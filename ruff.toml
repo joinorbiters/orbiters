@@ -6,4 +6,5 @@ exclude = ["docs", ".superpowers"]
 select = ["E", "F", "I", "UP", "B", "SIM", "TID"]
 
 [lint.flake8-tidy-imports.banned-api]
-"apps".msg = "packages/core must not import from apps/"
+"pigrocrm_api".msg = "packages/core must not import from apps/api"
+"pigrocrm_mcp".msg = "packages/core must not import from apps/mcp"
