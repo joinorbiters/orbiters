@@ -1,3 +1,4 @@
+from typing import Any
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -65,3 +66,98 @@ def test_record_does_not_commit_so_it_joins_the_callers_transaction(db_session: 
     db_session.rollback()
 
     assert service.timeline("customer", entity_id) == []
+
+
+# --- Fix round 1 ------------------------------------------------------------------
+
+
+def test_record_sanitizes_non_finite_floats(db_session: Session) -> None:
+    """Postgres JSONB rejects NaN/Infinity outright; a naive audit write must not be
+    able to take the operation it is recording down with it."""
+    service = ActivityService(db_session)
+    entity_id = uuid4()
+    service.record(
+        "customer",
+        entity_id,
+        "created",
+        USER,
+        {"a": float("nan"), "b": float("inf"), "c": float("-inf")},
+    )
+    db_session.commit()
+
+    entry = service.timeline("customer", entity_id)[0]
+    assert entry.payload == {"a": "NaN", "b": "Infinity", "c": "-Infinity"}
+
+
+def test_record_strips_null_bytes_from_strings(db_session: Session) -> None:
+    """Postgres text storage cannot hold a NUL byte at all."""
+    service = ActivityService(db_session)
+    entity_id = uuid4()
+    service.record("customer", entity_id, "created", USER, {"note": "abc\x00def"})
+    db_session.commit()
+
+    entry = service.timeline("customer", entity_id)[0]
+    assert entry.payload == {"note": "abcdef"}
+
+
+def test_record_truncates_long_strings(db_session: Session) -> None:
+    service = ActivityService(db_session)
+    entity_id = uuid4()
+    service.record("customer", entity_id, "created", USER, {"note": "x" * 3000})
+    db_session.commit()
+
+    saved = service.timeline("customer", entity_id)[0].payload["note"]
+    assert len(saved) == 2001
+    assert saved.endswith("…")
+
+
+def test_record_caps_nesting_depth(db_session: Session) -> None:
+    """Must not raise on pathological input and must not preserve unbounded nesting.
+    The exact placeholder text is an implementation detail; only that recursion stops
+    at a bounded depth is the contract."""
+    nested: dict[str, Any] = {"leaf": "bottom"}
+    for _ in range(20):
+        nested = {"next": nested}
+
+    service = ActivityService(db_session)
+    entity_id = uuid4()
+    service.record("customer", entity_id, "created", USER, nested)
+    db_session.commit()
+
+    cursor: Any = service.timeline("customer", entity_id)[0].payload
+    for _ in range(10):
+        assert isinstance(cursor, dict)
+        cursor = cursor["next"]
+    # ten "next" unwraps land on the placeholder: recursion stopped, not a dict.
+    assert isinstance(cursor, str)
+
+
+def test_record_truncates_kind_and_entity_type_to_column_widths(db_session: Session) -> None:
+    """`entity_type`/`kind` are developer-controlled literals, not user input -- plain
+    truncation is enough, unlike the richer sanitization the payload needs."""
+    long_entity_type = "y" * 50
+    long_kind = "x" * 100
+    service = ActivityService(db_session)
+    entity_id = uuid4()
+    service.record(long_entity_type, entity_id, long_kind, USER)
+    db_session.commit()
+
+    entry = service.timeline(long_entity_type[:30], entity_id)[0]
+    assert entry.entity_type == long_entity_type[:30]
+    assert entry.kind == long_kind[:50]
+
+
+def test_session_remains_usable_after_a_hostile_payload(db_session: Session) -> None:
+    """Before sanitization, recording a NaN reached `flush()` raw and Postgres
+    rejected it with a `DataError`, leaving the session in `PendingRollbackError` --
+    poisoning every later operation in the same transaction, including the unrelated
+    change the activity was supposed to be auditing."""
+    service = ActivityService(db_session)
+    entity_id = uuid4()
+    service.record("customer", entity_id, "created", USER, {"x": float("nan")})
+
+    # The session must still accept further writes in the same transaction.
+    service.record("customer", entity_id, "updated", USER, {"y": 1})
+    db_session.commit()
+
+    assert len(service.timeline("customer", entity_id)) == 2
