@@ -240,7 +240,11 @@ def validate_custom_fields(
     for key in values:
         if key not in by_key:
             known = ", ".join(sorted(by_key)) or "nessuno"
-            _fail(entity, key, f"campo non definito (campi disponibili: {known})")
+            # key comes straight from the caller's payload and becomes this
+            # exception's `field`; ValidationFailed.__init__ formats it into
+            # `message` in errors.py, a different file a local grep cannot see.
+            # _brief bounds it here, before it ever leaves this function.
+            _fail(entity, _brief(key), f"campo non definito (campi disponibili: {known})")
 
     result: dict[str, Any] = {}
     for spec in specs:

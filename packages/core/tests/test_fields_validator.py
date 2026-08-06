@@ -352,3 +352,20 @@ def test_validation_failed_message_stays_bounded_for_a_deeply_nested_input() -> 
         validate_custom_fields("c", [spec("n", "number")], {"n": _DEEPLY_NESTED_LIST})
     assert len(exc.value.details["reason"]) < _MAX_REASONABLE_MESSAGE_LENGTH
     assert len(str(exc.value)) < _MAX_REASONABLE_MESSAGE_LENGTH
+
+
+# --- Fix round 3: the unknown-key name itself, not just field values, must stay
+# bounded. It comes straight from the user's payload and becomes ValidationFailed's
+# `field`, formatted into `message` inside errors.py - a different file, so a grep
+# over validator.py's f-strings alone cannot see this site.
+
+
+def test_unknown_key_error_stays_bounded_when_the_key_itself_is_huge() -> None:
+    """A 10 MB dict key must not produce a 10 MB message or a 10 MB details["field"]
+    - the same failure mode fix round 2 closed for values, entering through the key
+    instead."""
+    huge_key = "k" * 10_000_000
+    with pytest.raises(ValidationFailed) as exc:
+        validate_custom_fields("c", [], {huge_key: "value"})
+    assert len(str(exc.value)) < _MAX_REASONABLE_MESSAGE_LENGTH
+    assert len(exc.value.details["field"]) < _MAX_REASONABLE_MESSAGE_LENGTH
