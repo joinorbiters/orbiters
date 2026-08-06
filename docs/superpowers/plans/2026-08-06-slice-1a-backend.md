@@ -33,6 +33,7 @@ These apply to **every** task. They are not repeated per task.
 - **TDD is mandatory for `packages/core`.** Write the failing test, watch it fail, then implement.
 - **Commit after every task**, using the message given in the task's final step.
 - **UI language is Italian.** Field labels, buttons, and error messages shown to users are Italian. Code identifiers, table names, and column names are English except the Italian fiscal terms already fixed in the spec (`partita_iva`, `codice_fiscale`, `codice_sdi`, `pec`, `ragione_sociale`, and the address parts `indirizzo`, `cap`, `comune`, `provincia`, `nazione`).
+- **The `Expected: PASS (N passed)` counts are indicative, not contractual.** Parametrised tests expand to different totals than the number of test functions. What matters is that every test passes and none is skipped — a differing total is not a failure and must not be "fixed" by deleting or merging cases.
 
 ### Pinned versions
 
@@ -1790,7 +1791,7 @@ class FieldSpec(BaseModel):
 ```python
 from datetime import date
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, NoReturn
 from urllib.parse import urlparse
 
 from pigrocrm.core.errors import ValidationFailed
@@ -1801,7 +1802,9 @@ FALSE_VALUES = {False, 0, "0", "false", "False", "no"}
 ALLOWED_URL_SCHEMES = {"http", "https"}
 
 
-def _fail(entity: str, key: str, reason: str, expected: str | None = None) -> None:
+def _fail(entity: str, key: str, reason: str, expected: str | None = None) -> NoReturn:
+    """`NoReturn` is load-bearing: it tells mypy every call ends the function, so no
+    caller needs an unreachable `raise` after it just to satisfy the return type."""
     raise ValidationFailed(entity, key, reason, expected=expected)
 
 
@@ -1810,7 +1813,6 @@ def _coerce_number(entity: str, spec: FieldSpec, value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         _fail(entity, spec.key, f"'{value}' non è un numero", "un numero")
-        raise  # unreachable, keeps mypy happy
 
 
 def _coerce_currency(entity: str, spec: FieldSpec, value: Any) -> str:
@@ -1820,7 +1822,6 @@ def _coerce_currency(entity: str, spec: FieldSpec, value: Any) -> str:
         return str(Decimal(str(value)).quantize(Decimal("0.01")))
     except (InvalidOperation, TypeError, ValueError):
         _fail(entity, spec.key, f"'{value}' non è un importo", "un importo numerico")
-        raise
 
 
 def _coerce_date(entity: str, spec: FieldSpec, value: Any) -> str:
@@ -1830,7 +1831,6 @@ def _coerce_date(entity: str, spec: FieldSpec, value: Any) -> str:
         return date.fromisoformat(str(value)).isoformat()
     except ValueError:
         _fail(entity, spec.key, f"'{value}' non è una data valida", "una data ISO (YYYY-MM-DD)")
-        raise
 
 
 def _coerce_select(entity: str, spec: FieldSpec, value: Any) -> str:
@@ -1869,7 +1869,6 @@ def _coerce_checkbox(entity: str, spec: FieldSpec, value: Any) -> bool:
     if value in FALSE_VALUES:
         return False
     _fail(entity, spec.key, f"'{value}' non è un booleano", "true oppure false")
-    raise
 
 
 def _coerce_url(entity: str, spec: FieldSpec, value: Any) -> str:
@@ -1901,7 +1900,6 @@ def coerce_value(entity: str, spec: FieldSpec, value: Any) -> Any:
         case "url":
             return _coerce_url(entity, spec, value)
     _fail(entity, spec.key, f"tipo di campo sconosciuto: {spec.field_type}")
-    raise
 
 
 def _is_blank(value: Any) -> bool:
@@ -1986,6 +1984,7 @@ git commit -m "feat: pure custom-field validator with per-type coercion and acti
 
 ```python
 import pytest
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
@@ -2049,9 +2048,13 @@ def test_field_type_cannot_be_changed(db_session: Session) -> None:
     operation does not exist. Archive the old field and create a new one."""
     service = FieldDefinitionService(db_session)
     field = _create(service)
-    assert not hasattr(FieldDefinitionUpdate(), "field_type")
-    with pytest.raises(TypeError):
+
+    assert "field_type" not in FieldDefinitionUpdate.model_fields
+    # extra="forbid" turns the attempt into a pydantic ValidationError, so the
+    # request never reaches the service at all.
+    with pytest.raises(ValidationError):
         FieldDefinitionUpdate(field_type="number")  # type: ignore[call-arg]
+
     updated = service.update(field.id, FieldDefinitionUpdate(label="Nuovo"), ADMIN)
     assert updated.field_type == "text"
 
