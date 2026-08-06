@@ -3,7 +3,7 @@ from collections.abc import Iterator
 import pytest
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
-from testcontainers.postgres import PostgresContainer
+from testcontainers.community.postgres import PostgresContainer
 
 from pigrocrm.core.config import Settings
 from pigrocrm.core.db import Base, create_engine_from_settings, session_factory
