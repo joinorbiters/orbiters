@@ -146,17 +146,44 @@ class PersonService:
         # must see a caller-supplied `None` *inside* the dict (e.g. {"seniority":
         # None}, meaning "remove this key") exactly as given, with no risk of it being
         # confused with the field itself being absent -- see `_update_custom_fields`.
-        changes = data.model_dump(exclude_none=True, exclude={"custom_fields", "detach"})
+        # `customer_id` is excluded here too and handled below, alongside `detach`:
+        # the two interact in a way a blind `model_dump` cannot express.
+        changes = data.model_dump(
+            exclude_none=True, exclude={"custom_fields", "detach", "customer_id"}
+        )
         _check_email(changes)
-        if "customer_id" in changes:
-            self._check_customer(changes["customer_id"])
+
+        # `detach` is an explicit, self-contained intention and wins outright over any
+        # `customer_id` the caller also happens to send in the same payload -- checked
+        # first, and once true, `data.customer_id` is never read at all. Two real
+        # defects existed here before this ordering: `PersonUpdate(customer_id=<valid>,
+        # detach=True)` used to run `_check_customer` and briefly assign the supplied
+        # id before detach unconditionally overwrote it back to `None` a few lines
+        # later -- wasted work with no error, silently discarding a value the caller
+        # may not have intended to throw away. `PersonUpdate(customer_id=<missing>,
+        # detach=True)` was worse: `_check_customer` ran *before* `data.detach` was
+        # ever consulted, so it raised `NotFound` and aborted the whole update --
+        # blocking the detach entirely, even though its own success never depended on
+        # that field being valid, or even present. A client re-submitting stale form
+        # state alongside an explicit "unlink" action is not exotic. `_check_customer`
+        # must never run at all when detaching.
+        #
+        # `changes["customer_id"]` is only set -- and therefore only appears in the
+        # timeline's "changed" list below -- when the person actually had a customer to
+        # remove: detaching an already-detached person must not write an audit entry
+        # claiming a change that never happened, the same reasoning `restore()` applies
+        # via its own `was_deleted` guard.
+        if data.detach:
+            if person.customer_id is not None:
+                changes["customer_id"] = None
+        elif data.customer_id is not None:
+            self._check_customer(data.customer_id)
+            changes["customer_id"] = data.customer_id
+
         if data.custom_fields is not None:
             changes["custom_fields"] = self._update_custom_fields(person, data.custom_fields)
         for key, value in changes.items():
             setattr(person, key, value)
-        if data.detach:
-            person.customer_id = None
-            changes["customer_id"] = None
 
         self.activities.record(ENTITY, person.id, "updated", actor, {"changed": sorted(changes)})
         self.session.commit()
