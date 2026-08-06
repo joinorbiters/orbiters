@@ -1,0 +1,4 @@
+"""Imports every SQLAlchemy model so that `Base.metadata` is complete.
+
+Each task that adds a model appends its import here.
+"""
