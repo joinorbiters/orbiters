@@ -16,6 +16,17 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me-in-production-please-set-a-real-secret"
     access_token_minutes: int = 15
     refresh_token_days: int = 30
+    # Must stay True in production: it is what stops the auth cookies from ever being
+    # sent over plain HTTP. It exists as a *setting* rather than a hardcoded True only
+    # because of one browser: Chrome and Firefox treat "localhost" as a secure context
+    # and accept a `Secure` cookie over plain HTTP there, but Safari does not and has
+    # no plan to. Local development (slice 1B's Vite proxy) serves the API over
+    # http://localhost with no TLS, so without an escape hatch, login on Safari in dev
+    # would return 200 while the browser silently discarded the cookie -- every
+    # request after that looks unauthenticated with no error anywhere to explain why.
+    # Set PIGROCRM_COOKIE_SECURE=false for that one case. Anyone tempted to flip this
+    # in production because "it's just a flag" should re-read this paragraph first.
+    cookie_secure: bool = True
 
     @field_validator("jwt_secret")
     @classmethod
