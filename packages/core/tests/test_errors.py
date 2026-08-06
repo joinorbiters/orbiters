@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.errors import (
@@ -26,11 +27,45 @@ def test_errors_carry_structured_details_not_formatted_strings() -> None:
     }
 
 
+def test_validation_failed_without_expected() -> None:
+    """When expected is not provided, it should not be in details."""
+    err = ValidationFailed("customer", "partita_iva", "must be 11 digits")
+    assert err.code == "validation_failed"
+    assert err.details == {
+        "entity": "customer",
+        "field": "partita_iva",
+        "reason": "must be 11 digits",
+    }
+    assert "expected" not in err.details
+
+
 def test_not_found_records_which_entity_and_which_id() -> None:
     err = NotFound("deal", "0199-abc")
     assert err.code == "not_found"
     assert err.details["entity"] == "deal"
     assert err.details["identifier"] == "0199-abc"
+
+
+def test_not_found_message_and_str() -> None:
+    """Error message is available on .message and str(exc)."""
+    err = NotFound("deal", "0199-abc")
+    assert err.message == "deal 0199-abc not found"
+    assert str(err) == "deal 0199-abc not found"
+
+
+def test_validation_failed_message_and_str() -> None:
+    """Error message is available on .message and str(exc)."""
+    err = ValidationFailed("customer", "partita_iva", "must be 11 digits")
+    assert err.message == "customer.partita_iva: must be 11 digits"
+    assert str(err) == "customer.partita_iva: must be 11 digits"
+
+
+def test_permission_denied_message_and_str() -> None:
+    """Error message is available on .message and str(exc)."""
+    err = PermissionDenied("update_deal", ["admin", "collaboratore"], "readonly")
+    expected_msg = "update_deal requires one of ['admin', 'collaboratore'], actor has readonly"
+    assert err.message == expected_msg
+    assert str(err) == expected_msg
 
 
 def test_conflict_accepts_arbitrary_context() -> None:
@@ -65,3 +100,72 @@ def test_system_actor_is_an_admin_with_no_user_id() -> None:
     assert actor.type == "system"
     assert actor.id is None
     assert actor.can_administer is True
+
+
+def test_actor_is_immutable() -> None:
+    """Actor is a frozen value object; assignment should raise."""
+    actor = Actor(id=None, type="user", role="readonly")
+    with pytest.raises(ValidationError):
+        actor.role = "admin"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    ("role", "should_raise_write", "should_raise_admin"),
+    [
+        ("admin", False, False),
+        ("collaboratore", False, True),
+        ("readonly", True, True),
+    ],
+)
+def test_require_write_and_admin_by_role(
+    role: str, should_raise_write: bool, should_raise_admin: bool
+) -> None:
+    """require_write and require_admin enforce role-based permissions."""
+    actor = Actor(id=None, type="user", role=role)  # type: ignore[arg-type]
+
+    if should_raise_write:
+        with pytest.raises(PermissionDenied) as exc_info:
+            actor.require_write("do_something")
+        assert exc_info.value.details["required_roles"] == ["admin", "collaboratore"]
+        assert exc_info.value.details["actual_role"] == role
+    else:
+        actor.require_write("do_something")  # should not raise
+
+    if should_raise_admin:
+        with pytest.raises(PermissionDenied) as exc_info:
+            actor.require_admin("do_admin_thing")
+        assert exc_info.value.details["required_roles"] == ["admin"]
+        assert exc_info.value.details["actual_role"] == role
+    else:
+        actor.require_admin("do_admin_thing")  # should not raise
+
+
+def test_collaboratore_passes_write_but_not_admin() -> None:
+    """Demonstrates role distinction: collaboratore can write but not administer."""
+    actor = Actor(id=None, type="user", role="collaboratore")
+    actor.require_write("update_field")  # should not raise
+    with pytest.raises(PermissionDenied):
+        actor.require_admin("delete_entity")
+
+
+def test_permission_denied_details_are_not_aliased_to_global_state() -> None:
+    """Mutating err.details["required_roles"] should not affect subsequent calls.
+    This test catches the aliasing bug where global WRITE_ROLES was passed by reference."""
+    actor = Actor(id=None, type="user", role="readonly")
+
+    # First call: capture the error
+    with pytest.raises(PermissionDenied) as exc_info:
+        actor.require_write("action1")
+    err1 = exc_info.value
+    original_roles = list(err1.details["required_roles"])
+
+    # Mutate the details (simulates a bug in downstream code)
+    err1.details["required_roles"].append("corrupted")
+
+    # Second call: should have fresh, uncorrupted details
+    with pytest.raises(PermissionDenied) as exc_info:
+        actor.require_write("action2")
+    err2 = exc_info.value
+
+    assert err2.details["required_roles"] == original_roles
+    assert err2.details["required_roles"] == ["admin", "collaboratore"]

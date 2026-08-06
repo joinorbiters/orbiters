@@ -1,21 +1,23 @@
 from typing import Literal, Self
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from pigrocrm.core.errors import PermissionDenied
 
 ActorType = Literal["user", "mcp", "system"]
 Role = Literal["admin", "collaboratore", "readonly"]
 
-WRITE_ROLES: list[str] = ["admin", "collaboratore"]
-ADMIN_ROLES: list[str] = ["admin"]
+WRITE_ROLES: tuple[str, ...] = ("admin", "collaboratore")
+ADMIN_ROLES: tuple[str, ...] = ("admin",)
 
 
 class Actor(BaseModel):
     """Who is performing an operation. Always passed explicitly — never inferred
     from global state — so that authorization is testable and the timeline is honest
     about whether a human or an agent made the change."""
+
+    model_config = ConfigDict(frozen=True)
 
     id: UUID | None
     type: ActorType
@@ -35,8 +37,8 @@ class Actor(BaseModel):
 
     def require_write(self, action: str) -> None:
         if not self.can_write:
-            raise PermissionDenied(action, WRITE_ROLES, self.role)
+            raise PermissionDenied(action, list(WRITE_ROLES), self.role)
 
     def require_admin(self, action: str) -> None:
         if not self.can_administer:
-            raise PermissionDenied(action, ADMIN_ROLES, self.role)
+            raise PermissionDenied(action, list(ADMIN_ROLES), self.role)

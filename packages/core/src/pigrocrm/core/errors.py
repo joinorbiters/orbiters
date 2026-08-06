@@ -33,13 +33,14 @@ class ValidationFailed(DomainError):
     def __init__(
         self, entity: str, field: str, reason: str, *, expected: str | None = None
     ) -> None:
-        super().__init__(
-            f"{entity}.{field}: {reason}",
-            entity=entity,
-            field=field,
-            reason=reason,
-            expected=expected,
-        )
+        details: dict[str, Any] = {
+            "entity": entity,
+            "field": field,
+            "reason": reason,
+        }
+        if expected is not None:
+            details["expected"] = expected
+        super().__init__(f"{entity}.{field}: {reason}", **details)
 
 
 class Conflict(DomainError):
