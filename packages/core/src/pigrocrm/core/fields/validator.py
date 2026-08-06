@@ -1,3 +1,4 @@
+import math
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any, NoReturn
@@ -9,6 +10,9 @@ from pigrocrm.core.fields.types import FieldSpec
 TRUE_VALUES = {True, "1", "true", "True", "si", "sì", "yes"}
 FALSE_VALUES = {False, "0", "false", "False", "no"}
 ALLOWED_URL_SCHEMES = {"http", "https"}
+# text/textarea/url all funnel through _clean_text: only these become text, so a
+# dict or a list can never be silently stringified into "{'a': 1}"-shaped garbage.
+TEXT_SCALAR_TYPES = (str, int, float, bool, Decimal)
 
 
 def _fail(entity: str, key: str, reason: str, expected: str | None = None) -> NoReturn:
@@ -19,17 +23,37 @@ def _fail(entity: str, key: str, reason: str, expected: str | None = None) -> No
 
 def _coerce_number(entity: str, spec: FieldSpec, value: Any) -> float:
     try:
-        return float(value)
-    except (TypeError, ValueError):
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: JSON has no size limit on integers, so json.loads can hand
+        # us an int float() cannot represent - e.g. an integer with hundreds of
+        # digits. That is exactly as invalid as a non-numeric string.
         _fail(entity, spec.key, f"'{value}' non è un numero", "un numero")
+    if not math.isfinite(result):
+        # float("1e1000") becomes inf without float() raising anything, so
+        # finiteness has to be checked after conversion, not inferred from it.
+        # Postgres rejects a bare NaN/Infinity token in JSONB outright.
+        _fail(entity, spec.key, f"'{value}' non è un numero finito", "un numero finito")
+    return result
 
 
 def _coerce_currency(entity: str, spec: FieldSpec, value: Any) -> str:
     """Money is stored as a fixed-scale string: JSON has no decimal type, and float
     rounding on money is a bug that only shows up on an invoice."""
     try:
-        return str(Decimal(str(value)).quantize(Decimal("0.01")))
+        amount = Decimal(str(value))
     except (InvalidOperation, TypeError, ValueError):
+        _fail(entity, spec.key, f"'{value}' non è un importo", "un importo numerico")
+    if not amount.is_finite():
+        # Decimal("NaN").quantize(...) does not raise - it silently propagates NaN -
+        # while Decimal("Infinity").quantize(...) does. Checking is_finite() first
+        # means both fail the same way instead of NaN slipping through as "NaN".
+        _fail(entity, spec.key, f"'{value}' non è un importo finito", "un importo finito")
+    try:
+        return str(amount.quantize(Decimal("0.01")))
+    except InvalidOperation:
+        # A value with more significant digits than the decimal context allows
+        # (e.g. a 400-digit integer) is finite but still cannot be quantized.
         _fail(entity, spec.key, f"'{value}' non è un importo", "un importo numerico")
 
 
@@ -73,15 +97,40 @@ def _coerce_multiselect(entity: str, spec: FieldSpec, value: Any) -> list[str]:
 
 
 def _coerce_checkbox(entity: str, spec: FieldSpec, value: Any) -> bool:
-    if value in TRUE_VALUES:
-        return True
-    if value in FALSE_VALUES:
-        return False
+    try:
+        if value in TRUE_VALUES:
+            return True
+        if value in FALSE_VALUES:
+            return False
+    except TypeError:
+        # An unhashable value (a list, a dict) cannot be tested for set membership.
+        # A client sending arbitrary JSON can easily produce one; that is just
+        # another way of saying "not a recognisable boolean", not a crash.
+        pass
     _fail(entity, spec.key, f"'{value}' non è un booleano", "true oppure false")
 
 
-def _coerce_url(entity: str, spec: FieldSpec, value: Any) -> str:
+def _clean_text(entity: str, spec: FieldSpec, value: Any) -> str:
+    """Shared by text, textarea and url. Only scalars become text - str() on a dict
+    or a list produces silent garbage like "{'a': 1}" with no signal to whoever sent
+    it - and a NUL byte is rejected outright rather than stripped, because stripping
+    would change the user's data without telling them, and Postgres refuses \\x00 in
+    a text column regardless."""
+    if not isinstance(value, TEXT_SCALAR_TYPES):
+        _fail(entity, spec.key, f"'{value}' non è un valore testuale", "un valore testuale")
     text = str(value).strip()
+    if "\x00" in text:
+        _fail(
+            entity,
+            spec.key,
+            "il testo contiene un carattere nullo",
+            "testo senza caratteri di controllo",
+        )
+    return text
+
+
+def _coerce_url(entity: str, spec: FieldSpec, value: Any) -> str:
+    text = _clean_text(entity, spec, value)
     parsed = urlparse(text)
     # Rejecting javascript: here is what stops a stored-XSS the moment the UI
     # renders a custom field as a link.
@@ -93,7 +142,7 @@ def _coerce_url(entity: str, spec: FieldSpec, value: Any) -> str:
 def coerce_value(entity: str, spec: FieldSpec, value: Any) -> Any:
     match spec.field_type:
         case "text" | "textarea":
-            return str(value).strip()
+            return _clean_text(entity, spec, value)
         case "number":
             return _coerce_number(entity, spec, value)
         case "currency":
@@ -112,7 +161,15 @@ def coerce_value(entity: str, spec: FieldSpec, value: Any) -> Any:
 
 
 def _is_blank(value: Any) -> bool:
-    return value is None or (isinstance(value, str) and not value.strip())
+    """None, a whitespace-only string, or an empty sequence all mean "nothing was
+    provided". False and 0 do not: they are legitimate values, not missing ones."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, tuple)):
+        return len(value) == 0
+    return False
 
 
 def validate_custom_fields(
