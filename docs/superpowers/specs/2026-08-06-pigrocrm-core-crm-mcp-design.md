@@ -318,7 +318,8 @@ Restituiscono il contesto completo in Markdown — anagrafica, persone collegate
 ## 9. Autenticazione
 
 - Login → verifica argon2 → **JWT 15 minuti** in cookie `httpOnly` + `Secure` + `SameSite=Lax`
-- **Refresh token 30 giorni**, ruotato a ogni uso
+- **Refresh token 30 giorni, ruotato davvero a ogni uso.** Ogni token porta un `jti` registrato in una tabella `refresh_tokens`; usarlo lo marca consumato, e un `jti` già consumato viene rifiutato. Riusare un token consumato è il segnale che è stato rubato, quindi **revoca tutti i refresh token ancora validi di quell'utente**, non solo quello presentato. `logout` consuma il token lato server, così uscire chiude la sessione davvero e non solo nel browser. Senza questo la rotazione sarebbe cosmetica: il vecchio token continuerebbe a valere per i suoi 30 giorni.
+- Il flag `Secure` sui cookie è configurabile (`PIGROCRM_COOKIE_SECURE`, default `true`) perché Safari — a differenza di Chrome e Firefox — non tratta `localhost` come contesto sicuro e scarta i cookie `Secure` su HTTP, facendo fallire il login in sviluppo locale senza alcun errore visibile.
 - **PAT**: `pgc_` + 32 byte random, salvati come **hash**, con `prefix` in chiaro per la lista, `last_used_at`, revoca. Mostrati una sola volta alla creazione.
 - Nessun signup pubblico: gli utenti li crea l'admin
 - **Bootstrap del primo admin**: comando CLI `pigrocrm createadmin` (`packages/core`), che legge email e password da argomenti o da prompt interattivo. Nessun account di default, nessuna password nota preconfigurata — la lezione diretta dalle credenziali hardcoded di Acme.
