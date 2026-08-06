@@ -5,6 +5,9 @@ exclude = ["docs", ".superpowers"]
 [lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "TID"]
 
+[lint.isort]
+known-first-party = ["pigrocrm", "pigrocrm_api", "pigrocrm_mcp"]
+
 [lint.flake8-tidy-imports.banned-api]
 "pigrocrm_api".msg = "packages/core must not import from apps/api"
 "pigrocrm_mcp".msg = "packages/core must not import from apps/mcp"

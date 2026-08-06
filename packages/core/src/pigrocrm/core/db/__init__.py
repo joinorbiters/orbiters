@@ -5,7 +5,7 @@ from pigrocrm.core.db.base import (
     TimestampMixin,
     uuid7,
 )
-from pigrocrm.core.db.session import create_engine_from_settings, session_factory, session_scope
+from pigrocrm.core.db.session import create_engine_from_settings, session_factory
 
 __all__ = [
     "Base",
@@ -14,6 +14,5 @@ __all__ = [
     "TimestampMixin",
     "create_engine_from_settings",
     "session_factory",
-    "session_scope",
     "uuid7",
 ]
