@@ -89,12 +89,33 @@ class FieldDefinitionService:
 
     def archive(self, field_id: UUID, actor: Actor) -> FieldDefinitionRead:
         """Archive rather than delete: deleting a definition while rows still hold the
-        value in JSONB produces orphan data nobody can see."""
+        value in JSONB produces orphan data nobody can see.
+
+        The key stays reserved on purpose, even while archived: `get_by_key` does not
+        filter on `archived`, so `create` still raises `Conflict` for it. This is a
+        choice, not an oversight -- freeing the key would let someone recreate it with
+        a different `field_type`, and there is no correct way to reinterpret the
+        existing JSONB values under a new type. That is exactly the operation
+        `field_type` immutability exists to rule out at every layer; leaving the key
+        reserved is what keeps archiving from reopening it through the back door. Use
+        `unarchive` to bring the field back -- the stored data was never touched.
+        """
         actor.require_admin("archive_field_definition")
         field = self.repo.get(field_id)
         if field is None:
             raise NotFound("field_definition", field_id)
         field.archived = True
+        self.session.commit()
+        return FieldDefinitionRead.model_validate(field)
+
+    def unarchive(self, field_id: UUID, actor: Actor) -> FieldDefinitionRead:
+        """Symmetric to `archive`. Only visibility changes -- archiving never touched
+        the stored JSONB values, so there is nothing to restore in the data itself."""
+        actor.require_admin("unarchive_field_definition")
+        field = self.repo.get(field_id)
+        if field is None:
+            raise NotFound("field_definition", field_id)
+        field.archived = False
         self.session.commit()
         return FieldDefinitionRead.model_validate(field)
 
@@ -119,6 +140,17 @@ class FieldDefinitionService:
             for f in self.repo.list(entity_type)
         ]
 
+    # `list` must stay the last method defined in this class. Giving a method the same
+    # name as a builtin rebinds that name in the *class* namespace; any method defined
+    # below this one whose own return annotation is a bare `list[...]` (as `specs_for`
+    # above is, which is why it had to move ahead of this one) would resolve `list` to
+    # this method instead of the builtin and fail at import time with `TypeError:
+    # 'function' object is not subscriptable`. This is exactly the bug this class
+    # shipped with once already. `test_module_imports.py` is the real guard against a
+    # repeat -- it imports every module under `pigrocrm.core` and fails with the
+    # module name and exception if any of them raises, in this class or any other,
+    # present or future. Treat that test as the actual protection; this comment is
+    # only here for whoever is looking at the diff that adds the next method.
     def list(
         self, entity_type: EntityType, *, include_archived: bool = False
     ) -> list[FieldDefinitionRead]:

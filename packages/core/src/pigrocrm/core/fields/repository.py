@@ -23,7 +23,10 @@ class FieldDefinitionRepository:
         stmt = select(FieldDefinition).where(FieldDefinition.entity_type == entity_type)
         if not include_archived:
             stmt = stmt.where(FieldDefinition.archived.is_(False))
-        stmt = stmt.order_by(FieldDefinition.position, FieldDefinition.label)
+        # `id` is the tiebreaker: Postgres gives no ordering guarantee at all between
+        # rows equal on both `position` and `label`, so without a final, unique key
+        # the result order is undefined and can vary between two identical queries.
+        stmt = stmt.order_by(FieldDefinition.position, FieldDefinition.label, FieldDefinition.id)
         return list(self.session.execute(stmt).scalars())
 
     def add(self, field: FieldDefinition) -> FieldDefinition:
