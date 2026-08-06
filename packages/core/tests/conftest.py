@@ -1,11 +1,12 @@
 from collections.abc import Iterator
 
 import pytest
-from pigrocrm.core.config import Settings
-from pigrocrm.core.db import Base, create_engine_from_settings, session_factory
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 from testcontainers.postgres import PostgresContainer
+
+from pigrocrm.core.config import Settings
+from pigrocrm.core.db import Base, create_engine_from_settings, session_factory
 
 
 @pytest.fixture(scope="session")
@@ -26,7 +27,7 @@ def db_session(db_engine: Engine) -> Iterator[Session]:
     """Each test runs in a transaction that is rolled back, so tests never see each other."""
     connection = db_engine.connect()
     transaction = connection.begin()
-    session = session_factory(db_engine)(bind=connection)
+    session = session_factory(db_engine)(bind=connection, join_transaction_mode="create_savepoint")
     try:
         yield session
     finally:
