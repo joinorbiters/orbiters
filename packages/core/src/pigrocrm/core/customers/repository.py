@@ -1,0 +1,92 @@
+from uuid import UUID
+
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.customers.schemas import CustomerListQuery
+from pigrocrm.core.db import Base
+
+
+class CustomerRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def get(self, customer_id: UUID, *, include_deleted: bool = False) -> Customer | None:
+        customer = self.session.get(Customer, customer_id)
+        if customer is None:
+            return None
+        if customer.deleted_at is not None and not include_deleted:
+            return None
+        return customer
+
+    def add(self, customer: Customer) -> Customer:
+        self.session.add(customer)
+        self.session.flush()
+        return customer
+
+    def list(self, query: CustomerListQuery) -> list[Customer]:
+        stmt = select(Customer).where(Customer.deleted_at.is_(None))
+
+        if query.search:
+            like = f"%{query.search.lower()}%"
+            stmt = stmt.where(
+                or_(
+                    Customer.ragione_sociale.ilike(like),
+                    Customer.partita_iva.ilike(like),
+                    Customer.email.ilike(like),
+                    Customer.codice_fiscale.ilike(like),
+                )
+            )
+        if query.stato:
+            stmt = stmt.where(Customer.stato == query.stato)
+        if query.custom:
+            # JSONB containment, served by the GIN index.
+            stmt = stmt.where(Customer.custom_fields.contains(query.custom))
+        if query.cursor:
+            stmt = stmt.where(Customer.id > query.cursor)
+
+        # Keyset pagination on a UUIDv7 id: ordered by creation, stable under inserts.
+        return list(
+            self.session.execute(stmt.order_by(Customer.id).limit(query.limit + 1)).scalars()
+        )
+
+    def count_active_deals(self, customer_id: UUID) -> int:
+        """Queries the deals table through `Base.metadata` rather than importing the
+        model. Deals are written in Task 12: importing `pigrocrm.core.deals.models`
+        here -- at module level or inside the function -- would raise
+        `ModuleNotFoundError` in this task's own tests. Going through `Base.metadata`
+        keeps the dependency one-directional (deals references customers, never the
+        other way round) and lets this method start returning real counts the moment
+        the deals model is registered, with no edit here.
+
+        Mirrors `PipelineRepository.count_deals_in_stage`'s shape exactly: returning 0
+        is only correct for "the `deals` table does not exist yet". If `deals` exists
+        but does not expose `customer_id` -- the FK column, verified against the plan's
+        Task 12 `Deal` model -- that is a bug in this code, not "no deals for this
+        customer": returning 0 there would let `soft_delete` remove a customer that
+        still has deals, so this raises instead of guessing.
+
+        `deleted_at` is treated more leniently than `customer_id`: its presence narrows
+        "active" to exclude an already-archived deal, but -- unlike `customer_id` --
+        it was not the column this correction verified against the plan, so a `deals`
+        table lacking it simply counts every matching deal rather than raising.
+        """
+        deals_table = Base.metadata.tables.get("deals")
+        if deals_table is None:
+            return 0  # i deal arrivano in un task successivo
+        customer_id_column = deals_table.c.get("customer_id")
+        if customer_id_column is None:
+            # La tabella esiste ma non ha la colonna attesa: e' un errore di codice,
+            # non l'assenza di deal. Restituire 0 qui permetterebbe di cancellare un
+            # cliente che ha ancora deal collegati.
+            raise RuntimeError(
+                "la tabella deals non espone customer_id: aggiornare count_active_deals"
+            )
+        stmt = (
+            select(func.count()).select_from(deals_table).where(customer_id_column == customer_id)
+        )
+        deleted_at_column = deals_table.c.get("deleted_at")
+        if deleted_at_column is not None:
+            stmt = stmt.where(deleted_at_column.is_(None))
+        return int(self.session.execute(stmt).scalar_one())
