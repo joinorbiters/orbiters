@@ -8,4 +8,5 @@ from pigrocrm.core.auth.models import User  # noqa: F401
 from pigrocrm.core.auth.pat_models import PersonalAccessToken  # noqa: F401
 from pigrocrm.core.customers.models import Customer  # noqa: F401
 from pigrocrm.core.fields.models import FieldDefinition  # noqa: F401
+from pigrocrm.core.people.models import Person  # noqa: F401
 from pigrocrm.core.pipeline.models import PipelineStage  # noqa: F401

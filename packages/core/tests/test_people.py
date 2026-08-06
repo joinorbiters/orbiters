@@ -1,0 +1,451 @@
+from typing import Any
+from uuid import uuid4
+
+import pytest
+from pydantic import ValidationError
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.customers.schemas import CustomerCreate
+from pigrocrm.core.customers.service import CustomerService
+from pigrocrm.core.errors import NotFound, PermissionDenied, ValidationFailed
+from pigrocrm.core.fields.schemas import FieldDefinitionCreate
+from pigrocrm.core.fields.service import FieldDefinitionService
+from pigrocrm.core.people.schemas import (
+    COGNOME_MAX_LENGTH,
+    EMAIL_MAX_LENGTH,
+    LINKEDIN_MAX_LENGTH,
+    NOME_MAX_LENGTH,
+    RUOLO_MAX_LENGTH,
+    TELEFONO_MAX_LENGTH,
+    PersonCreate,
+    PersonListQuery,
+    PersonUpdate,
+)
+from pigrocrm.core.people.service import PersonService, _check_email
+
+ADMIN = Actor(id=None, type="system", role="admin")
+COLLAB = Actor(id=None, type="user", role="collaboratore")
+READONLY = Actor(id=None, type="user", role="readonly")
+
+
+def test_a_person_can_exist_without_a_customer(db_session: Session) -> None:
+    """Forcing the association produces phantom customers called 'Freelance vari'."""
+    person = PersonService(db_session).create(PersonCreate(nome="Mario"), ADMIN)
+    assert person.customer_id is None
+
+
+def test_a_person_can_be_attached_to_a_customer(db_session: Session) -> None:
+    customer = CustomerService(db_session).create(CustomerCreate(ragione_sociale="ACME"), ADMIN)
+    person = PersonService(db_session).create(
+        PersonCreate(nome="Mario", cognome="Rossi", customer_id=customer.id), ADMIN
+    )
+    assert person.customer_id == customer.id
+
+
+def test_attaching_to_a_missing_customer_is_rejected(db_session: Session) -> None:
+    with pytest.raises(NotFound) as exc:
+        PersonService(db_session).create(PersonCreate(nome="Mario", customer_id=uuid4()), ADMIN)
+    assert exc.value.details["entity"] == "customer"
+
+
+def test_reattaching_to_a_missing_customer_is_rejected(db_session: Session) -> None:
+    """The brief's own test only exercises this rule at create time. `update()` runs
+    the identical `_check_customer` whenever `customer_id` is among the supplied
+    changes, so re-pointing an existing person at a customer that does not resolve
+    to a live row must be rejected exactly the same way."""
+    service = PersonService(db_session)
+    person = service.create(PersonCreate(nome="Mario"), ADMIN)
+
+    with pytest.raises(NotFound) as exc:
+        service.update(person.id, PersonUpdate(customer_id=uuid4()), ADMIN)
+    assert exc.value.details["entity"] == "customer"
+
+
+def test_invalid_email_is_rejected(db_session: Session) -> None:
+    with pytest.raises(ValidationFailed) as exc:
+        PersonService(db_session).create(PersonCreate(nome="Mario", email="non-una-email"), ADMIN)
+    assert exc.value.details["field"] == "email"
+
+
+def test_email_with_a_trailing_newline_is_rejected() -> None:
+    r"""`^[^@\s]+@[^@\s]+\.[^@\s]+$` checked with `.match()` accepts a trailing
+    "\n": `$` matches just before a final newline, not only at the true end of the
+    string, so "a@b.it\n" would pass the check and could reach `flush()` as a raw,
+    session-poisoning `DataError` once combined with a value long enough to exceed
+    the `String(320)` column. This was the Critical finding on Customers
+    (`partita_iva`, checked the same way) -- the fifth time this project has hit the
+    class of bug -- and `.fullmatch()`, which requires the entire string to be
+    consumed, is what closes it.
+
+    Exercises `_check_email` directly rather than through `PersonService.create`:
+    `PersonCreate`'s own `_normalise_email` validator (schemas.py) strips leading and
+    trailing whitespace -- including a trailing newline -- before `_check_email` ever
+    runs, which is exactly why a literal `PersonCreate(email="a@b.it\n")` cannot
+    observe the difference end to end (verified separately: the stripped value is
+    "a@b.it", and `.match()`/`.fullmatch()` agree on that). `partita_iva` has no such
+    normalisation in front of `_check_fiscal`, which is why Customer's own regression
+    test could stay end-to-end. `_check_email` is still the function `create()` and
+    `update()` actually call, and it must reject the raw value on its own terms --
+    its own contract does not depend on every caller stripping first.
+    """
+    payload: dict[str, Any] = {"email": "a@b.it\n"}
+    with pytest.raises(ValidationFailed) as exc:
+        _check_email(payload)
+    assert exc.value.details["field"] == "email"
+
+
+def test_email_is_normalised_to_lowercase(db_session: Session) -> None:
+    person = PersonService(db_session).create(
+        PersonCreate(nome="Mario", email="  Mario@ACME.IT "), ADMIN
+    )
+    assert person.email == "mario@acme.it"
+
+
+def test_empty_string_email_is_normalized_to_none(db_session: Session) -> None:
+    """An empty string is falsy, so a bare `if email` would skip the format check
+    entirely and let "" reach storage as an empty string -- a different thing from
+    "not provided", mirroring the identical fix on Customer's `partita_iva`/
+    `codice_sdi` (`_check_fiscal` in customers/service.py)."""
+    person = PersonService(db_session).create(PersonCreate(nome="Mario", email=""), ADMIN)
+    assert person.email is None
+
+
+@pytest.mark.parametrize(
+    "field,limit",
+    [
+        ("nome", NOME_MAX_LENGTH),
+        ("cognome", COGNOME_MAX_LENGTH),
+        ("email", EMAIL_MAX_LENGTH),
+        ("telefono", TELEFONO_MAX_LENGTH),
+        ("ruolo", RUOLO_MAX_LENGTH),
+        ("linkedin", LINKEDIN_MAX_LENGTH),
+    ],
+)
+def test_string_fields_are_bounded_to_their_column_width_on_create(field: str, limit: int) -> None:
+    """Mirrors `CustomerCreate`'s own `*_MAX_LENGTH` bounds (customers/schemas.py):
+    without a matching Pydantic bound, an over-length value sails past validation,
+    reaches `flush()`, and comes back as a raw `sqlalchemy.exc.DataError`
+    (`StringDataRightTruncation`) -- not a subclass of `IntegrityError`, so nothing
+    in this codebase catches it, and it poisons the session."""
+    kwargs: dict[str, Any] = {"nome": "Mario"}
+    kwargs[field] = "x" * (limit + 1)
+    with pytest.raises(ValidationError):
+        PersonCreate(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "field,limit",
+    [
+        ("nome", NOME_MAX_LENGTH),
+        ("cognome", COGNOME_MAX_LENGTH),
+        ("email", EMAIL_MAX_LENGTH),
+        ("telefono", TELEFONO_MAX_LENGTH),
+        ("ruolo", RUOLO_MAX_LENGTH),
+        ("linkedin", LINKEDIN_MAX_LENGTH),
+    ],
+)
+def test_string_fields_are_bounded_to_their_column_width_on_update(field: str, limit: int) -> None:
+    with pytest.raises(ValidationError):
+        PersonUpdate(**{field: "x" * (limit + 1)})
+
+
+def test_custom_fields_are_validated(db_session: Session) -> None:
+    FieldDefinitionService(db_session).create(
+        FieldDefinitionCreate(
+            entity_type="person", key="seniority", label="Seniority", field_type="text"
+        ),
+        ADMIN,
+    )
+    person = PersonService(db_session).create(
+        PersonCreate(nome="Mario", custom_fields={"seniority": "Senior"}), ADMIN
+    )
+    assert person.custom_fields == {"seniority": "Senior"}
+
+    with pytest.raises(ValidationFailed):
+        PersonService(db_session).create(
+            PersonCreate(nome="Luigi", custom_fields={"inventato": "x"}), ADMIN
+        )
+
+
+def test_archived_custom_field_value_survives_unrelated_updates_and_can_still_be_cleared(
+    db_session: Session,
+) -> None:
+    """Task 7's contract for archiving a field definition is 'hide it, keep the data
+    readable'. Validating the *union* of a row's stored custom_fields and the
+    caller's incoming values against only the active definitions breaks that
+    contract: an archived key still sitting in `custom_fields` would make every
+    future update -- even one that never mentions that key -- fail with "campo non
+    definito". `update()` must validate only the keys the caller actually supplies,
+    never the union with what is already stored. Mirrors
+    `test_archived_custom_field_value_survives_unrelated_updates_and_can_still_be_cleared`
+    in test_customers.py exactly."""
+    fields = FieldDefinitionService(db_session)
+    settore = fields.create(
+        FieldDefinitionCreate(
+            entity_type="person", key="settore", label="Settore", field_type="text"
+        ),
+        ADMIN,
+    )
+    fields.create(
+        FieldDefinitionCreate(
+            entity_type="person", key="priorita", label="Priorita", field_type="text"
+        ),
+        ADMIN,
+    )
+    service = PersonService(db_session)
+    person = service.create(PersonCreate(nome="Mario", custom_fields={"settore": "IT"}), ADMIN)
+    fields.archive(settore.id, ADMIN)
+
+    updated = service.update(person.id, PersonUpdate(custom_fields={"priorita": "alta"}), ADMIN)
+    assert updated.custom_fields == {"settore": "IT", "priorita": "alta"}
+
+    cleared = service.update(person.id, PersonUpdate(custom_fields={"settore": None}), ADMIN)
+    assert cleared.custom_fields == {"priorita": "alta"}
+
+    fields.create(
+        FieldDefinitionCreate(
+            entity_type="person",
+            key="stato_persona",
+            label="Stato",
+            field_type="select",
+            options=["attivo", "sospeso"],
+        ),
+        ADMIN,
+    )
+    with pytest.raises(ValidationFailed):
+        service.update(person.id, PersonUpdate(custom_fields={"stato_persona": "chiuso"}), ADMIN)
+
+
+def test_required_active_custom_field_set_to_none_is_rejected_like_empty_string(
+    db_session: Session,
+) -> None:
+    """`None` and `""` are two spellings of the same intent -- "this field has no
+    value" -- and must be rejected identically on a currently active, required
+    field. A version that only sent `None` straight to removal, bypassing any
+    required check, would silently strip a required value with no error."""
+    fields = FieldDefinitionService(db_session)
+    fields.create(
+        FieldDefinitionCreate(
+            entity_type="person",
+            key="settore",
+            label="Settore",
+            field_type="text",
+            required=True,
+        ),
+        ADMIN,
+    )
+    service = PersonService(db_session)
+    person = service.create(PersonCreate(nome="Mario", custom_fields={"settore": "IT"}), ADMIN)
+
+    with pytest.raises(ValidationFailed) as via_none:
+        service.update(person.id, PersonUpdate(custom_fields={"settore": None}), ADMIN)
+    assert via_none.value.details["field"] == "settore"
+    assert via_none.value.details["reason"] == "campo obbligatorio"
+
+    with pytest.raises(ValidationFailed) as via_empty:
+        service.update(person.id, PersonUpdate(custom_fields={"settore": ""}), ADMIN)
+    assert via_empty.value.details["reason"] == via_none.value.details["reason"]
+
+
+def test_non_required_active_custom_field_set_to_none_is_removed(db_session: Session) -> None:
+    fields = FieldDefinitionService(db_session)
+    fields.create(
+        FieldDefinitionCreate(
+            entity_type="person", key="settore", label="Settore", field_type="text"
+        ),
+        ADMIN,
+    )
+    service = PersonService(db_session)
+    person = service.create(PersonCreate(nome="Mario", custom_fields={"settore": "IT"}), ADMIN)
+
+    updated = service.update(person.id, PersonUpdate(custom_fields={"settore": None}), ADMIN)
+    assert updated.custom_fields == {}
+
+
+def test_archived_custom_field_set_to_none_is_removed_even_if_it_was_required(
+    db_session: Session,
+) -> None:
+    """Requiredness only ever blocks removal for a *currently active* definition:
+    clearing an archived field's stored value must stay possible even if the
+    definition was required back when it was active."""
+    fields = FieldDefinitionService(db_session)
+    settore = fields.create(
+        FieldDefinitionCreate(
+            entity_type="person",
+            key="settore",
+            label="Settore",
+            field_type="text",
+            required=True,
+        ),
+        ADMIN,
+    )
+    service = PersonService(db_session)
+    person = service.create(PersonCreate(nome="Mario", custom_fields={"settore": "IT"}), ADMIN)
+    fields.archive(settore.id, ADMIN)
+
+    updated = service.update(person.id, PersonUpdate(custom_fields={"settore": None}), ADMIN)
+    assert updated.custom_fields == {}
+
+
+def test_required_active_custom_field_not_mentioned_in_a_partial_update_is_unaffected(
+    db_session: Session,
+) -> None:
+    """A required, active field the caller never mentions in this update is neither
+    an omission (create-time semantics) nor a removal (a `None` was never sent) --
+    it must be left exactly as stored, with no error."""
+    fields = FieldDefinitionService(db_session)
+    fields.create(
+        FieldDefinitionCreate(
+            entity_type="person",
+            key="settore",
+            label="Settore",
+            field_type="text",
+            required=True,
+        ),
+        ADMIN,
+    )
+    fields.create(
+        FieldDefinitionCreate(
+            entity_type="person", key="priorita", label="Priorita", field_type="text"
+        ),
+        ADMIN,
+    )
+    service = PersonService(db_session)
+    person = service.create(PersonCreate(nome="Mario", custom_fields={"settore": "IT"}), ADMIN)
+
+    updated = service.update(person.id, PersonUpdate(custom_fields={"priorita": "alta"}), ADMIN)
+    assert updated.custom_fields == {"settore": "IT", "priorita": "alta"}
+
+
+def test_create_records_a_timeline_entry(db_session: Session) -> None:
+    from pigrocrm.core.activities.service import ActivityService
+
+    person = PersonService(db_session).create(PersonCreate(nome="Mario"), ADMIN)
+    assert [e.kind for e in ActivityService(db_session).timeline("person", person.id)] == [
+        "created"
+    ]
+
+
+def test_readonly_cannot_create(db_session: Session) -> None:
+    with pytest.raises(PermissionDenied):
+        PersonService(db_session).create(PersonCreate(nome="Mario"), READONLY)
+
+
+def test_readonly_cannot_write_but_can_read(db_session: Session) -> None:
+    service = PersonService(db_session)
+    person = service.create(PersonCreate(nome="Mario"), ADMIN)
+
+    assert service.get(person.id, READONLY).id == person.id
+    with pytest.raises(PermissionDenied):
+        service.create(PersonCreate(nome="Luigi"), READONLY)
+
+
+def test_collaborator_can_create(db_session: Session) -> None:
+    assert PersonService(db_session).create(PersonCreate(nome="Mario"), COLLAB)
+
+
+def test_update_can_detach_a_person_from_a_customer(db_session: Session) -> None:
+    customer = CustomerService(db_session).create(CustomerCreate(ragione_sociale="ACME"), ADMIN)
+    service = PersonService(db_session)
+    person = service.create(PersonCreate(nome="Mario", customer_id=customer.id), ADMIN)
+
+    detached = service.update(person.id, PersonUpdate(customer_id=None, detach=True), ADMIN)
+    assert detached.customer_id is None
+
+
+def test_soft_delete_then_restore(db_session: Session) -> None:
+    service = PersonService(db_session)
+    person = service.create(PersonCreate(nome="Mario"), ADMIN)
+    service.soft_delete(person.id, ADMIN)
+
+    with pytest.raises(NotFound):
+        service.get(person.id, ADMIN)
+    assert service.restore(person.id, ADMIN).nome == "Mario"
+
+
+def test_restore_on_a_person_that_was_never_deleted_does_not_log_a_restored_entry(
+    db_session: Session,
+) -> None:
+    """Mirrors the identical guard on `CustomerService.restore` (customers/
+    service.py): unconditionally logging "restored" -- even for a person who was
+    never soft-deleted -- would write a timeline entry claiming a recovery that
+    never happened."""
+    from pigrocrm.core.activities.service import ActivityService
+
+    service = PersonService(db_session)
+    person = service.create(PersonCreate(nome="Mario"), ADMIN)
+
+    service.restore(person.id, ADMIN)
+
+    kinds = [e.kind for e in ActivityService(db_session).timeline("person", person.id)]
+    assert "restored" not in kinds
+
+
+def test_get_missing_person_raises_not_found(db_session: Session) -> None:
+    with pytest.raises(NotFound):
+        PersonService(db_session).get(uuid4(), ADMIN)
+
+
+def test_list_can_be_filtered_by_customer(db_session: Session) -> None:
+    customer = CustomerService(db_session).create(CustomerCreate(ragione_sociale="ACME"), ADMIN)
+    service = PersonService(db_session)
+    service.create(PersonCreate(nome="Dentro", customer_id=customer.id), ADMIN)
+    service.create(PersonCreate(nome="Fuori"), ADMIN)
+
+    page = service.list(PersonListQuery(customer_id=customer.id), ADMIN)
+    assert [p.nome for p in page.items] == ["Dentro"]
+
+
+def test_search_matches_name_surname_and_email(db_session: Session) -> None:
+    service = PersonService(db_session)
+    service.create(PersonCreate(nome="Mario", cognome="Rossi", email="mr@acme.it"), ADMIN)
+    service.create(PersonCreate(nome="Luigi", cognome="Verdi"), ADMIN)
+
+    assert len(service.list(PersonListQuery(search="rossi"), ADMIN).items) == 1
+    assert len(service.list(PersonListQuery(search="mr@acme.it"), ADMIN).items) == 1
+    assert len(service.list(PersonListQuery(search="mario"), ADMIN).items) == 1
+
+
+def test_search_treats_underscore_as_a_literal_character_not_a_wildcard(
+    db_session: Session,
+) -> None:
+    """In LIKE/ILIKE, "_" means "any one character". An unescaped search term makes
+    a literal underscore in the query match every row with any character in that
+    position -- here, searching "a_b" would also match "axb"."""
+    service = PersonService(db_session)
+    service.create(PersonCreate(nome="A_B"), ADMIN)
+    service.create(PersonCreate(nome="AXB"), ADMIN)
+
+    result = service.list(PersonListQuery(search="a_b"), ADMIN)
+    assert [p.nome for p in result.items] == ["A_B"]
+
+
+def test_search_treats_percent_as_a_literal_character_not_a_wildcard(db_session: Session) -> None:
+    """Same bug, "%" instead of "_": unescaped, it means "any run of characters", so
+    searching "50%off" would also match "50XXXoff"."""
+    service = PersonService(db_session)
+    service.create(PersonCreate(nome="50%off"), ADMIN)
+    service.create(PersonCreate(nome="50XXXoff"), ADMIN)
+
+    result = service.list(PersonListQuery(search="50%off"), ADMIN)
+    assert [p.nome for p in result.items] == ["50%off"]
+
+
+def test_search_term_with_a_trailing_backslash_still_matches(db_session: Session) -> None:
+    """Before escaping, a trailing backslash in the search term combines with the
+    "%" this method appends to build the pattern, forming an accidental escape
+    sequence that swallows the trailing wildcard -- the match disappears entirely,
+    even though the target genuinely contains that backslash."""
+    service = PersonService(db_session)
+    service.create(PersonCreate(nome="ACME\\"), ADMIN)
+
+    result = service.list(PersonListQuery(search="acme\\"), ADMIN)
+    assert [p.nome for p in result.items] == ["ACME\\"]
+
+
+def test_list_query_limit_is_bounded() -> None:
+    with pytest.raises(ValidationError):
+        PersonListQuery(limit=0)
+    with pytest.raises(ValidationError):
+        PersonListQuery(limit=201)
