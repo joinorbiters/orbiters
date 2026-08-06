@@ -17,18 +17,46 @@ from pydantic import BaseModel, ConfigDict, Field
 # width to mirror.
 NOME_MAX_LENGTH = 255
 
+# Mirror Deal's Numeric(p, s) column widths (models.py): valore_previsto and
+# valore_preventivato are Numeric(12, 2), ore_preventivate is Numeric(8, 2).
+# Without max_digits/decimal_places here, a value beyond a column's capacity sails
+# past Pydantic, reaches flush(), and comes back as a raw sqlalchemy.exc.DataError
+# (NumericValueOutOfRange) -- not a subclass of IntegrityError, so no handler
+# catches it, and it poisons the session. Same failure mode as an over-length
+# string reaching a String(n) column (NOME_MAX_LENGTH above); this is the sixth
+# time this project has hit the family, and the first on a Numeric column -- Deal
+# is the first entity with one, so there was no template to copy here.
+#
+# decimal_places=2 does double duty: it also closes a second, subtler gap. Postgres
+# silently rounds a sub-scale value (e.g. 0.005) to the column's scale (0.01) on
+# write, but this project's session_factory sets expire_on_commit=False
+# (db/session.py), so the in-memory object -- and the DealRead built straight from
+# it -- keeps reporting the original, unrounded 0.005: the immediate response would
+# lie about what was actually written. Rejecting the value outright, rather than
+# rounding it silently, means this service never has to decide on the caller's
+# behalf which cent they meant.
+VALORE_MAX_DIGITS = 12
+ORE_MAX_DIGITS = 8
+DECIMAL_PLACES = 2
+
 
 class DealCreate(BaseModel):
     nome: str = Field(max_length=NOME_MAX_LENGTH)
     customer_id: UUID
     pipeline_stage_id: UUID | None = None
-    valore_previsto: Decimal | None = None
+    valore_previsto: Decimal | None = Field(
+        default=None, max_digits=VALORE_MAX_DIGITS, decimal_places=DECIMAL_PLACES
+    )
     probabilita: int | None = None
     data_chiusura_prevista: date | None = None
     owner_id: UUID | None = None
     note: str | None = None
-    ore_preventivate: Decimal | None = None
-    valore_preventivato: Decimal | None = None
+    ore_preventivate: Decimal | None = Field(
+        default=None, max_digits=ORE_MAX_DIGITS, decimal_places=DECIMAL_PLACES
+    )
+    valore_preventivato: Decimal | None = Field(
+        default=None, max_digits=VALORE_MAX_DIGITS, decimal_places=DECIMAL_PLACES
+    )
     custom_fields: dict[str, Any] = {}
 
 
@@ -41,13 +69,19 @@ class DealUpdate(BaseModel):
     # `create`/`move_stage` exist to enforce. `move_stage` is the only supported way
     # to change a deal's stage.
     nome: str | None = Field(default=None, max_length=NOME_MAX_LENGTH)
-    valore_previsto: Decimal | None = None
+    valore_previsto: Decimal | None = Field(
+        default=None, max_digits=VALORE_MAX_DIGITS, decimal_places=DECIMAL_PLACES
+    )
     probabilita: int | None = None
     data_chiusura_prevista: date | None = None
     owner_id: UUID | None = None
     note: str | None = None
-    ore_preventivate: Decimal | None = None
-    valore_preventivato: Decimal | None = None
+    ore_preventivate: Decimal | None = Field(
+        default=None, max_digits=ORE_MAX_DIGITS, decimal_places=DECIMAL_PLACES
+    )
+    valore_preventivato: Decimal | None = Field(
+        default=None, max_digits=VALORE_MAX_DIGITS, decimal_places=DECIMAL_PLACES
+    )
     custom_fields: dict[str, Any] | None = None
 
 
