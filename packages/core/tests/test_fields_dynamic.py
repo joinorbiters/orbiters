@@ -14,9 +14,14 @@ def spec(key: str, field_type: str, **kw: Any) -> FieldSpec:
 
 
 def _try_validate(entity: str, s: FieldSpec, value: Any) -> tuple[bool, Any]:
-    """(accepted, normalised_value) for the single validation authority."""
+    """(accepted, normalised_value) for the single validation authority.
+
+    A blank value on an optional field is *omitted* from `validate_custom_fields`'s
+    result rather than stored as `None` -- `.get(s.key)` treats "omitted" and
+    "present as None" as the same "no value" outcome, matching what the model
+    itself returns for that case."""
     try:
-        return True, validate_custom_fields(entity, [s], {s.key: value})[s.key]
+        return True, validate_custom_fields(entity, [s], {s.key: value}).get(s.key)
     except ValidationFailed:
         return False, None
 
@@ -124,38 +129,69 @@ def test_two_entities_produce_independent_models() -> None:
 
 
 @pytest.mark.parametrize(
-    ("field_type", "value"),
+    ("s", "value"),
     [
-        ("date", "06/08/2026"),
-        ("date", "domani"),
-        ("currency", "hello"),
-        ("url", "javascript:alert(1)"),
-        ("url", "example.com"),
-        ("checkbox", "si"),
+        (spec("campo", "date"), "06/08/2026"),
+        (spec("campo", "date"), "domani"),
+        (spec("campo", "currency"), "hello"),
+        (spec("campo", "url"), "javascript:alert(1)"),
+        (spec("campo", "url"), "example.com"),
+        (spec("campo", "checkbox"), "si"),
+        # Found by an independent 47-row review sweep across all nine types: the
+        # model called `coerce_value` directly, with no notion of "blank," so a
+        # required text/textarea accepted "" (the validator's blank-check rejects
+        # it before coerce_value is even called), and an optional multiselect
+        # stored [] as a real value instead of treating it as absent.
+        (spec("campo", "text", required=True), ""),
+        (spec("campo", "textarea", required=True), ""),
+        (spec("campo", "multiselect", options=["a", "b"]), []),
+        # Symmetric counterparts, so the fix is proven in both directions rather
+        # than just on the exact rows the review happened to list.
+        (spec("campo", "text", required=False), ""),
+        (spec("campo", "multiselect", options=["a", "b"], required=True), []),
+        # Guard rail: False is a value, not a blank -- a required checkbox set to
+        # False must be *accepted* by both, never confused with "missing."
+        (spec("campo", "checkbox", required=True), False),
+    ],
+    ids=[
+        "date-slash-format",
+        "date-word",
+        "currency-non-numeric",
+        "url-javascript-scheme",
+        "url-no-scheme",
+        "checkbox-italian-si",
+        "text-required-blank",
+        "textarea-required-blank",
+        "multiselect-optional-empty",
+        "text-optional-blank",
+        "multiselect-required-empty",
+        "checkbox-required-false",
     ],
 )
-def test_model_and_validator_agree_on_previously_divergent_inputs(
-    field_type: str, value: Any
-) -> None:
+def test_model_and_validator_agree_on_previously_divergent_inputs(s: FieldSpec, value: Any) -> None:
     """A line-by-line comparison of `build_custom_fields_model` against
-    `validate_custom_fields` found exactly these six inputs disagreeing: the model
-    was more permissive than the validator on date/currency/url -- a bare `str`
-    annotation carries no format constraint of its own, so it let through a
-    malformed date, a non-numeric currency, and (worst of all) a `javascript:` URL
-    the validator rejects specifically to stop a stored-XSS -- and stricter on
-    checkbox, because pydantic's own lax `bool` parsing does not recognise the
-    Italian "si" that `coerce_value` does. Either both reject, or both accept and
-    produce the identical normalised value. Two authorities that can disagree is
-    exactly what this module exists to prevent."""
-    s = spec("campo", field_type)
+    `validate_custom_fields` found these inputs disagreeing: the model was more
+    permissive than the validator on date/currency/url -- a bare `str` annotation
+    carries no format constraint of its own, so it let through a malformed date, a
+    non-numeric currency, and (worst of all) a `javascript:` URL the validator
+    rejects specifically to stop a stored-XSS -- stricter on checkbox, because
+    Pydantic's own lax `bool` parsing does not recognise the Italian "si" that
+    `coerce_value` does, and permissive again on blank required text/textarea and
+    blank optional multiselect, because the model called `coerce_value` with no
+    blank-check in front of it, while `validate_custom_fields` always checks
+    blankness first. Either both reject, or both accept and produce the identical
+    normalised value (`None` counts as agreement when the validator omits the key
+    entirely for a blank optional field, and the model reports `None` for it too).
+    Two authorities that can disagree is exactly what this module exists to
+    prevent."""
     model = build_custom_fields_model("customer", [s])
 
     validator_accepted, validator_value = _try_validate("customer", s, value)
-    model_accepted, model_value = _try_model(model, "campo", value)
+    model_accepted, model_value = _try_model(model, s.key, value)
 
     assert model_accepted == validator_accepted, (
-        f"{field_type}={value!r}: validator accepted={validator_accepted}, "
-        f"model accepted={model_accepted}"
+        f"{s.field_type}(required={s.required})={value!r}: "
+        f"validator accepted={validator_accepted}, model accepted={model_accepted}"
     )
     if validator_accepted:
         assert model_value == validator_value
