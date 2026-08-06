@@ -1,2 +1,22 @@
 .claude/settings.local.json
+.claude/worktrees/
 .reference-acme/
+.superpowers/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Env
+.env
+.env.local
