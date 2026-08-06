@@ -15,6 +15,12 @@ from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 
 PAT_PREFIX = "pgc_"
 PREFIX_VISIBLE_CHARS = 8
+# Used for every way `resolve()` can fail -- unknown token, revoked token, or a token
+# whose owning user was deactivated -- so the three are indistinguishable from the
+# outside. A leaked PAT must not double as an oracle for "is this still worth using":
+# the same discipline `UserService.authenticate` already applies with its dummy hash,
+# here applied to error content instead of timing.
+INVALID_TOKEN = "token non valido o revocato"
 
 
 class PatRead(BaseModel):
@@ -91,11 +97,12 @@ class PatService:
         )
         record = self.session.execute(stmt).scalar_one_or_none()
         if record is None or record.revoked_at is not None:
-            raise ValidationFailed("token", "token", "token non valido o revocato")
+            raise ValidationFailed("token", "token", INVALID_TOKEN)
 
         user = self.session.get(User, record.user_id)
         if user is None or not user.attivo:
-            raise ValidationFailed("token", "token", "utente non attivo")
+            # Same message and details as above, on purpose -- see INVALID_TOKEN.
+            raise ValidationFailed("token", "token", INVALID_TOKEN)
 
         record.last_used_at = datetime.now(UTC)
         self.session.commit()

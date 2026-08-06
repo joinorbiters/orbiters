@@ -1,5 +1,7 @@
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
+import jwt
 import pytest
 from sqlalchemy.orm import Session
 
@@ -7,7 +9,12 @@ from pigrocrm.core.actor import Actor
 from pigrocrm.core.auth.pat_service import PAT_PREFIX, PatService
 from pigrocrm.core.auth.schemas import UserCreate
 from pigrocrm.core.auth.service import UserService
-from pigrocrm.core.auth.tokens import decode_token, issue_access_token, issue_refresh_token
+from pigrocrm.core.auth.tokens import (
+    ALGORITHM,
+    decode_token,
+    issue_access_token,
+    issue_refresh_token,
+)
 from pigrocrm.core.config import Settings
 from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 
@@ -19,6 +26,17 @@ def _make_user(db_session: Session, email: str = "tok@test.it"):
     return UserService(db_session).create(
         UserCreate(email=email, password="supersegreta1", nome="Tok", ruolo="admin"), ADMIN
     )
+
+
+def _forge(claims: dict[str, object]) -> str:
+    """A token signed with the real secret, whose claims are not necessarily what
+    `issue_access_token`/`issue_refresh_token` would ever produce -- for exercising
+    what `decode_token` does with a well-signed but malformed payload."""
+    return jwt.encode(claims, SETTINGS.jwt_secret, algorithm=ALGORITHM)
+
+
+def _future_exp() -> int:
+    return int((datetime.now(UTC) + timedelta(minutes=5)).timestamp())
 
 
 def test_access_token_round_trips_user_and_role(db_session: Session) -> None:
@@ -61,6 +79,35 @@ def test_access_token_expiry_matches_settings(db_session: Session) -> None:
     )
     expected = datetime.now(UTC) + timedelta(minutes=SETTINGS.access_token_minutes)
     assert abs((payload.exp - expected).total_seconds()) < 5
+
+
+def test_token_without_sub_is_rejected_not_a_raw_keyerror() -> None:
+    """Well-signed (real secret, real algorithm) but missing the "sub" claim --
+    decode_token's contract is "return a TokenPayload or raise a domain error,"
+    never a bare KeyError from indexing into claims."""
+    forged = _forge({"type": "access", "role": "admin", "exp": _future_exp()})
+    with pytest.raises(ValidationFailed) as exc:
+        decode_token(forged, SETTINGS, expected_type="access")
+    assert exc.value.details["field"] == "token"
+
+
+def test_token_without_exp_is_rejected_not_a_raw_keyerror() -> None:
+    """Well-signed but missing "exp". PyJWT only verifies expiry when the claim is
+    present, so this reaches TokenPayload construction rather than failing inside
+    jwt.decode itself."""
+    forged = _forge({"type": "access", "role": "admin", "sub": str(uuid4())})
+    with pytest.raises(ValidationFailed) as exc:
+        decode_token(forged, SETTINGS, expected_type="access")
+    assert exc.value.details["field"] == "token"
+
+
+def test_token_with_unparseable_sub_is_rejected_not_a_raw_valueerror() -> None:
+    """Well-signed, "sub" present, but not a UUID -- decode_token must not let
+    uuid.UUID's ValueError escape either."""
+    forged = _forge({"type": "access", "role": "admin", "sub": "not-a-uuid", "exp": _future_exp()})
+    with pytest.raises(ValidationFailed) as exc:
+        decode_token(forged, SETTINGS, expected_type="access")
+    assert exc.value.details["field"] == "token"
 
 
 def test_pat_is_returned_once_and_stored_only_as_a_hash(db_session: Session) -> None:
@@ -130,6 +177,47 @@ def test_pat_for_deactivated_user_stops_working(db_session: Session) -> None:
 
     with pytest.raises(ValidationFailed):
         PatService(db_session).resolve(raw)
+
+
+def test_unknown_revoked_and_deactivated_user_tokens_are_indistinguishable(
+    db_session: Session,
+) -> None:
+    """Someone holding a leaked PAT must not be able to tell "revoked, dead end"
+    apart from "still valid, just needs its user reactivated" -- that distinction
+    would tell them whether it is worth pursuing. Same discipline as
+    UserService.authenticate's dummy hash, applied to error content rather than
+    timing: asserts message and details are identical, not merely that all three
+    raise ValidationFailed."""
+    from pigrocrm.core.auth.schemas import UserUpdate
+
+    service = PatService(db_session)
+
+    revoked_owner = _make_user(db_session, "revoked-owner@test.it")
+    revoked_actor = Actor(id=revoked_owner.id, type="user", role="admin")
+    revoked_record, revoked_raw = service.create("Revocato", revoked_actor)
+    service.revoke(revoked_record.id, revoked_actor)
+
+    deactivated_owner = _make_user(db_session, "deactivated-owner@test.it")
+    deactivated_actor = Actor(id=deactivated_owner.id, type="user", role="admin")
+    _, deactivated_raw = service.create("Utente disattivato", deactivated_actor)
+    UserService(db_session).update(deactivated_owner.id, UserUpdate(attivo=False), ADMIN)
+
+    unknown_raw = "pgc_this-token-was-never-issued-by-anyone"
+
+    caught: list[ValidationFailed] = []
+    for raw in (unknown_raw, revoked_raw, deactivated_raw):
+        with pytest.raises(ValidationFailed) as exc:
+            service.resolve(raw)
+        caught.append(exc.value)
+
+    unknown_err, revoked_err, deactivated_err = caught
+    assert revoked_err.message == unknown_err.message
+    assert revoked_err.details == unknown_err.details
+    assert deactivated_err.message == unknown_err.message, (
+        "a deactivated user's token must fail identically to an unknown or revoked "
+        "one, or the error itself becomes a way to tell a live token from a dead one"
+    )
+    assert deactivated_err.details == unknown_err.details
 
 
 def test_pat_hash_collision_becomes_a_domain_conflict_not_a_raw_integrity_error(
