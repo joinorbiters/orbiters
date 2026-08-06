@@ -1,9 +1,10 @@
 from uuid import UUID
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
-from pigrocrm.core.errors import NotFound, ValidationFailed
+from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 from pigrocrm.core.pipeline.models import PipelineStage
 from pigrocrm.core.pipeline.repository import PipelineRepository
 from pigrocrm.core.pipeline.schemas import (
@@ -12,13 +13,15 @@ from pigrocrm.core.pipeline.schemas import (
     PipelineStageUpdate,
 )
 
-DEFAULT_STAGES: list[tuple[str, int, int, str]] = [
-    ("Lead", 0, 10, "open"),
-    ("Contattato", 1, 25, "open"),
-    ("Offerta", 2, 50, "open"),
-    ("Negoziazione", 3, 75, "open"),
-    ("Vinto", 4, 100, "won"),
-    ("Perso", 5, 0, "lost"),
+# (code, nome, posizione, probabilita_default, tipo). `seed_defaults` deduplicates on
+# `code`, never on `nome` -- see `PipelineStage`'s docstring for why.
+DEFAULT_STAGES: list[tuple[str, str, int, int, str]] = [
+    ("lead", "Lead", 0, 10, "open"),
+    ("contattato", "Contattato", 1, 25, "open"),
+    ("offerta", "Offerta", 2, 50, "open"),
+    ("negoziazione", "Negoziazione", 3, 75, "open"),
+    ("vinto", "Vinto", 4, 100, "won"),
+    ("perso", "Perso", 5, 0, "lost"),
 ]
 
 
@@ -29,6 +32,10 @@ def _check_probability(value: int | None) -> None:
         )
 
 
+def _conflicting_code(code: str | None) -> Conflict:
+    return Conflict("pipeline_stage", "esiste già uno stato con questo code", code=code)
+
+
 class PipelineService:
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -37,8 +44,19 @@ class PipelineService:
     def create(self, data: PipelineStageCreate, actor: Actor) -> PipelineStageRead:
         actor.require_admin("create_pipeline_stage")
         _check_probability(data.probabilita_default)
-        stage = self.repo.add(PipelineStage(**data.model_dump()))
-        self.session.commit()
+        if data.code is not None and self.repo.get_by_code(data.code) is not None:
+            raise _conflicting_code(data.code)
+        stage = PipelineStage(**data.model_dump())
+        try:
+            self.repo.add(stage)
+            self.session.commit()
+        except IntegrityError as exc:
+            # The pre-check above cannot cover a race between two concurrent requests
+            # that both pass it before either commits -- the unique index on `code` is
+            # the real authority. The rollback is mandatory: without it the session is
+            # unusable for the caller.
+            self.session.rollback()
+            raise _conflicting_code(data.code) from exc
         return PipelineStageRead.model_validate(stage)
 
     def update(self, stage_id: UUID, data: PipelineStageUpdate, actor: Actor) -> PipelineStageRead:
@@ -53,6 +71,19 @@ class PipelineService:
         self.session.commit()
         return PipelineStageRead.model_validate(stage)
 
+    def delete(self, stage_id: UUID, actor: Actor) -> None:
+        """Admin-only, and refuses if any deal is currently in this stage -- deleting
+        it out from under them would leave those deals pointing at nothing."""
+        actor.require_admin("delete_pipeline_stage")
+        stage = self.repo.get(stage_id)
+        if stage is None:
+            raise NotFound("pipeline_stage", stage_id)
+        deal_count = self.repo.count_deals_in_stage(stage_id)
+        if deal_count > 0:
+            raise Conflict("pipeline_stage", "ci sono deal in questo stato", deals=deal_count)
+        self.repo.delete(stage)
+        self.session.commit()
+
     def get(self, stage_id: UUID) -> PipelineStageRead:
         stage = self.repo.get(stage_id)
         if stage is None:
@@ -61,11 +92,12 @@ class PipelineService:
 
     # `list` is defined LAST in this class on purpose — see the note below the code.
     def seed_defaults(self) -> list[PipelineStageRead]:
-        existing = {s.nome for s in self.repo.list()}
-        for nome, posizione, probabilita, tipo in DEFAULT_STAGES:
-            if nome not in existing:
+        existing_codes = {s.code for s in self.repo.list() if s.code is not None}
+        for code, nome, posizione, probabilita, tipo in DEFAULT_STAGES:
+            if code not in existing_codes:
                 self.repo.add(
                     PipelineStage(
+                        code=code,
                         nome=nome,
                         posizione=posizione,
                         probabilita_default=probabilita,
@@ -76,10 +108,18 @@ class PipelineService:
         return self.list()
 
     def default_stage(self) -> PipelineStageRead:
-        stages = self.list()
-        if not stages:
-            raise NotFound("pipeline_stage", "default")
-        return stages[0]
+        """The lowest-position stage of type `open` -- never a terminal one. A deal
+        created without an explicit stage must start somewhere still in progress;
+        handing it a `won`/`lost` stage would fabricate an outcome nobody decided."""
+        open_stages = [s for s in self.list() if s.tipo == "open"]
+        if not open_stages:
+            raise ValidationFailed(
+                "pipeline_stage",
+                "tipo",
+                "nessuno stato aperto configurato",
+                expected="almeno uno stato di tipo open",
+            )
+        return min(open_stages, key=lambda s: s.posizione)
 
     def list(self) -> list[PipelineStageRead]:
         return [PipelineStageRead.model_validate(s) for s in self.repo.list()]

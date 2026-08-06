@@ -1,13 +1,26 @@
-from sqlalchemy import Integer, String
+from sqlalchemy import Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from pigrocrm.core.db import Base, PrimaryKeyMixin, TimestampMixin
 
 
 class PipelineStage(Base, PrimaryKeyMixin, TimestampMixin):
+    """`code` is the stable identity for the seeded default stages; `nome` is the
+    visible label a user is free to rename. `seed_defaults` deduplicates on `code`,
+    never on `nome` -- the same reasoning that makes `tipo` exist: logic must not
+    depend on a string the user can change.
+
+    Stages a user creates through `create` have no `code` (`None`) and are never
+    touched by `seed_defaults`. The unique index below is safe for that: Postgres
+    treats every `NULL` as distinct from every other value under a unique index, so
+    any number of user-created, code-less stages can coexist.
+    """
+
     __tablename__ = "pipeline_stages"
+    __table_args__ = (Index("uq_pipeline_stage_code", "code", unique=True),)
 
     nome: Mapped[str] = mapped_column(String(60), nullable=False)
     posizione: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     probabilita_default: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     tipo: Mapped[str] = mapped_column(String(10), nullable=False, default="open")
+    code: Mapped[str | None] = mapped_column(String(30), default=None)
