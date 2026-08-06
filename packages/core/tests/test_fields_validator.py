@@ -256,6 +256,18 @@ def test_field_spec_rejects_multiselect_with_no_options() -> None:
         FieldSpec(key="tag", label="Tag", field_type="multiselect", options=[])
 
 
+def _deeply_nested_list(depth: int) -> list[Any]:
+    """A list nested `depth` levels deep, built iteratively so the test itself
+    never recurses - only the *value* it produces is deeply nested."""
+    value: list[Any] = []
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
+_DEEPLY_NESTED_LIST = _deeply_nested_list(20_000)
+_VERY_LONG_STRING = "x" * 100_000
+
 _HOSTILE_VALUES: list[Any] = [
     [],
     {},
@@ -267,6 +279,8 @@ _HOSTILE_VALUES: list[Any] = [
     "abc\x00def",
     None,
     True,
+    _DEEPLY_NESTED_LIST,
+    _VERY_LONG_STRING,
 ]
 _HOSTILE_IDS = [
     "empty_list",
@@ -279,6 +293,8 @@ _HOSTILE_IDS = [
     "null_byte",
     "none",
     "true",
+    "deeply_nested_list",
+    "very_long_string",
 ]
 
 
@@ -307,3 +323,32 @@ def test_hostile_values_never_escape_as_a_raw_exception_or_an_unsafe_value(
     # strict JSONB parser like Postgres's rejects. The default allow_nan=True would
     # let the silent-corruption case (C3) through this net unnoticed.
     json.dumps(result, allow_nan=False)
+
+
+# --- Fix round 2: a deeply nested or oversized value must not exhaust the stack,
+# or produce a message so large it ends up whole in an HTTP problem document and
+# in an agent's context, just to report that the value is rejected.
+
+
+_MAX_REASONABLE_MESSAGE_LENGTH = 500
+
+
+def test_validation_failed_message_stays_bounded_for_a_huge_input() -> None:
+    """A 10 MB numeric-looking string in a number field must not produce a 10 MB
+    ValidationFailed message - that string would end up whole in an HTTP problem
+    document and in an agent's context, just to report that it is rejected."""
+    huge = "9" * 10_000_000
+    with pytest.raises(ValidationFailed) as exc:
+        validate_custom_fields("c", [spec("n", "number")], {"n": huge})
+    assert len(exc.value.details["reason"]) < _MAX_REASONABLE_MESSAGE_LENGTH
+    assert len(str(exc.value)) < _MAX_REASONABLE_MESSAGE_LENGTH
+
+
+def test_validation_failed_message_stays_bounded_for_a_deeply_nested_input() -> None:
+    """A deeply nested value must not exhaust the stack while the module is still
+    trying to explain why it is invalid, and the resulting message must still be
+    short - not the value's own (enormous) formatted representation."""
+    with pytest.raises(ValidationFailed) as exc:
+        validate_custom_fields("c", [spec("n", "number")], {"n": _DEEPLY_NESTED_LIST})
+    assert len(exc.value.details["reason"]) < _MAX_REASONABLE_MESSAGE_LENGTH
+    assert len(str(exc.value)) < _MAX_REASONABLE_MESSAGE_LENGTH

@@ -13,6 +13,11 @@ ALLOWED_URL_SCHEMES = {"http", "https"}
 # text/textarea/url all funnel through _clean_text: only these become text, so a
 # dict or a list can never be silently stringified into "{'a': 1}"-shaped garbage.
 TEXT_SCALAR_TYPES = (str, int, float, bool, Decimal)
+# Formatting a container's contents is exactly what can exhaust the stack on a
+# deeply nested input. Naming its type instead never touches that structure, so
+# _brief/_safe_text cannot recurse into it no matter how deep it goes.
+CONTAINER_TYPES = (list, dict, tuple)
+_MAX_VALUE_REPR = 60
 
 
 def _fail(entity: str, key: str, reason: str, expected: str | None = None) -> NoReturn:
@@ -21,61 +26,106 @@ def _fail(entity: str, key: str, reason: str, expected: str | None = None) -> No
     raise ValidationFailed(entity, key, reason, expected=expected)
 
 
+def _brief(value: Any) -> str:
+    """Rappresentazione limitata del valore, per i messaggi d'errore.
+
+    Interpolare il valore grezzo ha due difetti: un input molto annidato esaurisce
+    lo stack durante la formattazione, prima ancora che l'eccezione esista, e un
+    valore molto grande produce un messaggio enorme che finisce in un problem
+    document HTTP e nel contesto di un agente.
+    """
+    if isinstance(value, CONTAINER_TYPES):
+        # Never attempt str() on a container at all: checking the type is O(1) and
+        # cannot recurse, whereas formatting its contents is the actual recursion.
+        return f"<{type(value).__name__}>"
+    try:
+        text = str(value)
+    except RecursionError:
+        # Defence in depth for shapes CONTAINER_TYPES does not name - e.g. a custom
+        # object whose __repr__ walks into a deeply nested attribute.
+        return f"<{type(value).__name__} troppo annidato>"
+    if len(text) > _MAX_VALUE_REPR:
+        return text[:_MAX_VALUE_REPR] + "…"
+    return text
+
+
+def _safe_text(value: Any) -> str | None:
+    """str(value).strip(), or None if value is a container type whose contents we
+    refuse to format - printing them is exactly what could exhaust the stack.
+    Used for the actual coerced value, never truncated like `_brief`."""
+    if isinstance(value, CONTAINER_TYPES):
+        return None
+    return str(value).strip()
+
+
+def _safe_decimal(value: Any) -> Decimal | None:
+    text = _safe_text(value)
+    if text is None:
+        return None
+    try:
+        return Decimal(text)
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+
 def _coerce_number(entity: str, spec: FieldSpec, value: Any) -> float:
     try:
         result = float(value)
     except (TypeError, ValueError, OverflowError):
         # OverflowError: JSON has no size limit on integers, so json.loads can hand
         # us an int float() cannot represent - e.g. an integer with hundreds of
-        # digits. That is exactly as invalid as a non-numeric string.
-        _fail(entity, spec.key, f"'{value}' non è un numero", "un numero")
+        # digits. That is exactly as invalid as a non-numeric string. float() never
+        # formats a container's contents to raise this, so value is safe to brief.
+        _fail(entity, spec.key, f"'{_brief(value)}' non è un numero", "un numero")
     if not math.isfinite(result):
         # float("1e1000") becomes inf without float() raising anything, so
         # finiteness has to be checked after conversion, not inferred from it.
         # Postgres rejects a bare NaN/Infinity token in JSONB outright.
-        _fail(entity, spec.key, f"'{value}' non è un numero finito", "un numero finito")
+        _fail(entity, spec.key, f"'{_brief(value)}' non è un numero finito", "un numero finito")
     return result
 
 
 def _coerce_currency(entity: str, spec: FieldSpec, value: Any) -> str:
     """Money is stored as a fixed-scale string: JSON has no decimal type, and float
     rounding on money is a bug that only shows up on an invoice."""
-    try:
-        amount = Decimal(str(value))
-    except (InvalidOperation, TypeError, ValueError):
-        _fail(entity, spec.key, f"'{value}' non è un importo", "un importo numerico")
+    amount = _safe_decimal(value)
+    if amount is None:
+        _fail(entity, spec.key, f"'{_brief(value)}' non è un importo", "un importo numerico")
     if not amount.is_finite():
         # Decimal("NaN").quantize(...) does not raise - it silently propagates NaN -
         # while Decimal("Infinity").quantize(...) does. Checking is_finite() first
         # means both fail the same way instead of NaN slipping through as "NaN".
-        _fail(entity, spec.key, f"'{value}' non è un importo finito", "un importo finito")
+        _fail(entity, spec.key, f"'{_brief(value)}' non è un importo finito", "un importo finito")
     try:
         return str(amount.quantize(Decimal("0.01")))
     except InvalidOperation:
         # A value with more significant digits than the decimal context allows
         # (e.g. a 400-digit integer) is finite but still cannot be quantized.
-        _fail(entity, spec.key, f"'{value}' non è un importo", "un importo numerico")
+        _fail(entity, spec.key, f"'{_brief(value)}' non è un importo", "un importo numerico")
 
 
 def _coerce_date(entity: str, spec: FieldSpec, value: Any) -> str:
     if isinstance(value, date):
         return value.isoformat()
-    try:
-        return date.fromisoformat(str(value)).isoformat()
-    except ValueError:
-        _fail(entity, spec.key, f"'{value}' non è una data valida", "una data ISO (YYYY-MM-DD)")
+    text = _safe_text(value)
+    if text is not None:
+        try:
+            return date.fromisoformat(text).isoformat()
+        except ValueError:
+            pass
+    _fail(entity, spec.key, f"'{_brief(value)}' non è una data valida", "una data ISO (YYYY-MM-DD)")
 
 
 def _coerce_select(entity: str, spec: FieldSpec, value: Any) -> str:
-    text = str(value).strip()
-    if text not in spec.options:
-        _fail(
-            entity,
-            spec.key,
-            f"'{text}' non è tra le opzioni ammesse",
-            f"uno tra: {', '.join(spec.options)}",
-        )
-    return text
+    text = _safe_text(value)
+    if text is not None and text in spec.options:
+        return text
+    _fail(
+        entity,
+        spec.key,
+        f"'{_brief(value)}' non è tra le opzioni ammesse",
+        f"uno tra: {', '.join(spec.options)}",
+    )
 
 
 def _coerce_multiselect(entity: str, spec: FieldSpec, value: Any) -> list[str]:
@@ -83,12 +133,12 @@ def _coerce_multiselect(entity: str, spec: FieldSpec, value: Any) -> list[str]:
         _fail(entity, spec.key, "il valore deve essere una lista", "una lista di valori")
     seen: list[str] = []
     for item in value:
-        text = str(item).strip()
-        if text not in spec.options:
+        text = _safe_text(item)
+        if text is None or text not in spec.options:
             _fail(
                 entity,
                 spec.key,
-                f"'{text}' non è tra le opzioni ammesse",
+                f"'{_brief(item)}' non è tra le opzioni ammesse",
                 f"valori tra: {', '.join(spec.options)}",
             )
         if text not in seen:
@@ -107,7 +157,7 @@ def _coerce_checkbox(entity: str, spec: FieldSpec, value: Any) -> bool:
         # A client sending arbitrary JSON can easily produce one; that is just
         # another way of saying "not a recognisable boolean", not a crash.
         pass
-    _fail(entity, spec.key, f"'{value}' non è un booleano", "true oppure false")
+    _fail(entity, spec.key, f"'{_brief(value)}' non è un booleano", "true oppure false")
 
 
 def _clean_text(entity: str, spec: FieldSpec, value: Any) -> str:
@@ -117,7 +167,10 @@ def _clean_text(entity: str, spec: FieldSpec, value: Any) -> str:
     would change the user's data without telling them, and Postgres refuses \\x00 in
     a text column regardless."""
     if not isinstance(value, TEXT_SCALAR_TYPES):
-        _fail(entity, spec.key, f"'{value}' non è un valore testuale", "un valore testuale")
+        # value is by definition not one of TEXT_SCALAR_TYPES here - it could be
+        # the very container we must not format - so the message uses _brief, not
+        # value directly, even though the main path never calls str() on it.
+        _fail(entity, spec.key, f"'{_brief(value)}' non è un valore testuale", "un valore testuale")
     text = str(value).strip()
     if "\x00" in text:
         _fail(
@@ -135,7 +188,9 @@ def _coerce_url(entity: str, spec: FieldSpec, value: Any) -> str:
     # Rejecting javascript: here is what stops a stored-XSS the moment the UI
     # renders a custom field as a link.
     if parsed.scheme not in ALLOWED_URL_SCHEMES or not parsed.netloc:
-        _fail(entity, spec.key, f"'{text}' non è un URL valido", "un URL http:// o https://")
+        _fail(
+            entity, spec.key, f"'{_brief(text)}' non è un URL valido", "un URL http:// o https://"
+        )
     return text
 
 
