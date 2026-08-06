@@ -278,10 +278,14 @@ Altrettanto sottile, con due responsabilità aggiuntive.
 
 Se l'utente ha aggiunto un campo custom "Settore", Claude non può indovinarlo. Quindi:
 
-- I tool costruiscono il proprio **JSON Schema a runtime** leggendo `field_definitions`.
-- Un tool `describe_schema` restituisce la forma corrente di ogni entità.
+- I tool espongono lo **schema dinamico** costruito a runtime da `field_definitions`.
+- Un tool `describe_schema` restituisce la forma corrente di ogni entità, letta dal database a ogni chiamata.
 
 Senza questo, campi dinamici e MCP sono due funzionalità che si ignorano a vicenda.
+
+**Meccanismo.** L'SDK MCP (`mcp` v2) inferisce lo schema di un tool dalla firma della funzione: `add_tool()` non accetta un JSON Schema esplicito. Il ponte è `pydantic.create_model()`, che costruisce a runtime il modello dell'entità a partire dalle `field_definitions`; il modello diventa l'annotazione del parametro del tool e l'inferenza produce lo schema corretto. **Lo stesso factory alimenta FastAPI**, quindi OpenAPI e MCP descrivono i campi custom dalla stessa fonte, senza duplicazione.
+
+**Conseguenza da gestire.** Gli schemi dei tool sono fissati alla registrazione, e il processo MCP è distinto da quello dell'API: un campo aggiunto dalla web app non è visibile a un server MCP già avviato. Perciò `describe_schema` legge sempre dal vivo, e un tool `refresh_schema` ri-registra i tool dinamici ed emette `send_tool_list_changed()`.
 
 ### 8.2 Errori azionabili da un modello
 
