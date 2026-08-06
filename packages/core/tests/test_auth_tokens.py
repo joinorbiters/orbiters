@@ -18,7 +18,7 @@ from pigrocrm.core.auth.tokens import (
 from pigrocrm.core.config import Settings
 from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 
-SETTINGS = Settings(jwt_secret="test-secret-not-for-production")
+SETTINGS = Settings(jwt_secret="test-secret-not-for-production-and-32-chars-long")
 ADMIN = Actor(id=None, type="system", role="admin")
 
 
@@ -67,7 +67,9 @@ def test_expired_token_is_rejected(db_session: Session) -> None:
 
 def test_token_signed_with_another_secret_is_rejected(db_session: Session) -> None:
     user = _make_user(db_session)
-    token = issue_access_token(user.id, "admin", Settings(jwt_secret="a-different-secret"))
+    token = issue_access_token(
+        user.id, "admin", Settings(jwt_secret="a-different-secret-that-is-also-32-chars")
+    )
     with pytest.raises(ValidationFailed):
         decode_token(token, SETTINGS, expected_type="access")
 

@@ -11,3 +11,10 @@ known-first-party = ["pigrocrm", "pigrocrm_api", "pigrocrm_mcp"]
 [lint.flake8-tidy-imports.banned-api]
 "pigrocrm_api".msg = "packages/core must not import from apps/api"
 "pigrocrm_mcp".msg = "packages/core must not import from apps/mcp"
+
+[lint.per-file-ignores]
+# The ban above exists solely to keep packages/core from importing an adapter (see the
+# messages above) -- it was never meant to stop apps/api or apps/mcp from importing
+# their own package. Task 14 is the first task with real intra-package imports under
+# apps/, which is why this had never fired before.
+"apps/**" = ["TID251"]
