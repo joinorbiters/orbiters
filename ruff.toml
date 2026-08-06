@@ -1,0 +1,8 @@
+line-length = 100
+target-version = "py313"
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "TID"]
+
+[lint.flake8-tidy-imports.banned-api]
+"apps".msg = "packages/core must not import from apps/"
