@@ -1,8 +1,12 @@
+from typing import Any
+
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import Column, Integer, Table
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
+from pigrocrm.core.db import Base
 from pigrocrm.core.errors import Conflict, PermissionDenied, ValidationFailed
 from pigrocrm.core.pipeline.schemas import PipelineStageCreate, PipelineStageUpdate
 from pigrocrm.core.pipeline.service import PipelineService
@@ -150,3 +154,89 @@ def test_create_allows_several_stages_with_no_code(db_session: Session) -> None:
     service.create(PipelineStageCreate(nome="Due", posizione=1), ADMIN)
 
     assert {s.nome for s in service.list()} == {"Uno", "Due"}
+
+
+# --- Fix round 2 ------------------------------------------------------------------
+
+
+def test_create_rejects_a_duplicate_code_race_past_the_precheck(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`test_create_rejects_a_duplicate_code` above only exercises the precheck
+    branch -- the second call's own `get_by_code` correctly finds the first row, so
+    the `except IntegrityError` branch never runs. This mirrors
+    `test_duplicate_key_race_past_the_precheck_still_becomes_a_domain_conflict` in
+    fields (force the precheck to report "not found" while a real duplicate already
+    exists, so the INSERT hits the database's own unique index) and is the test that
+    was actually missing, not the one already there."""
+    service = PipelineService(db_session)
+    service.create(PipelineStageCreate(nome="Uno", posizione=0, code="dup"), ADMIN)
+
+    monkeypatch.setattr(service.repo, "get_by_code", lambda code: None)
+
+    with pytest.raises(Conflict) as exc:
+        service.create(PipelineStageCreate(nome="Due", posizione=1, code="dup"), ADMIN)
+    assert exc.value.details["code"] == "dup"
+
+    # The session must still be usable right after -- a leftover PendingRollbackError
+    # would blow up on the very next statement issued on it.
+    assert len(service.list()) == 1
+
+
+def test_seed_defaults_race_past_the_precheck_converges_silently(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same shape as the create()-race tests (force the precheck to lie so the INSERT
+    hits the real unique constraint), but seed_defaults's contract is the opposite of
+    create()'s: the caller only wanted the defaults to exist, not to create *this
+    specific* row, so losing the race must converge silently instead of raising
+    Conflict. Lies only on the first `repo.list()` call (the precheck that computes
+    `existing_codes`) -- `seed_defaults`'s own trailing `return self.list()` also calls
+    `repo.list()`, and that call must see the real rows."""
+    service = PipelineService(db_session)
+    service.seed_defaults()
+
+    real_list = service.repo.list
+    calls = {"n": 0}
+
+    def _lie_on_first_call() -> list[Any]:
+        calls["n"] += 1
+        return [] if calls["n"] == 1 else real_list()
+
+    monkeypatch.setattr(service.repo, "list", _lie_on_first_call)
+
+    result = service.seed_defaults()
+
+    assert len(result) == 6
+
+
+def test_delete_fails_loudly_if_the_deals_table_lacks_the_expected_column(
+    db_session: Session,
+) -> None:
+    """Returning 0 from `count_deals_in_stage` is only correct when `deals` does not
+    exist yet. If it exists but without the expected column, that is a bug in this
+    code, not "no deals" -- silently returning 0 would let `delete()` remove a stage
+    that might still be full of deals. Registers a bare `deals` table directly in
+    `Base.metadata` (no `pipeline_stage_id`) rather than waiting for the real table to
+    exist; this only exercises the Python-side column lookup, never issues SQL against
+    it, so no real DDL is needed."""
+    fake_deals = Table("deals", Base.metadata, Column("id", Integer, primary_key=True))
+    try:
+        service = PipelineService(db_session)
+        stage = service.create(PipelineStageCreate(nome="Occupato", posizione=0), ADMIN)
+
+        with pytest.raises(RuntimeError):
+            service.delete(stage.id, ADMIN)
+    finally:
+        Base.metadata.remove(fake_deals)
+
+
+def test_nome_over_the_column_width_is_rejected_on_create_and_update() -> None:
+    """Same class of gap `code`'s `CODE_MAX_LENGTH` closed in fix round 1, but on
+    `nome` -- present since the original Task 9 brief, unbounded until now. The
+    fourth time this project has hit an unbounded string column that can reach
+    `flush()` and come back as a raw, session-poisoning `DataError`."""
+    with pytest.raises(ValidationError):
+        PipelineStageCreate(nome="x" * 61, posizione=0)
+    with pytest.raises(ValidationError):
+        PipelineStageUpdate(nome="x" * 61)
