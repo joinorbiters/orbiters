@@ -51,9 +51,18 @@ def decode_token(token: str, settings: Settings, *, expected_type: TokenType) ->
 
     if claims.get("type") != expected_type:
         raise ValidationFailed("session", "token", "tipo di token errato", expected=expected_type)
-    return TokenPayload(
-        sub=UUID(claims["sub"]),
-        role=claims.get("role"),
-        type=claims["type"],
-        exp=datetime.fromtimestamp(claims["exp"], tz=UTC),
-    )
+
+    # A signature can be valid while the payload is still missing or malformed --
+    # e.g. no "sub", no "exp", or a "sub" that is not a UUID. Building TokenPayload
+    # from claims must never let a raw KeyError/ValueError escape: this function's
+    # contract is "return a TokenPayload or raise a domain error," never a bare
+    # stdlib exception.
+    try:
+        return TokenPayload(
+            sub=UUID(claims["sub"]),
+            role=claims.get("role"),
+            type=claims["type"],
+            exp=datetime.fromtimestamp(claims["exp"], tz=UTC),
+        )
+    except (KeyError, ValueError) as exc:
+        raise ValidationFailed("session", "token", "token malformato") from exc
