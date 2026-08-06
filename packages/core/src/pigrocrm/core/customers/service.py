@@ -90,12 +90,26 @@ class CustomerService:
         before any notion of removal.
 
         A key supplied with `None` removes that entry from the stored dict -- the one
-        way left to clear an obsolete value once its definition is archived. A key
-        supplied with any other value must belong to a currently active definition:
-        setting a *new* value on an archived key is refused, the same as on an
-        undefined one -- archiving means "closed to new input," not "gone." Keys
-        already stored that `provided` does not mention -- archived or not -- are
-        carried over untouched.
+        way left to clear an obsolete value once its definition is archived -- unless
+        the key currently belongs to an active, `required=True` definition, in which
+        case it raises the same "campo obbligatorio" `ValidationFailed` that
+        `validate_custom_fields` would raise for `""` below. `None` and `""` are two
+        spellings of "this field has no value"; a first version of this method treated
+        them differently -- `""` reached `validate_custom_fields` and was correctly
+        rejected by its own is_blank/required check, while `None` went straight into
+        `to_remove` and never reached any required check at all, silently stripping a
+        required value with no error. On a *required* field the two spellings must be
+        rejected identically, or a caller strips the value just by choosing the other
+        one. This check only fires for a key that is currently active and required:
+        archived, undefined, or non-required keys keep the round 1 behavior above --
+        clearing an archived field's stored value must stay possible even if the
+        definition was required back when it was active.
+
+        A key supplied with any other (non-blank) value must belong to a currently
+        active definition: setting a *new* value on an archived key is refused, the
+        same as on an undefined one -- archiving means "closed to new input," not
+        "gone." Keys already stored that `provided` does not mention -- archived or
+        not, required or not -- are carried over untouched.
 
         Filtering `specs` down to only the touched keys before calling
         `validate_custom_fields` is what keeps this partial-update-shaped: that
@@ -105,9 +119,21 @@ class CustomerService:
         that this update never mentions at all if the full active spec list were
         passed here unfiltered.
         """
-        to_remove = {key for key, value in provided.items() if value is None}
+        active_by_key = {spec.key: spec for spec in self.fields.specs_for(ENTITY)}
+
+        to_remove: set[str] = set()
+        for key, value in provided.items():
+            if value is not None:
+                continue
+            spec = active_by_key.get(key)
+            if spec is not None and spec.required:
+                raise ValidationFailed(
+                    ENTITY, key, "campo obbligatorio", expected="un valore non vuoto"
+                )
+            to_remove.add(key)
+
         to_set = {key: value for key, value in provided.items() if value is not None}
-        touched_specs = [spec for spec in self.fields.specs_for(ENTITY) if spec.key in to_set]
+        touched_specs = [spec for spec in active_by_key.values() if spec.key in to_set]
         validated = validate_custom_fields(ENTITY, touched_specs, to_set)
 
         merged = {k: v for k, v in customer.custom_fields.items() if k not in to_remove}

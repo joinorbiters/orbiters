@@ -192,6 +192,118 @@ def test_archived_custom_field_value_survives_unrelated_updates_and_can_still_be
         )
 
 
+def test_required_active_custom_field_set_to_none_is_rejected_like_empty_string(
+    db_session: Session,
+) -> None:
+    """`None` and `""` are two spellings of the same intent -- "this field has no
+    value" -- and must be rejected identically on a currently active, required
+    field. Before this fix, `""` was rejected by `validate_custom_fields`'s own
+    is_blank/required check, but `None` took a different path straight into
+    `to_remove` and silently stripped the value with no error at all: the exact
+    same clearing intent, spelled two ways, landing on opposite outcomes."""
+    fields = FieldDefinitionService(db_session)
+    fields.create(
+        FieldDefinitionCreate(
+            entity_type="customer",
+            key="settore",
+            label="Settore",
+            field_type="text",
+            required=True,
+        ),
+        ADMIN,
+    )
+    service = CustomerService(db_session)
+    customer = service.create(
+        CustomerCreate(ragione_sociale="ACME", custom_fields={"settore": "IT"}), ADMIN
+    )
+
+    with pytest.raises(ValidationFailed) as via_none:
+        service.update(customer.id, CustomerUpdate(custom_fields={"settore": None}), ADMIN)
+    assert via_none.value.details["field"] == "settore"
+    assert via_none.value.details["reason"] == "campo obbligatorio"
+
+    with pytest.raises(ValidationFailed) as via_empty:
+        service.update(customer.id, CustomerUpdate(custom_fields={"settore": ""}), ADMIN)
+    assert via_empty.value.details["reason"] == via_none.value.details["reason"]
+
+
+def test_non_required_active_custom_field_set_to_none_is_removed(db_session: Session) -> None:
+    fields = FieldDefinitionService(db_session)
+    fields.create(
+        FieldDefinitionCreate(
+            entity_type="customer", key="settore", label="Settore", field_type="text"
+        ),
+        ADMIN,
+    )
+    service = CustomerService(db_session)
+    customer = service.create(
+        CustomerCreate(ragione_sociale="ACME", custom_fields={"settore": "IT"}), ADMIN
+    )
+
+    updated = service.update(customer.id, CustomerUpdate(custom_fields={"settore": None}), ADMIN)
+    assert updated.custom_fields == {}
+
+
+def test_archived_custom_field_set_to_none_is_removed_even_if_it_was_required(
+    db_session: Session,
+) -> None:
+    """The round 1 fix deliberately unblocked clearing an archived field's stored
+    value via `None`, even when the definition was required back when it was
+    active. This finding's fix must not re-close that: requiredness only ever
+    blocks removal for a currently active definition."""
+    fields = FieldDefinitionService(db_session)
+    settore = fields.create(
+        FieldDefinitionCreate(
+            entity_type="customer",
+            key="settore",
+            label="Settore",
+            field_type="text",
+            required=True,
+        ),
+        ADMIN,
+    )
+    service = CustomerService(db_session)
+    customer = service.create(
+        CustomerCreate(ragione_sociale="ACME", custom_fields={"settore": "IT"}), ADMIN
+    )
+    fields.archive(settore.id, ADMIN)
+
+    updated = service.update(customer.id, CustomerUpdate(custom_fields={"settore": None}), ADMIN)
+    assert updated.custom_fields == {}
+
+
+def test_required_active_custom_field_not_mentioned_in_a_partial_update_is_unaffected(
+    db_session: Session,
+) -> None:
+    """A required, active field the caller never mentions in this update is neither
+    an omission (create-time semantics) nor a removal (a None was never sent) --
+    it must be left exactly as stored, with no error."""
+    fields = FieldDefinitionService(db_session)
+    fields.create(
+        FieldDefinitionCreate(
+            entity_type="customer",
+            key="settore",
+            label="Settore",
+            field_type="text",
+            required=True,
+        ),
+        ADMIN,
+    )
+    fields.create(
+        FieldDefinitionCreate(
+            entity_type="customer", key="priorita", label="Priorita", field_type="text"
+        ),
+        ADMIN,
+    )
+    service = CustomerService(db_session)
+    customer = service.create(
+        CustomerCreate(ragione_sociale="ACME", custom_fields={"settore": "IT"}), ADMIN
+    )
+
+    updated = service.update(customer.id, CustomerUpdate(custom_fields={"priorita": "alta"}), ADMIN)
+    assert updated.custom_fields == {"settore": "IT", "priorita": "alta"}
+
+
 def test_create_records_a_timeline_entry_naming_the_actor(db_session: Session) -> None:
     from pigrocrm.core.activities.service import ActivityService
 
