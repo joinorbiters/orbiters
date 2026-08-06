@@ -1,3 +1,4 @@
+from pigrocrm.core.fields.dynamic import build_custom_fields_model, describe_specs, python_type_for
 from pigrocrm.core.fields.models import FieldDefinition
 from pigrocrm.core.fields.schemas import (
     EntityType,
@@ -19,6 +20,9 @@ __all__ = [
     "FieldDefinitionUpdate",
     "FieldSpec",
     "FieldType",
+    "build_custom_fields_model",
     "coerce_value",
+    "describe_specs",
+    "python_type_for",
     "validate_custom_fields",
 ]
