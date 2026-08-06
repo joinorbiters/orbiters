@@ -21,6 +21,7 @@ from pigrocrm.core.errors import NotFound, ValidationFailed
 from pigrocrm.core.fields.schemas import EntityType
 from pigrocrm.core.fields.service import FieldDefinitionService
 from pigrocrm.core.fields.validator import validate_custom_fields
+from pigrocrm.core.pipeline.schemas import PipelineStageRead
 from pigrocrm.core.pipeline.service import PipelineService
 
 # Typed as the fields module's own EntityType (not a bare `str`), matching
@@ -43,6 +44,35 @@ def _check_numbers(values: dict[str, Any]) -> None:
         value = values.get(field)
         if value is not None and Decimal(value) < 0:
             raise ValidationFailed(ENTITY, field, "non può essere negativo", expected=">= 0")
+
+
+def _settle_probability(stage: PipelineStageRead, probabilita: int | None) -> int:
+    """The single authority on what a deal's `probabilita` becomes once its stage is
+    known -- shared by `create`, `move_stage`, and `update` so "won at 60%" cannot be
+    reached through any one of them individually. Before this function existed, only
+    `move_stage` settled the probability on a terminal transition, and the class
+    docstring's own claim ("'Won at 60%' is not a state a deal can be left in") was
+    false in two different ways the tests never caught: `create()` with an explicit
+    `pipeline_stage_id` on a terminal stage and a contradicting `probabilita` kept
+    that value verbatim, and an ordinary `update(probabilita=...)` after a
+    `move_stage()` had already settled it to 100/0 could walk it back down with no
+    check at all.
+
+    A terminal stage's `tipo` overrides any candidate value outright, the same way
+    `move_stage` already did before this fix -- silently, not by raising. Overriding
+    was kept rather than switched to rejecting an inconsistent explicit value: the
+    override already had a passing, documented precedent
+    (`test_moving_to_a_won_stage_sets_probability_to_one_hundred`) that a reject-based
+    design would have had to invalidate, and consistency across all three write paths
+    mattered more than which of the two reasonable designs was picked. A non-terminal
+    stage keeps the candidate if one was supplied, or falls back to the stage's own
+    `probabilita_default` -- unchanged from `create`'s original default-from-stage
+    behavior."""
+    if stage.tipo == "won":
+        return 100
+    if stage.tipo == "lost":
+        return 0
+    return probabilita if probabilita is not None else stage.probabilita_default
 
 
 class DealService:
@@ -126,8 +156,7 @@ class DealService:
             else self.pipeline.default_stage()
         )
         payload["pipeline_stage_id"] = stage.id
-        if payload.get("probabilita") is None:
-            payload["probabilita"] = stage.probabilita_default
+        payload["probabilita"] = _settle_probability(stage, payload.get("probabilita"))
         payload["custom_fields"] = self._validated_custom(payload.get("custom_fields") or {})
 
         deal = self.repo.add(Deal(**payload))
@@ -150,6 +179,15 @@ class DealService:
         # confused with the field itself being absent -- see `_update_custom_fields`.
         changes = data.model_dump(exclude_none=True, exclude={"custom_fields"})
         _check_numbers(changes)
+        if "probabilita" in changes:
+            # `update` never changes `deal.pipeline_stage_id` -- that is
+            # `move_stage`'s job alone -- so the deal's *current* stage is what
+            # settling must be checked against here. Without this, an ordinary
+            # `update(probabilita=60)` on a deal a previous `move_stage` had already
+            # settled to 100/0 could walk it back down with no check at all -- the
+            # third of the three gates "won at 60%" needed closed.
+            current_stage = self.pipeline.get(deal.pipeline_stage_id)
+            changes["probabilita"] = _settle_probability(current_stage, changes["probabilita"])
         if data.custom_fields is not None:
             changes["custom_fields"] = self._update_custom_fields(deal, data.custom_fields)
         for key, value in changes.items():
@@ -161,9 +199,10 @@ class DealService:
 
     def move_stage(self, deal_id: UUID, stage_id: UUID, actor: Actor) -> DealRead:
         """The only supported way to change a deal's stage -- see `DealUpdate`'s own
-        docstring for why it is not also a plain field on `update`. Settles the
-        probability the instant a deal reaches a terminal stage: `won` -> 100,
-        `lost` -> 0. "Won at 60%" is not a state a deal can be left in."""
+        docstring for why it is not also a plain field on `update`. `_settle_probability`
+        -- also used by `create` and `update` -- is what actually keeps "won at 60%"
+        unreachable through *any* of the three; this method no longer settles the
+        probability by itself."""
         actor.require_write("move_deal")
         deal = self.repo.get(deal_id)
         if deal is None:
@@ -173,10 +212,7 @@ class DealService:
         previous = self.pipeline.get(deal.pipeline_stage_id)
 
         deal.pipeline_stage_id = target.id
-        if target.tipo == "won":
-            deal.probabilita = 100
-        elif target.tipo == "lost":
-            deal.probabilita = 0
+        deal.probabilita = _settle_probability(target, deal.probabilita)
 
         self.activities.record(
             ENTITY, deal.id, "stage_changed", actor, {"from": previous.nome, "to": target.nome}

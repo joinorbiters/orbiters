@@ -9,7 +9,10 @@ from pigrocrm.core.actor import Actor
 from pigrocrm.core.customers.schemas import CustomerCreate
 from pigrocrm.core.customers.service import CustomerService
 from pigrocrm.core.deals.schemas import (
+    DECIMAL_PLACES,
     NOME_MAX_LENGTH,
+    ORE_MAX_DIGITS,
+    VALORE_MAX_DIGITS,
     DealCreate,
     DealListQuery,
     DealUpdate,
@@ -569,6 +572,11 @@ def test_a_pipeline_stage_with_deals_cannot_be_deleted(
     with pytest.raises(Conflict) as exc:
         PipelineService(db_session).delete(stages["Lead"].id, ADMIN)
     assert exc.value.details["deals"] == 1
+    # Fix round 1, item 4: the message must be actionable on its own, not leave an
+    # administrator to work out from a bare count that archived deals count too and
+    # that moving them (not soft-deleting again) is what frees the stage.
+    assert "archiviat" in exc.value.details["reason"]
+    assert "sposta" in exc.value.details["reason"]
 
 
 def test_soft_deleting_the_deal_does_not_free_its_pipeline_stage_for_deletion(
@@ -652,3 +660,186 @@ def test_a_new_deal_can_specify_an_explicit_stage(db_session: Session, customer_
     )
     assert deal.pipeline_stage_id == stages["Offerta"].id
     assert deal.probabilita == stages["Offerta"].probabilita_default
+
+
+# --- Fix round 1 -----------------------------------------------------------------
+
+# (field, at_limit, over_limit) for every Numeric(p, s) column: Numeric(12, 2) for
+# valore_previsto/valore_preventivato, Numeric(8, 2) for ore_preventivate. Derived
+# from the schema's own constants rather than hardcoded twice, so a future change to
+# a column's width changes these test values along with it.
+_MONEY_INTEGER_DIGITS = VALORE_MAX_DIGITS - DECIMAL_PLACES
+_HOURS_INTEGER_DIGITS = ORE_MAX_DIGITS - DECIMAL_PLACES
+_MONEY_AT_LIMIT = Decimal("9" * _MONEY_INTEGER_DIGITS + "." + "9" * DECIMAL_PLACES)
+_MONEY_OVER_LIMIT = Decimal("9" * (_MONEY_INTEGER_DIGITS + 1) + "." + "9" * DECIMAL_PLACES)
+_HOURS_AT_LIMIT = Decimal("9" * _HOURS_INTEGER_DIGITS + "." + "9" * DECIMAL_PLACES)
+_HOURS_OVER_LIMIT = Decimal("9" * (_HOURS_INTEGER_DIGITS + 1) + "." + "9" * DECIMAL_PLACES)
+
+NUMERIC_FIELD_LIMITS = [
+    ("valore_previsto", _MONEY_AT_LIMIT, _MONEY_OVER_LIMIT),
+    ("valore_preventivato", _MONEY_AT_LIMIT, _MONEY_OVER_LIMIT),
+    ("ore_preventivate", _HOURS_AT_LIMIT, _HOURS_OVER_LIMIT),
+]
+
+
+# --- Item 1 (CRITICAL): Numeric columns need max_digits/decimal_places too -------
+
+
+@pytest.mark.parametrize("field,at_limit,over_limit", NUMERIC_FIELD_LIMITS)
+def test_value_at_the_numeric_column_limit_is_accepted_on_create(
+    field: str, at_limit: Decimal, over_limit: Decimal
+) -> None:
+    """Numeric(12,2)/Numeric(8,2) in models.py allow exactly this many significant
+    digits. The fix for the over-limit case below must not also reject the boundary
+    value itself."""
+    deal = DealCreate(nome="X", customer_id=uuid4(), **{field: at_limit})
+    assert getattr(deal, field) == at_limit
+
+
+@pytest.mark.parametrize("field,at_limit,over_limit", NUMERIC_FIELD_LIMITS)
+def test_value_beyond_the_numeric_column_capacity_is_rejected_on_create(
+    field: str, at_limit: Decimal, over_limit: Decimal
+) -> None:
+    """Before max_digits/decimal_places were declared, DealCreate(valore_previsto=
+    Decimal("99999999999.99")) sailed past Pydantic, reached flush(), and came back
+    as a raw sqlalchemy.exc.DataError (NumericValueOutOfRange) -- not a subclass of
+    IntegrityError, so nothing in this codebase caught it, and it poisoned the
+    session. This is the sixth time this project has hit this class of bug -- the
+    first five were String columns, closed with max_length; Deal is the first
+    entity with Numeric columns, so there was no template to copy for this one."""
+    with pytest.raises(ValidationError):
+        DealCreate(nome="X", customer_id=uuid4(), **{field: over_limit})
+
+
+@pytest.mark.parametrize("field,at_limit,over_limit", NUMERIC_FIELD_LIMITS)
+def test_value_beyond_the_numeric_column_capacity_is_rejected_on_update(
+    field: str, at_limit: Decimal, over_limit: Decimal
+) -> None:
+    with pytest.raises(ValidationError):
+        DealUpdate(**{field: over_limit})
+
+
+def test_value_at_the_numeric_column_limit_round_trips_through_the_database(
+    db_session: Session, customer_id, stages
+) -> None:
+    """Schema-level acceptance alone would not catch a mismatch between Pydantic's
+    bound and the column's real capacity: this proves the exact boundary value
+    survives create() -> Postgres -> DealRead with no truncation or rejection."""
+    deal = DealService(db_session).create(
+        DealCreate(nome="X", customer_id=customer_id, valore_previsto=_MONEY_AT_LIMIT),
+        ADMIN,
+    )
+    assert deal.valore_previsto == _MONEY_AT_LIMIT
+
+
+# --- Item 3 (IMPORTANT): a sub-cent value is rejected, not silently rounded ------
+
+
+def test_a_sub_cent_value_is_rejected_instead_of_silently_rounded() -> None:
+    """Before decimal_places=2 was declared, create(valore_previsto=Decimal("0.005"))
+    reached Postgres, which stored 0.01 -- but expire_on_commit=False (db/session.py)
+    meant the in-memory object, and the DealRead built straight from it, kept
+    reporting 0.005: the immediate response lied about what was actually written.
+    Deciding which cent the caller meant is not this service's job, so the value is
+    rejected outright instead of being rounded silently. Fixed by the same
+    decimal_places=2 declaration as item 1 above -- no separate code path exists to
+    round money, so closing item 1 already closes this."""
+    with pytest.raises(ValidationError):
+        DealCreate(nome="X", customer_id=uuid4(), valore_previsto=Decimal("0.005"))
+
+
+# --- Item 2 (IMPORTANT): "won at 60%" must be unreachable through every gate -----
+
+
+def test_creating_a_deal_directly_in_a_won_stage_ignores_an_explicit_low_probability(
+    db_session: Session, customer_id, stages
+) -> None:
+    """'Won at 60%' must not be reachable through create() either, not only through
+    move_stage(): a deal created straight into a terminal stage with an explicit,
+    contradicting probability must still land at the stage's settled value."""
+    deal = DealService(db_session).create(
+        DealCreate(
+            nome="X", customer_id=customer_id, pipeline_stage_id=stages["Vinto"].id, probabilita=60
+        ),
+        ADMIN,
+    )
+    assert deal.probabilita == 100
+
+
+def test_creating_a_deal_directly_in_a_lost_stage_ignores_an_explicit_nonzero_probability(
+    db_session: Session, customer_id, stages
+) -> None:
+    deal = DealService(db_session).create(
+        DealCreate(
+            nome="X", customer_id=customer_id, pipeline_stage_id=stages["Perso"].id, probabilita=60
+        ),
+        ADMIN,
+    )
+    assert deal.probabilita == 0
+
+
+def test_updating_probability_after_a_move_to_a_won_stage_cannot_reopen_it(
+    db_session: Session, customer_id, stages
+) -> None:
+    """The third, previously-unguarded path: an ordinary update() after move_stage()
+    settled the deal at 100% must not be able to walk it back down."""
+    service = DealService(db_session)
+    deal = service.create(DealCreate(nome="X", customer_id=customer_id), ADMIN)
+    service.move_stage(deal.id, stages["Vinto"].id, ADMIN)
+
+    updated = service.update(deal.id, DealUpdate(probabilita=60), ADMIN)
+    assert updated.probabilita == 100
+
+
+def test_updating_probability_after_a_move_to_a_lost_stage_cannot_reopen_it(
+    db_session: Session, customer_id, stages
+) -> None:
+    service = DealService(db_session)
+    deal = service.create(DealCreate(nome="X", customer_id=customer_id), ADMIN)
+    service.move_stage(deal.id, stages["Perso"].id, ADMIN)
+
+    updated = service.update(deal.id, DealUpdate(probabilita=60), ADMIN)
+    assert updated.probabilita == 0
+
+
+def test_updating_an_open_deals_probability_still_works_normally(
+    db_session: Session, customer_id, stages
+) -> None:
+    """The settling logic must not fire for a non-terminal stage: an ordinary
+    probability edit on a deal still sitting in "Lead" is untouched."""
+    service = DealService(db_session)
+    deal = service.create(DealCreate(nome="X", customer_id=customer_id), ADMIN)
+
+    updated = service.update(deal.id, DealUpdate(probabilita=33), ADMIN)
+    assert updated.probabilita == 33
+
+
+# --- Item 4 (IMPORTANT): the real blocking case is a soft-deleted deal ----------
+
+
+def test_freeing_a_stage_with_a_soft_deleted_deal_requires_restore_move_then_delete_again(
+    db_session: Session, customer_id, stages
+) -> None:
+    """test_moving_the_deal_out_of_the_stage_then_deleting_it_works (above) only
+    exercised an *active* deal -- but an active deal never actually blocks a stage
+    delete for long in practice, since nothing stops it from being active in a
+    different stage already. The case that genuinely blocks is a *soft-deleted*
+    deal, and move_stage raises NotFound on one: DealRepository.get filters
+    deleted_at by default, same as every other write method. The only real sequence
+    is restore() -> move_stage() -> soft_delete() again -- previously neither tested
+    nor documented."""
+    service = DealService(db_session)
+    deal = service.create(DealCreate(nome="X", customer_id=customer_id), ADMIN)
+    service.soft_delete(deal.id, ADMIN)
+
+    with pytest.raises(Conflict):
+        PipelineService(db_session).delete(stages["Lead"].id, ADMIN)
+    with pytest.raises(NotFound):
+        service.move_stage(deal.id, stages["Offerta"].id, ADMIN)
+
+    service.restore(deal.id, ADMIN)
+    service.move_stage(deal.id, stages["Offerta"].id, ADMIN)
+    service.soft_delete(deal.id, ADMIN)
+
+    PipelineService(db_session).delete(stages["Lead"].id, ADMIN)
+    assert stages["Lead"].id not in {s.id for s in PipelineService(db_session).list()}

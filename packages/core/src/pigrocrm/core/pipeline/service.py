@@ -73,14 +73,31 @@ class PipelineService:
 
     def delete(self, stage_id: UUID, actor: Actor) -> None:
         """Admin-only, and refuses if any deal is currently in this stage -- deleting
-        it out from under them would leave those deals pointing at nothing."""
+        it out from under them would leave those deals pointing at nothing.
+
+        `count_deals_in_stage` counts every deal in the stage, soft-deleted or not
+        (see that method's own docstring): `pipeline_stage_id` is `NOT NULL` with no
+        `ON DELETE` rule, so an archived deal's row still references this stage just
+        as much as an active one's, and a hard `DELETE` here would hit that foreign
+        key regardless of `deleted_at`. Freeing a stage that only has archived deals
+        in it means *moving* them to a different stage, not soft-deleting them again
+        -- and since a soft-deleted deal is not found by `move_stage` either, the
+        full sequence is restore, then move, then soft-delete again. The message
+        below says so explicitly, rather than leaving an administrator to work out
+        both of those facts from a bare count.
+        """
         actor.require_admin("delete_pipeline_stage")
         stage = self.repo.get(stage_id)
         if stage is None:
             raise NotFound("pipeline_stage", stage_id)
         deal_count = self.repo.count_deals_in_stage(stage_id)
         if deal_count > 0:
-            raise Conflict("pipeline_stage", "ci sono deal in questo stato", deals=deal_count)
+            raise Conflict(
+                "pipeline_stage",
+                "ci sono deal in questo stato (inclusi quelli archiviati): "
+                "spostali in un altro stato prima di eliminarlo",
+                deals=deal_count,
+            )
         self.repo.delete(stage)
         self.session.commit()
 
