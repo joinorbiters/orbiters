@@ -7,6 +7,7 @@ from pigrocrm.core.auth.schemas import UserCreate
 from pigrocrm.core.auth.service import UserService
 from pigrocrm.core.config import get_settings
 from pigrocrm.core.db import create_engine_from_settings, session_factory
+from pigrocrm.core.errors import DomainError
 
 
 def createadmin(email: str | None, nome: str | None) -> int:
@@ -22,10 +23,16 @@ def createadmin(email: str | None, nome: str | None) -> int:
     engine = create_engine_from_settings(get_settings())
     with session_factory(engine)() as session:
         service = UserService(session)
-        user = service.create(
-            UserCreate(email=email, password=password, nome=nome, ruolo="admin"),
-            Actor.system(),
-        )
+        try:
+            user = service.create(
+                UserCreate(email=email, password=password, nome=nome, ruolo="admin"),
+                Actor.system(),
+            )
+        except DomainError as exc:
+            # A short password is the single most likely first mistake a new operator
+            # will make with this tool; a raw traceback here is a bad first impression.
+            print(exc.message, file=sys.stderr)
+            return 1
     print(f"Creato amministratore {user.email}")
     return 0
 

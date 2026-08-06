@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.auth.models import User
@@ -21,7 +21,7 @@ class UserRepository:
         return list(self.session.execute(select(User).order_by(User.nome)).scalars())
 
     def count(self) -> int:
-        return len(self.list_all())
+        return self.session.execute(select(func.count()).select_from(User)).scalar_one()
 
     def add(self, user: User) -> User:
         self.session.add(user)
