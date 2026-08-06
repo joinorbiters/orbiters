@@ -34,6 +34,8 @@ These apply to **every** task. They are not repeated per task.
 - **Commit after every task**, using the message given in the task's final step.
 - **UI language is Italian.** Field labels, buttons, and error messages shown to users are Italian. Code identifiers, table names, and column names are English except the Italian fiscal terms already fixed in the spec (`partita_iva`, `codice_fiscale`, `codice_sdi`, `pec`, `ragione_sociale`, and the address parts `indirizzo`, `cap`, `comune`, `provincia`, `nazione`).
 - **The `Expected: PASS (N passed)` counts are indicative, not contractual.** Parametrised tests expand to different totals than the number of test functions. What matters is that every test passes and none is skipped — a differing total is not a failure and must not be "fixed" by deleting or merging cases.
+- **A uniqueness pre-check never replaces the database constraint.** Wherever a service does "SELECT to check, then INSERT", it must also catch `sqlalchemy.exc.IntegrityError` around the commit, `session.rollback()`, and re-raise the domain `Conflict`. Two concurrent requests both pass the SELECT; only the constraint stops the second, and without the rollback the caller's session is left poisoned (`PendingRollbackError` on its next statement). Established in Task 4 and applied identically in Task 7.
+- **Case-insensitive uniqueness needs a functional index, not a convention.** A plain `unique=True` on a text column is case-sensitive: lowercasing in a Pydantic validator protects only the paths that go through it. Where identity is case-insensitive (emails, slugs), declare `Index("uq_…", func.lower(col), unique=True)` in `__table_args__`.
 
 ### Pinned versions
 
@@ -2248,6 +2250,7 @@ class FieldDefinitionRepository:
 ```python
 from uuid import UUID
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
@@ -2300,8 +2303,20 @@ class FieldDefinitionService:
             )
 
         field = FieldDefinition(**data.model_dump())
-        self.repo.add(field)
-        self.session.commit()
+        try:
+            self.repo.add(field)
+            self.session.commit()
+        except IntegrityError as exc:
+            # The pre-check above cannot cover a race between two concurrent requests:
+            # there the database constraint is the only authority. The rollback is
+            # mandatory — without it the session is unusable for the caller.
+            self.session.rollback()
+            raise Conflict(
+                "field_definition",
+                "esiste già un campo con questa chiave",
+                entity_type=data.entity_type,
+                key=data.key,
+            ) from exc
         return FieldDefinitionRead.model_validate(field)
 
     def update(
