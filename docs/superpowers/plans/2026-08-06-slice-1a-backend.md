@@ -1576,6 +1576,17 @@ fields visible to both OpenAPI and MCP from one source.
 
 No database access here — the validator is pure, which is why it can be tested exhaustively and fast.
 
+> **The implementation is authoritative over the code below.** Review of this task found four
+> ways past the module's guarantee that the code in this brief did not cover — raw `TypeError` on
+> unhashable input, raw `OverflowError` on a large integer, silent acceptance of NaN/Infinity
+> (which Postgres JSONB rejects, and which `"1e1000"` reaches without raising anything at all),
+> and acceptance of a NUL byte (likewise rejected by JSONB) — plus a `RecursionError` raised while
+> *formatting* an error message for a deeply nested value. The shipped module therefore carries
+> guards the snippets below lack, and a parametrised sentinel test over field_type × hostile value
+> asserting the one invariant that matters: **either `ValidationFailed`, or a value `json.dumps`
+> accepts — never anything else.** Read `packages/core/src/pigrocrm/core/fields/validator.py` for
+> the current shape; treat the code here as the design intent it started from.
+
 - [ ] **Step 1: Write the failing test**
 
 `packages/core/tests/test_fields_validator.py`:
