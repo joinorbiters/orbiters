@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
+from pigrocrm.core.auth import tokens as tokens_module
 from pigrocrm.core.auth.pat_service import PAT_PREFIX, PatService
 from pigrocrm.core.auth.schemas import UserCreate
 from pigrocrm.core.auth.service import UserService
@@ -55,6 +56,40 @@ def test_refresh_token_cannot_be_used_as_an_access_token(db_session: Session) ->
     with pytest.raises(ValidationFailed) as exc:
         decode_token(refresh, SETTINGS, expected_type="access")
     assert exc.value.details["field"] == "token"
+
+
+def test_two_refresh_tokens_issued_in_the_same_instant_are_still_different(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Before the jti claim existed, two tokens issued within the same wall-clock
+    second were byte-for-byte identical: iat/exp truncate to whole seconds and HS256
+    over identical claims with the same key is deterministic. Freezing "now" removes
+    the timing luck needed to hit that window by chance, so this proves the actual
+    guarantee -- a fresh random jti every time -- instead of relying on a coincidence
+    of scheduling to reproduce it."""
+    user = _make_user(db_session)
+    # Real "now" (unpatched), not a hardcoded date: jwt.decode below checks `exp`
+    # against the real clock, which this patch does not touch -- only
+    # `issue_refresh_token`'s own notion of "now" is frozen.
+    frozen_instant = datetime.now(UTC)
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz: object = None) -> datetime:
+            return frozen_instant
+
+    monkeypatch.setattr(tokens_module, "datetime", _FrozenDateTime)
+
+    token_a = issue_refresh_token(user.id, SETTINGS)
+    token_b = issue_refresh_token(user.id, SETTINGS)
+
+    assert token_a != token_b
+    payload_a = decode_token(token_a, SETTINGS, expected_type="refresh")
+    payload_b = decode_token(token_b, SETTINGS, expected_type="refresh")
+    assert payload_a.exp == payload_b.exp, "the freeze must actually be in effect"
+    assert payload_a.jti is not None
+    assert payload_b.jti is not None
+    assert payload_a.jti != payload_b.jti
 
 
 def test_expired_token_is_rejected(db_session: Session) -> None:

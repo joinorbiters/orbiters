@@ -51,7 +51,18 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 def get_actor(request: Request, session: SessionDep, settings: SettingsDep) -> Actor:
     """Two credentials, one actor: the browser presents a JWT cookie, an agent presents
-    a PAT. Everything downstream is identical."""
+    a PAT. Everything downstream is identical.
+
+    Precedence, in order -- deterministic, not a race between the two credentials:
+
+    1. `Authorization: Bearer pgc_...` -- a header that looks like a PAT always wins
+       over any cookie, even a valid one. If `PatService.resolve` fails (unknown,
+       revoked, or the owning user deactivated), this raises 401 immediately; the
+       cookie is never consulted, even when one is present and would otherwise work.
+    2. Any other `Authorization` header -- absent, not `Bearer `, or a `Bearer` value
+       that does not start with `pgc_` -- is ignored outright, and resolution falls
+       back to the `ACCESS_COOKIE` cookie.
+    """
     header = request.headers.get("Authorization", "")
     if header.startswith("Bearer ") and header[7:].startswith(PAT_PREFIX):
         try:
@@ -67,9 +78,10 @@ def get_actor(request: Request, session: SessionDep, settings: SettingsDep) -> A
     except DomainError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Sessione scaduta") from exc
 
-    user = UserRepository(session).get(payload.sub)
-    if user is None or not user.attivo:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Utente non attivo")
+    try:
+        user = UserRepository(session).get_active(payload.sub)
+    except DomainError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Utente non attivo") from exc
 
     role: Role = user.ruolo  # type: ignore[assignment]
     return Actor(id=user.id, type="user", role=role)

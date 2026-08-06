@@ -1,0 +1,7 @@
+extend = "../../ruff.toml"
+
+# Narrows the root's banned-api table (which bans both adapter names, for
+# packages/core's sake) to what actually applies inside apps/mcp: this package may
+# import itself freely, but must not reach into apps/api.
+[lint.flake8-tidy-imports.banned-api]
+"pigrocrm_api".msg = "apps/mcp must not import from apps/api"

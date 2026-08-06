@@ -1,10 +1,11 @@
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import BaseModel
 
+from pigrocrm.core.auth.refresh_service import RefreshTokenService
 from pigrocrm.core.auth.repository import UserRepository
 from pigrocrm.core.auth.schemas import UserRead
 from pigrocrm.core.auth.service import UserService
-from pigrocrm.core.auth.tokens import decode_token, issue_access_token, issue_refresh_token
+from pigrocrm.core.auth.tokens import decode_token, issue_access_token
 from pigrocrm.core.errors import DomainError
 from pigrocrm_api.deps import ACCESS_COOKIE, REFRESH_COOKIE, ActorDep, SessionDep, SettingsDep
 
@@ -16,9 +17,9 @@ class LoginRequest(BaseModel):
     password: str
 
 
-def _set_cookie(response: Response, name: str, value: str, max_age: int) -> None:
+def _set_cookie(response: Response, name: str, value: str, max_age: int, *, secure: bool) -> None:
     response.set_cookie(
-        name, value, httponly=True, secure=True, samesite="lax", max_age=max_age, path="/"
+        name, value, httponly=True, secure=secure, samesite="lax", max_age=max_age, path="/"
     )
 
 
@@ -32,18 +33,35 @@ def login(
         ACCESS_COOKIE,
         issue_access_token(user.id, user.ruolo, settings),
         settings.access_token_minutes * 60,
+        secure=settings.cookie_secure,
     )
     _set_cookie(
         response,
         REFRESH_COOKIE,
-        issue_refresh_token(user.id, settings),
+        RefreshTokenService(session).issue(user.id, settings),
         settings.refresh_token_days * 86400,
+        secure=settings.cookie_secure,
     )
     return user
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout(response: Response) -> None:
+def logout(
+    request: Request, response: Response, session: SessionDep, settings: SettingsDep
+) -> None:
+    # Logging out must kill the session server-side, not just empty the browser's
+    # cookie jar -- otherwise a copy of the refresh token taken before logout stays
+    # valid for the rest of its 30-day life. An already-invalid or already-expired
+    # token has nothing left to invalidate, so that case is not an error here: the
+    # goal state ("no usable session") is already true.
+    token = request.cookies.get(REFRESH_COOKIE)
+    if token:
+        try:
+            payload = decode_token(token, settings, expected_type="refresh")
+            if payload.jti is not None:
+                RefreshTokenService(session).consume(payload.jti, payload.sub)
+        except DomainError:
+            pass
     response.delete_cookie(ACCESS_COOKIE, path="/")
     response.delete_cookie(REFRESH_COOKIE, path="/")
 
@@ -63,22 +81,41 @@ def refresh(
         payload = decode_token(token, settings, expected_type="refresh")
     except DomainError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Refresh token non valido") from exc
-    user = UserRepository(session).get(payload.sub)
-    if user is None or not user.attivo:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Utente non attivo")
+    if payload.jti is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Refresh token non valido")
+
+    refresh_tokens = RefreshTokenService(session)
+    # Consumed before anything else: this is what makes rotation real. Once this call
+    # returns, the token just presented can never be used again -- if it had already
+    # been consumed by an earlier request, this raises and, as a side effect, revokes
+    # every other still-valid refresh token this user holds (see consume()'s
+    # docstring): that earlier request was the legitimate rotation, so this one
+    # presenting the same token again is a replay.
+    try:
+        refresh_tokens.consume(payload.jti, payload.sub)
+    except DomainError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Refresh token non valido") from exc
+
+    try:
+        user = UserRepository(session).get_active(payload.sub)
+    except DomainError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Utente non attivo") from exc
 
     _set_cookie(
         response,
         ACCESS_COOKIE,
         issue_access_token(user.id, user.ruolo, settings),
         settings.access_token_minutes * 60,
+        secure=settings.cookie_secure,
     )
-    # Rotate the refresh token on every use, so a stolen one has a short life.
+    # A fresh token with its own row -- not a re-signing of the same claims -- because
+    # the one just consumed above can never be honoured again.
     _set_cookie(
         response,
         REFRESH_COOKIE,
-        issue_refresh_token(user.id, settings),
+        refresh_tokens.issue(user.id, settings),
         settings.refresh_token_days * 86400,
+        secure=settings.cookie_secure,
     )
     return UserRead.model_validate(user)
 
