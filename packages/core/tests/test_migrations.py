@@ -36,30 +36,12 @@ def _alembic_config(url: str) -> Config:
     return config
 
 
-def _upgrade_to_head(monkeypatch: pytest.MonkeyPatch, url: str) -> None:
-    """`env.py` deliberately ignores whatever URL the `Config` object carries and
-    resolves the real one from `get_settings()` instead -- the same single source of
-    truth the rest of the application uses, and exactly how the brief's own Step 5 points
-    a throwaway container at Alembic (`PIGROCRM_DATABASE_URL=... alembic revision
-    --autogenerate`). Pointing a test's container at Alembic means pointing
-    `get_settings()` at it the same way: set the environment variable it reads, and clear
-    its `lru_cache` so neither a stale default nor a previous test's already-stopped
-    container URL leaks into this one.
-    """
-    monkeypatch.setenv("PIGROCRM_DATABASE_URL", url)
-    get_settings.cache_clear()
-    try:
-        upgrade(_alembic_config(url), "head")
-    finally:
-        get_settings.cache_clear()
-
-
-def test_migrations_produce_exactly_the_models_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_migrations_produce_exactly_the_models_schema() -> None:
     """A drift between migrations and models is invisible until deploy day, when the
     application meets a table the code does not expect."""
     with PostgresContainer("postgres:17-alpine", driver="psycopg") as container:
         url = container.get_connection_url()
-        _upgrade_to_head(monkeypatch, url)
+        upgrade(_alembic_config(url), "head")
 
         engine: Engine = create_engine(url)
         with engine.connect() as connection:
@@ -84,14 +66,14 @@ def test_every_table_the_slice_needs_exists() -> None:
     assert expected <= set(Base.metadata.tables)
 
 
-def test_hand_maintained_indexes_survive_the_migration(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_hand_maintained_indexes_survive_the_migration() -> None:
     """`compare_metadata` (above) already proves migrations and models agree overall, but
     a diff report names a mismatch, not a silent gap -- this test names the exact indexes
     that autogenerate is known to drop, so a future regression fails as a missing name
     instead of a generic diff someone has to go decode."""
     with PostgresContainer("postgres:17-alpine", driver="psycopg") as container:
         url = container.get_connection_url()
-        _upgrade_to_head(monkeypatch, url)
+        upgrade(_alembic_config(url), "head")
 
         engine: Engine = create_engine(url)
         with engine.connect() as connection:
@@ -120,3 +102,59 @@ def test_hand_maintained_indexes_survive_the_migration(monkeypatch: pytest.Monke
         "ix_deals_custom_fields",
     ):
         assert "USING gin" in indexes[gin_index], f"{gin_index} was not created as a GIN index"
+
+
+def _applied_revision(url: str) -> str:
+    engine: Engine = create_engine(url)
+    try:
+        with engine.connect() as connection:
+            return connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    finally:
+        engine.dispose()
+
+
+def test_env_prefers_an_explicit_config_url_over_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression for a real finding: `env.py` must not unconditionally prefer
+    `get_settings()` over whatever URL the `Config` object already carries -- that is
+    exactly what made a hand-edited `alembic.ini` (Alembic's own documented mechanism)
+    silently do nothing. Proven adversarially: `get_settings()` is pointed at a URL that
+    cannot possibly connect (nothing listens on port 1), while `_alembic_config` gives
+    `upgrade()` the real container's URL. If `env.py` ever went back to always
+    overriding with settings, this fails with a connection error instead of quietly
+    passing.
+    """
+    monkeypatch.setenv(
+        "PIGROCRM_DATABASE_URL", "postgresql+psycopg://nobody:nobody@127.0.0.1:1/nobody"
+    )
+    get_settings.cache_clear()
+    try:
+        with PostgresContainer("postgres:17-alpine", driver="psycopg") as container:
+            url = container.get_connection_url()
+            upgrade(_alembic_config(url), "head")
+            revision = _applied_revision(url)
+    finally:
+        get_settings.cache_clear()
+
+    assert revision == "0001"
+
+
+def test_env_falls_back_to_settings_when_config_has_no_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The brief's own default path, which must keep working exactly as before: a
+    `Config` that nobody pointed anywhere (still carrying `alembic.ini`'s placeholder
+    `sqlalchemy.url`) falls back to `get_settings()`, the same application-wide
+    configuration source the rest of the codebase uses.
+    """
+    with PostgresContainer("postgres:17-alpine", driver="psycopg") as container:
+        url = container.get_connection_url()
+        monkeypatch.setenv("PIGROCRM_DATABASE_URL", url)
+        get_settings.cache_clear()
+        try:
+            config = Config(str(CORE_ROOT / "alembic.ini"))
+            config.set_main_option("script_location", str(CORE_ROOT / "migrations"))
+            # `sqlalchemy.url` deliberately left untouched -- still the ini's placeholder.
+            upgrade(config, "head")
+            revision = _applied_revision(url)
+        finally:
+            get_settings.cache_clear()
+
+    assert revision == "0001"

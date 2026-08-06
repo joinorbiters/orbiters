@@ -8,7 +8,20 @@ from pigrocrm.core.config import get_settings
 from pigrocrm.core.db import Base
 
 config = context.config
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+
+# `alembic.ini`'s own `sqlalchemy.url` line is Alembic's standard mechanism for
+# pointing a migration at a specific database -- documented in that file's own
+# comments -- and it must actually work: an operator who edits it and gets no effect
+# and no warning would silently migrate the wrong database. `get_settings()` is only
+# the fallback for the common case where the config carries no URL at all, or still
+# carries the placeholder `alembic init` wrote into a fresh `alembic.ini`. An
+# explicitly configured URL -- whether from a hand-edited ini file, or a caller's own
+# `Config.set_main_option("sqlalchemy.url", ...)` before invoking Alembic
+# programmatically -- always wins.
+_PLACEHOLDER_URL = "driver://user:pass@localhost/dbname"
+_configured_url = config.get_main_option("sqlalchemy.url", "")
+if not _configured_url or _configured_url == _PLACEHOLDER_URL:
+    config.set_main_option("sqlalchemy.url", get_settings().database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
