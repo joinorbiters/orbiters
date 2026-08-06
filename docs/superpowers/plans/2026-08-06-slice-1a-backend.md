@@ -5435,12 +5435,15 @@ git commit -m "feat: FastAPI app with cookie auth, PAT bearer auth and RFC 9457 
 
 **Files:**
 - Create: `apps/api/src/pigrocrm_api/routers/{customers,people,deals,fields,pipeline,users,tokens,schema}.py`
+- Create: `packages/core/src/pigrocrm/core/schema_registry.py`
 - Modify: `apps/api/src/pigrocrm_api/main.py`
-- Test: `apps/api/tests/test_entities_api.py`
+- Test: `apps/api/tests/test_entities_api.py`, `packages/core/tests/test_schema_registry.py`
 
 **Interfaces:**
 - Consumes: every service from Phase 4; `ActorDep`, `SessionDep` (Task 14)
-- Produces: the endpoint surface from spec §7, plus `POST /api/tokens` returning `{"token": "<raw>"}` exactly once
+- Produces:
+  - the endpoint surface from spec §7, plus `POST /api/tokens` returning `{"token": "<raw>"}` exactly once
+  - `pigrocrm.core.schema_registry` with `ENTITY_TYPES`, `CREATE_MODELS`, `native_fields(entity_type) -> list[str]`, `describe_entity(session, entity_type) -> dict` — **consumed by both adapters**, so `GET /api/schema/{entity}` and the MCP `describe_schema` tool return identical data by construction
 
 - [ ] **Step 1: Write the failing test**
 
@@ -5969,13 +5972,28 @@ def revoke(token_id: UUID, session: SessionDep, actor: ActorDep) -> None:
     PatService(session).revoke(token_id, actor)
 ```
 
-- [ ] **Step 7: Write `routers/schema.py`**
+- [ ] **Step 7: Write the shared schema description in core**
+
+Both adapters must describe an entity identically — that is the whole point of
+`describe_schema`. So the description is computed once, in core, and imported by both.
+A hand-maintained field list in either adapter would be a second source of truth that
+drifts silently the first time a column is added.
+
+`packages/core/src/pigrocrm/core/schema_registry.py`:
 
 ```python
+"""One description of an entity's shape, for every adapter.
+
+Lives in core rather than in an adapter because both the REST API and the MCP
+server must answer "what fields does a customer have?" with the same answer.
+Nothing in core imports this module, so pulling in the entity schemas here
+creates no cycle.
+"""
+
 from typing import Any
 
-from fastapi import APIRouter
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from pigrocrm.core.customers.schemas import CustomerCreate
 from pigrocrm.core.deals.schemas import DealCreate
@@ -5983,15 +6001,83 @@ from pigrocrm.core.fields.dynamic import describe_specs
 from pigrocrm.core.fields.schemas import EntityType
 from pigrocrm.core.fields.service import FieldDefinitionService
 from pigrocrm.core.people.schemas import PersonCreate
-from pigrocrm_api.deps import ActorDep, SessionDep
 
-router = APIRouter(prefix="/api/schema", tags=["schema"])
+ENTITY_TYPES: tuple[EntityType, ...] = ("customer", "person", "deal")
 
-NATIVE_MODELS = {
+CREATE_MODELS: dict[str, type[BaseModel]] = {
     "customer": CustomerCreate,
     "person": PersonCreate,
     "deal": DealCreate,
 }
+
+
+def native_fields(entity_type: str) -> list[str]:
+    """Derived from the Pydantic model, never hand-listed."""
+    return [name for name in CREATE_MODELS[entity_type].model_fields if name != "custom_fields"]
+
+
+def describe_entity(session: Session, entity_type: EntityType) -> dict[str, Any]:
+    return {
+        "entity_type": entity_type,
+        "native_fields": native_fields(entity_type),
+        "custom_fields": describe_specs(FieldDefinitionService(session).specs_for(entity_type)),
+    }
+```
+
+Add a test at `packages/core/tests/test_schema_registry.py`:
+
+```python
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.fields.schemas import FieldDefinitionCreate
+from pigrocrm.core.fields.service import FieldDefinitionService
+from pigrocrm.core.schema_registry import ENTITY_TYPES, describe_entity, native_fields
+
+ADMIN = Actor(id=None, type="system", role="admin")
+
+
+def test_native_fields_come_from_the_model_not_a_hand_written_list() -> None:
+    fields = native_fields("customer")
+    assert "ragione_sociale" in fields
+    assert "partita_iva" in fields
+    assert "custom_fields" not in fields, "custom fields are described separately"
+
+
+def test_every_entity_type_can_be_described(db_session: Session) -> None:
+    for entity_type in ENTITY_TYPES:
+        described = describe_entity(db_session, entity_type)
+        assert described["entity_type"] == entity_type
+        assert described["native_fields"]
+
+
+def test_a_new_custom_field_shows_up_immediately(db_session: Session) -> None:
+    FieldDefinitionService(db_session).create(
+        FieldDefinitionCreate(
+            entity_type="deal", key="rischio", label="Rischio", field_type="text"
+        ),
+        ADMIN,
+    )
+    described = describe_entity(db_session, "deal")
+    assert [field["key"] for field in described["custom_fields"]] == ["rischio"]
+```
+
+Run: `uv run pytest packages/core/tests/test_schema_registry.py -v`
+Expected: PASS (3 passed)
+
+- [ ] **Step 8: Write `routers/schema.py`**
+
+```python
+from typing import Any
+
+from fastapi import APIRouter
+from pydantic import BaseModel
+
+from pigrocrm.core.fields.schemas import EntityType
+from pigrocrm.core.schema_registry import describe_entity
+from pigrocrm_api.deps import ActorDep, SessionDep
+
+router = APIRouter(prefix="/api/schema", tags=["schema"])
 
 
 class EntitySchema(BaseModel):
@@ -6002,16 +6088,12 @@ class EntitySchema(BaseModel):
 
 @router.get("/{entity_type}", response_model=EntitySchema)
 def describe(entity_type: EntityType, session: SessionDep, actor: ActorDep) -> EntitySchema:
-    """The same information the MCP `describe_schema` tool returns, so the UI and an
-    agent can never disagree about what fields exist."""
-    specs = FieldDefinitionService(session).specs_for(entity_type)
-    native = [name for name in NATIVE_MODELS[entity_type].model_fields if name != "custom_fields"]
-    return EntitySchema(
-        entity_type=entity_type, native_fields=native, custom_fields=describe_specs(specs)
-    )
+    """The same information the MCP `describe_schema` tool returns — literally the same
+    function — so the UI and an agent can never disagree about what fields exist."""
+    return EntitySchema(**describe_entity(session, entity_type))
 ```
 
-- [ ] **Step 8: Register every router in `main.py`**
+- [ ] **Step 9: Register every router in `main.py`**
 
 Replace the import and the `include_router` call in `create_app()`:
 
@@ -6034,16 +6116,16 @@ from pigrocrm_api.routers import (
         app.include_router(module.router)
 ```
 
-- [ ] **Step 9: Run the full API suite**
+- [ ] **Step 10: Run the full API suite and the core suite**
 
-Run: `uv run pytest apps/api -v`
-Expected: PASS (21 passed — the 10 auth tests including the PAT one, plus 11 entity tests)
+Run: `uv run pytest apps/api packages/core/tests/test_schema_registry.py -v`
+Expected: PASS — the 10 auth tests including the PAT one, 11 entity tests, 3 schema-registry tests.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add -A
-git commit -m "feat: REST routers for customers, people, deals, fields, pipeline, users and tokens"
+git commit -m "feat: REST routers plus the shared entity-schema description in core"
 ```
 
 ---
@@ -6412,38 +6494,21 @@ def render_deal(context: McpContext, deal_id: UUID) -> str:
 
 - [ ] **Step 6: Write `tools/schema.py`**
 
+Thin by design: the description itself lives in `pigrocrm.core.schema_registry` (Task 15),
+so this adapter and the REST router return literally the same data.
+
 ```python
 from typing import Any
 
-from pigrocrm.core.fields.dynamic import describe_specs
-from pigrocrm.core.fields.service import FieldDefinitionService
+from pigrocrm.core.fields.schemas import EntityType
+from pigrocrm.core.schema_registry import ENTITY_TYPES, describe_entity
 from pigrocrm_mcp.context import McpContext
 
-ENTITY_TYPES = ("customer", "person", "deal")
-
-NATIVE_FIELDS: dict[str, list[str]] = {
-    "customer": [
-        "ragione_sociale", "partita_iva", "codice_fiscale", "codice_sdi", "pec",
-        "indirizzo", "cap", "comune", "provincia", "nazione", "email", "telefono",
-        "sito_web", "stato", "note",
-    ],
-    "person": [
-        "nome", "cognome", "email", "telefono", "ruolo", "linkedin", "note", "customer_id",
-    ],
-    "deal": [
-        "nome", "customer_id", "pipeline_stage_id", "valore_previsto", "probabilita",
-        "data_chiusura_prevista", "owner_id", "note", "ore_preventivate", "valore_preventivato",
-    ],
-}
+__all__ = ["ENTITY_TYPES", "entity_schema"]
 
 
-def entity_schema(context: McpContext, entity_type: str) -> dict[str, Any]:
-    specs = FieldDefinitionService(context.session).specs_for(entity_type)  # type: ignore[arg-type]
-    return {
-        "entity_type": entity_type,
-        "native_fields": NATIVE_FIELDS[entity_type],
-        "custom_fields": describe_specs(specs),
-    }
+def entity_schema(context: McpContext, entity_type: EntityType) -> dict[str, Any]:
+    return describe_entity(context.session, entity_type)
 ```
 
 - [ ] **Step 7: Write `server.py`**
