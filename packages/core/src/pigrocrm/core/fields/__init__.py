@@ -8,7 +8,7 @@ from pigrocrm.core.fields.schemas import (
 )
 from pigrocrm.core.fields.service import FieldDefinitionService
 from pigrocrm.core.fields.types import FIELD_TYPES, FieldSpec, FieldType
-from pigrocrm.core.fields.validator import coerce_value, validate_custom_fields
+from pigrocrm.core.fields.validator import coerce_value, is_blank, validate_custom_fields
 
 __all__ = [
     "FIELD_TYPES",
@@ -23,6 +23,7 @@ __all__ = [
     "build_custom_fields_model",
     "coerce_value",
     "describe_specs",
+    "is_blank",
     "python_type_for",
     "validate_custom_fields",
 ]

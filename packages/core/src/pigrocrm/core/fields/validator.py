@@ -215,9 +215,14 @@ def coerce_value(entity: str, spec: FieldSpec, value: Any) -> Any:
     _fail(entity, spec.key, f"tipo di campo sconosciuto: {spec.field_type}")
 
 
-def _is_blank(value: Any) -> bool:
+def is_blank(value: Any) -> bool:
     """None, a whitespace-only string, or an empty sequence all mean "nothing was
-    provided". False and 0 do not: they are legitimate values, not missing ones."""
+    provided". False and 0 do not: they are legitimate values, not missing ones.
+
+    Public and re-exported: this is the same domain rule the runtime model factory
+    (`pigrocrm.core.fields.dynamic`) must apply, in the same order relative to
+    `coerce_value`, for the model to agree with `validate_custom_fields` on every
+    input -- not a private detail of this module."""
     if value is None:
         return True
     if isinstance(value, str):
@@ -249,7 +254,7 @@ def validate_custom_fields(
     result: dict[str, Any] = {}
     for spec in specs:
         raw = values.get(spec.key)
-        if _is_blank(raw):
+        if is_blank(raw):
             if spec.required:
                 _fail(entity, spec.key, "campo obbligatorio", "un valore non vuoto")
             continue

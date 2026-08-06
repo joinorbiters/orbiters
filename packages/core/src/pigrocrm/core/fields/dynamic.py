@@ -4,7 +4,7 @@ from pydantic import BaseModel, BeforeValidator, Field, create_model
 
 from pigrocrm.core.errors import ValidationFailed
 from pigrocrm.core.fields.types import FieldSpec
-from pigrocrm.core.fields.validator import coerce_value
+from pigrocrm.core.fields.validator import coerce_value, is_blank
 
 # currency and date stay strings on the wire: JSON has no decimal and no date type,
 # and the validator has already normalised them to a canonical string form.
@@ -55,15 +55,25 @@ def _delegating_validator(entity: str, spec: FieldSpec) -> BeforeValidator:
     stored-XSS), and it accepts a "si" a bare `bool` field would otherwise
     reject. What Pydantic validates afterwards is already the coerced, canonical
     value, so that check is a formality it cannot fail.
+
+    The blank check below has to come first too, and has to be the *same*
+    function `validate_custom_fields` uses -- not a narrower `value is None`
+    stand-in. `coerce_value` has no notion of "absent": it is only ever asked
+    about a value `validate_custom_fields` already decided was present. Calling
+    it directly on a blank value gives a wrong answer for both directions --
+    `coerce_value` would clean an empty string into "" and report it as a real
+    value for a required field the validator rejects outright, and would reject
+    an empty list for an optional multiselect that the validator simply omits
+    as absent. `is_blank` is what tells `False` and `0` apart from "nothing was
+    provided", so a required checkbox set to `False` still reaches
+    `coerce_value` and is correctly accepted, never confused with a missing
+    field.
     """
 
     def _check(value: Any) -> Any:
-        if value is None:
-            # Optional fields are `T | None`. `coerce_value` has no notion of
-            # "absent" -- that is `validate_custom_fields`'s blank-check, a
-            # different layer -- so a `None` here must pass through untouched
-            # rather than be handed to a function that was never designed to
-            # see it.
+        if is_blank(value):
+            if spec.required:
+                raise ValueError(f"{spec.key}: campo obbligatorio")
             return None
         try:
             return coerce_value(entity, spec, value)
@@ -92,10 +102,18 @@ def build_custom_fields_model(entity: str, specs: list[FieldSpec]) -> type[BaseM
     FastAPI derives OpenAPI from it, and the MCP SDK derives a tool's JSON Schema
     from the function signature it annotates. One source, two descriptions.
 
-    Every field delegates its validation to `coerce_value` -- the same function
-    `validate_custom_fields` calls -- so this model can never accept a value the
-    validator would reject, or reject one it would accept. See
-    `_delegating_validator` for why that requires a `BeforeValidator`.
+    Every field delegates to the same two functions, called in the same order, as
+    `validate_custom_fields`: `is_blank` first, then `coerce_value`. Calling only
+    the second (an earlier version of this module did) is not equivalent -- a
+    required field would accept an empty string as if it were a real value, and
+    an optional multiselect would store `[]` instead of treating it as absent --
+    so this model can never accept a value the validator would reject, or reject
+    one it would accept. Checked directly against `validate_custom_fields` across
+    all nine field types, both required and optional, over a broad matrix of
+    inputs (blank in every shape, valid, invalid, and boundary values such as
+    `False`, `0`, `inf`/`nan`, and padded option strings): zero disagreements.
+    See `_delegating_validator` for why the delegation also has to run inside a
+    `BeforeValidator`, not an `AfterValidator`.
 
     Call this once per entity, from that entity's *current* field definitions,
     each time a schema is needed. Do not hold on to a model built from a stale

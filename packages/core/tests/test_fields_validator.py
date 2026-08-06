@@ -226,7 +226,7 @@ def test_text_rejects_a_dict_instead_of_stringifying_it_into_garbage() -> None:
 
 
 def test_required_multiselect_rejects_an_empty_list_as_still_missing() -> None:
-    """_is_blank only special-cased None and blank strings, so a required multiselect
+    """is_blank only special-cased None and blank strings, so a required multiselect
     could be "satisfied" by an empty list - present in the payload, absent in
     substance."""
     s = spec("tag", "multiselect", options=["a", "b"], required=True)
@@ -236,7 +236,7 @@ def test_required_multiselect_rejects_an_empty_list_as_still_missing() -> None:
 
 
 def test_checkbox_false_and_number_zero_are_not_treated_as_blank() -> None:
-    """Guards the caution in the _is_blank fix: extending blankness to empty
+    """Guards the caution in the is_blank fix: extending blankness to empty
     sequences must not start swallowing other falsy-but-legitimate values."""
     specs = [spec("ok", "checkbox", required=True), spec("n", "number", required=True)]
     result = validate_custom_fields("c", specs, {"ok": False, "n": 0})
