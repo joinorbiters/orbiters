@@ -36,6 +36,7 @@ These apply to **every** task. They are not repeated per task.
 - **The `Expected: PASS (N passed)` counts are indicative, not contractual.** Parametrised tests expand to different totals than the number of test functions. What matters is that every test passes and none is skipped — a differing total is not a failure and must not be "fixed" by deleting or merging cases.
 - **A uniqueness pre-check never replaces the database constraint.** Wherever a service does "SELECT to check, then INSERT", it must also catch `sqlalchemy.exc.IntegrityError` around the commit, `session.rollback()`, and re-raise the domain `Conflict`. Two concurrent requests both pass the SELECT; only the constraint stops the second, and without the rollback the caller's session is left poisoned (`PendingRollbackError` on its next statement). Established in Task 4 and applied identically in Task 7.
 - **Case-insensitive uniqueness needs a functional index, not a convention.** A plain `unique=True` on a text column is case-sensitive: lowercasing in a Pydantic validator protects only the paths that go through it. Where identity is case-insensitive (emails, slugs), declare `Index("uq_…", func.lower(col), unique=True)` in `__table_args__`.
+- **A method named `list` must be the last method in its class.** `def list(...)` rebinds `list` in the class namespace, so any later method annotated `-> list[Something]` resolves it to that method and raises `TypeError: 'function' object is not subscriptable` at import time. Python 3.13 evaluates annotations eagerly, so this is a hard failure here; 3.14's PEP 649 would hide it. Calling `self.list()` from an earlier method is fine — that is a call-time attribute lookup, not an annotation.
 
 ### Pinned versions
 
@@ -3121,9 +3122,7 @@ class PipelineService:
             raise NotFound("pipeline_stage", stage_id)
         return PipelineStageRead.model_validate(stage)
 
-    def list(self) -> list[PipelineStageRead]:
-        return [PipelineStageRead.model_validate(s) for s in self.repo.list()]
-
+    # `list` is defined LAST in this class on purpose — see the note below the code.
     def seed_defaults(self) -> list[PipelineStageRead]:
         existing = {s.nome for s in self.repo.list()}
         for nome, posizione, probabilita, tipo in DEFAULT_STAGES:
@@ -3144,7 +3143,18 @@ class PipelineService:
         if not stages:
             raise NotFound("pipeline_stage", "default")
         return stages[0]
+
+    def list(self) -> list[PipelineStageRead]:
+        return [PipelineStageRead.model_validate(s) for s in self.repo.list()]
 ```
+
+**Why `list` comes last.** Defining `def list(...)` rebinds the name `list` inside the class
+namespace, so any *later* method annotated `-> list[Something]` resolves `list` to that method
+instead of the builtin and raises `TypeError: 'function' object is not subscriptable` **at import
+time**. On Python 3.13 annotations are evaluated eagerly, so this is a hard failure; on 3.14 PEP 649
+makes them lazy and it silently disappears — which is exactly why it must not be left to chance on a
+project pinned to 3.13. Calling `self.list()` from an earlier method is fine: that is an attribute
+lookup at call time, not an annotation evaluated at definition time.
 
 `pipeline/__init__.py`:
 
