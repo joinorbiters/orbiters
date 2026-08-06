@@ -1,0 +1,213 @@
+import re
+from datetime import UTC, datetime
+from typing import Any
+from uuid import UUID
+
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.activities.service import ActivityService
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.customers.repository import CustomerRepository
+from pigrocrm.core.errors import NotFound, ValidationFailed
+from pigrocrm.core.fields.schemas import EntityType
+from pigrocrm.core.fields.service import FieldDefinitionService
+from pigrocrm.core.fields.validator import validate_custom_fields
+from pigrocrm.core.people.models import Person
+from pigrocrm.core.people.repository import PersonRepository
+from pigrocrm.core.people.schemas import (
+    PersonCreate,
+    PersonListQuery,
+    PersonPage,
+    PersonRead,
+    PersonUpdate,
+)
+
+# Typed as the fields module's own EntityType (not a bare `str`), matching
+# CustomerService.ENTITY exactly: passing a plain `str` into `specs_for` fails mypy
+# strict, which requires the narrower `Literal["customer", "person", "deal"]`.
+ENTITY: EntityType = "person"
+# `.fullmatch()`, not `.match()`, is load-bearing -- identical reasoning to
+# `PARTITA_IVA_RE` in customers/service.py: `.match()` with a `$`-anchored pattern
+# accepts a trailing "\n", because `$` matches just before a final newline, not only
+# at the true end of the string. "a@b.it\n" would pass `^...$` under `.match()` and
+# could reach `flush()` as a raw, session-poisoning `DataError` once combined with a
+# value long enough to exceed the `String(320)` column. This was the Critical finding
+# on Customers; `.fullmatch()` requires the entire string to be consumed, which has no
+# such exception.
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _check_email(data: dict[str, Any]) -> None:
+    """Mutates `data` in place: an empty string is normalized to `None` before the
+    format check runs, exactly mirroring `_check_fiscal` in customers/service.py.
+    Without this, `if email` below is falsy on "", so an empty string skips the check
+    entirely and would be stored as "" -- a different thing from "not provided" that
+    would, for instance, wrongly satisfy a future "has an email" filter. Shared by
+    `create` and `update`, so the normalization applies equally to a brand-new row and
+    to a patch that clears the field with "".
+    """
+    if data.get("email") == "":
+        data["email"] = None
+
+    email = data.get("email")
+    if email and not EMAIL_RE.fullmatch(email):
+        raise ValidationFailed(ENTITY, "email", "indirizzo non valido", expected="nome@dominio.it")
+
+
+class PersonService:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+        self.repo = PersonRepository(session)
+        self.customers = CustomerRepository(session)
+        self.fields = FieldDefinitionService(session)
+        self.activities = ActivityService(session)
+
+    def _check_customer(self, customer_id: UUID | None) -> None:
+        """`None` is always accepted -- see `Person`'s own docstring: a contact may
+        exist with no customer at all. A supplied id that does not resolve to a live
+        row -- absent, or itself soft-deleted, since `CustomerRepository.get` treats
+        both the same unless `include_deleted=True` -- is rejected: a dangling FK is
+        worse than no FK."""
+        if customer_id is not None and self.customers.get(customer_id) is None:
+            raise NotFound("customer", customer_id)
+
+    def _validated_custom(self, values: dict[str, Any]) -> dict[str, Any]:
+        """Used by `create` only: `values` is the *complete* desired set of custom
+        fields for a brand-new row, so it is validated against every active
+        definition -- a required-but-absent field is genuinely missing here, not
+        merely untouched, unlike on a partial `update` (see `_update_custom_fields`).
+        Mirrors `CustomerService._validated_custom` exactly."""
+        return validate_custom_fields(ENTITY, self.fields.specs_for(ENTITY), values)
+
+    def _update_custom_fields(self, person: Person, provided: dict[str, Any]) -> dict[str, Any]:
+        """Copies `CustomerService._update_custom_fields`'s contract exactly (see that
+        method's docstring in customers/service.py for the full reasoning): validates
+        only the keys the caller is touching, against active definitions -- never the
+        union with what is already stored on `person`. Validating the union would
+        contradict Task 7's contract for archiving a field ("hide it, keep the data
+        readable"): an archived key still present in storage would fail the "campo non
+        definito" check on every future update, even one that never mentions that key.
+
+        A key supplied with `None` removes that entry from the stored dict, unless the
+        key currently belongs to an active, `required=True` definition -- in which case
+        it raises the same "campo obbligatorio" `ValidationFailed` that
+        `validate_custom_fields` raises for `""`. `None` and `""` are two spellings of
+        "this field has no value"; on a *required*, currently active field the two must
+        be rejected identically, or a caller strips the value just by choosing the
+        other spelling. Archived, undefined, or non-required keys keep allowing removal
+        via `None` even if the definition was required back when it was active --
+        clearing an archived field's stored value must stay possible.
+
+        A key supplied with any other (non-blank) value must belong to a currently
+        active definition. Keys already stored that `provided` does not mention --
+        archived or not, required or not -- are carried over untouched.
+        """
+        active_by_key = {spec.key: spec for spec in self.fields.specs_for(ENTITY)}
+
+        to_remove: set[str] = set()
+        for key, value in provided.items():
+            if value is not None:
+                continue
+            spec = active_by_key.get(key)
+            if spec is not None and spec.required:
+                raise ValidationFailed(
+                    ENTITY, key, "campo obbligatorio", expected="un valore non vuoto"
+                )
+            to_remove.add(key)
+
+        to_set = {key: value for key, value in provided.items() if value is not None}
+        touched_specs = [spec for spec in active_by_key.values() if spec.key in to_set]
+        validated = validate_custom_fields(ENTITY, touched_specs, to_set)
+
+        merged = {k: v for k, v in person.custom_fields.items() if k not in to_remove}
+        merged.update(validated)
+        return merged
+
+    def create(self, data: PersonCreate, actor: Actor) -> PersonRead:
+        actor.require_write("create_person")
+        payload = data.model_dump()
+        _check_email(payload)
+        self._check_customer(payload.get("customer_id"))
+        payload["custom_fields"] = self._validated_custom(payload.get("custom_fields") or {})
+
+        person = self.repo.add(Person(**payload))
+        self.activities.record(ENTITY, person.id, "created", actor, {"nome": person.nome})
+        self.session.commit()
+        return PersonRead.model_validate(person)
+
+    def update(self, person_id: UUID, data: PersonUpdate, actor: Actor) -> PersonRead:
+        actor.require_write("update_person")
+        person = self.repo.get(person_id)
+        if person is None:
+            raise NotFound(ENTITY, person_id)
+
+        # custom_fields is handled separately from the rest of the payload, reading
+        # `data.custom_fields` directly rather than through `model_dump`: this method
+        # must see a caller-supplied `None` *inside* the dict (e.g. {"seniority":
+        # None}, meaning "remove this key") exactly as given, with no risk of it being
+        # confused with the field itself being absent -- see `_update_custom_fields`.
+        changes = data.model_dump(exclude_none=True, exclude={"custom_fields", "detach"})
+        _check_email(changes)
+        if "customer_id" in changes:
+            self._check_customer(changes["customer_id"])
+        if data.custom_fields is not None:
+            changes["custom_fields"] = self._update_custom_fields(person, data.custom_fields)
+        for key, value in changes.items():
+            setattr(person, key, value)
+        if data.detach:
+            person.customer_id = None
+            changes["customer_id"] = None
+
+        self.activities.record(ENTITY, person.id, "updated", actor, {"changed": sorted(changes)})
+        self.session.commit()
+        return PersonRead.model_validate(person)
+
+    def get(self, person_id: UUID, actor: Actor) -> PersonRead:
+        person = self.repo.get(person_id)
+        if person is None:
+            raise NotFound(ENTITY, person_id)
+        return PersonRead.model_validate(person)
+
+    def soft_delete(self, person_id: UUID, actor: Actor) -> None:
+        """Sets deleted_at. No physical delete exists in this slice: a misread
+        instruction from an agent must be reversible."""
+        actor.require_write("delete_person")
+        person = self.repo.get(person_id)
+        if person is None:
+            raise NotFound(ENTITY, person_id)
+        person.deleted_at = datetime.now(UTC)
+        self.activities.record(ENTITY, person.id, "deleted", actor)
+        self.session.commit()
+
+    def restore(self, person_id: UUID, actor: Actor) -> PersonRead:
+        actor.require_write("restore_person")
+        person = self.repo.get(person_id, include_deleted=True)
+        if person is None:
+            raise NotFound(ENTITY, person_id)
+        # Recorded only when the person really was deleted: unconditionally logging
+        # "restored" here -- even for a person that was never soft-deleted -- would
+        # write a timeline entry claiming a recovery that never happened. Mirrors the
+        # identical guard on CustomerService.restore.
+        was_deleted = person.deleted_at is not None
+        person.deleted_at = None
+        if was_deleted:
+            self.activities.record(ENTITY, person.id, "restored", actor)
+        self.session.commit()
+        return PersonRead.model_validate(person)
+
+    # `list` must stay the last method defined in this class -- an unconditional
+    # project rule (see `FieldDefinitionService.specs_for`'s docstring and
+    # `CustomerService`'s own ordering): defining a method named `list` rebinds that
+    # name in the *class* namespace, so any later method whose own return annotation is
+    # a bare `list[...]` would resolve `list` to this method instead of the builtin and
+    # fail at import time. No method in this class has that shape today, but the rule
+    # has no "only when it would currently break" exception -- this is the file Deals
+    # copies.
+    def list(self, query: PersonListQuery, actor: Actor) -> PersonPage:
+        rows = self.repo.list(query)
+        has_more = len(rows) > query.limit
+        items = rows[: query.limit]
+        return PersonPage(
+            items=[PersonRead.model_validate(p) for p in items],
+            next_cursor=items[-1].id if has_more and items else None,
+        )
