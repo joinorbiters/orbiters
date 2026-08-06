@@ -111,7 +111,9 @@ class CustomerListQuery(BaseModel):
     search: str | None = None
     stato: str | None = None
     custom: dict[str, Any] | None = None
-    limit: int = 50
+    # Upper-bounded so a caller (an MCP agent especially) cannot request an
+    # unbounded page; the router will impose the same ceiling at the HTTP layer.
+    limit: int = Field(default=50, ge=1, le=200)
     cursor: UUID | None = None
 
 

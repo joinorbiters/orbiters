@@ -28,13 +28,33 @@ from pigrocrm.core.fields.validator import validate_custom_fields
 # ActivityService.record, validate_custom_fields) only asks for `str`, so the narrower
 # type costs nothing there.
 ENTITY: EntityType = "customer"
+# `.fullmatch()`, not `.match()`, is load-bearing: `.match()` with a `$`-anchored
+# pattern accepts a trailing "\n" -- `$` matches just before a final newline, not only
+# at the true end of the string -- so "12345678901\n" (12 characters, one more than
+# the `String(11)` column) used to pass this check and reach `flush()` as a raw,
+# session-poisoning `DataError`. `.fullmatch()` requires the *entire* string to be
+# consumed, which has no such exception. A pasted VAT number or an MCP agent's tool
+# call carrying a trailing newline is not a lab-only case.
 PARTITA_IVA_RE = re.compile(r"^\d{11}$")
 CODICE_SDI_LENGTH = 7
 
 
 def _check_fiscal(data: dict[str, Any]) -> None:
+    """Mutates `data` in place: an empty string is normalized to `None` for both
+    fiscal fields before either is checked. Without this, `if piva`/`if sdi` below are
+    falsy on "", so an empty string skipped the check entirely and was stored as "" --
+    a different thing from "not provided" that would, for instance, wrongly satisfy a
+    future "has a VAT number" filter. Shared by `create` and `update`, so the
+    normalization applies equally to a brand-new row and to a patch that clears the
+    field with "".
+    """
+    if data.get("partita_iva") == "":
+        data["partita_iva"] = None
+    if data.get("codice_sdi") == "":
+        data["codice_sdi"] = None
+
     piva = data.get("partita_iva")
-    if piva and not PARTITA_IVA_RE.match(piva):
+    if piva and not PARTITA_IVA_RE.fullmatch(piva):
         raise ValidationFailed(
             ENTITY, "partita_iva", "deve essere di 11 cifre", expected="11 cifre numeriche"
         )
@@ -53,7 +73,46 @@ class CustomerService:
         self.activities = ActivityService(session)
 
     def _validated_custom(self, values: dict[str, Any]) -> dict[str, Any]:
+        """Used by `create` only: `values` is the *complete* desired set of custom
+        fields for a brand-new row, so it is validated against every active
+        definition -- a required-but-absent field is genuinely missing here, not
+        merely untouched, unlike on a partial `update` (see `_update_custom_fields`)."""
         return validate_custom_fields(ENTITY, self.fields.specs_for(ENTITY), values)
+
+    def _update_custom_fields(self, customer: Customer, provided: dict[str, Any]) -> dict[str, Any]:
+        """Validates only the keys the caller is touching, against active definitions
+        -- never the union with what is already stored on `customer`. An earlier
+        version merged `customer.custom_fields` with `provided` and validated the
+        result, which broke Task 7's contract for archiving a field ("hide it, keep
+        the data readable"): any archived key still present in storage failed the
+        "campo non definito" check on *every* future update, even one that never
+        mentions that key, and there was no way to clear it because the same check ran
+        before any notion of removal.
+
+        A key supplied with `None` removes that entry from the stored dict -- the one
+        way left to clear an obsolete value once its definition is archived. A key
+        supplied with any other value must belong to a currently active definition:
+        setting a *new* value on an archived key is refused, the same as on an
+        undefined one -- archiving means "closed to new input," not "gone." Keys
+        already stored that `provided` does not mention -- archived or not -- are
+        carried over untouched.
+
+        Filtering `specs` down to only the touched keys before calling
+        `validate_custom_fields` is what keeps this partial-update-shaped: that
+        function's own second pass walks every spec it is given and fails a blank
+        *required* one, which is correct when `values` is meant to be a complete set
+        (`_validated_custom`, above) but would wrongly fail an active required field
+        that this update never mentions at all if the full active spec list were
+        passed here unfiltered.
+        """
+        to_remove = {key for key, value in provided.items() if value is None}
+        to_set = {key: value for key, value in provided.items() if value is not None}
+        touched_specs = [spec for spec in self.fields.specs_for(ENTITY) if spec.key in to_set]
+        validated = validate_custom_fields(ENTITY, touched_specs, to_set)
+
+        merged = {k: v for k, v in customer.custom_fields.items() if k not in to_remove}
+        merged.update(validated)
+        return merged
 
     def create(self, data: CustomerCreate, actor: Actor) -> CustomerRead:
         actor.require_write("create_customer")
@@ -74,11 +133,15 @@ class CustomerService:
         if customer is None:
             raise NotFound(ENTITY, customer_id)
 
-        changes = data.model_dump(exclude_none=True)
+        # custom_fields is handled separately from the rest of the payload, reading
+        # `data.custom_fields` directly rather than through `model_dump`: this method
+        # must see a caller-supplied `None` *inside* the dict (e.g. {"settore": None},
+        # meaning "remove this key") exactly as given, with no risk of it being
+        # confused with the field itself being absent -- see `_update_custom_fields`.
+        changes = data.model_dump(exclude_none=True, exclude={"custom_fields"})
         _check_fiscal(changes)
-        if "custom_fields" in changes:
-            merged = {**customer.custom_fields, **changes["custom_fields"]}
-            changes["custom_fields"] = self._validated_custom(merged)
+        if data.custom_fields is not None:
+            changes["custom_fields"] = self._update_custom_fields(customer, data.custom_fields)
         for key, value in changes.items():
             setattr(customer, key, value)
 
@@ -91,15 +154,6 @@ class CustomerService:
         if customer is None:
             raise NotFound(ENTITY, customer_id)
         return CustomerRead.model_validate(customer)
-
-    def list(self, query: CustomerListQuery, actor: Actor) -> CustomerPage:
-        rows = self.repo.list(query)
-        has_more = len(rows) > query.limit
-        items = rows[: query.limit]
-        return CustomerPage(
-            items=[CustomerRead.model_validate(c) for c in items],
-            next_cursor=items[-1].id if has_more and items else None,
-        )
 
     def soft_delete(self, customer_id: UUID, actor: Actor) -> None:
         """Sets deleted_at. No physical delete exists in this slice: a misread
@@ -126,7 +180,29 @@ class CustomerService:
         customer = self.repo.get(customer_id, include_deleted=True)
         if customer is None:
             raise NotFound(ENTITY, customer_id)
+        # Recorded only when the customer really was deleted: unconditionally logging
+        # "restored" here -- even for a customer that was never soft-deleted -- would
+        # write a timeline entry claiming a recovery that never happened.
+        was_deleted = customer.deleted_at is not None
         customer.deleted_at = None
-        self.activities.record(ENTITY, customer.id, "restored", actor)
+        if was_deleted:
+            self.activities.record(ENTITY, customer.id, "restored", actor)
         self.session.commit()
         return CustomerRead.model_validate(customer)
+
+    # `list` must stay the last method defined in this class -- an unconditional
+    # project rule (see `FieldDefinitionService.specs_for`'s docstring and
+    # `PipelineService`'s own ordering for the two other places it already applies):
+    # defining a method named `list` rebinds that name in the *class* namespace, so
+    # any later method whose own return annotation is a bare `list[...]` would resolve
+    # `list` to this method instead of the builtin and fail at import time. No method
+    # in this class has that shape today, but the rule does not have a "only when it
+    # would currently break" exception -- this is the file People and Deals copy.
+    def list(self, query: CustomerListQuery, actor: Actor) -> CustomerPage:
+        rows = self.repo.list(query)
+        has_more = len(rows) > query.limit
+        items = rows[: query.limit]
+        return CustomerPage(
+            items=[CustomerRead.model_validate(c) for c in items],
+            next_cursor=items[-1].id if has_more and items else None,
+        )

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.customers.schemas import CustomerListQuery
-from pigrocrm.core.db import Base
+from pigrocrm.core.db import Base, escape_like
 
 
 class CustomerRepository:
@@ -29,13 +29,20 @@ class CustomerRepository:
         stmt = select(Customer).where(Customer.deleted_at.is_(None))
 
         if query.search:
-            like = f"%{query.search.lower()}%"
+            # escape_like neutralizes "%"/"_"/"\" in the *user's* term before it is
+            # wrapped in the wildcard "%...%" this method builds -- otherwise a
+            # literal "_" in the search box matches "any one character" and a
+            # trailing "\" combines with the wildcard just after it into an
+            # accidental escape sequence that swallows the match entirely. escape="\\"
+            # states explicitly which character escape_like used, rather than relying
+            # on ILIKE's default.
+            like = f"%{escape_like(query.search.lower())}%"
             stmt = stmt.where(
                 or_(
-                    Customer.ragione_sociale.ilike(like),
-                    Customer.partita_iva.ilike(like),
-                    Customer.email.ilike(like),
-                    Customer.codice_fiscale.ilike(like),
+                    Customer.ragione_sociale.ilike(like, escape="\\"),
+                    Customer.partita_iva.ilike(like, escape="\\"),
+                    Customer.email.ilike(like, escape="\\"),
+                    Customer.codice_fiscale.ilike(like, escape="\\"),
                 )
             )
         if query.stato:
