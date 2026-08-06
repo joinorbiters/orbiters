@@ -35,17 +35,25 @@ class PipelineRepository:
         """Deals arrive in a later slice. Until then, `deals` is simply absent from
         `Base.metadata.tables`, and this returns 0 rather than querying a table that
         does not exist yet -- the same defensive lookup `CustomerRepository` uses for
-        `count_active_deals`.
+        `count_active_deals`. The referencing column is `pipeline_stage_id` (per the
+        plan's Task 12).
 
-        The referencing column is assumed to be named `stage_id`, following this
-        codebase's `_id`-suffix convention for foreign keys (`Activity.entity_id`,
-        `Activity.actor_id`). If the task that introduces `deals` names it differently,
-        this is the one line that needs to change.
+        Returning 0 is only correct for the "table does not exist yet" case above. If
+        `deals` exists but does not expose `pipeline_stage_id`, that is a bug in this
+        code, not "no deals in this stage" -- returning 0 there would let `delete()`
+        remove a stage that might still be full of deals, so this raises instead of
+        guessing.
         """
         deals_table = Base.metadata.tables.get("deals")
         if deals_table is None:
-            return 0
-        stmt = (
-            select(func.count()).select_from(deals_table).where(deals_table.c.stage_id == stage_id)
-        )
+            return 0  # i deal arrivano in un task successivo
+        column = deals_table.c.get("pipeline_stage_id")
+        if column is None:
+            # La tabella esiste ma non ha la colonna attesa: e' un errore di codice,
+            # non l'assenza di deal. Restituire 0 qui permetterebbe di cancellare uno
+            # stato ancora referenziato.
+            raise RuntimeError(
+                "la tabella deals non espone pipeline_stage_id: aggiornare count_deals_in_stage"
+            )
+        stmt = select(func.count()).select_from(deals_table).where(column == stage_id)
         return self.session.execute(stmt).scalar_one()

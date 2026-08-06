@@ -93,18 +93,30 @@ class PipelineService:
     # `list` is defined LAST in this class on purpose — see the note below the code.
     def seed_defaults(self) -> list[PipelineStageRead]:
         existing_codes = {s.code for s in self.repo.list() if s.code is not None}
-        for code, nome, posizione, probabilita, tipo in DEFAULT_STAGES:
-            if code not in existing_codes:
-                self.repo.add(
-                    PipelineStage(
-                        code=code,
-                        nome=nome,
-                        posizione=posizione,
-                        probabilita_default=probabilita,
-                        tipo=tipo,
+        try:
+            for code, nome, posizione, probabilita, tipo in DEFAULT_STAGES:
+                if code not in existing_codes:
+                    self.repo.add(
+                        PipelineStage(
+                            code=code,
+                            nome=nome,
+                            posizione=posizione,
+                            probabilita_default=probabilita,
+                            tipo=tipo,
+                        )
                     )
-                )
-        self.session.commit()
+            self.session.commit()
+        except IntegrityError:
+            # Different recovery than create()'s on purpose. There, the caller wants
+            # *that specific* stage created and a conflict is information they need.
+            # Here, the caller only wants the defaults to exist -- if a concurrent
+            # seed_defaults() call won the race on `code`'s unique index first, the
+            # desired end state (these stages exist) is already reached, so this
+            # converges silently instead of raising. The rollback is still mandatory:
+            # without it the session is unusable for whatever runs next. Wraps the
+            # whole loop, not just the commit -- each `repo.add()` flushes immediately,
+            # so the conflict can surface there rather than at the trailing commit.
+            self.session.rollback()
         return self.list()
 
     def default_stage(self) -> PipelineStageRead:
