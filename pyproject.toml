@@ -1,0 +1,28 @@
+[project]
+name = "pigrocrm"
+version = "0.1.0"
+requires-python = ">=3.13,<3.14"
+dependencies = ["pigrocrm-core", "pigrocrm-api", "pigrocrm-mcp"]
+
+[tool.uv.workspace]
+members = ["packages/*", "apps/api", "apps/mcp"]
+
+[tool.uv.sources]
+pigrocrm-core = { workspace = true }
+pigrocrm-api = { workspace = true }
+pigrocrm-mcp = { workspace = true }
+
+[dependency-groups]
+dev = [
+  "pytest==9.1.1", "pytest-cov==7.1.0", "pytest-asyncio==1.4.0",
+  "testcontainers[postgres]==4.15.0", "httpx==0.28.1",
+  "ruff==0.16.1", "mypy==2.3.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["packages/core/tests", "apps/api/tests", "apps/mcp/tests"]
+asyncio_mode = "auto"
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
