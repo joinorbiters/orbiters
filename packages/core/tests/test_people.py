@@ -354,6 +354,58 @@ def test_update_can_detach_a_person_from_a_customer(db_session: Session) -> None
     assert detached.customer_id is None
 
 
+def test_detach_wins_over_a_valid_customer_id_supplied_in_the_same_update(
+    db_session: Session,
+) -> None:
+    """`detach=True` is an explicit, self-contained intention: an incidental
+    `customer_id` sent in the same payload (a client re-submitting stale form
+    state alongside an "unlink" action is not exotic) must not be silently
+    honoured instead, nor interact with the detach at all -- the person ends up
+    detached regardless of what `customer_id` said."""
+    original = CustomerService(db_session).create(CustomerCreate(ragione_sociale="ACME"), ADMIN)
+    other = CustomerService(db_session).create(CustomerCreate(ragione_sociale="Beta"), ADMIN)
+    service = PersonService(db_session)
+    person = service.create(PersonCreate(nome="Mario", customer_id=original.id), ADMIN)
+
+    detached = service.update(person.id, PersonUpdate(customer_id=other.id, detach=True), ADMIN)
+    assert detached.customer_id is None
+
+
+def test_detach_succeeds_even_with_a_nonexistent_customer_id_in_the_same_update(
+    db_session: Session,
+) -> None:
+    """The detach's own success must not depend on `customer_id` being valid, or
+    even resolvable at all: `_check_customer` must never run when `detach=True`,
+    since the caller's intent to unlink does not depend on that field."""
+    customer = CustomerService(db_session).create(CustomerCreate(ragione_sociale="ACME"), ADMIN)
+    service = PersonService(db_session)
+    person = service.create(PersonCreate(nome="Mario", customer_id=customer.id), ADMIN)
+
+    detached = service.update(person.id, PersonUpdate(customer_id=uuid4(), detach=True), ADMIN)
+    assert detached.customer_id is None
+
+
+def test_detach_on_an_already_detached_person_records_an_honest_empty_changed_list(
+    db_session: Session,
+) -> None:
+    """`detach=True` on a person with no customer to begin with must not force a
+    spurious `customer_id=None` assignment into the timeline's "changed" list --
+    that would be an audit entry claiming a change that never happened, the same
+    class of defect `restore()`'s own `was_deleted` guard exists to prevent."""
+    from pigrocrm.core.activities.service import ActivityService
+
+    service = PersonService(db_session)
+    person = service.create(PersonCreate(nome="Mario"), ADMIN)
+
+    detached = service.update(person.id, PersonUpdate(detach=True), ADMIN)
+    assert detached.customer_id is None
+
+    updates = [
+        e for e in ActivityService(db_session).timeline("person", person.id) if e.kind == "updated"
+    ]
+    assert updates[0].payload["changed"] == []
+
+
 def test_soft_delete_then_restore(db_session: Session) -> None:
     service = PersonService(db_session)
     person = service.create(PersonCreate(nome="Mario"), ADMIN)
@@ -449,3 +501,43 @@ def test_list_query_limit_is_bounded() -> None:
         PersonListQuery(limit=0)
     with pytest.raises(ValidationError):
         PersonListQuery(limit=201)
+
+
+def test_filter_by_custom_field_uses_jsonb_containment(db_session: Session) -> None:
+    """Mirrors `test_filter_by_custom_field_uses_jsonb_containment` in
+    test_customers.py -- coverage Deals will also need once it copies this shape,
+    even though nothing here is currently broken."""
+    FieldDefinitionService(db_session).create(
+        FieldDefinitionCreate(
+            entity_type="person", key="settore", label="Settore", field_type="text"
+        ),
+        ADMIN,
+    )
+    service = PersonService(db_session)
+    service.create(PersonCreate(nome="A", custom_fields={"settore": "IT"}), ADMIN)
+    service.create(PersonCreate(nome="B", custom_fields={"settore": "Retail"}), ADMIN)
+
+    page = service.list(PersonListQuery(custom={"settore": "IT"}), ADMIN)
+    assert [p.nome for p in page.items] == ["A"]
+
+
+def test_pagination_returns_a_cursor_and_does_not_repeat_rows(db_session: Session) -> None:
+    """Mirrors `test_pagination_returns_a_cursor_and_does_not_repeat_rows` in
+    test_customers.py."""
+    service = PersonService(db_session)
+    for index in range(5):
+        service.create(PersonCreate(nome=f"Persona {index:02d}"), ADMIN)
+
+    first = service.list(PersonListQuery(limit=2), ADMIN)
+    assert len(first.items) == 2
+    assert first.next_cursor is not None
+
+    second = service.list(PersonListQuery(limit=2, cursor=first.next_cursor), ADMIN)
+    assert {p.id for p in first.items}.isdisjoint({p.id for p in second.items})
+
+
+def test_last_page_has_no_cursor(db_session: Session) -> None:
+    """Mirrors `test_last_page_has_no_cursor` in test_customers.py."""
+    service = PersonService(db_session)
+    service.create(PersonCreate(nome="Solo"), ADMIN)
+    assert service.list(PersonListQuery(limit=10), ADMIN).next_cursor is None
