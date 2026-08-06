@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import Column, Integer, Table
 from sqlalchemy.orm import Session
 
@@ -56,6 +57,51 @@ def test_codice_sdi_must_be_seven_characters(db_session: Session) -> None:
     assert exc.value.details["field"] == "codice_sdi"
 
 
+def test_partita_iva_with_a_trailing_newline_is_rejected(db_session: Session) -> None:
+    """`^\\d{11}$` checked with `.match()` accepts a trailing "\\n": `$` matches just
+    before a final newline, not only at the true end of the string, so
+    "12345678901\\n" (12 characters -- one more than the `String(11)` column) passed
+    the check and reached `flush()` as a raw, session-poisoning `DataError`. A VAT
+    number pasted from a PDF or supplied by an MCP agent is not a lab-only case for a
+    trailing newline. `.fullmatch()` requires the entire string to be consumed, which
+    closes the gap."""
+    with pytest.raises(ValidationFailed) as exc:
+        CustomerService(db_session).create(
+            CustomerCreate(ragione_sociale="X", partita_iva="12345678901\n"), ADMIN
+        )
+    assert exc.value.details["field"] == "partita_iva"
+
+
+def test_codice_sdi_with_a_trailing_newline_is_rejected(db_session: Session) -> None:
+    """`len(sdi) != 7` has no equivalent gap -- a trailing newline simply makes the
+    string 8 characters long, regardless of anchoring. Tested for symmetry with the
+    partita_iva case above, and as a regression guard for whoever changes this check
+    later."""
+    with pytest.raises(ValidationFailed) as exc:
+        CustomerService(db_session).create(
+            CustomerCreate(ragione_sociale="X", codice_sdi="ABCDEFG\n"), ADMIN
+        )
+    assert exc.value.details["field"] == "codice_sdi"
+
+
+def test_empty_string_partita_iva_is_normalized_to_none(db_session: Session) -> None:
+    """An empty string is falsy, so a bare `if piva` skipped the format check
+    entirely and let "" reach storage as an empty string -- a different thing from
+    "not provided" that would, for instance, wrongly satisfy a future "has a VAT
+    number" filter."""
+    customer = CustomerService(db_session).create(
+        CustomerCreate(ragione_sociale="X", partita_iva=""), ADMIN
+    )
+    assert customer.partita_iva is None
+
+
+def test_empty_string_codice_sdi_is_normalized_to_none(db_session: Session) -> None:
+    customer = CustomerService(db_session).create(
+        CustomerCreate(ragione_sociale="X", codice_sdi=""), ADMIN
+    )
+    assert customer.codice_sdi is None
+
+
 def test_custom_fields_are_validated_against_the_definitions(db_session: Session) -> None:
     FieldDefinitionService(db_session).create(
         FieldDefinitionCreate(
@@ -84,6 +130,65 @@ def test_undefined_custom_field_is_rejected(db_session: Session) -> None:
     with pytest.raises(ValidationFailed):
         CustomerService(db_session).create(
             CustomerCreate(ragione_sociale="X", custom_fields={"inventato": "v"}), ADMIN
+        )
+
+
+def test_archived_custom_field_value_survives_unrelated_updates_and_can_still_be_cleared(
+    db_session: Session,
+) -> None:
+    """Task 7's contract for archiving a field definition is 'hide it, keep the data
+    readable' (see `FieldDefinitionService.archive`'s own docstring). Validating the
+    *union* of a row's stored custom_fields and the caller's incoming values against
+    only the active definitions broke that contract: an archived key still sitting in
+    `custom_fields` made every future update -- even one that never mentions that key
+    -- fail with "campo non definito", and passing `None` for it didn't help, because
+    the unknown-key check ran before any notion of removal. `update()` must validate
+    only the keys the caller actually supplies, never the union with what is already
+    stored."""
+    fields = FieldDefinitionService(db_session)
+    settore = fields.create(
+        FieldDefinitionCreate(
+            entity_type="customer", key="settore", label="Settore", field_type="text"
+        ),
+        ADMIN,
+    )
+    fields.create(
+        FieldDefinitionCreate(
+            entity_type="customer", key="priorita", label="Priorita", field_type="text"
+        ),
+        ADMIN,
+    )
+    service = CustomerService(db_session)
+    customer = service.create(
+        CustomerCreate(ragione_sociale="ACME", custom_fields={"settore": "IT"}), ADMIN
+    )
+    fields.archive(settore.id, ADMIN)
+
+    # Updating a different, active custom field must not be blocked by the archived
+    # key still sitting in custom_fields, and the archived value must survive.
+    updated = service.update(customer.id, CustomerUpdate(custom_fields={"priorita": "alta"}), ADMIN)
+    assert updated.custom_fields == {"settore": "IT", "priorita": "alta"}
+
+    # Explicitly clearing the archived key -- the one way left to remove an obsolete
+    # value once its definition is gone -- still works.
+    cleared = service.update(customer.id, CustomerUpdate(custom_fields={"settore": None}), ADMIN)
+    assert cleared.custom_fields == {"priorita": "alta"}
+
+    # An active key's own validation still runs normally: an invalid value is
+    # rejected exactly as it was before this fix.
+    fields.create(
+        FieldDefinitionCreate(
+            entity_type="customer",
+            key="stato_cliente",
+            label="Stato",
+            field_type="select",
+            options=["attivo", "sospeso"],
+        ),
+        ADMIN,
+    )
+    with pytest.raises(ValidationFailed):
+        service.update(
+            customer.id, CustomerUpdate(custom_fields={"stato_cliente": "chiuso"}), ADMIN
         )
 
 
@@ -135,6 +240,23 @@ def test_soft_delete_hides_the_row_without_removing_it(db_session: Session) -> N
     assert service.restore(customer.id, ADMIN).ragione_sociale == "ACME"
 
 
+def test_restore_on_a_customer_that_was_never_deleted_does_not_log_a_restored_entry(
+    db_session: Session,
+) -> None:
+    """`restore()` unconditionally recorded a "restored" activity, even for a customer
+    that was never soft-deleted -- a misleading timeline entry claiming a recovery that
+    never happened. Only log it when the customer actually was deleted."""
+    from pigrocrm.core.activities.service import ActivityService
+
+    service = CustomerService(db_session)
+    customer = service.create(CustomerCreate(ragione_sociale="ACME"), ADMIN)
+
+    service.restore(customer.id, ADMIN)
+
+    kinds = [e.kind for e in ActivityService(db_session).timeline("customer", customer.id)]
+    assert "restored" not in kinds
+
+
 def test_soft_delete_fails_loudly_if_the_deals_table_lacks_the_expected_column(
     db_session: Session,
 ) -> None:
@@ -172,6 +294,45 @@ def test_search_matches_name_vat_and_email(db_session: Session) -> None:
     assert len(service.list(CustomerListQuery(search="zzz"), ADMIN).items) == 0
 
 
+def test_search_treats_underscore_as_a_literal_character_not_a_wildcard(
+    db_session: Session,
+) -> None:
+    """In LIKE/ILIKE, "_" means "any one character". An unescaped search term makes a
+    literal underscore in the query match every row with any character in that
+    position -- here, searching "a_b" would also match "axb"."""
+    service = CustomerService(db_session)
+    service.create(CustomerCreate(ragione_sociale="A_B Srl"), ADMIN)
+    service.create(CustomerCreate(ragione_sociale="AXB Srl"), ADMIN)
+
+    result = service.list(CustomerListQuery(search="a_b"), ADMIN)
+    assert [c.ragione_sociale for c in result.items] == ["A_B Srl"]
+
+
+def test_search_treats_percent_as_a_literal_character_not_a_wildcard(
+    db_session: Session,
+) -> None:
+    """Same bug, "%" instead of "_": unescaped, it means "any run of characters", so
+    searching "50%off" would also match "50XXXoff"."""
+    service = CustomerService(db_session)
+    service.create(CustomerCreate(ragione_sociale="50%off Srl"), ADMIN)
+    service.create(CustomerCreate(ragione_sociale="50XXXoff Srl"), ADMIN)
+
+    result = service.list(CustomerListQuery(search="50%off"), ADMIN)
+    assert [c.ragione_sociale for c in result.items] == ["50%off Srl"]
+
+
+def test_search_term_with_a_trailing_backslash_still_matches(db_session: Session) -> None:
+    """Before escaping, a trailing backslash in the search term combines with the "%"
+    this method appends to build the pattern, forming an accidental escape sequence
+    that swallows the trailing wildcard -- the match disappears entirely, even though
+    the target genuinely contains that backslash."""
+    service = CustomerService(db_session)
+    service.create(CustomerCreate(ragione_sociale="ACME\\ Srl"), ADMIN)
+
+    result = service.list(CustomerListQuery(search="acme\\"), ADMIN)
+    assert [c.ragione_sociale for c in result.items] == ["ACME\\ Srl"]
+
+
 def test_filter_by_custom_field_uses_jsonb_containment(db_session: Session) -> None:
     FieldDefinitionService(db_session).create(
         FieldDefinitionCreate(
@@ -204,6 +365,13 @@ def test_last_page_has_no_cursor(db_session: Session) -> None:
     service = CustomerService(db_session)
     service.create(CustomerCreate(ragione_sociale="Solo"), ADMIN)
     assert service.list(CustomerListQuery(limit=10), ADMIN).next_cursor is None
+
+
+def test_list_query_limit_is_bounded() -> None:
+    with pytest.raises(ValidationError):
+        CustomerListQuery(limit=0)
+    with pytest.raises(ValidationError):
+        CustomerListQuery(limit=201)
 
 
 def test_get_missing_customer_raises_not_found(db_session: Session) -> None:
