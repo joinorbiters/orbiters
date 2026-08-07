@@ -109,17 +109,55 @@ def test_deactivated_user_cannot_authenticate(db_session: Session) -> None:
     )
 
 
-def _mean_seconds(action: Callable[[], None], repeats: int = 10) -> float:
-    """Average wall-clock time of `action` over `repeats` runs. `action` is expected to
-    always raise `ValidationFailed` — that is the behaviour under measurement, not an
-    error in the measurement itself."""
-    samples: list[float] = []
+def _interleaved_median_seconds(
+    action_a: Callable[[], None],
+    action_b: Callable[[], None],
+    repeats: int = 10,
+    warmup: int = 3,
+) -> tuple[float, float]:
+    """Median wall-clock time of two actions, measured side by side rather than one
+    after the other. Each action is expected to always raise `ValidationFailed` -- that
+    is the behaviour under measurement, not an error in the measurement itself.
+
+    A naive "time A ten times to completion, then time B ten times, then compare means"
+    measurement has two flaws that make it unreliable on a loaded machine (e.g. the full
+    suite, with Docker-backed fixtures competing for the CPU):
+
+    - Order bias: whichever path is timed first absorbs all of the warm-up --
+      allocator warmth, connection state, CPU frequency scaling, page faults -- which
+      inflates it relative to whichever path is timed second, regardless of which one
+      is actually slower. A few untimed warm-up rounds on *both* actions before
+      recording anything drains that one-time cost up front; interleaving the recorded
+      samples (A, B, A, B, ...) instead of running them in two blocks means any warm-up
+      residue, load spike, or CPU frequency change that shows up during the recorded
+      run still lands on both series about equally, instead of only on whichever one
+      happened to run first.
+    - Mean over few samples: a single scheduler preemption or GC pause of a few hundred
+      milliseconds -- ordinary on a machine running hundreds of tests plus Docker -- is
+      an outlier that shifts a 10-sample mean by tens of milliseconds, which is
+      comparable in size to the real effect being measured. The median barely moves for
+      one such stall.
+    """
+    for _ in range(warmup):
+        with pytest.raises(ValidationFailed):
+            action_a()
+        with pytest.raises(ValidationFailed):
+            action_b()
+
+    samples_a: list[float] = []
+    samples_b: list[float] = []
     for _ in range(repeats):
         start = time.perf_counter()
         with pytest.raises(ValidationFailed):
-            action()
-        samples.append(time.perf_counter() - start)
-    return statistics.mean(samples)
+            action_a()
+        samples_a.append(time.perf_counter() - start)
+
+        start = time.perf_counter()
+        with pytest.raises(ValidationFailed):
+            action_b()
+        samples_b.append(time.perf_counter() - start)
+
+    return statistics.median(samples_a), statistics.median(samples_b)
 
 
 def test_authenticate_timing_does_not_reveal_whether_the_email_exists(
@@ -127,7 +165,7 @@ def test_authenticate_timing_does_not_reveal_whether_the_email_exists(
 ) -> None:
     """Measured, not deduced. An attacker who can time login attempts must not be able
     to tell 'no such email' apart from 'right email, wrong password' from latency alone.
-    Asserted as a ratio of two means, not as absolute milliseconds, so this does not
+    Asserted as a ratio of two medians, not as absolute milliseconds, so this does not
     flake on a slower or faster machine than whatever ran it last."""
     service = UserService(db_session)
     service.create(
@@ -135,8 +173,10 @@ def test_authenticate_timing_does_not_reveal_whether_the_email_exists(
         ADMIN,
     )
 
-    unknown_email = _mean_seconds(lambda: service.authenticate("nobody@race.it", "whatever12"))
-    wrong_password = _mean_seconds(lambda: service.authenticate("timing@race.it", "wrongpass1"))
+    unknown_email, wrong_password = _interleaved_median_seconds(
+        lambda: service.authenticate("nobody@race.it", "whatever12"),
+        lambda: service.authenticate("timing@race.it", "wrongpass1"),
+    )
     ratio = unknown_email / wrong_password
 
     # Visible with `-s`: real measured numbers for a human reviewing this, not guessed.
@@ -150,6 +190,16 @@ def test_authenticate_timing_does_not_reveal_whether_the_email_exists(
     # that boundary catch the regression in only 1 of 5 trial runs. 1.5 sits with margin
     # on both sides of the two real clusters (~1.0x fixed, ~2.0x broken) instead of on
     # top of one of them.
+    #
+    # That margin is what the interleaved-median measurement above protects: an earlier
+    # version of this helper timed ten unknown-email calls to completion and then ten
+    # wrong-password calls, and compared their means. Unknown-email always ran first, so
+    # it always absorbed the run's warm-up; and a single GC pause or scheduler stall
+    # landing in just one of the two ten-sample blocks (not unusual under a full-suite
+    # load) could move that block's mean by tens of milliseconds on its own. Either
+    # effect alone was enough to push a genuinely ~1.0x machine past a 1.5 bound.
+    # Warming up both paths first, interleaving the timed samples, and comparing
+    # medians removes both effects without touching what is actually being asserted.
     assert 0.5 < ratio < 1.5, (
         f"unknown-email path took {unknown_email * 1000:.1f}ms, known-email-wrong-password "
         f"path took {wrong_password * 1000:.1f}ms (ratio {ratio:.2f}) -- response time "
