@@ -96,6 +96,18 @@ def test_timeline_endpoint_reports_what_happened(logged_in: TestClient) -> None:
     assert all(entry["actor_type"] == "user" for entry in timeline)
 
 
+def test_timeline_endpoint_respects_a_bounded_limit(logged_in: TestClient) -> None:
+    customer_id = logged_in.post("/api/customers", json={"ragione_sociale": "ACME"}).json()["id"]
+    for index in range(5):
+        logged_in.patch(f"/api/customers/{customer_id}", json={"telefono": f"0{index}"})
+
+    limited = logged_in.get(f"/api/customers/{customer_id}/timeline", params={"limit": 2})
+    assert len(limited.json()) == 2
+
+    too_big = logged_in.get(f"/api/customers/{customer_id}/timeline", params={"limit": 201})
+    assert too_big.status_code == 422
+
+
 def test_deleting_a_customer_with_deals_is_409_and_says_how_many(logged_in: TestClient) -> None:
     _seed_pipeline(logged_in)
     customer_id = logged_in.post("/api/customers", json={"ragione_sociale": "ACME"}).json()["id"]

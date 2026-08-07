@@ -9,8 +9,9 @@ from pigrocrm.core.pipeline.schemas import (
 )
 from pigrocrm.core.pipeline.service import PipelineService
 from pigrocrm_api.deps import ActorDep, SessionDep
+from pigrocrm_api.errors import PROBLEM_RESPONSES
 
-router = APIRouter(prefix="/api/pipeline-stages", tags=["pipeline"])
+router = APIRouter(prefix="/api/pipeline-stages", tags=["pipeline"], responses=PROBLEM_RESPONSES)
 
 
 @router.post("", response_model=PipelineStageRead, status_code=status.HTTP_201_CREATED)
@@ -38,5 +39,7 @@ def delete(stage_id: UUID, session: SessionDep, actor: ActorDep) -> None:
 
 @router.post("/seed", response_model=list[PipelineStageRead])
 def seed(session: SessionDep, actor: ActorDep) -> list[PipelineStageRead]:
-    actor.require_admin("seed_pipeline")
-    return PipelineService(session).seed_defaults()
+    """The admin check lives in `PipelineService.seed_defaults` itself now, not
+    here -- see that method's docstring. This router is back to the same
+    validate/resolve/call/serialize shape as every other endpoint."""
+    return PipelineService(session).seed_defaults(actor)

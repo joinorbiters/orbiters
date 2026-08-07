@@ -6,8 +6,9 @@ from pydantic import BaseModel
 from pigrocrm.core.fields.schemas import EntityType
 from pigrocrm.core.schema_registry import describe_entity
 from pigrocrm_api.deps import ActorDep, SessionDep
+from pigrocrm_api.errors import PROBLEM_RESPONSES
 
-router = APIRouter(prefix="/api/schema", tags=["schema"])
+router = APIRouter(prefix="/api/schema", tags=["schema"], responses=PROBLEM_RESPONSES)
 
 
 class EntitySchema(BaseModel):

@@ -16,7 +16,7 @@ COLLAB = Actor(id=None, type="user", role="collaboratore")
 
 
 def test_seed_creates_the_default_italian_sales_process(db_session: Session) -> None:
-    stages = PipelineService(db_session).seed_defaults()
+    stages = PipelineService(db_session).seed_defaults(ADMIN)
     assert [s.nome for s in stages] == [
         "Lead",
         "Contattato",
@@ -32,7 +32,7 @@ def test_seed_marks_the_terminal_stages_so_dashboards_need_no_name_matching(
 ) -> None:
     """Dashboards must know what 'won' means without string-matching a label the
     user is free to rename."""
-    by_name = {s.nome: s for s in PipelineService(db_session).seed_defaults()}
+    by_name = {s.nome: s for s in PipelineService(db_session).seed_defaults(ADMIN)}
     assert by_name["Vinto"].tipo == "won"
     assert by_name["Perso"].tipo == "lost"
     assert by_name["Lead"].tipo == "open"
@@ -40,8 +40,8 @@ def test_seed_marks_the_terminal_stages_so_dashboards_need_no_name_matching(
 
 def test_seed_is_idempotent(db_session: Session) -> None:
     service = PipelineService(db_session)
-    service.seed_defaults()
-    service.seed_defaults()
+    service.seed_defaults(ADMIN)
+    service.seed_defaults(ADMIN)
     assert len(service.list()) == 6
 
 
@@ -77,11 +77,11 @@ def test_seed_is_idempotent_across_a_rename(db_session: Session) -> None:
     exactly why `seed_defaults` must not use `nome` as the seeded stages' identity
     either. Renaming "Vinto" and reseeding must not recreate a stage called "Vinto"."""
     service = PipelineService(db_session)
-    stages = service.seed_defaults()
+    stages = service.seed_defaults(ADMIN)
     vinto = next(s for s in stages if s.nome == "Vinto")
     service.update(vinto.id, PipelineStageUpdate(nome="Chiuso vinto"), ADMIN)
 
-    reseeded = service.seed_defaults()
+    reseeded = service.seed_defaults(ADMIN)
 
     assert len(reseeded) == 6
     assert {s.nome for s in reseeded} == {
@@ -194,7 +194,7 @@ def test_seed_defaults_race_past_the_precheck_converges_silently(
     `existing_codes`) -- `seed_defaults`'s own trailing `return self.list()` also calls
     `repo.list()`, and that call must see the real rows."""
     service = PipelineService(db_session)
-    service.seed_defaults()
+    service.seed_defaults(ADMIN)
 
     real_list = service.repo.list
     calls = {"n": 0}
@@ -205,7 +205,7 @@ def test_seed_defaults_race_past_the_precheck_converges_silently(
 
     monkeypatch.setattr(service.repo, "list", _lie_on_first_call)
 
-    result = service.seed_defaults()
+    result = service.seed_defaults(ADMIN)
 
     assert len(result) == 6
 
@@ -251,3 +251,18 @@ def test_nome_over_the_column_width_is_rejected_on_create_and_update() -> None:
         PipelineStageCreate(nome="x" * 61, posizione=0)
     with pytest.raises(ValidationError):
         PipelineStageUpdate(nome="x" * 61)
+
+
+# --- Task 15 review, fix round 1 --------------------------------------------------
+
+
+def test_seed_defaults_requires_admin(db_session: Session) -> None:
+    """`create`, `update` and `delete` on this same service all call
+    `actor.require_admin(...)` themselves -- `seed_defaults` is the only write
+    method that did not, which meant the admin check for reseeding the pipeline
+    lived solely in the REST router (`routers/pipeline.py`'s `seed()`) and would
+    have silently gone missing the moment anything else -- an MCP tool, a script,
+    a future router -- called `seed_defaults()` directly. A shared service is the
+    whole point of this architecture only if authorization travels with it."""
+    with pytest.raises(PermissionDenied):
+        PipelineService(db_session).seed_defaults(COLLAB)

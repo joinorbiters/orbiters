@@ -35,7 +35,7 @@ def customer_id(db_session: Session):
 
 @pytest.fixture
 def stages(db_session: Session):
-    return {s.nome: s for s in PipelineService(db_session).seed_defaults()}
+    return {s.nome: s for s in PipelineService(db_session).seed_defaults(ADMIN)}
 
 
 # --- Brief's own tests (Step 1), unchanged --------------------------------------

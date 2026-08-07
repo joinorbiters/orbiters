@@ -5,8 +5,9 @@ from pydantic import BaseModel, Field
 
 from pigrocrm.core.auth.pat_service import PatRead, PatService
 from pigrocrm_api.deps import ActorDep, SessionDep
+from pigrocrm_api.errors import PROBLEM_RESPONSES
 
-router = APIRouter(prefix="/api/tokens", tags=["tokens"])
+router = APIRouter(prefix="/api/tokens", tags=["tokens"], responses=PROBLEM_RESPONSES)
 
 # Mirrors PersonalAccessToken.nome's column width (auth/pat_models.py: String(120)).
 # Without this, an over-length value sails past Pydantic, reaches flush(), and comes
