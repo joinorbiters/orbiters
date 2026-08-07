@@ -66,10 +66,22 @@ class RefreshTokenService:
         self.session.commit()
 
     def _revoke_all_valid(self, user_id: UUID, now: datetime) -> None:
-        stmt = select(RefreshToken).where(
-            RefreshToken.user_id == user_id,
-            RefreshToken.consumed_at.is_(None),
-            RefreshToken.expires_at >= now,
+        # `order_by(id)` is not decorative: without it, this UPDATEs whatever order
+        # session.dirty happens to hand SQLAlchemy, and two concurrent replays that
+        # both revoke an overlapping set of sibling rows can acquire those rows' locks
+        # in different orders -- a real Postgres deadlock, not a hypothetical one.
+        # A fixed order means every concurrent caller takes the same locks in the same
+        # sequence, which is what rules that out. This runs on the exact path that
+        # fires when a stolen token is being replayed -- the worst possible moment for
+        # a transaction to fail.
+        stmt = (
+            select(RefreshToken)
+            .where(
+                RefreshToken.user_id == user_id,
+                RefreshToken.consumed_at.is_(None),
+                RefreshToken.expires_at >= now,
+            )
+            .order_by(RefreshToken.id)
         )
         for record in self.session.execute(stmt).scalars():
             record.consumed_at = now
