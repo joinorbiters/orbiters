@@ -201,6 +201,43 @@ def test_openapi_document_is_served(client: TestClient) -> None:
     assert schema["info"]["title"] == "PigroCRM API"
 
 
+def test_me_and_refresh_document_401_but_logout_does_not() -> None:
+    """`me` and `refresh` both actually return 401 (see test_me_requires_authentication
+    and test_refresh_with_an_invalid_refresh_token_is_401 above), but PROBLEM_RESPONSES
+    (errors.py, shared by every router) only declares 403/404/409/422 -- a generated
+    TypeScript client would type this response as `unknown` for exactly the status code
+    a frontend auth layer branches on programmatically (session expired -> try refresh
+    -> redirect to login). `logout` must NOT gain the same entry: it has no actor
+    dependency and is idempotent by construction (an absent or already-invalid refresh
+    cookie is simply nothing left to invalidate, per its own docstring), so it cannot
+    structurally produce a 401 the way these two can -- claiming one anyway would
+    misdocument a response this route never sends.
+
+    No database fixture: building the app and reading its schema never opens a session,
+    same reasoning as test_error_rendering.py's equivalent 422-shape check."""
+    app = create_app()
+    schema = app.openapi()
+
+    me_responses = schema["paths"]["/api/auth/me"]["get"]["responses"]
+    refresh_responses = schema["paths"]["/api/auth/refresh"]["post"]["responses"]
+    logout_responses = schema["paths"]["/api/auth/logout"]["post"]["responses"]
+
+    assert "401" not in logout_responses
+
+    for responses in (me_responses, refresh_responses):
+        assert "401" in responses
+        content = responses["401"]["content"]
+        assert set(content) == {"application/json"}
+        body_schema = content["application/json"]["schema"]
+        assert body_schema["properties"]["detail"]["type"] == "string"
+        assert body_schema["required"] == ["detail"]
+
+    # The addition is additive, not a replacement: both routes still inherit the
+    # router-wide domain-error responses alongside their own new 401.
+    for responses in (me_responses, refresh_responses):
+        assert {"403", "404", "409", "422"} <= set(responses)
+
+
 # --- Coordinator follow-up on final review item 1: the NUL-byte gap was live --
 # --- and reachable with zero credentials through /api/auth/login. ------------
 

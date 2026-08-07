@@ -24,21 +24,56 @@ router = APIRouter(prefix="/api/auth", tags=["auth"], responses=PROBLEM_RESPONSE
 # is specific to what ValidationFailed means at this one call site, not a
 # reclassification of the error code everywhere else it is raised.
 #
-# PROBLEM_RESPONSES (attached to the whole router above) has no 401 entry -- nothing
-# else under /api/auth documents one either, since logout/refresh/me all reach 401
-# through get_actor or their own HTTPException without a client-generation step
-# depending on it. login's OpenAPI documentation would otherwise stay silent about a
-# status code it can now actually return, and slice 1B's generated TypeScript client
-# would type this response as `unknown` -- exactly the kind of silent client-generation
-# gap _domain_and_request_validation_response above already had to fix once for 422.
-# FastAPI merges a route's own `responses=` with the router's (see
-# APIRouter.post/_combined_responses in fastapi/routing.py), so this only adds 401
-# here without touching the shared dict every other route relies on.
+# PROBLEM_RESPONSES (attached to the whole router above) has no 401 entry, so
+# without a route-level addition login's OpenAPI documentation would stay silent
+# about a status code it can now actually return, and slice 1B's generated
+# TypeScript client would type this response as `unknown` -- exactly the kind of
+# silent client-generation gap _domain_and_request_validation_response above already
+# had to fix once for 422. FastAPI merges a route's own `responses=` with the
+# router's (see APIRouter.post/_combined_responses in fastapi/routing.py), so this
+# only adds 401 here without touching the shared dict every other route relies on.
+# (`me` and `refresh` need the same treatment, for a different, more load-bearing
+# reason -- see `_UNAUTHENTICATED_RESPONSE` just below.)
 _LOGIN_UNAUTHORIZED_RESPONSE: dict[str, Any] = {
     "description": (
         "Email o password non corrette, oppure l'utente è disattivato -- lo stesso "
         "messaggio identico in tutti e tre i casi, così la risposta stessa non "
         "rivela quale sia la causa reale."
+    ),
+    "content": {
+        "application/json": {
+            "schema": {
+                "type": "object",
+                "properties": {"detail": {"type": "string"}},
+                "required": ["detail"],
+            }
+        }
+    },
+}
+
+# `me` and `refresh` both reach 401 the same way login does above -- deps.get_actor or
+# this router's own token checks raising a plain HTTPException, never a DomainError --
+# so PROBLEM_RESPONSES (application/problem+json) would misdocument this exactly as
+# _LOGIN_UNAUTHORIZED_RESPONSE above had to fix once already. One shared entry, not one
+# per route: unlike login's single fixed message, these two cover several distinct
+# causes each (get_actor: no cookie at all, an expired/invalid access token, a user
+# deactivated after the token was issued, an unrecognised bearer PAT; refresh: no
+# refresh cookie, an invalid/expired refresh token, a replayed/already-consumed token,
+# a now-inactive user) -- but every one of them means the same thing to a caller: the
+# session is gone, not "you sent something malformed." That is *more* load-bearing for
+# a generated client than login's own 401: this is the routine "session expired" signal
+# a frontend auth layer branches on programmatically (try /refresh once, then redirect
+# to /login), where login's error is hand-written UX regardless of how precisely it is
+# typed. `logout` deliberately has no entry here -- it has no actor dependency and is
+# idempotent by design (see its own docstring), so it cannot structurally produce a 401
+# the way these two can; documenting one anyway would claim a response this route can
+# never send.
+_UNAUTHENTICATED_RESPONSE: dict[str, Any] = {
+    "description": (
+        "Non autenticato: il cookie di sessione è assente, scaduto o non valido, "
+        "oppure l'utente non è più attivo. Il client deve trattarlo come sessione "
+        "terminata (ritentare /api/auth/refresh e poi reindirizzare al login), non "
+        "come un errore da ripetere."
     ),
     "content": {
         "application/json": {
@@ -122,7 +157,7 @@ def logout(
     response.delete_cookie(REFRESH_COOKIE, path="/")
 
 
-@router.post("/refresh", response_model=UserRead)
+@router.post("/refresh", response_model=UserRead, responses={401: _UNAUTHENTICATED_RESPONSE})
 def refresh(
     request: Request, response: Response, session: SessionDep, settings: SettingsDep
 ) -> UserRead:
@@ -176,7 +211,7 @@ def refresh(
     return UserRead.model_validate(user)
 
 
-@router.get("/me", response_model=UserRead)
+@router.get("/me", response_model=UserRead, responses={401: _UNAUTHENTICATED_RESPONSE})
 def me(actor: ActorDep, session: SessionDep) -> UserRead:
     user = UserRepository(session).get(actor.id) if actor.id else None
     if user is None:
