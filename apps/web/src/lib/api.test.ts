@@ -76,6 +76,43 @@ describe('toProblem', () => {
   })
 })
 
+// Fix round 1: main.py registers an exception handler only for DomainError, so
+// FastAPI's own default HTTPException handler is what renders everything else --
+// including a 404 for a route nothing matches, and a 405 for a wrong method on a
+// route that exists. Both render through the exact same bare `{ detail: "<message>" }`
+// shape as every deliberate 401 in this API, with no `code` either way. Reproduced
+// live against the real backend: GET /auth/me (missing the /api prefix) -> 404
+// {"detail":"Not Found"}; DELETE /api/auth/me -> 405 {"detail":"Method Not Allowed"}.
+// Shape alone cannot tell these apart from a real 401 -- only the transport-level
+// status can, and toProblem doesn't see it unless told: hence the second parameter.
+describe('toProblem — authentication is decided by status, never by body shape alone', () => {
+  it('does not call a 404 with this shape "unauthenticated"', () => {
+    expect(toProblem({ detail: 'Not Found' }, 404).code).not.toBe('unauthenticated')
+  })
+
+  it('does not call a 405 with this shape "unauthenticated"', () => {
+    expect(toProblem({ detail: 'Method Not Allowed' }, 405).code).not.toBe('unauthenticated')
+  })
+
+  it('calls a real 401 with this shape "unauthenticated"', () => {
+    expect(toProblem(BARE_UNAUTHENTICATED, 401).code).toBe('unauthenticated')
+  })
+
+  it('gives a 404 an honest generic code instead, without losing its status or message', () => {
+    const problem = toProblem({ detail: 'Not Found' }, 404)
+    expect(problem.code).toBe('http_error')
+    expect(problem.status).toBe(404)
+    expect(problem.detail).toBe('Not Found')
+  })
+
+  it('does not guess "unauthenticated" when no status is given at all', () => {
+    // toProblem(error) alone -- the shape every direct, status-free call site uses
+    // (including every other test in this file) -- must not assume 401 just because
+    // the body happens to look like one of this API's real 401s.
+    expect(toProblem(BARE_UNAUTHENTICATED).code).not.toBe('unauthenticated')
+  })
+})
+
 describe('fieldErrorFrom', () => {
   it('extracts the offending field from a domain problem document', () => {
     expect(fieldErrorFrom(toProblem(PROBLEM))).toEqual({
@@ -108,7 +145,7 @@ describe('unwrap', () => {
     ).resolves.toEqual({ id: '1' })
   })
 
-  it('attaches the real HTTP status even to a body that does not embed one', async () => {
+  it('attaches the real HTTP status even to a body that does not embed one, and correctly calls it unauthenticated', async () => {
     // The exact shape login/me/refresh return for a 401: openapi-fetch's parsed
     // `error` never carries the response's own status code (see api.ts's docstring
     // on unwrap), so without this, queryClient's retry policy could never see 401
@@ -116,7 +153,26 @@ describe('unwrap', () => {
     const response = new Response(null, { status: 401 })
     await expect(
       unwrap(Promise.resolve({ error: BARE_UNAUTHENTICATED, response })),
-    ).rejects.toMatchObject({ status: 401, detail: 'Autenticazione richiesta' })
+    ).rejects.toMatchObject({ status: 401, code: 'unauthenticated', detail: 'Autenticazione richiesta' })
+  })
+
+  // Fix round 1: reproduces, through the actual unwrap() call path, the two live
+  // responses the reviewer found -- a 404 for a mistyped path and a 405 for a wrong
+  // method, both rendered by FastAPI's own default handler through the identical
+  // bare-detail shape every 401 uses. Neither may come out "unauthenticated": only
+  // unwrap has the real response.status, so this is where the distinction must hold.
+  it('does not call a 404 "unauthenticated" -- GET /auth/me (no /api prefix) reproduced live', async () => {
+    const response = new Response(null, { status: 404 })
+    await expect(
+      unwrap(Promise.resolve({ error: { detail: 'Not Found' }, response })),
+    ).rejects.toMatchObject({ status: 404, code: 'http_error' })
+  })
+
+  it('does not call a 405 "unauthenticated" -- DELETE /api/auth/me reproduced live', async () => {
+    const response = new Response(null, { status: 405 })
+    await expect(
+      unwrap(Promise.resolve({ error: { detail: 'Method Not Allowed' }, response })),
+    ).rejects.toMatchObject({ status: 405, code: 'http_error' })
   })
 
   it('normalises a network-level failure into a ProblemDetail too, not a raw error', async () => {

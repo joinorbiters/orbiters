@@ -75,7 +75,8 @@ function asFastApiValidationErrors(
  *
  *  - the domain problem document (RFC 9457, `application/problem+json`): a
  *    `DomainError` rendered by `domain_error_handler` -- `code`/`detail`/`field`/...
- *    already at the top level, passed through unchanged.
+ *    already at the top level, passed through unchanged (still allowing `status` to
+ *    be corrected below, since the transport layer is never wrong about it).
  *  - FastAPI's own request-validation error (`application/json`): the request never
  *    reached an endpoint at all (a non-UUID path segment, a malformed body), so
  *    there is no domain `code` -- `detail` is an array of `{ type, loc, msg }`
@@ -86,15 +87,34 @@ function asFastApiValidationErrors(
  *    always the *last* segment of `loc` -- everything before it is the path to get
  *    there, e.g. `["body", "customer", "partita_iva"]`.
  *  - a bare `HTTPException` (`application/json`, `{ detail: "<message>" }`, no
- *    `code`): every one of these in this API is a 401 -- login's own credentials
- *    check, and get_actor's/refresh's "the session is gone" checks (see
- *    `pigrocrm_api/deps.py` and `pigrocrm_api/routers/auth.py`). Worth keeping the
- *    real message over the generic fallback below even without a `code` to key off.
+ *    `code`): this is where a real 401 lands (login's credentials check, and
+ *    get_actor's/refresh's "the session is gone" checks -- see `pigrocrm_api/deps.py`
+ *    and `pigrocrm_api/routers/auth.py`), but it is *not exclusive to 401* --
+ *    `apps/api/src/pigrocrm_api/main.py` registers an exception handler only for
+ *    `DomainError`, so FastAPI's own default `HTTPException` handler renders
+ *    *everything else* through this identical shape too: a 404 for a path nothing
+ *    matches, a 405 for a wrong method on a path that exists, with no `code` either
+ *    way (reproduced live: `GET /auth/me` -> 404 `{"detail":"Not Found"}`; `DELETE
+ *    /api/auth/me` -> 405 `{"detail":"Method Not Allowed"}`). Shape alone cannot
+ *    tell a real 401 apart from these -- only the transport-level status can, which
+ *    is why this function takes one as a second, optional argument: `status === 401`
+ *    is the *only* thing that earns `code: 'unauthenticated'` here. Any other status
+ *    with this same shape gets `code: 'http_error'` instead -- honest about not
+ *    knowing more, never a guess dressed up as a fact. Omitting `status` entirely
+ *    (every direct call in this file's own tests, and any consumer working from an
+ *    already-thrown value with no `Response` in reach) never yields
+ *    `'unauthenticated'` either, for the same reason.
  *  - anything else -- a thrown network `Error`, `null`, garbage -- becomes the
  *    generic Italian fallback. `detail` is never undefined from this function.
+ *
+ * `status`, when given, always wins for the returned `.status`: it comes straight
+ * from the transport layer and cannot be wrong, unlike anything a body might (or
+ * might not) self-report.
  */
-export function toProblem(error: unknown): ProblemDetail {
-  if (!error || typeof error !== 'object') return GENERIC
+export function toProblem(error: unknown, status?: number): ProblemDetail {
+  if (!error || typeof error !== 'object') {
+    return status === undefined ? GENERIC : { ...GENERIC, status }
+  }
 
   const validationErrors = asFastApiValidationErrors(error)
   if (validationErrors) {
@@ -103,7 +123,7 @@ export function toProblem(error: unknown): ProblemDetail {
     return {
       ...GENERIC,
       title: 'Dati non validi',
-      status: 422,
+      status: status ?? 422,
       detail: first.msg,
       code: 'validation_failed',
       field,
@@ -113,13 +133,19 @@ export function toProblem(error: unknown): ProblemDetail {
 
   const err = error as { code?: unknown; detail?: unknown }
   if (typeof err.code === 'string' && typeof err.detail === 'string') {
-    return error as ProblemDetail
+    const problem = error as ProblemDetail
+    return status === undefined ? problem : { ...problem, status }
   }
   if (typeof err.detail === 'string') {
-    return { ...GENERIC, detail: err.detail, code: 'unauthenticated' }
+    return {
+      ...GENERIC,
+      status: status ?? GENERIC.status,
+      detail: err.detail,
+      code: status === 401 ? 'unauthenticated' : 'http_error',
+    }
   }
 
-  return GENERIC
+  return status === undefined ? GENERIC : { ...GENERIC, status }
 }
 
 /** The API already decided what is wrong and why. The UI only points at it. */
@@ -134,14 +160,16 @@ export function fieldErrorFrom(problem: ProblemDetail): { field: string; message
  * Throws the problem document itself, so every consumer gets structured data --
  * never a raw `Response` or an untyped `unknown`.
  *
- * openapi-fetch's parsed `error` body never carries the real HTTP status (it comes
- * from a blind `JSON.parse` of the response text -- see its source): the domain
- * problem document happens to embed one anyway (RFC 9457's own `status` field), but
- * a bare `HTTPException` body (`{ detail: "<message>" }`, e.g. every 401 in this
- * API) does not. `response.status` is the one place that number is never ambiguous,
- * so it always wins here. This is what makes `queryClient`'s retry policy able to
- * ask "was this a 401?" at all -- silently losing it would make that check never
- * fire for the exact case it exists for.
+ * Always passes `response.status` into `toProblem`: openapi-fetch's parsed `error`
+ * body never carries the real HTTP status itself (it comes from a blind
+ * `JSON.parse` of the response text -- see its source), so this is the one place
+ * that number is never ambiguous. It is also the *only* place `toProblem` can
+ * safely decide a bare `{ detail: "<message>" }` body means "the session is gone"
+ * (`code: 'unauthenticated'`) rather than "some other HTTPException" (a 404, a
+ * 405, ...) -- see `toProblem`'s own docstring for why shape alone cannot tell
+ * those apart. This is also what makes `queryClient`'s retry policy able to ask
+ * "was this a 401?" at all -- silently losing the status would make that check
+ * never fire for the exact case it exists for.
  */
 export async function unwrap<T>(
   promise: Promise<{ data?: T; error?: unknown; response: Response }>,
@@ -152,6 +180,6 @@ export async function unwrap<T>(
     // here, unlike every other branch below.
     throw toProblem(networkError)
   })
-  if (error !== undefined) throw { ...toProblem(error), status: response.status }
+  if (error !== undefined) throw toProblem(error, response.status)
   return data as T
 }
