@@ -59,4 +59,15 @@ export default defineConfig([
       ],
     },
   },
+  {
+    // Same shape as the `auth.tsx` override above, same reason: `renderFieldValue`
+    // is `DynamicFieldRenderer`'s read-only counterpart -- the control and its
+    // table/detail-panel rendering for the same nine field types belong in one
+    // file, not split across two purely to satisfy this rule. The brief's own
+    // `DynamicFieldRenderer.test.tsx` imports both from this one module.
+    files: ['src/components/DynamicFieldRenderer.tsx'],
+    rules: {
+      'react-refresh/only-export-components': ['error', { allowExportNames: ['renderFieldValue'] }],
+    },
+  },
 ])
