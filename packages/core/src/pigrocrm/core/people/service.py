@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.customers.repository import CustomerRepository
-from pigrocrm.core.errors import NotFound, ValidationFailed
+from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 from pigrocrm.core.fields.schemas import EntityType
 from pigrocrm.core.fields.service import FieldDefinitionService
 from pigrocrm.core.fields.validator import validate_custom_fields
@@ -207,10 +207,27 @@ class PersonService:
         self.session.commit()
 
     def restore(self, person_id: UUID, actor: Actor) -> PersonRead:
+        """Refuses when the person's customer is archived, mirroring
+        `DealService.restore` exactly. `customer_id` is nullable here (unlike on
+        `Deal`), so the check is skipped entirely for the common case -- most
+        people have no customer at all -- and only applies when one is actually
+        set. Checked unconditionally, not only when the person itself was
+        actually archived: the invariant is about the person's *current* state
+        after this call, not about what changed."""
         actor.require_write("restore_person")
         person = self.repo.get(person_id, include_deleted=True)
         if person is None:
             raise NotFound(ENTITY, person_id)
+
+        if person.customer_id is not None:
+            customer = self.customers.get(person.customer_id, include_deleted=True)
+            if customer is not None and customer.deleted_at is not None:
+                raise Conflict(
+                    ENTITY,
+                    "il cliente è archiviato: ripristina prima il cliente",
+                    customer_id=str(customer.id),
+                )
+
         # Recorded only when the person really was deleted: unconditionally logging
         # "restored" here -- even for a person that was never soft-deleted -- would
         # write a timeline entry claiming a recovery that never happened. Mirrors the

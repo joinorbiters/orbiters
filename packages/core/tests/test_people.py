@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.customers.schemas import CustomerCreate
 from pigrocrm.core.customers.service import CustomerService
-from pigrocrm.core.errors import NotFound, PermissionDenied, ValidationFailed
+from pigrocrm.core.errors import Conflict, NotFound, PermissionDenied, ValidationFailed
 from pigrocrm.core.fields.schemas import FieldDefinitionCreate
 from pigrocrm.core.fields.service import FieldDefinitionService
 from pigrocrm.core.people.schemas import (
@@ -560,3 +560,50 @@ def test_a_nul_byte_introduced_after_email_normalisation_is_still_caught() -> No
     the original input must still be caught after normalisation runs."""
     with pytest.raises(ValidationError):
         PersonCreate(nome="Mario", email="  Mario\x00@Example.COM  ")
+
+
+# --- Final review item 8 (IMPORTANT): restore() must not undo the invariant -----
+# --- soft_delete() protects -- mirrors the identical fix on DealService.       --
+
+
+def test_restoring_a_person_whose_customer_is_now_archived_is_refused(
+    db_session: Session,
+) -> None:
+    """Unlike deals, a customer can already be archived while an active person
+    still points at it (soft_delete on a customer only ever counted active deals,
+    never people) -- but restoring a person onto an archived customer is still the
+    operation this fix closes, mirroring DealService.restore exactly."""
+    customer = CustomerService(db_session).create(CustomerCreate(ragione_sociale="ACME"), ADMIN)
+    service = PersonService(db_session)
+    person = service.create(PersonCreate(nome="Mario", customer_id=customer.id), ADMIN)
+    service.soft_delete(person.id, ADMIN)
+    CustomerService(db_session).soft_delete(customer.id, ADMIN)
+
+    with pytest.raises(Conflict) as exc:
+        service.restore(person.id, ADMIN)
+    assert exc.value.details["entity"] == "person"
+    assert "cliente" in exc.value.message
+
+
+def test_restoring_the_customer_first_then_the_person_works(db_session: Session) -> None:
+    customer = CustomerService(db_session).create(CustomerCreate(ragione_sociale="ACME"), ADMIN)
+    service = PersonService(db_session)
+    person = service.create(PersonCreate(nome="Mario", customer_id=customer.id), ADMIN)
+    service.soft_delete(person.id, ADMIN)
+    CustomerService(db_session).soft_delete(customer.id, ADMIN)
+
+    CustomerService(db_session).restore(customer.id, ADMIN)
+    service.restore(person.id, ADMIN)
+
+    assert service.get(person.id, ADMIN).id == person.id
+
+
+def test_restoring_a_person_with_no_customer_at_all_is_unaffected(db_session: Session) -> None:
+    """The common case -- most people have no customer_id -- must not be blocked
+    by a check that only ever applies when one is actually set."""
+    service = PersonService(db_session)
+    person = service.create(PersonCreate(nome="Mario"), ADMIN)
+    service.soft_delete(person.id, ADMIN)
+
+    service.restore(person.id, ADMIN)
+    assert service.get(person.id, ADMIN).id == person.id

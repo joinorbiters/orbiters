@@ -18,7 +18,7 @@ from pigrocrm.core.deals.schemas import (
     DealRead,
     DealUpdate,
 )
-from pigrocrm.core.errors import NotFound, ValidationFailed
+from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 from pigrocrm.core.fields.schemas import EntityType
 from pigrocrm.core.fields.service import FieldDefinitionService
 from pigrocrm.core.fields.validator import validate_custom_fields
@@ -255,10 +255,29 @@ class DealService:
         self.session.commit()
 
     def restore(self, deal_id: UUID, actor: Actor) -> DealRead:
+        """Refuses when the deal's customer is archived: `soft_delete` on a
+        customer refuses while it has active deals precisely to rule out an
+        active deal sitting on an archived customer, but that invariant has a
+        back door if `restore` does not check it too -- archive the deal,
+        archive the now deal-free customer, restore the deal, and the exact
+        state `soft_delete` exists to prevent is back. `GET /api/deals` would
+        list it, and the MCP resource `deal://{id}` would then fail to render
+        because it cannot load the customer. Checked unconditionally, not only
+        when the deal itself was actually archived: the invariant is about the
+        deal's *current* state after this call, not about what changed."""
         actor.require_write("restore_deal")
         deal = self.repo.get(deal_id, include_deleted=True)
         if deal is None:
             raise NotFound(ENTITY, deal_id)
+
+        customer = self.customers.get(deal.customer_id, include_deleted=True)
+        if customer is not None and customer.deleted_at is not None:
+            raise Conflict(
+                ENTITY,
+                "il cliente è archiviato: ripristina prima il cliente",
+                customer_id=str(customer.id),
+            )
+
         # Recorded only when the deal really was deleted: unconditionally logging
         # "restored" here -- even for a deal that was never soft-deleted -- would
         # write a timeline entry claiming a recovery that never happened. Mirrors the

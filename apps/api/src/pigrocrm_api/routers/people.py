@@ -15,6 +15,7 @@ from pigrocrm.core.people.schemas import (
 from pigrocrm.core.people.service import PersonService
 from pigrocrm_api.deps import ActorDep, SessionDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
+from pigrocrm_api.query_params import CUSTOM_QUERY_DESCRIPTION, parse_custom_filter
 
 router = APIRouter(prefix="/api/people", tags=["people"], responses=PROBLEM_RESPONSES)
 
@@ -30,10 +31,17 @@ def list_people(
     actor: ActorDep,
     search: Annotated[str | None, Query()] = None,
     customer_id: Annotated[UUID | None, Query()] = None,
+    custom: Annotated[list[str] | None, Query(description=CUSTOM_QUERY_DESCRIPTION)] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     cursor: Annotated[UUID | None, Query()] = None,
 ) -> PersonPage:
-    query = PersonListQuery(search=search, customer_id=customer_id, limit=limit, cursor=cursor)
+    query = PersonListQuery(
+        search=search,
+        customer_id=customer_id,
+        custom=parse_custom_filter(custom),
+        limit=limit,
+        cursor=cursor,
+    )
     return PersonService(session).list(query, actor)
 
 

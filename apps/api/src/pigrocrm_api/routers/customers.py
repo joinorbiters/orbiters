@@ -15,6 +15,7 @@ from pigrocrm.core.customers.schemas import (
 from pigrocrm.core.customers.service import CustomerService
 from pigrocrm_api.deps import ActorDep, SessionDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
+from pigrocrm_api.query_params import CUSTOM_QUERY_DESCRIPTION, parse_custom_filter
 
 router = APIRouter(prefix="/api/customers", tags=["customers"], responses=PROBLEM_RESPONSES)
 
@@ -30,10 +31,17 @@ def list_customers(
     actor: ActorDep,
     search: Annotated[str | None, Query()] = None,
     stato: Annotated[str | None, Query()] = None,
+    custom: Annotated[list[str] | None, Query(description=CUSTOM_QUERY_DESCRIPTION)] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     cursor: Annotated[UUID | None, Query()] = None,
 ) -> CustomerPage:
-    query = CustomerListQuery(search=search, stato=stato, limit=limit, cursor=cursor)
+    query = CustomerListQuery(
+        search=search,
+        stato=stato,
+        custom=parse_custom_filter(custom),
+        limit=limit,
+        cursor=cursor,
+    )
     return CustomerService(session).list(query, actor)
 
 

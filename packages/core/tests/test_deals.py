@@ -914,3 +914,42 @@ def test_a_valid_owner_id_is_accepted_on_update(
     deal = service.create(DealCreate(nome="X", customer_id=customer_id), ADMIN)
     updated = service.update(deal.id, DealUpdate(owner_id=owner_id), ADMIN)
     assert updated.owner_id == owner_id
+
+
+# --- Final review item 8 (IMPORTANT): restore() must not undo the invariant -----
+# --- soft_delete() protects: no active deal on an archived customer. -----------
+
+
+def test_restoring_a_deal_whose_customer_is_now_archived_is_refused(
+    db_session: Session, customer_id, stages
+) -> None:
+    """The only way to reach this state at all: archive the deal (soft_delete's own
+    active-deals count only counts non-archived deals, so this is what unblocks
+    archiving the customer next), then archive the now deal-free customer. Without
+    this fix, restoring the deal afterward produces exactly the state soft_delete
+    exists to prevent -- an active deal on an archived customer, which GET
+    /api/deals would list and the MCP resource deal://{id} would then fail to
+    render because it cannot load the customer."""
+    service = DealService(db_session)
+    deal = service.create(DealCreate(nome="X", customer_id=customer_id), ADMIN)
+    service.soft_delete(deal.id, ADMIN)
+    CustomerService(db_session).soft_delete(customer_id, ADMIN)
+
+    with pytest.raises(Conflict) as exc:
+        service.restore(deal.id, ADMIN)
+    assert exc.value.details["entity"] == "deal"
+    assert "cliente" in exc.value.message
+
+
+def test_restoring_the_customer_first_then_the_deal_works(
+    db_session: Session, customer_id, stages
+) -> None:
+    service = DealService(db_session)
+    deal = service.create(DealCreate(nome="X", customer_id=customer_id), ADMIN)
+    service.soft_delete(deal.id, ADMIN)
+    CustomerService(db_session).soft_delete(customer_id, ADMIN)
+
+    CustomerService(db_session).restore(customer_id, ADMIN)
+    service.restore(deal.id, ADMIN)
+
+    assert service.get(deal.id, ADMIN).id == deal.id
