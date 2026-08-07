@@ -3,7 +3,17 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from pigrocrm.core.errors import DomainError
 from pigrocrm_api.errors import domain_error_handler
-from pigrocrm_api.routers import auth
+from pigrocrm_api.routers import (
+    auth,
+    customers,
+    deals,
+    fields,
+    people,
+    pipeline,
+    schema,
+    tokens,
+    users,
+)
 
 
 def create_app() -> FastAPI:
@@ -22,7 +32,9 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.add_exception_handler(DomainError, domain_error_handler)
-    app.include_router(auth.router)
+
+    for module in (auth, customers, people, deals, fields, pipeline, users, tokens, schema):
+        app.include_router(module.router)
 
     @app.get("/health", tags=["meta"])
     def health() -> dict[str, str]:

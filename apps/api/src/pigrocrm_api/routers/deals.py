@@ -1,0 +1,77 @@
+from typing import Annotated
+from uuid import UUID
+
+from fastapi import APIRouter, Query, status
+from pydantic import BaseModel
+
+from pigrocrm.core.activities.schemas import ActivityRead
+from pigrocrm.core.activities.service import ActivityService
+from pigrocrm.core.deals.schemas import (
+    DealCreate,
+    DealListQuery,
+    DealPage,
+    DealRead,
+    DealUpdate,
+)
+from pigrocrm.core.deals.service import DealService
+from pigrocrm_api.deps import ActorDep, SessionDep
+
+router = APIRouter(prefix="/api/deals", tags=["deals"])
+
+
+class MoveStageRequest(BaseModel):
+    stage_id: UUID
+
+
+@router.post("", response_model=DealRead, status_code=status.HTTP_201_CREATED)
+def create(data: DealCreate, session: SessionDep, actor: ActorDep) -> DealRead:
+    return DealService(session).create(data, actor)
+
+
+@router.get("", response_model=DealPage)
+def list_deals(
+    session: SessionDep,
+    actor: ActorDep,
+    search: Annotated[str | None, Query()] = None,
+    customer_id: Annotated[UUID | None, Query()] = None,
+    stage_id: Annotated[UUID | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    cursor: Annotated[UUID | None, Query()] = None,
+) -> DealPage:
+    query = DealListQuery(
+        search=search, customer_id=customer_id, stage_id=stage_id, limit=limit, cursor=cursor
+    )
+    return DealService(session).list(query, actor)
+
+
+@router.get("/{deal_id}", response_model=DealRead)
+def get(deal_id: UUID, session: SessionDep, actor: ActorDep) -> DealRead:
+    return DealService(session).get(deal_id, actor)
+
+
+@router.patch("/{deal_id}", response_model=DealRead)
+def update(deal_id: UUID, data: DealUpdate, session: SessionDep, actor: ActorDep) -> DealRead:
+    return DealService(session).update(deal_id, data, actor)
+
+
+@router.patch("/{deal_id}/stage", response_model=DealRead)
+def move_stage(
+    deal_id: UUID, data: MoveStageRequest, session: SessionDep, actor: ActorDep
+) -> DealRead:
+    """Backs the Kanban drag. Optimistic on the client, authoritative here."""
+    return DealService(session).move_stage(deal_id, data.stage_id, actor)
+
+
+@router.delete("/{deal_id}", status_code=status.HTTP_204_NO_CONTENT)
+def soft_delete(deal_id: UUID, session: SessionDep, actor: ActorDep) -> None:
+    DealService(session).soft_delete(deal_id, actor)
+
+
+@router.post("/{deal_id}/restore", response_model=DealRead)
+def restore(deal_id: UUID, session: SessionDep, actor: ActorDep) -> DealRead:
+    return DealService(session).restore(deal_id, actor)
+
+
+@router.get("/{deal_id}/timeline", response_model=list[ActivityRead])
+def timeline(deal_id: UUID, session: SessionDep, actor: ActorDep) -> list[ActivityRead]:
+    return ActivityService(session).timeline("deal", deal_id)
