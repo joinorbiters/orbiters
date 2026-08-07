@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from pigrocrm.core.validation import SafeStr
+
 # Mirror Person's column widths (models.py). Without these, an over-length value
 # sails past Pydantic, reaches flush(), and comes back as a raw sqlalchemy.exc.DataError
 # (StringDataRightTruncation) -- not a subclass of IntegrityError, so no handler catches
@@ -26,35 +28,40 @@ def _normalise_email(value: str | None) -> str | None:
 
 
 class PersonCreate(BaseModel):
-    nome: str = Field(max_length=NOME_MAX_LENGTH)
-    cognome: str | None = Field(default=None, max_length=COGNOME_MAX_LENGTH)
-    email: str | None = Field(default=None, max_length=EMAIL_MAX_LENGTH)
-    telefono: str | None = Field(default=None, max_length=TELEFONO_MAX_LENGTH)
-    ruolo: str | None = Field(default=None, max_length=RUOLO_MAX_LENGTH)
-    linkedin: str | None = Field(default=None, max_length=LINKEDIN_MAX_LENGTH)
-    note: str | None = None
+    nome: SafeStr = Field(max_length=NOME_MAX_LENGTH)
+    cognome: SafeStr | None = Field(default=None, max_length=COGNOME_MAX_LENGTH)
+    # Plain `str`, not `EmailStr`: format is checked separately by the service's own
+    # `_check_email` regex below, not by the schema. `SafeStr` closes the NUL-byte gap
+    # that regex does not: `[^@\s]` matches a NUL byte just as readily as a letter.
+    email: SafeStr | None = Field(default=None, max_length=EMAIL_MAX_LENGTH)
+    telefono: SafeStr | None = Field(default=None, max_length=TELEFONO_MAX_LENGTH)
+    ruolo: SafeStr | None = Field(default=None, max_length=RUOLO_MAX_LENGTH)
+    linkedin: SafeStr | None = Field(default=None, max_length=LINKEDIN_MAX_LENGTH)
+    note: SafeStr | None = None
     customer_id: UUID | None = None
     custom_fields: dict[str, Any] = {}
 
     @field_validator("email", mode="before")
     @classmethod
     def _email(cls, value: str | None) -> str | None:
-        # `mode="before"` runs ahead of the `max_length` constraint above -- like
-        # `FieldDefinitionCreate.key`'s slugify validator (fields/schemas.py) -- so the
-        # bound applies to the normalised value, not to whatever raw string arrived.
+        # `mode="before"` runs ahead of both the `max_length` constraint above and
+        # SafeStr's own NUL check -- like `FieldDefinitionCreate.key`'s slugify
+        # validator (fields/schemas.py) -- so both apply to the normalised value, not
+        # to whatever raw string arrived. Stripping/lowering never removes a NUL byte,
+        # so SafeStr still catches one introduced anywhere in the original input.
         return _normalise_email(value)
 
 
 class PersonUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    nome: str | None = Field(default=None, max_length=NOME_MAX_LENGTH)
-    cognome: str | None = Field(default=None, max_length=COGNOME_MAX_LENGTH)
-    email: str | None = Field(default=None, max_length=EMAIL_MAX_LENGTH)
-    telefono: str | None = Field(default=None, max_length=TELEFONO_MAX_LENGTH)
-    ruolo: str | None = Field(default=None, max_length=RUOLO_MAX_LENGTH)
-    linkedin: str | None = Field(default=None, max_length=LINKEDIN_MAX_LENGTH)
-    note: str | None = None
+    nome: SafeStr | None = Field(default=None, max_length=NOME_MAX_LENGTH)
+    cognome: SafeStr | None = Field(default=None, max_length=COGNOME_MAX_LENGTH)
+    email: SafeStr | None = Field(default=None, max_length=EMAIL_MAX_LENGTH)
+    telefono: SafeStr | None = Field(default=None, max_length=TELEFONO_MAX_LENGTH)
+    ruolo: SafeStr | None = Field(default=None, max_length=RUOLO_MAX_LENGTH)
+    linkedin: SafeStr | None = Field(default=None, max_length=LINKEDIN_MAX_LENGTH)
+    note: SafeStr | None = None
     customer_id: UUID | None = None
     custom_fields: dict[str, Any] | None = None
     # `exclude_none` on a partial update cannot express "set customer_id back to

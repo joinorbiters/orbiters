@@ -4,6 +4,7 @@ from fastapi import APIRouter, status
 from pydantic import BaseModel, Field
 
 from pigrocrm.core.auth.pat_service import PatRead, PatService
+from pigrocrm.core.validation import SafeStr
 from pigrocrm_api.deps import ActorDep, SessionDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
 
@@ -14,12 +15,16 @@ router = APIRouter(prefix="/api/tokens", tags=["tokens"], responses=PROBLEM_RESP
 # back as a raw sqlalchemy.exc.DataError (StringDataRightTruncation) -- not a subclass
 # of IntegrityError, so no handler catches it, and it poisons the session. Same class
 # of gap every other Create schema in this codebase already closes (see e.g.
-# CustomerCreate.RAGIONE_SOCIALE_MAX_LENGTH).
+# CustomerCreate.RAGIONE_SOCIALE_MAX_LENGTH). `PatService.create` takes a bare `nome:
+# str`, not a packages/core schema of its own (see pat_service.py), so this router's
+# own request model is the only Pydantic layer standing between a caller and
+# `personal_access_tokens.nome` -- both the length bound and the SafeStr NUL guard
+# have to live here, not in packages/core.
 NOME_MAX_LENGTH = 120
 
 
 class CreateTokenRequest(BaseModel):
-    nome: str = Field(max_length=NOME_MAX_LENGTH)
+    nome: SafeStr = Field(max_length=NOME_MAX_LENGTH)
 
 
 class CreatedToken(PatRead):

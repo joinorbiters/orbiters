@@ -6,6 +6,8 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
+from pigrocrm.core.auth.schemas import UserCreate
+from pigrocrm.core.auth.service import UserService
 from pigrocrm.core.customers.schemas import CustomerCreate
 from pigrocrm.core.customers.service import CustomerService
 from pigrocrm.core.deals.schemas import (
@@ -31,6 +33,18 @@ READONLY = Actor(id=None, type="user", role="readonly")
 @pytest.fixture
 def customer_id(db_session: Session):
     return CustomerService(db_session).create(CustomerCreate(ragione_sociale="ACME"), ADMIN).id
+
+
+@pytest.fixture
+def owner_id(db_session: Session):
+    return (
+        UserService(db_session)
+        .create(
+            UserCreate(email="owner@example.it", password="supersegreta1", nome="Owner"),
+            ADMIN,
+        )
+        .id
+    )
 
 
 @pytest.fixture
@@ -843,3 +857,60 @@ def test_freeing_a_stage_with_a_soft_deleted_deal_requires_restore_move_then_del
 
     PipelineService(db_session).delete(stages["Lead"].id, ADMIN)
     assert stages["Lead"].id not in {s.id for s in PipelineService(db_session).list()}
+
+
+# --- Final review item 3 (CRITICAL): owner_id is a real FK, never validated -------
+#
+# `deals.owner_id` is `ForeignKey("users.id")` (models.py), but neither `create` nor
+# `update` ever checked it -- `grep -rn owner_id packages/core/tests apps/*/tests`
+# returned nothing before this section existed. Any syntactically valid UUID reached
+# `flush()` and came back as a raw, uncaught `ForeignKeyViolation`, exactly the
+# "unvalidated input reaches Postgres" family this project has already closed for
+# every other shape. `customer_id` gets exactly this treatment already
+# (`test_a_deal_for_a_missing_customer_is_rejected` above); `owner_id` never did,
+# because it is optional and easy to never pass in a test.
+
+
+def test_owner_id_for_a_nonexistent_user_is_rejected_on_create(
+    db_session: Session, customer_id, stages
+) -> None:
+    with pytest.raises(NotFound) as exc:
+        DealService(db_session).create(
+            DealCreate(nome="X", customer_id=customer_id, owner_id=uuid4()), ADMIN
+        )
+    assert exc.value.details["entity"] == "user"
+
+
+def test_a_valid_owner_id_is_accepted_on_create(
+    db_session: Session, customer_id, stages, owner_id
+) -> None:
+    deal = DealService(db_session).create(
+        DealCreate(nome="X", customer_id=customer_id, owner_id=owner_id), ADMIN
+    )
+    assert deal.owner_id == owner_id
+
+
+def test_a_deal_with_no_owner_is_still_allowed(db_session: Session, customer_id, stages) -> None:
+    """owner_id is nullable -- a deal may be unassigned. The fix must not turn
+    "not provided" into a validation failure."""
+    deal = DealService(db_session).create(DealCreate(nome="X", customer_id=customer_id), ADMIN)
+    assert deal.owner_id is None
+
+
+def test_owner_id_for_a_nonexistent_user_is_rejected_on_update(
+    db_session: Session, customer_id, stages
+) -> None:
+    service = DealService(db_session)
+    deal = service.create(DealCreate(nome="X", customer_id=customer_id), ADMIN)
+    with pytest.raises(NotFound) as exc:
+        service.update(deal.id, DealUpdate(owner_id=uuid4()), ADMIN)
+    assert exc.value.details["entity"] == "user"
+
+
+def test_a_valid_owner_id_is_accepted_on_update(
+    db_session: Session, customer_id, stages, owner_id
+) -> None:
+    service = DealService(db_session)
+    deal = service.create(DealCreate(nome="X", customer_id=customer_id), ADMIN)
+    updated = service.update(deal.id, DealUpdate(owner_id=owner_id), ADMIN)
+    assert updated.owner_id == owner_id

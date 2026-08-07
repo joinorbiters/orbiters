@@ -266,3 +266,51 @@ def test_seed_defaults_requires_admin(db_session: Session) -> None:
     whole point of this architecture only if authorization travels with it."""
     with pytest.raises(PermissionDenied):
         PipelineService(db_session).seed_defaults(COLLAB)
+
+
+# --- Final review item 2 (CRITICAL): posizione is a bare Integer, unbounded ------
+#
+# `pipeline_stages.posizione` is `Integer`. Nothing anywhere checked its range --
+# unlike `probabilita_default`, this column has no equivalent service-level guard,
+# so `2**40` reached `flush()` raw as `psycopg.errors.NumericValueOutOfRange` before
+# `Field(ge=..., le=...)` existed on `PipelineStageCreate.posizione`/
+# `PipelineStageUpdate.posizione`.
+
+
+def test_posizione_at_the_bound_is_accepted_on_create(db_session: Session) -> None:
+    from pigrocrm.core.pipeline.schemas import POSIZIONE_MAX, POSIZIONE_MIN
+
+    service = PipelineService(db_session)
+    at_min = service.create(PipelineStageCreate(nome="Min", posizione=POSIZIONE_MIN), ADMIN)
+    at_max = service.create(PipelineStageCreate(nome="Max", posizione=POSIZIONE_MAX), ADMIN)
+    assert at_min.posizione == POSIZIONE_MIN
+    assert at_max.posizione == POSIZIONE_MAX
+
+
+def test_posizione_far_beyond_the_bound_is_rejected_on_create() -> None:
+    with pytest.raises(ValidationError):
+        PipelineStageCreate(nome="X", posizione=2**40)
+
+
+def test_posizione_far_below_the_bound_is_rejected_on_create() -> None:
+    """Symmetric around zero (see POSIZIONE_MIN's own comment for why negative
+    values are legitimate, unlike `field_definitions.position`): a huge negative
+    value is exactly as unrepresentable in `Integer` as a huge positive one."""
+    with pytest.raises(ValidationError):
+        PipelineStageCreate(nome="X", posizione=-(2**40))
+
+
+def test_posizione_far_beyond_the_bound_is_rejected_on_update() -> None:
+    with pytest.raises(ValidationError):
+        PipelineStageUpdate(posizione=2**40)
+
+
+def test_a_realistic_negative_posizione_still_works_end_to_end(
+    db_session: Session,
+) -> None:
+    """Regression guard for the exact scenario the bound must not break:
+    test_default_stage_returns_the_lowest_position_open_stage above already relies
+    on posizione=-1 constructing and round-tripping cleanly."""
+    service = PipelineService(db_session)
+    stage = service.create(PipelineStageCreate(nome="Prima", posizione=-1), ADMIN)
+    assert stage.posizione == -1

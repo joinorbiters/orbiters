@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from pigrocrm.core.fields.types import FieldType
+from pigrocrm.core.validation import SafeStr
 
 # Open by design: later slices append "document" and "invoice" with no schema change.
 EntityType = Literal["customer", "person", "deal"]
@@ -20,6 +21,17 @@ _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
 # before the request ever reaches the service.
 KEY_MAX_LENGTH = 60
 LABEL_MAX_LENGTH = 120
+
+# `field_definitions.position` is `Integer`, unguarded by any service-level range
+# check (unlike `deals.probabilita`/`pipeline_stages.probabilita_default`, which stay
+# unbounded here on purpose -- see deals/schemas.py's comment on `probabilita`).
+# `2**40` reaches Postgres raw as `IntegerOutOfRange` with nothing to stop it. `position`
+# is a display-order index -- an entity realistically has, at most, a few dozen custom
+# fields -- so 100000 is generous headroom, comfortably inside the actual `Integer`
+# column's +/-2.1 billion range, while still catching the kind of wrong-by-orders-of-
+# -magnitude value that is never a legitimate position and never merely a large one.
+POSITION_MIN = 0
+POSITION_MAX = 100_000
 
 
 def slugify_key(raw: str) -> str:
@@ -36,12 +48,17 @@ def slugify_key(raw: str) -> str:
 
 class FieldDefinitionCreate(BaseModel):
     entity_type: EntityType
+    # `key` does not need `SafeStr`: `_slugify` below runs first (a `mode="before"`
+    # field_validator wraps *outside* an Annotated type's own BeforeValidator,
+    # verified against the installed pydantic) and `_SLUG_STRIP` already replaces
+    # every character outside `[a-z0-9]` -- including a NUL byte -- with "_", so no
+    # NUL byte can survive to be stored. Adding `SafeStr` here would never fire.
     key: str = Field(max_length=KEY_MAX_LENGTH)
-    label: str = Field(max_length=LABEL_MAX_LENGTH)
+    label: SafeStr = Field(max_length=LABEL_MAX_LENGTH)
     field_type: FieldType
-    options: list[str] = []
+    options: list[SafeStr] = []
     required: bool = False
-    position: int = 0
+    position: int = Field(default=0, ge=POSITION_MIN, le=POSITION_MAX)
 
     @field_validator("key", mode="before")
     @classmethod
@@ -58,10 +75,10 @@ class FieldDefinitionUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    label: str | None = Field(default=None, max_length=LABEL_MAX_LENGTH)
-    options: list[str] | None = None
+    label: SafeStr | None = Field(default=None, max_length=LABEL_MAX_LENGTH)
+    options: list[SafeStr] | None = None
     required: bool | None = None
-    position: int | None = None
+    position: int | None = Field(default=None, ge=POSITION_MIN, le=POSITION_MAX)
 
 
 class FieldDefinitionRead(BaseModel):

@@ -505,3 +505,29 @@ def test_get_missing_customer_raises_not_found(db_session: Session) -> None:
 
     with pytest.raises(NotFound):
         CustomerService(db_session).get(uuid4(), ADMIN)
+
+
+# --- Final review item 1 (CRITICAL): a NUL byte in a native column -----------------
+#
+# `ragione_sociale` (String) and `note` (Text) both had no check at all before
+# `SafeStr`: `apps/api/tests/test_input_bounds_sweep.py` sweeps every string field on
+# this schema over real HTTP; these two exercise the same gap directly at the schema
+# layer, including the "reject, don't strip" requirement.
+
+
+def test_a_nul_byte_in_ragione_sociale_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        CustomerCreate(ragione_sociale="ACME\x00Srl")
+
+
+def test_a_nul_byte_in_note_a_text_column_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        CustomerCreate(ragione_sociale="ACME", note="riga1\x00riga2")
+
+
+def test_a_valid_ragione_sociale_is_never_mutated() -> None:
+    """The fix must reject, not silently strip -- a stripped NUL byte is a lost
+    character nobody notices. Confirmed the other way too: an unrelated valid value
+    is returned byte-for-byte unchanged."""
+    customer = CustomerCreate(ragione_sociale="Città Studi Srl")
+    assert customer.ragione_sociale == "Città Studi Srl"

@@ -3,6 +3,7 @@ import time
 from collections.abc import Callable
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -10,7 +11,7 @@ from sqlalchemy.orm import Session
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.auth.models import User
 from pigrocrm.core.auth.passwords import hash_password, verify_password
-from pigrocrm.core.auth.schemas import UserCreate, UserUpdate
+from pigrocrm.core.auth.schemas import NOME_MAX_LENGTH, UserCreate, UserUpdate
 from pigrocrm.core.auth.service import UserService
 from pigrocrm.core.errors import Conflict, PermissionDenied, ValidationFailed
 
@@ -240,3 +241,36 @@ def test_users_email_has_a_case_insensitive_unique_index_in_postgres(
     assert any(
         "unique" in d.lower() and "lower(" in d.lower() and "email" in d.lower() for d in indexdefs
     ), indexdefs
+
+
+# --- Final review item 4 (CRITICAL): UserCreate/UserUpdate.nome had no max_length -
+#
+# `users.nome` is `String(200)` (auth/models.py). Every other domain's Create/Update
+# schema mirrors its own String columns' widths; `UserCreate`/`UserUpdate` predate
+# that sweep and were missed until the final review. Without this bound, an
+# over-length value sails past Pydantic, reaches flush(), and comes back as a raw
+# sqlalchemy.exc.DataError (StringDataRightTruncation) -- not a subclass of
+# IntegrityError, so `UserService.create`'s own `except IntegrityError` (guarding the
+# email-uniqueness race) does not catch it, and it poisons the session.
+
+
+def test_nome_over_the_column_width_is_rejected_on_create() -> None:
+    with pytest.raises(ValidationError):
+        UserCreate(email="x@example.it", password="supersegreta1", nome="x" * (NOME_MAX_LENGTH + 1))
+
+
+def test_nome_over_the_column_width_is_rejected_on_update() -> None:
+    with pytest.raises(ValidationError):
+        UserUpdate(nome="x" * (NOME_MAX_LENGTH + 1))
+
+
+def test_nome_at_the_column_width_is_accepted_on_create() -> None:
+    user = UserCreate(email="x@example.it", password="supersegreta1", nome="x" * NOME_MAX_LENGTH)
+    assert len(user.nome) == NOME_MAX_LENGTH
+
+
+def test_a_nul_byte_in_nome_is_rejected_not_stored(db_session: Session) -> None:
+    """Same family as the max_length gap above (final review item 1): a NUL byte in
+    a native string column reaches Postgres raw unless SafeStr catches it first."""
+    with pytest.raises(ValidationError):
+        UserCreate(email="y@example.it", password="supersegreta1", nome="Mario\x00Rossi")
