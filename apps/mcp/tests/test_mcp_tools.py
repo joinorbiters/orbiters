@@ -214,3 +214,156 @@ async def test_move_deal_to_a_won_stage_settles_probability_through_the_tool(
         )
 
     assert moved["probabilita"] == 100
+
+
+# --- Fix round 1: update_* schemas must be discoverable, and every argument- ---
+# --- conversion failure must render like every other domain error.          ---
+
+
+async def test_update_customer_schema_lists_the_real_modifiable_fields(server) -> None:
+    """A model calling list_tools() must see the actual field names it can send in
+    `changes`, not an opaque `{"type": "object"}` it has to guess or infer from
+    create_customer's sibling schema."""
+    async with Client(server) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    changes_schema = tools["update_customer"].input_schema["properties"]["changes"]
+    assert "ragione_sociale" in changes_schema["properties"]
+    assert "partita_iva" in changes_schema["properties"]
+
+
+async def test_update_deal_schema_lists_the_real_modifiable_fields(server) -> None:
+    async with Client(server) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    changes_schema = tools["update_deal"].input_schema["properties"]["changes"]
+    assert "probabilita" in changes_schema["properties"]
+    assert "valore_previsto" in changes_schema["properties"]
+    # move_deal, not update_deal, is the supported way to change stage -- the
+    # schema must not invite an agent to try setting it here instead.
+    assert "pipeline_stage_id" not in changes_schema["properties"]
+
+
+async def test_update_person_schema_documents_what_detach_does(server) -> None:
+    """`detach` reads as a bare boolean unless its schema explains the effect --
+    the field name alone does not say it unlinks the person from their customer."""
+    async with Client(server) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    changes_schema = tools["update_person"].input_schema["properties"]["changes"]
+    detach_schema = changes_schema["properties"]["detach"]
+    description = detach_schema.get("description", "").lower()
+    assert description
+    assert "client" in description or "cliente" in description
+
+
+async def test_create_deal_documents_the_expected_date_format(server) -> None:
+    async with Client(server) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    create_deal_tool = tools["create_deal"]
+    assert "YYYY-MM-DD" in (create_deal_tool.description or "")
+
+
+async def test_a_malformed_identifier_produces_guidance_not_a_stack_trace(
+    server, mcp_session: Session
+) -> None:
+    """§8.2: an error must be actionable by a model. `uuid.UUID("not-a-uuid")`
+    raises a bare `ValueError` with an English, unstructured message; the guard
+    must render it the same way as every other domain error."""
+    async with Client(server) as client:
+        result = await client.call_tool("get_customer", {"customer_id": "not-a-uuid"})
+
+    assert result.is_error
+    message = result.content[0].text
+    assert "errors.pydantic.dev" not in message
+    assert "badly formed" not in message
+    assert "Valore atteso" in message
+    assert "cerca" in message.lower()
+
+
+async def test_a_wrong_typed_value_inside_changes_produces_guidance(
+    server, mcp_session: Session
+) -> None:
+    """Fix 1 makes `changes` a real, typed schema; this proves the type-checking
+    that now happens when building the update model still comes back through the
+    guard's rendering, not as a raw pydantic dump with a errors.pydantic.dev link."""
+    PipelineService(mcp_session).seed_defaults(ADMIN)
+    async with Client(server) as client:
+        customer = _payload(await client.call_tool("create_customer", {"ragione_sociale": "ACME"}))
+        deal = _payload(
+            await client.call_tool("create_deal", {"nome": "X", "customer_id": customer["id"]})
+        )
+        result = await client.call_tool(
+            "update_deal", {"deal_id": deal["id"], "changes": {"probabilita": "not-a-number"}}
+        )
+
+    assert result.is_error
+    message = result.content[0].text
+    assert "errors.pydantic.dev" not in message
+    assert "probabilita" in message
+    assert "Valore atteso" in message
+
+
+async def test_a_limit_out_of_range_produces_guidance_naming_the_range(
+    server, mcp_session: Session
+) -> None:
+    async with Client(server) as client:
+        result = await client.call_tool("search_customers", {"limit": 500})
+
+    assert result.is_error
+    message = result.content[0].text
+    assert "errors.pydantic.dev" not in message
+    assert "200" in message
+    assert "Valore atteso" in message
+
+
+# --- The WithJsonSchema override must not disturb the ordinary, valid path. ---
+
+
+async def test_update_customer_still_applies_a_valid_changes_payload(server) -> None:
+    async with Client(server) as client:
+        customer = _payload(await client.call_tool("create_customer", {"ragione_sociale": "ACME"}))
+        updated = _payload(
+            await client.call_tool(
+                "update_customer",
+                {"customer_id": customer["id"], "changes": {"ragione_sociale": "ACME Srl"}},
+            )
+        )
+
+    assert updated["ragione_sociale"] == "ACME Srl"
+
+
+async def test_update_person_can_still_detach_via_changes(server) -> None:
+    async with Client(server) as client:
+        customer = _payload(await client.call_tool("create_customer", {"ragione_sociale": "ACME"}))
+        person = _payload(
+            await client.call_tool(
+                "create_person", {"nome": "Mario", "customer_id": customer["id"]}
+            )
+        )
+        updated = _payload(
+            await client.call_tool(
+                "update_person", {"person_id": person["id"], "changes": {"detach": True}}
+            )
+        )
+
+    assert updated["customer_id"] is None
+
+
+async def test_update_deal_still_applies_a_valid_changes_payload(
+    server, mcp_session: Session
+) -> None:
+    PipelineService(mcp_session).seed_defaults(ADMIN)
+    async with Client(server) as client:
+        customer = _payload(await client.call_tool("create_customer", {"ragione_sociale": "ACME"}))
+        deal = _payload(
+            await client.call_tool("create_deal", {"nome": "X", "customer_id": customer["id"]})
+        )
+        updated = _payload(
+            await client.call_tool(
+                "update_deal", {"deal_id": deal["id"], "changes": {"probabilita": 42}}
+            )
+        )
+
+    assert updated["probabilita"] == 42

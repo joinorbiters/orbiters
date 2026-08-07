@@ -1,17 +1,55 @@
 from collections.abc import Callable
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
 from mcp.server import MCPServer
+from pydantic import WithJsonSchema
 
 from pigrocrm.core.activities.service import ActivityService
-from pigrocrm.core.customers.schemas import CustomerListQuery
-from pigrocrm.core.deals.schemas import DealListQuery
+from pigrocrm.core.customers.schemas import CustomerListQuery, CustomerUpdate
+from pigrocrm.core.deals.schemas import DealListQuery, DealUpdate
 from pigrocrm.core.fields.schemas import EntityType
-from pigrocrm.core.people.schemas import PersonListQuery
+from pigrocrm.core.people.schemas import PersonListQuery, PersonUpdate
 from pigrocrm.core.pipeline.service import PipelineService
 from pigrocrm_mcp.context import McpContext
 from pigrocrm_mcp.tools import customers, deals, people
+
+# `changes` stays a plain `dict[str, Any]` at runtime -- deliberately, not an
+# oversight. Typing it directly as `CustomerUpdate` (etc.) would make the MCP SDK
+# validate the nested object *before* calling the guarded tool function at all
+# (`FuncMetadata.validate_arguments`, invoked from `Tool.run` ahead of `self.fn`,
+# confirmed by instrumenting both and observing which one a nested type error
+# actually reaches — the guarded function body never runs). A caller's malformed
+# value would then surface as raw pydantic text, one guard-decorator edit
+# powerless to fix, since the exception never reaches the decorator's own
+# try/except in the first place.
+#
+# `WithJsonSchema` overrides only the *displayed* schema, not the runtime type:
+# the model advertised to `list_tools()` is the real Customer/Person/DealUpdate
+# shape (so a caller sees the actual field names instead of an opaque empty
+# object), while the value the tool function receives is still an unvalidated
+# dict. The real `CustomerUpdate(**data)` construction that validates it happens
+# inside `tools/customers.py::update` (unchanged from before this override),
+# squarely inside the guarded call — exactly where `_guard`'s `except ValueError`
+# can turn a bad value into rendered guidance instead of a raw pydantic dump.
+# Verified against the installed SDK with a throwaway tool before adopting this
+# for real: `list_tools()` showed the nested model's real properties, and a
+# wrong-typed nested value reached the guard rather than bypassing it.
+CustomerChanges = Annotated[dict[str, Any], WithJsonSchema(CustomerUpdate.model_json_schema())]
+PersonChanges = Annotated[dict[str, Any], WithJsonSchema(PersonUpdate.model_json_schema())]
+DealChanges = Annotated[dict[str, Any], WithJsonSchema(DealUpdate.model_json_schema())]
+
+# Same runtime-permissive / schema-only-strict split as the `*Changes` aliases
+# above, applied to a scalar instead of a nested object: the parameter stays a
+# plain `str | None` (so a malformed date string is rejected by `DealCreate`'s
+# own `date` field inside the guarded call, not by the SDK ahead of it), while
+# `format: date` is added purely for what `list_tools()` displays.
+IsoDateStr = Annotated[
+    str | None,
+    WithJsonSchema(
+        {"anyOf": [{"type": "string", "format": "date"}, {"type": "null"}], "default": None}
+    ),
+]
 
 
 def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[..., Any]) -> None:
@@ -64,7 +102,7 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
 
     @mcp.tool()
     @guard
-    def update_customer(customer_id: str, changes: dict[str, Any]) -> dict[str, Any]:
+    def update_customer(customer_id: str, changes: CustomerChanges) -> dict[str, Any]:
         """Aggiorna un cliente. `changes` contiene solo i campi da modificare."""
         return customers.update(context, customer_id, changes)
 
@@ -123,8 +161,10 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
 
     @mcp.tool()
     @guard
-    def update_person(person_id: str, changes: dict[str, Any]) -> dict[str, Any]:
-        """Aggiorna una persona. Per staccarla dal cliente passa `{"detach": true}`."""
+    def update_person(person_id: str, changes: PersonChanges) -> dict[str, Any]:
+        """Aggiorna una persona. Per staccarla dal cliente attuale senza assegnarne uno
+        nuovo, passa `changes.detach = true` invece di un `customer_id`.
+        """
         return people.update(context, person_id, changes)
 
     @mcp.tool()
@@ -163,14 +203,15 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
         customer_id: str,
         valore_previsto: float | None = None,
         probabilita: int | None = None,
-        data_chiusura_prevista: str | None = None,
+        data_chiusura_prevista: IsoDateStr = None,
         note: str | None = None,
         ore_preventivate: float | None = None,
         valore_preventivato: float | None = None,
         custom_fields: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Crea un deal. Il cliente è obbligatorio; lo stato iniziale è il primo della
-        pipeline. Chiama prima `describe_schema` per i campi personalizzati.
+        pipeline. `data_chiusura_prevista` va in formato YYYY-MM-DD. Chiama prima
+        `describe_schema` per i campi personalizzati.
         """
         return deals.create(
             context,
@@ -189,7 +230,7 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
 
     @mcp.tool()
     @guard
-    def update_deal(deal_id: str, changes: dict[str, Any]) -> dict[str, Any]:
+    def update_deal(deal_id: str, changes: DealChanges) -> dict[str, Any]:
         """Aggiorna un deal. Per cambiare stato usa `move_deal`."""
         return deals.update(context, deal_id, changes)
 

@@ -11,7 +11,7 @@ from mcp.server.mcpserver.exceptions import ResourceError, ResourceNotFoundError
 from pigrocrm.core.errors import DomainError
 from pigrocrm.core.fields.schemas import EntityType
 from pigrocrm_mcp.context import ActorProvider, McpContext, SessionProvider
-from pigrocrm_mcp.errors import to_agent_message
+from pigrocrm_mcp.errors import to_agent_message, to_domain_error
 from pigrocrm_mcp.resources import entities
 from pigrocrm_mcp.tools.schema import ENTITY_TYPES, entity_schema
 
@@ -55,6 +55,17 @@ def _guard[T: Callable[..., Any]](fn: T) -> T:
     a wrapper without it produced two *required* "args"/"kwargs" fields instead of,
     say, `entity_type`, because the tool manager saw this wrapper's own bare
     `(*args, **kwargs)` signature instead of the guarded function's real one.
+
+    `except ValueError` (which also catches `pydantic.ValidationError`, a subclass)
+    is what keeps an argument-conversion failure — `uuid.UUID(bad_string)` inside a
+    tool, or constructing one of `pigrocrm.core`'s own Create/Update/ListQuery
+    schemas from caller-supplied data — from reaching the client as raw, English,
+    link-carrying text instead of the same rendered guidance a hand-raised
+    `DomainError` gets. `to_domain_error` does the translation; see its own
+    docstring for why the two sources need different handling despite both
+    arriving here as `ValueError`. This must stay a single guard fixing both,
+    not a per-tool try/except: a fix that only covered today's tools would not
+    cover the next one.
     """
     if inspect.iscoroutinefunction(fn):
 
@@ -64,6 +75,8 @@ def _guard[T: Callable[..., Any]](fn: T) -> T:
                 return await fn(*args, **kwargs)
             except DomainError as exc:
                 raise _as_protocol_error(exc) from exc
+            except ValueError as exc:
+                raise _as_protocol_error(to_domain_error(exc)) from exc
 
         return cast(T, async_wrapper)
 
@@ -73,6 +86,8 @@ def _guard[T: Callable[..., Any]](fn: T) -> T:
             return fn(*args, **kwargs)
         except DomainError as exc:
             raise _as_protocol_error(exc) from exc
+        except ValueError as exc:
+            raise _as_protocol_error(to_domain_error(exc)) from exc
 
     return cast(T, wrapper)
 
