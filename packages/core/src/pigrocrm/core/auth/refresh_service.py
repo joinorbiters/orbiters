@@ -39,8 +39,22 @@ class RefreshTokenService:
         legitimate user rotated past it, so whoever is presenting it now is not them.
         Rewarding that replay with a fresh pair of tokens would leave the thief inside,
         so the response is to revoke every other still-valid token this user holds,
-        not just the one being replayed."""
-        stmt = select(RefreshToken).where(RefreshToken.jti == jti, RefreshToken.user_id == user_id)
+        not just the one being replayed.
+
+        `with_for_update()` locks the row for the rest of this transaction: without
+        it, two concurrent calls on the same jti (a genuine replay -- an attacker and
+        the legitimate user racing, or even just a retried request) can both read
+        `consumed_at IS NULL` before either writes, so both "succeed" and the
+        revocation chain above never fires. The lock forces the second caller to wait
+        for the first's commit and then see the state that commit actually produced,
+        which is what makes the two branches below mutually exclusive for the same
+        row. It stays held until this method's own commit or the caller's -- there is
+        no commit between the SELECT and the write in either branch, on purpose."""
+        stmt = (
+            select(RefreshToken)
+            .where(RefreshToken.jti == jti, RefreshToken.user_id == user_id)
+            .with_for_update()
+        )
         record = self.session.execute(stmt).scalar_one_or_none()
         now = datetime.now(UTC)
         if record is None or record.expires_at < now:
