@@ -61,7 +61,18 @@ class PersonUpdate(BaseModel):
     # null" -- None already means "leave this field alone" for every other field
     # here -- so detaching is its own explicit flag instead of overloading
     # customer_id=None.
-    detach: bool = False
+    #
+    # The `description` is not decorative: this field's own JSON Schema entry is
+    # what an MCP client renders for `changes.detach` (see apps/mcp's
+    # `PersonChanges` schema override), and the bare name "detach" does not say
+    # what it detaches -- unlike `customer_id`, which reads as what it is.
+    detach: bool = Field(
+        default=False,
+        description=(
+            "Se true, rimuove il collegamento della persona al cliente attuale invece di "
+            "assegnarne uno nuovo con customer_id."
+        ),
+    )
 
     @field_validator("email", mode="before")
     @classmethod
