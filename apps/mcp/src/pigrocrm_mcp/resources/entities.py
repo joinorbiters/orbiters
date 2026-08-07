@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from pigrocrm.core.activities.service import ActivityService
+from pigrocrm.core.customers.schemas import CustomerRead
 from pigrocrm.core.customers.service import CustomerService
 from pigrocrm.core.deals.service import DealService
 from pigrocrm.core.people.schemas import PersonListQuery
@@ -23,6 +24,38 @@ def _custom_lines(custom_fields: dict[str, object]) -> list[str]:
     ]
 
 
+def _or_dash(value: object) -> str:
+    """`0`/`Decimal("0")`/`False` are real values, not "unset" -- a bare
+    `value or '—'` ternary treats them identically to `None` because all three
+    are falsy in Python. A deal worth exactly zero (pro bono, a full discount)
+    would then render indistinguishably from a deal where nobody ever filled
+    the field in, and a model reading this card before acting would draw the
+    wrong conclusion from the dash. Mirrors `fields.validator.is_blank`'s
+    reasoning for custom fields, applied here to the native numeric ones: only
+    `None` means "nothing was provided". Not used for text fields -- an empty
+    string and "not provided" are the same thing to show a reader there, so the
+    plain `or '—'` ternary stays correct for those.
+    """
+    return "—" if value is None else str(value)
+
+
+def _address_line(customer: CustomerRead) -> str:
+    """Joins only the parts that are actually present.
+
+    A customer with no street/CAP/comune/provincia used to render as
+    `—,   () IT` -- a literal dash, a comma, two blank spaces where CAP and
+    comune would go, and empty parentheses -- noise a model has to read past
+    before it can act. With nothing but a country, this renders as `IT` alone.
+    """
+    locality = " ".join(part for part in (customer.cap, customer.comune) if part)
+    if customer.provincia:
+        locality = f"{locality} ({customer.provincia})".strip()
+    if customer.nazione:
+        locality = f"{locality} {customer.nazione}".strip()
+    segments = [part for part in (customer.indirizzo, locality) if part]
+    return ", ".join(segments) if segments else "—"
+
+
 def render_customer(context: McpContext, customer_id: UUID) -> str:
     customer = CustomerService(context.session).get(customer_id, context.actor)
     people = PersonService(context.session).list(
@@ -43,8 +76,7 @@ def render_customer(context: McpContext, customer_id: UUID) -> str:
         f"- Codice fiscale: {customer.codice_fiscale or '—'}",
         f"- Codice SDI: {customer.codice_sdi or '—'}",
         f"- PEC: {customer.pec or '—'}",
-        f"- Indirizzo: {customer.indirizzo or '—'}, {customer.cap or ''} "
-        f"{customer.comune or ''} ({customer.provincia or ''}) {customer.nazione}",
+        f"- Indirizzo: {_address_line(customer)}",
         "",
         "## Contatti",
         "",
@@ -55,7 +87,7 @@ def render_customer(context: McpContext, customer_id: UUID) -> str:
     ] or ["_Nessun contatto._"]
     lines += ["", "## Deal", ""]
     lines += [
-        f"- {d.nome} — valore previsto {d.valore_previsto or '—'} — probabilità {d.probabilita}%"
+        f"- {d.nome} — valore previsto {_or_dash(d.valore_previsto)} — probabilità {d.probabilita}%"
         for d in deals.items
     ] or ["_Nessun deal._"]
     lines += _custom_lines(customer.custom_fields)
@@ -100,11 +132,11 @@ def render_deal(context: McpContext, deal_id: UUID) -> str:
         "",
         f"- Cliente: {customer.ragione_sociale} (`customer://{customer.id}`)",
         f"- Stato: {stage.nome} ({stage.tipo})",
-        f"- Valore previsto: {deal.valore_previsto or '—'}",
+        f"- Valore previsto: {_or_dash(deal.valore_previsto)}",
         f"- Probabilità: {deal.probabilita}%",
         f"- Chiusura prevista: {deal.data_chiusura_prevista or '—'}",
-        f"- Ore preventivate: {deal.ore_preventivate or '—'}",
-        f"- Valore preventivato: {deal.valore_preventivato or '—'}",
+        f"- Ore preventivate: {_or_dash(deal.ore_preventivate)}",
+        f"- Valore preventivato: {_or_dash(deal.valore_preventivato)}",
     ]
     lines += _custom_lines(deal.custom_fields)
     lines += ["", "## Timeline", ""] + _timeline_lines(context, "deal", deal_id)

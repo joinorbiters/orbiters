@@ -93,14 +93,35 @@ def build_server(session_provider: SessionProvider, actor_provider: ActorProvide
     @mcp.tool()
     @_guard
     async def refresh_schema(ctx: Context) -> dict[str, int]:
-        """Ricarica i campi personalizzati e aggiorna la lista degli strumenti.
+        """Ricarica i campi personalizzati e riporta quanti sono definiti per entità.
 
-        Serve quando un campo è stato aggiunto dalla web app mentre questo server
-        era già avviato: gli schemi degli strumenti sono fissati alla registrazione.
+        Dopo aver chiamato questo strumento, richiama `describe_schema` per vedere
+        i campi aggiornati: a seconda della versione di protocollo negoziata con
+        questo client, potresti non ricevere alcun avviso automatico di
+        cambiamento. Non aspettare una notifica che potrebbe non arrivare mai.
         """
         counts: dict[str, int] = {
             entity: len(entity_schema(context, entity)["custom_fields"]) for entity in ENTITY_TYPES
         }
+        # Best-effort, kept because it is correct and harmless -- not because it
+        # reliably reaches the client. Verified against the installed SDK
+        # (mcp==2.0.0), not assumed: with the default connection mode (`Client(
+        # server)`, `mode="auto"`), this negotiates the modern 2026-07-28
+        # protocol, under which `notifications/tools/list_changed` is delivered
+        # only to a client that opened a `subscriptions/listen` stream —
+        # `mcp.server.lowlevel.server.Server.get_capabilities`'s own docstring
+        # says so, and a live reproduction confirmed it: a `Client(server)`
+        # connection with a registered `message_handler` received zero messages
+        # after this call, even though the server advertises
+        # `tools.listChanged=True` for that same connection. Forcing the classic
+        # handshake protocol instead (`Client(server, mode="legacy")`, which
+        # negotiates 2025-11-25) delivered a `ToolListChangedNotification`
+        # immediately, despite that connection advertising `listChanged=False`.
+        # See `test_refresh_schema_notification_is_a_documented_sdk_limitation`
+        # for the reproduction this comment is based on. Re-verify both
+        # directions the next time `mcp` is upgraded — either the modern
+        # protocol's listen-stream requirement, or this SDK's capability
+        # advertisement for it, may have changed.
         await ctx.session.send_tool_list_changed()
         return counts
 
