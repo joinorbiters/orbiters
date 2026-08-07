@@ -1,0 +1,146 @@
+/* `@import "tailwindcss"` expands inline into a large stylesheet; any @import
+   textually after it would then sit behind non-import rules in the emitted
+   CSS, which is invalid — the production optimiser drops it rather than
+   reorder it. Every other @import therefore has to come first. */
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+/* Required by the generated ui/*.tsx components themselves, not a design choice:
+   tw-animate-css backs their animate-in/out transitions, and shadcn/tailwind.css
+   defines the data-open/data-checked/... custom variants their class names use. */
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import 'tailwindcss';
+
+/* Tailwind v4 defaults `dark:` to the OS `prefers-color-scheme` media query. This
+   project toggles dark mode with a `.dark` class instead (see `.dark` below), so
+   the variant has to be told to match on that class. */
+@custom-variant dark (&:is(.dark *));
+
+/* The single source of colour for the whole application.
+   Landing-page tokens live in slice 5 and are the soft expression of this same
+   system: Coral #FFB7B2 is the desaturated tint of Watermelon #ED254E. */
+@theme {
+  --color-watermelon: #ed254e;
+  --color-royal-gold: #f9dc5c;
+  --color-mint-cream: #f4fffd;
+  --color-prussian-blue: #011936;
+  --color-charcoal-blue: #465362;
+
+  --font-sans: 'Outfit', ui-sans-serif, system-ui, sans-serif;
+  --radius: 0.625rem;
+}
+
+:root {
+  --background: var(--color-mint-cream);
+  --foreground: var(--color-prussian-blue);
+  --card: #ffffff;
+  --card-foreground: var(--color-prussian-blue);
+  --popover: #ffffff;
+  --popover-foreground: var(--color-prussian-blue);
+  --primary: var(--color-watermelon);
+  --primary-foreground: #ffffff;
+  --secondary: #e6ecea;
+  --secondary-foreground: var(--color-prussian-blue);
+  --muted: #eef4f2;
+  --muted-foreground: var(--color-charcoal-blue);
+  --accent: var(--color-royal-gold);
+  --accent-foreground: var(--color-prussian-blue);
+  --destructive: var(--color-watermelon);
+  --destructive-foreground: #ffffff;
+  --border: #d8e2df;
+  --input: #d8e2df;
+  --ring: var(--color-watermelon);
+
+  /* The sidebar primitive (added per the component list) reads these directly;
+     they are not separate colours, only the app palette re-pointed at its slots. */
+  --sidebar: var(--card);
+  --sidebar-foreground: var(--card-foreground);
+  --sidebar-primary: var(--color-watermelon);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: var(--muted);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+}
+
+.dark {
+  --background: var(--color-prussian-blue);
+  --foreground: var(--color-mint-cream);
+  --card: #0a2547;
+  --card-foreground: var(--color-mint-cream);
+  --popover: #0a2547;
+  --popover-foreground: var(--color-mint-cream);
+  --primary: var(--color-watermelon);
+  --primary-foreground: #ffffff;
+  --secondary: #14304f;
+  --secondary-foreground: var(--color-mint-cream);
+  --muted: #14304f;
+  --muted-foreground: #9fb0c0;
+  --accent: var(--color-royal-gold);
+  --accent-foreground: var(--color-prussian-blue);
+  --destructive: var(--color-watermelon);
+  --destructive-foreground: #ffffff;
+  --border: #1d3d61;
+  --input: #1d3d61;
+  --ring: var(--color-royal-gold);
+
+  --sidebar: var(--card);
+  --sidebar-foreground: var(--card-foreground);
+  --sidebar-primary: var(--color-watermelon);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: var(--muted);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+/* Registers the semantic slots above as Tailwind theme colours (bg-background,
+   text-primary-foreground, border-input, ...) and derives the radius scale from
+   the single --radius above, so every ui/*.tsx component the CLI generated
+   resolves to this palette instead of its own defaults. */
+@theme inline {
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
