@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build && tsc --noEmit",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "generate:api": "openapi-typescript http://localhost:8000/openapi.json -o src/lib/api-types.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "4.3.3",
@@ -19,6 +20,7 @@
     "date-fns": "^4.4.0",
     "lucide-react": "^1.30.0",
     "next-themes": "^0.4.6",
+    "openapi-fetch": "0.17.0",
     "radix-ui": "^1.6.7",
     "react": "^19.2.8",
     "react-day-picker": "^10.0.1",
@@ -43,6 +45,7 @@
     "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^16.5.0",
     "jsdom": "^30.0.1",
+    "openapi-typescript": "7.13.0",
     "typescript": "5.9",
     "typescript-eslint": "^8.46.4",
     "vite": "^8.2.0",
