@@ -1,8 +1,10 @@
+from typing import Any
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from pigrocrm.core.errors import DomainError
-from pigrocrm_api.errors import domain_error_handler
+from pigrocrm_api.errors import domain_error_handler, ensure_validation_error_schemas_are_declared
 from pigrocrm_api.routers import (
     auth,
     customers,
@@ -40,6 +42,21 @@ def create_app() -> FastAPI:
 
     for module in (auth, customers, people, deals, fields, pipeline, users, tokens, schema):
         app.include_router(module.router)
+
+    # PROBLEM_RESPONSES (attached to every router above) declares a 422 that
+    # `$ref`s HTTPValidationError alongside ProblemDetail -- see
+    # ensure_validation_error_schemas_are_declared's docstring for why that
+    # reference would otherwise point at nothing: declaring 422 at all, on every
+    # router, suppresses the automatic registration FastAPI would otherwise do.
+    # `generate_openapi` (the bound method, captured before it is replaced below)
+    # already handles the title/version/description/routes wiring and the
+    # `self.openapi_schema` caching; this only post-processes its result.
+    generate_openapi = app.openapi
+
+    def openapi_with_validation_error_schemas() -> dict[str, Any]:
+        return ensure_validation_error_schemas_are_declared(generate_openapi())
+
+    app.openapi = openapi_with_validation_error_schemas  # type: ignore[method-assign]
 
     @app.get("/health", tags=["meta"])
     def health() -> dict[str, str]:
