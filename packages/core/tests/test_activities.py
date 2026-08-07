@@ -1,10 +1,12 @@
 from typing import Any
 from uuid import uuid4
 
+import pytest
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
+from pigrocrm.core.errors import ValidationFailed
 
 USER = Actor(id=uuid4(), type="user", role="admin")
 AGENT = Actor(id=uuid4(), type="mcp", role="admin")
@@ -161,3 +163,49 @@ def test_session_remains_usable_after_a_hostile_payload(db_session: Session) -> 
     db_session.commit()
 
     assert len(service.timeline("customer", entity_id)) == 2
+
+
+# --- Final review item 5 (CRITICAL): timeline's limit was unbounded, unlike REST --
+#
+# All three REST timeline routes declare `Query(ge=1, le=200)`; the shared service
+# behind both adapters -- and therefore the MCP `get_timeline` tool, which called
+# straight into it with a bare `int` parameter -- enforced no bound at all. `-1`
+# reaches Postgres as `InvalidRowCountInLimitClause`; `10**9` succeeds where REST
+# would refuse the same value outright. Bounding it here, at the one place both
+# adapters share, is what makes the MCP tool match REST without the tool itself
+# needing its own copy of the rule -- the same pattern `_check_numbers` already
+# uses for `probabilita` on `create_deal`'s tool parameter.
+
+
+def test_timeline_rejects_a_limit_below_one(db_session: Session) -> None:
+    service = ActivityService(db_session)
+    with pytest.raises(ValidationFailed) as exc:
+        service.timeline("customer", uuid4(), limit=0)
+    assert exc.value.details["field"] == "limit"
+
+
+def test_timeline_rejects_a_negative_limit(db_session: Session) -> None:
+    """Before the bound existed, this reached Postgres raw as
+    `psycopg.errors.InvalidRowCountInLimitClause` ('LIMIT must not be negative')."""
+    service = ActivityService(db_session)
+    with pytest.raises(ValidationFailed):
+        service.timeline("customer", uuid4(), limit=-1)
+
+
+def test_timeline_rejects_a_limit_above_two_hundred(db_session: Session) -> None:
+    """Matches every REST timeline route's own `Query(ge=1, le=200)` exactly."""
+    service = ActivityService(db_session)
+    with pytest.raises(ValidationFailed) as exc:
+        service.timeline("customer", uuid4(), limit=201)
+    assert exc.value.details["expected"] == "1-200"
+
+
+def test_timeline_accepts_the_boundary_values(db_session: Session) -> None:
+    service = ActivityService(db_session)
+    entity_id = uuid4()
+    service.record("customer", entity_id, "created", USER)
+    db_session.commit()
+
+    assert service.timeline("customer", entity_id, limit=1) == service.timeline(
+        "customer", entity_id, limit=200
+    )

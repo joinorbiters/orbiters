@@ -1,6 +1,9 @@
 import json
+from typing import Any
 
+import pytest
 from mcp import Client
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
@@ -318,6 +321,60 @@ async def test_a_limit_out_of_range_produces_guidance_naming_the_range(
     assert "Valore atteso" in message
 
 
+# --- Final review item 5 (CRITICAL): get_timeline's limit was unbounded, unlike --
+# --- REST's Query(ge=1, le=200) on all three timeline routes. ---------------------
+
+
+async def test_get_timeline_rejects_a_negative_limit_with_guidance_not_a_crash(
+    server, mcp_session: Session
+) -> None:
+    """Before ActivityService.timeline bounded its own `limit`, -1 reached Postgres
+    raw as `psycopg.errors.InvalidRowCountInLimitClause` -- an exception `_guard`
+    did not (and, per item 6, could not fully) recover from cleanly."""
+    async with Client(server) as client:
+        customer = _payload(await client.call_tool("create_customer", {"ragione_sociale": "ACME"}))
+        result = await client.call_tool(
+            "get_timeline",
+            {"entity_type": "customer", "entity_id": customer["id"], "limit": -1},
+        )
+
+    assert result.is_error
+    message = result.content[0].text
+    assert "errors.pydantic.dev" not in message
+    assert "1-200" in message
+
+
+async def test_get_timeline_rejects_an_oversized_limit_matching_rest_exactly(
+    server, mcp_session: Session
+) -> None:
+    """`10**9` used to succeed here and return everything, where REST would refuse
+    the same request outright -- a parity divergence between the two adapters, not
+    only a crash risk."""
+    async with Client(server) as client:
+        customer = _payload(await client.call_tool("create_customer", {"ragione_sociale": "ACME"}))
+        result = await client.call_tool(
+            "get_timeline",
+            {"entity_type": "customer", "entity_id": customer["id"], "limit": 10**9},
+        )
+
+    assert result.is_error
+    message = result.content[0].text
+    assert "1-200" in message
+
+
+async def test_get_timeline_still_accepts_an_in_range_limit(server, mcp_session: Session) -> None:
+    async with Client(server) as client:
+        customer = _payload(await client.call_tool("create_customer", {"ragione_sociale": "ACME"}))
+        result = _payload(
+            await client.call_tool(
+                "get_timeline",
+                {"entity_type": "customer", "entity_id": customer["id"], "limit": 50},
+            )
+        )
+
+    assert isinstance(result["entries"], list)
+
+
 # --- The WithJsonSchema override must not disturb the ordinary, valid path. ---
 
 
@@ -367,3 +424,76 @@ async def test_update_deal_still_applies_a_valid_changes_payload(
         )
 
     assert updated["probabilita"] == 42
+
+
+# --- Final review item 6 (CRITICAL, blast radius): one escaping exception must ---
+# --- not brick the server for every later call. ----------------------------------
+
+
+async def test_server_survives_a_raw_database_error_and_serves_the_next_call(
+    server, mcp_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`__main__.py` builds exactly one `Session` for the whole process and passes
+    `lambda: session` to `build_server` -- the same shared session every tool call
+    in this test suite's `server` fixture reuses too. Before this fix, `_guard`
+    only rolled back a `DomainError`/`ValueError` it already knew how to render;
+    any other exception -- a raw DBAPI failure being the realistic case, since
+    items 1-5 of this same fix wave closed off the paths that used to produce one
+    at the public tool surface -- escaped uncaught, leaving the session's
+    transaction failed. Every later call on that session, including an unrelated
+    read like `describe_schema`, then failed too (`psycopg.errors.
+    InFailedSqlTransaction` under this test's savepoint-based session, the plain
+    SQLAlchemy `PendingRollbackError` in `__main__.py`'s real, non-savepoint
+    session -- same underlying bug, two renderings of it) until the process was
+    restarted.
+
+    Forces a genuine Postgres-level error (`SELECT 1/0`, integer division by
+    zero) rather than a bare Python exception: only a real DBAPI failure actually
+    leaves the SQLAlchemy transaction in the failed state this bug depends on --
+    a plain `RuntimeError` raised in application code never touches the
+    connection at all, and would pass even without the fix, proving nothing.
+    """
+
+    def _hit_a_real_database_error(self: PipelineService) -> list[Any]:
+        self.session.execute(text("SELECT 1/0"))
+        return []
+
+    monkeypatch.setattr(PipelineService, "list", _hit_a_real_database_error)
+
+    async with Client(server) as client:
+        failing = await client.call_tool("list_pipeline_stages", {})
+        assert failing.is_error
+
+        # Undo the fault injection before the next call -- this proves the FIRST
+        # call's aftermath (not a second, independent failure) is what is under
+        # test: describe_schema never touches PipelineService either way, but
+        # this keeps the test's intent unambiguous even if that changes later.
+        monkeypatch.undo()
+
+        ok = await client.call_tool("describe_schema", {"entity_type": "customer"})
+
+    assert not ok.is_error, ok.content[0].text
+
+
+async def test_the_broadened_rollback_guard_still_does_not_disguise_a_programming_error(
+    server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The trailing `except Exception` added for item 6 exists only to add a
+    rollback -- it must never also translate the exception, or a real programming
+    bug (a `KeyError`/`AttributeError` this codebase never intends to raise on
+    purpose) would be misreported to the agent as if it had sent a bad value,
+    exactly the property Task 17's review already verified about the two narrower
+    `except` clauses above it in `_guard`."""
+
+    def _raise_a_programming_error(self: PipelineService) -> list[Any]:
+        raise KeyError("boom")
+
+    monkeypatch.setattr(PipelineService, "list", _raise_a_programming_error)
+
+    async with Client(server) as client:
+        result = await client.call_tool("list_pipeline_stages", {})
+
+    assert result.is_error
+    message = result.content[0].text
+    assert "Valore atteso" not in message
+    assert "boom" in message
