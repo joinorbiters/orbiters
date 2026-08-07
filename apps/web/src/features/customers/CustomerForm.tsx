@@ -36,11 +36,39 @@ const NATIVE_FIELDS: FieldDefinition[] = [
 
 const NATIVE_FIELD_KEYS = NATIVE_FIELDS.map((field) => field.key)
 
+/**
+ * The form's state, kept in the two namespaces the API itself uses -- native columns
+ * at the top level of the request body, custom fields inside `custom_fields` -- and
+ * never flattened into one.
+ *
+ * Flattening was a real, reproduced data bug, not a style question. A flat bag has to
+ * re-derive, at submit time, which keys were custom, and the only thing available to
+ * re-derive it from is the *currently active* schema. Archive a field definition
+ * while a record still holds a value for it and that key drops out of the active
+ * schema: the value is still in the form (it is still in the record), but it is now
+ * classified as native and sent as a top-level key. `CustomerUpdate` is
+ * `extra="forbid"`, so the PATCH 422s -- on an edit where the user changed nothing
+ * -- and the record stays uneditable forever. Reproduced against the running API
+ * before this fix, exactly that way.
+ *
+ * Provenance therefore has to be structural: a value that came out of
+ * `customer.custom_fields` stays in `custom` for as long as the dialog is open, no
+ * matter what happens to its definition in the meantime, and nothing ever re-asks the
+ * schema what it is.
+ */
+export interface CustomerFormValues {
+  /** Editable native columns, exactly `NATIVE_FIELD_KEYS`. */
+  native: Record<string, unknown>
+  /** Everything stored under `custom_fields`, including keys whose definition has
+   *  since been archived and which therefore render nowhere. */
+  custom: Record<string, unknown>
+}
+
 // `nazione` pre-filled to match `CustomerCreate.nazione`'s own server-side default
 // (customers/schemas.py: `Field(default="IT", ...)`) -- a convenience, not a rule:
 // leaving it blank omits the key from the payload entirely (see `submit` below) and
 // the server fills in the exact same default either way.
-const DEFAULT_CREATE_VALUES: Record<string, unknown> = { nazione: 'IT' }
+const DEFAULT_CREATE_VALUES: CustomerFormValues = { native: { nazione: 'IT' }, custom: {} }
 
 /**
  * Builds the form's starting state from a real, already-saved customer.
@@ -50,15 +78,17 @@ const DEFAULT_CREATE_VALUES: Record<string, unknown> = { nazione: 'IT' }
  * `model_config = ConfigDict(extra="forbid")` (customers/schemas.py) -- sending
  * those three straight back would 422 with "extra fields not permitted" on every
  * single edit, since none of them is a field `CustomerUpdate` recognises. Listing
- * exactly the editable native keys, then spreading `custom_fields` on top, is what
- * keeps the round trip to only what the form is actually allowed to send.
+ * exactly the editable native keys keeps the round trip to only what the form is
+ * actually allowed to send; `custom_fields` is copied whole into its own namespace,
+ * archived keys included -- see `CustomerFormValues` for why they must not be
+ * dropped and must not be merged in with the native ones.
  */
-export function customerToFormValues(customer: Customer): Record<string, unknown> {
+export function customerToFormValues(customer: Customer): CustomerFormValues {
   const native: Record<string, unknown> = {}
   for (const key of NATIVE_FIELD_KEYS) {
     native[key] = (customer as unknown as Record<string, unknown>)[key]
   }
-  return { ...native, ...customer.custom_fields }
+  return { native, custom: { ...customer.custom_fields } }
 }
 
 /** Mirrors `is_blank` in packages/core/src/pigrocrm/core/fields/validator.py:
@@ -78,7 +108,7 @@ interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
   customFields: FieldDefinition[]
-  initial?: Record<string, unknown>
+  initial?: CustomerFormValues
   problem?: ProblemDetail | null
   busy?: boolean
   onSubmit: (values: Record<string, unknown>) => void
@@ -95,7 +125,7 @@ export function CustomerForm({
   onSubmit,
   title,
 }: Props) {
-  const [values, setValues] = useState<Record<string, unknown>>(initial ?? DEFAULT_CREATE_VALUES)
+  const [values, setValues] = useState<CustomerFormValues>(initial ?? DEFAULT_CREATE_VALUES)
 
   // This component stays mounted across opens -- only `Dialog`'s own visibility
   // toggles (see the list/detail routes: `open={open}` on an always-rendered
@@ -118,36 +148,75 @@ export function CustomerForm({
     if (open) setValues(initial ?? DEFAULT_CREATE_VALUES)
   }
 
-  function submit() {
-    const custom: Record<string, unknown> = {}
-    const native: Record<string, unknown> = {}
-    const isCustomKey = (key: string) => customFields.some((field) => field.key === key)
+  /** True for a key the active schema currently renders as a custom-field control.
+   *
+   *  This is only ever asked about a key the user can actually see and edit, which is
+   *  exactly what the active schema describes -- it is *not* what decides whether a
+   *  value is custom. That is `CustomerFormValues`' two namespaces, decided once when
+   *  the form is seeded and never re-derived; see that interface's own docstring for
+   *  the bug that re-deriving it caused. */
+  const isRenderedCustomKey = (key: string) => customFields.some((field) => field.key === key)
 
-    for (const [key, value] of Object.entries(values)) {
-      const target = isCustomKey(key) ? custom : native
+  /** Routes an edit into the namespace the key belongs to. A key already present in
+   *  `custom` stays custom even if the active schema no longer lists it -- provenance
+   *  is never re-decided from a schema that can change underneath a stored value. */
+  function change(key: string, value: unknown) {
+    setValues((previous) =>
+      isRenderedCustomKey(key) || key in previous.custom
+        ? { ...previous, custom: { ...previous.custom, [key]: value } }
+        : { ...previous, native: { ...previous.native, [key]: value } },
+    )
+  }
+
+  function submit() {
+    const native: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(values.native)) {
       if (!isBlank(value)) {
-        target[key] = value
+        native[key] = value
+      } else if (!isBlank(initial?.native[key])) {
+        // The user cleared a native column that used to hold a value -- say so
+        // explicitly instead of dropping the key, or the old value survives
+        // untouched. A native column clears on `""` and only on `""`:
+        // `CustomerUpdate.model_dump(exclude_none=True)` keeps an empty string and
+        // drops an actual `None`, so `null` here would be silently ignored.
+        native[key] = ''
+      }
+      // else: blank now, blank (or never set) before -- nothing changed, so there is
+      // nothing to say.
+    }
+
+    const custom: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(values.custom)) {
+      if (!isRenderedCustomKey(key)) {
+        // A stored value whose definition is archived (or otherwise not in the
+        // active schema): omit the key and the server carries the stored value over
+        // untouched -- `_update_custom_fields` only ever touches keys the payload
+        // mentions. This is the *only* correct thing to send. Verified all four
+        // possibilities against the running API on this record's own shape:
+        //   - as a top-level key (what a flattened form state produces): 422,
+        //     `extra_forbidden` -- the bug this file's `CustomerFormValues` exists
+        //     to make unrepresentable;
+        //   - inside `custom_fields` with its stored value: 422, "campo non
+        //     definito" -- `validate_custom_fields` refuses any key that is not an
+        //     *active* definition, so echoing the value back is not an option;
+        //   - inside `custom_fields` as `null`: accepted, and it deletes the value
+        //     -- the opposite of what an untouched edit should do;
+        //   - omitted: 200, and the stored value is still there afterwards.
+        // The value stays in `values.custom` regardless, so it is never reclassified
+        // as native and never mistaken for a field the user just cleared.
         continue
       }
-      if (!isBlank(initial?.[key])) {
-        // The user cleared a field that used to hold a value -- say so explicitly
-        // instead of dropping the key, or the old value survives untouched. Native
-        // columns and custom fields disagree on what "clear" means on the wire
-        // (packages/core/src/pigrocrm/core/customers/service.py):
-        //   - a native column clears on `""` (`CustomerUpdate.model_dump
-        //     (exclude_none=True)` keeps an empty string, only `None` is dropped);
-        //   - a custom field clears only on an explicit `null`
-        //     (`_update_custom_fields` reads it as "remove this key") -- `""`
-        //     there is `is_blank`, which a non-required field just quietly skips,
-        //     leaving the previously-stored value in place.
-        // Sending the wrong one of the two for a given key would compile, run, and
-        // silently fail to clear anything.
-        target[key] = isCustomKey(key) ? null : ''
+      if (!isBlank(value)) {
+        custom[key] = value
+      } else if (!isBlank(initial?.custom[key])) {
+        // A custom field clears only on an explicit `null` (`_update_custom_fields`
+        // reads it as "remove this key"). `""` there is `is_blank`, which a
+        // non-required field just quietly skips, leaving the stored value in place
+        // -- so the two spellings are not interchangeable with the native one above.
+        custom[key] = null
       }
-      // else: blank now, blank (or never set) before -- nothing changed, so there
-      // is nothing to say. This is also what keeps a freshly-required custom field
-      // this edit never touched from being reported as "cleared".
     }
+
     onSubmit({ ...native, custom_fields: custom })
   }
 
@@ -160,8 +229,16 @@ export function CustomerForm({
 
         <DynamicForm
           fields={[...NATIVE_FIELDS, ...customFields]}
-          values={values}
-          onChange={(key, value) => setValues((previous) => ({ ...previous, [key]: value }))}
+          // Flattened for rendering only -- one control per key is all a form can
+          // draw. The state behind it stays split (see `CustomerFormValues`), so what
+          // reaches `submit` still knows which namespace each value came from. Custom
+          // last, matching the field order below it: nothing today stops a
+          // tenant-defined key from being named after a native column
+          // (`FieldDefinitionService.create` only checks other definitions), and if
+          // that ever happens the control the user sees and the value read back here
+          // must at least be the same one.
+          values={{ ...values.native, ...values.custom }}
+          onChange={change}
           problem={problem}
         />
 

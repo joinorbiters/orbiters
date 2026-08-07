@@ -10,6 +10,14 @@ const FIELDS: FieldDefinition[] = [
   { key: 'note_interne', label: 'Note interne', type: 'textarea', required: false, options: [] },
 ]
 
+const CHECKBOX: FieldDefinition = {
+  key: 'vip',
+  label: 'Cliente VIP',
+  type: 'checkbox',
+  required: false,
+  options: [],
+}
+
 // The real shape `domain_error_handler` renders for a validation failure (see
 // lib/api.test.ts's PROBLEM) -- the one case where `fieldErrorFrom` has something
 // to attach.
@@ -87,5 +95,78 @@ describe('DynamicForm', () => {
       />,
     )
     expect(screen.getByLabelText('Partita IVA')).toHaveAttribute('aria-invalid', 'false')
+  })
+
+  /**
+   * The invisible half of the archived-field defect (see CustomerForm.test.tsx for
+   * the other half): the server names a field, this form renders no such control, and
+   * the message used to be dropped on the floor -- the user pressed Salva and nothing
+   * whatsoever happened, forever. `field: 'settore'` for a key no longer in the
+   * schema is exactly the shape the running API returns in that case.
+   */
+  it('shows a server error naming a field it does not render, instead of swallowing it', () => {
+    render(
+      <DynamicForm
+        fields={FIELDS}
+        values={{}}
+        onChange={vi.fn()}
+        problem={{
+          ...VALIDATION_PROBLEM,
+          field: 'settore',
+          reason: 'campo non definito (campi disponibili: nessuno)',
+          expected: undefined,
+        }}
+      />,
+    )
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'settore: campo non definito (campi disponibili: nessuno)',
+    )
+  })
+
+  it('shows a problem that names no field at all, rather than dropping it', () => {
+    render(
+      <DynamicForm
+        fields={FIELDS}
+        values={{}}
+        onChange={vi.fn()}
+        problem={{
+          ...VALIDATION_PROBLEM,
+          code: 'conflict',
+          field: undefined,
+          detail: 'esiste già un cliente con questa partita IVA',
+        }}
+      />,
+    )
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'esiste già un cliente con questa partita IVA',
+    )
+  })
+
+  it('does not repeat an error a rendered field is already showing', () => {
+    render(
+      <DynamicForm fields={FIELDS} values={{}} onChange={vi.fn()} problem={VALIDATION_PROBLEM} />,
+    )
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  /** A checkbox has two states, not three: an untouched one means "no". Before this,
+   *  nothing wrote to its slot until the user clicked it, so the submitted payload
+   *  omitted the key and the record rendered "—" instead of "No". */
+  it('reports an untouched checkbox as false, so unchecked is a value and not an absence', () => {
+    const onChange = vi.fn()
+    render(<DynamicForm fields={[CHECKBOX]} values={{}} onChange={onChange} />)
+    expect(onChange).toHaveBeenCalledWith('vip', false)
+  })
+
+  it('leaves a checkbox that already carries a value alone', () => {
+    const onChange = vi.fn()
+    render(<DynamicForm fields={[CHECKBOX]} values={{ vip: true }} onChange={onChange} />)
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('does not invent values for the other field types', () => {
+    const onChange = vi.fn()
+    render(<DynamicForm fields={FIELDS} values={{}} onChange={onChange} />)
+    expect(onChange).not.toHaveBeenCalled()
   })
 })
