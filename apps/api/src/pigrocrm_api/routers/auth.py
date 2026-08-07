@@ -7,6 +7,7 @@ from pigrocrm.core.auth.schemas import UserRead
 from pigrocrm.core.auth.service import UserService
 from pigrocrm.core.auth.tokens import decode_token, issue_access_token
 from pigrocrm.core.errors import DomainError
+from pigrocrm.core.validation import SafeStr
 from pigrocrm_api.deps import ACCESS_COOKIE, REFRESH_COOKIE, ActorDep, SessionDep, SettingsDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
 
@@ -14,7 +15,16 @@ router = APIRouter(prefix="/api/auth", tags=["auth"], responses=PROBLEM_RESPONSE
 
 
 class LoginRequest(BaseModel):
-    email: str
+    # SafeStr, not EmailStr: UserRepository.get_by_email binds `email` straight
+    # into a SELECT ... WHERE email = :email, and psycopg refuses to adapt any
+    # string parameter containing a NUL byte, insert or not -- the same defect
+    # class as the list routers' search/stato/custom, but reachable with zero
+    # credentials, since login is the one endpoint anyone can call. This is a
+    # request-body field (like every Create schema's own fields), so FastAPI's
+    # normal request-body validation already turns a rejection here into a clean
+    # 422 with no further change needed -- unlike the query-parameter case, where
+    # the parameter itself has to carry the annotation (see routers/customers.py).
+    email: SafeStr
     password: str
 
 
