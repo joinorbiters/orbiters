@@ -5,8 +5,9 @@ from fastapi import APIRouter, status
 from pigrocrm.core.auth.schemas import UserCreate, UserRead, UserUpdate
 from pigrocrm.core.auth.service import UserService
 from pigrocrm_api.deps import ActorDep, SessionDep
+from pigrocrm_api.errors import PROBLEM_RESPONSES
 
-router = APIRouter(prefix="/api/users", tags=["users"])
+router = APIRouter(prefix="/api/users", tags=["users"], responses=PROBLEM_RESPONSES)
 
 
 @router.post("", response_model=UserRead, status_code=status.HTTP_201_CREATED)

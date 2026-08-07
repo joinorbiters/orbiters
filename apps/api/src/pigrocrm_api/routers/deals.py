@@ -15,8 +15,9 @@ from pigrocrm.core.deals.schemas import (
 )
 from pigrocrm.core.deals.service import DealService
 from pigrocrm_api.deps import ActorDep, SessionDep
+from pigrocrm_api.errors import PROBLEM_RESPONSES
 
-router = APIRouter(prefix="/api/deals", tags=["deals"])
+router = APIRouter(prefix="/api/deals", tags=["deals"], responses=PROBLEM_RESPONSES)
 
 
 class MoveStageRequest(BaseModel):
@@ -73,5 +74,10 @@ def restore(deal_id: UUID, session: SessionDep, actor: ActorDep) -> DealRead:
 
 
 @router.get("/{deal_id}/timeline", response_model=list[ActivityRead])
-def timeline(deal_id: UUID, session: SessionDep, actor: ActorDep) -> list[ActivityRead]:
-    return ActivityService(session).timeline("deal", deal_id)
+def timeline(
+    deal_id: UUID,
+    session: SessionDep,
+    actor: ActorDep,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> list[ActivityRead]:
+    return ActivityService(session).timeline("deal", deal_id, limit)

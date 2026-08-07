@@ -8,8 +8,9 @@ from pigrocrm.core.auth.service import UserService
 from pigrocrm.core.auth.tokens import decode_token, issue_access_token
 from pigrocrm.core.errors import DomainError
 from pigrocrm_api.deps import ACCESS_COOKIE, REFRESH_COOKIE, ActorDep, SessionDep, SettingsDep
+from pigrocrm_api.errors import PROBLEM_RESPONSES
 
-router = APIRouter(prefix="/api/auth", tags=["auth"])
+router = APIRouter(prefix="/api/auth", tags=["auth"], responses=PROBLEM_RESPONSES)
 
 
 class LoginRequest(BaseModel):

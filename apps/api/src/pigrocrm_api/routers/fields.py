@@ -11,8 +11,9 @@ from pigrocrm.core.fields.schemas import (
 )
 from pigrocrm.core.fields.service import FieldDefinitionService
 from pigrocrm_api.deps import ActorDep, SessionDep
+from pigrocrm_api.errors import PROBLEM_RESPONSES
 
-router = APIRouter(prefix="/api/field-definitions", tags=["fields"])
+router = APIRouter(prefix="/api/field-definitions", tags=["fields"], responses=PROBLEM_RESPONSES)
 
 
 @router.post("", response_model=FieldDefinitionRead, status_code=status.HTTP_201_CREATED)

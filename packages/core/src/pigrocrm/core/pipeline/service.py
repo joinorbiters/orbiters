@@ -108,7 +108,16 @@ class PipelineService:
         return PipelineStageRead.model_validate(stage)
 
     # `list` is defined LAST in this class on purpose — see the note below the code.
-    def seed_defaults(self) -> list[PipelineStageRead]:
+    def seed_defaults(self, actor: Actor) -> list[PipelineStageRead]:
+        """Admin-only, like every other write method on this class. Reviewed into
+        existence for Task 15: this method used to take no `actor` at all, which left
+        the admin check living solely in the REST router (`routers/pipeline.py`'s
+        `seed()` used to call `actor.require_admin` itself) -- correct for that one
+        adapter, but silently absent the moment anything else calls `seed_defaults()`
+        directly, which is the entire point of putting it on a shared service. See
+        `test_seed_defaults_requires_admin`.
+        """
+        actor.require_admin("seed_pipeline")
         existing_codes = {s.code for s in self.repo.list() if s.code is not None}
         try:
             for code, nome, posizione, probabilita, tipo in DEFAULT_STAGES:

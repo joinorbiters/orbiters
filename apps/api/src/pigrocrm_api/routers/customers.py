@@ -14,8 +14,9 @@ from pigrocrm.core.customers.schemas import (
 )
 from pigrocrm.core.customers.service import CustomerService
 from pigrocrm_api.deps import ActorDep, SessionDep
+from pigrocrm_api.errors import PROBLEM_RESPONSES
 
-router = APIRouter(prefix="/api/customers", tags=["customers"])
+router = APIRouter(prefix="/api/customers", tags=["customers"], responses=PROBLEM_RESPONSES)
 
 
 @router.post("", response_model=CustomerRead, status_code=status.HTTP_201_CREATED)
@@ -60,5 +61,10 @@ def restore(customer_id: UUID, session: SessionDep, actor: ActorDep) -> Customer
 
 
 @router.get("/{customer_id}/timeline", response_model=list[ActivityRead])
-def timeline(customer_id: UUID, session: SessionDep, actor: ActorDep) -> list[ActivityRead]:
-    return ActivityService(session).timeline("customer", customer_id)
+def timeline(
+    customer_id: UUID,
+    session: SessionDep,
+    actor: ActorDep,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> list[ActivityRead]:
+    return ActivityService(session).timeline("customer", customer_id, limit)
