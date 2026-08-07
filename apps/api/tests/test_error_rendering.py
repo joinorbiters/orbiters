@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from pigrocrm.core.errors import Conflict, DomainError
 from pigrocrm_api.errors import domain_error_handler
+from pigrocrm_api.main import create_app
 
 
 def _throwaway_app() -> FastAPI:
@@ -38,3 +39,35 @@ def test_a_uuid_in_domain_error_details_still_renders_a_clean_problem_document()
     # have produced this body at all otherwise.
     assert isinstance(body["stage_id"], str)
     assert len(body["stage_id"]) == 36
+
+
+def test_the_openapi_document_declares_both_shapes_a_422_can_actually_be() -> None:
+    """`PROBLEM_RESPONSES` (errors.py) declares a 422 on every router, which
+    suppresses FastAPI's own automatic `HTTPValidationError` documentation for
+    that status -- a real regression caught in review by regenerating a
+    TypeScript client with `openapi-typescript` and finding the array-of-errors
+    shape (`{"loc": [...], "msg": ..., "type": ...}`) nowhere in the generated
+    422 type, even though the server still returns exactly that shape whenever
+    FastAPI's own request parsing rejects something before an endpoint ever
+    runs (e.g. a non-UUID path segment). slice 1B's planned `fieldErrorFrom`
+    reads `HTTPValidationError.detail[].loc` to find the offending form field;
+    losing this from the document breaks that silently, with nothing visibly
+    wrong anywhere. Uses the real `create_app()`, not a throwaway one: the
+    whole point is to check what every router actually publishes. No database
+    fixture needed -- building the app and generating its schema never opens a
+    session; `SessionDep` is only resolved per-request, and this test never
+    makes one.
+    """
+    app = create_app()
+    schema = app.openapi()
+
+    schemas = schema["components"]["schemas"]
+    assert "HTTPValidationError" in schemas, "the $ref below would point at nothing"
+    assert "ValidationError" in schemas, "HTTPValidationError.detail[] itself $refs this"
+
+    op = schema["paths"]["/api/customers/{customer_id}"]["get"]
+    content = op["responses"]["422"]["content"]
+    assert set(content) == {"application/problem+json", "application/json"}
+    assert content["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/HTTPValidationError"
+    }

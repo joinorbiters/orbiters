@@ -2,6 +2,8 @@ from typing import Any
 
 from fastapi import Request
 from fastapi.encoders import jsonable_encoder
+from fastapi.openapi.constants import REF_PREFIX
+from fastapi.openapi.utils import validation_error_definition, validation_error_response_definition
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
@@ -109,6 +111,47 @@ def _problem_response(description: str) -> dict[str, Any]:
     }
 
 
+def _domain_and_request_validation_response(description: str) -> dict[str, Any]:
+    """422 is genuinely two different runtime shapes sharing one status code, not
+    one shape documented sloppily. Almost every 422 these routers raise themselves
+    (an invalid custom-field value, a bad VAT number, ...) is a `ValidationFailed`
+    rendered by `domain_error_handler` as `application/problem+json`. But FastAPI's
+    own request parsing can *also* reject a request before an endpoint ever runs --
+    e.g. a non-UUID path segment, or a malformed JSON body -- entirely outside
+    `domain_error_handler`, and that path always answers `application/json` with
+    FastAPI's own `HTTPValidationError` shape (`{"detail": [{"loc": [...], "msg":
+    ..., "type": ...}]}`).
+
+    An earlier version of this fix declared only the domain shape for 422, on the
+    (correct, but incomplete) reasoning that a shared `responses=` dict doesn't
+    need to enumerate which codes each route can *actually* raise. What that
+    version missed: declaring 422 at all -- regardless of which schema -- makes
+    FastAPI skip its own automatic `HTTPValidationError` documentation for that
+    status (see `get_openapi_path` in `fastapi/openapi/utils.py`: it only adds the
+    generic entry when no 422/4XX/default key is already present), so the generic
+    shape silently disappeared from the generated document even though the server
+    still returns it. Verified with `openapi-typescript`: the generated TS type for
+    422 only carried `ProblemDetail`, with no trace of the array-of-errors shape.
+    That is a real, load-bearing gap for slice 1B's planned `fieldErrorFrom`
+    (highlights the offending form field from `HTTPValidationError.detail[].loc`)
+    -- it would simply never fire for a FastAPI-level validation error, with
+    nothing visibly broken, and no obvious link back to this cause.
+
+    Two distinct media types on the same response, not an `anyOf` inside one --
+    `application/problem+json` and `application/json` really are two different
+    `Content-Type` headers the server can send for this one status code, so the
+    document should say that plainly rather than collapsing them into a single
+    content type with two possible bodies.
+    """
+    return {
+        "description": description,
+        "content": {
+            "application/problem+json": {"schema": _PROBLEM_DETAIL_SCHEMA},
+            "application/json": {"schema": {"$ref": f"{REF_PREFIX}HTTPValidationError"}},
+        },
+    }
+
+
 # Attached to every router in main.py's registration loop: the domain-error
 # outcomes any endpoint that resolves an Actor or touches an entity can produce,
 # described once instead of per-route -- see ProblemDetail's docstring for why
@@ -116,17 +159,37 @@ def _problem_response(description: str) -> dict[str, Any]:
 # it. Passing this blanket means an endpoint that cannot actually raise, say, 409
 # still lists it -- an accepted over-approximation, not an attempt to model each
 # route's exact exception set.
-#
-# Declaring "422" here also replaces FastAPI's own auto-generated entry for it
-# (the generic `{"detail": [...]}` shape raised before an endpoint ever runs, on
-# a malformed body/query/path). That generic shape is still what the server
-# actually returns for a request FastAPI itself rejects; only the *documented*
-# schema for 422 changes, to the domain shape that is what these routers' own
-# code raises far more often (e.g. an invalid custom-field value, a bad VAT
-# number) and is what a client generator most needs to see modeled.
 PROBLEM_RESPONSES: dict[int | str, dict[str, Any]] = {
     403: _problem_response("Permesso negato: l'actor non ha il ruolo richiesto."),
     404: _problem_response("La risorsa richiesta non esiste o è stata rimossa."),
     409: _problem_response("La richiesta è in conflitto con lo stato attuale della risorsa."),
-    422: _problem_response("Una regola di dominio non è stata rispettata."),
+    422: _domain_and_request_validation_response(
+        "Una regola di dominio non è stata rispettata (application/problem+json), "
+        "oppure il corpo, i parametri o il path della richiesta non hanno la forma "
+        "attesa e non hanno mai raggiunto l'endpoint (application/json)."
+    ),
 }
+
+
+def ensure_validation_error_schemas_are_declared(schema: dict[str, Any]) -> dict[str, Any]:
+    """`PROBLEM_RESPONSES`'s 422 entry `$ref`s `HTTPValidationError` (see
+    `_domain_and_request_validation_response` above) -- the same schema FastAPI
+    would normally register in `components.schemas` on its own, except it only
+    does that for a route whose 422 is left to its own default handling, and
+    every router here deliberately declares its own 422. Left alone, that `$ref`
+    would point at nothing and the document would not validate.
+
+    Reuses FastAPI's own two definitions (`ValidationError`/`HTTPValidationError`)
+    rather than hand-copying their shape -- the two must stay byte-for-byte the
+    schema FastAPI itself would have generated, since that shape is exactly what
+    a non-UUID path segment or a malformed body actually produces at runtime; a
+    hand-maintained copy could silently drift from it.
+
+    Called from `main.py`'s `app.openapi` override, on the dict `app.openapi()`
+    already builds and caches -- `setdefault` makes this idempotent, so calling
+    it again on an already-patched, cached schema is a no-op.
+    """
+    schemas = schema.setdefault("components", {}).setdefault("schemas", {})
+    schemas.setdefault("ValidationError", validation_error_definition)
+    schemas.setdefault("HTTPValidationError", validation_error_response_definition)
+    return schema
