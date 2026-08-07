@@ -20,6 +20,15 @@
    system: Coral #FFB7B2 is the desaturated tint of Watermelon #ED254E. */
 @theme {
   --color-watermelon: #ed254e;
+  /* White text on raw Watermelon measures 4.22:1 — enough for a UI component
+     (3:1) but short of the 4.5:1 body-text threshold, and that pair is live on
+     the primary button label and the default badge. Prussian Blue on top
+     doesn't fix it either (3.96:1), so this is a same-hue, same-saturation,
+     darker step (HSL h=347.7° s=84.7% l=53.7% -> l=48.7%): white on top is
+     4.67:1, and it still contrasts 4.58:1 against the light app background and
+     3.77:1 against the dark one. Watermelon itself is unchanged and remains
+     the brand colour for every accent/border/icon/non-text use. */
+  --color-watermelon-strong: #e5133e;
   --color-royal-gold: #f9dc5c;
   --color-mint-cream: #f4fffd;
   --color-prussian-blue: #011936;
@@ -36,7 +45,7 @@
   --card-foreground: var(--color-prussian-blue);
   --popover: #ffffff;
   --popover-foreground: var(--color-prussian-blue);
-  --primary: var(--color-watermelon);
+  --primary: var(--color-watermelon-strong);
   --primary-foreground: #ffffff;
   --secondary: #e6ecea;
   --secondary-foreground: var(--color-prussian-blue);
@@ -44,7 +53,7 @@
   --muted-foreground: var(--color-charcoal-blue);
   --accent: var(--color-royal-gold);
   --accent-foreground: var(--color-prussian-blue);
-  --destructive: var(--color-watermelon);
+  --destructive: var(--color-watermelon-strong);
   --destructive-foreground: #ffffff;
   --border: #d8e2df;
   --input: #d8e2df;
@@ -54,6 +63,11 @@
      they are not separate colours, only the app palette re-pointed at its slots. */
   --sidebar: var(--card);
   --sidebar-foreground: var(--card-foreground);
+  /* Deliberately still --color-watermelon, not -strong: nothing renders
+     `bg-sidebar-primary text-sidebar-primary-foreground` today (verified by
+     grep), so it carries the same 4.22:1 shortfall white-on-Watermelon has
+     everywhere else. Point this at --color-watermelon-strong when something
+     actually uses it, instead of rediscovering the contrast failure cold. */
   --sidebar-primary: var(--color-watermelon);
   --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: var(--muted);
@@ -69,7 +83,7 @@
   --card-foreground: var(--color-mint-cream);
   --popover: #0a2547;
   --popover-foreground: var(--color-mint-cream);
-  --primary: var(--color-watermelon);
+  --primary: var(--color-watermelon-strong);
   --primary-foreground: #ffffff;
   --secondary: #14304f;
   --secondary-foreground: var(--color-mint-cream);
@@ -77,7 +91,7 @@
   --muted-foreground: #9fb0c0;
   --accent: var(--color-royal-gold);
   --accent-foreground: var(--color-prussian-blue);
-  --destructive: var(--color-watermelon);
+  --destructive: var(--color-watermelon-strong);
   --destructive-foreground: #ffffff;
   --border: #1d3d61;
   --input: #1d3d61;
@@ -85,6 +99,8 @@
 
   --sidebar: var(--card);
   --sidebar-foreground: var(--card-foreground);
+  /* Same shortfall as the light-mode --sidebar-primary above, same reason:
+     unused today, so left on plain --color-watermelon rather than -strong. */
   --sidebar-primary: var(--color-watermelon);
   --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: var(--muted);
