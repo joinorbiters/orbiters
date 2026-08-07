@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import BaseModel
 
@@ -6,12 +8,48 @@ from pigrocrm.core.auth.repository import UserRepository
 from pigrocrm.core.auth.schemas import UserRead
 from pigrocrm.core.auth.service import UserService
 from pigrocrm.core.auth.tokens import decode_token, issue_access_token
-from pigrocrm.core.errors import DomainError
+from pigrocrm.core.errors import DomainError, ValidationFailed
 from pigrocrm.core.validation import SafeStr
 from pigrocrm_api.deps import ACCESS_COOKIE, REFRESH_COOKIE, ActorDep, SessionDep, SettingsDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
 
 router = APIRouter(prefix="/api/auth", tags=["auth"], responses=PROBLEM_RESPONSES)
+
+# STATUS_BY_CODE (pigrocrm_api/errors.py) maps ValidationFailed to 422 for every other
+# endpoint, correctly -- there it means "the body was well-formed but violated a
+# domain rule." Here it would mean something else entirely: UserService.authenticate
+# raises this same exception class for wrong credentials, which is "not authenticated,"
+# the same category refresh (below) and deps.get_actor already answer with 401 for an
+# invalid refresh/access token. Router-level, not a STATUS_BY_CODE change, because this
+# is specific to what ValidationFailed means at this one call site, not a
+# reclassification of the error code everywhere else it is raised.
+#
+# PROBLEM_RESPONSES (attached to the whole router above) has no 401 entry -- nothing
+# else under /api/auth documents one either, since logout/refresh/me all reach 401
+# through get_actor or their own HTTPException without a client-generation step
+# depending on it. login's OpenAPI documentation would otherwise stay silent about a
+# status code it can now actually return, and slice 1B's generated TypeScript client
+# would type this response as `unknown` -- exactly the kind of silent client-generation
+# gap _domain_and_request_validation_response above already had to fix once for 422.
+# FastAPI merges a route's own `responses=` with the router's (see
+# APIRouter.post/_combined_responses in fastapi/routing.py), so this only adds 401
+# here without touching the shared dict every other route relies on.
+_LOGIN_UNAUTHORIZED_RESPONSE: dict[str, Any] = {
+    "description": (
+        "Email o password non corrette, oppure l'utente è disattivato -- lo stesso "
+        "messaggio identico in tutti e tre i casi, così la risposta stessa non "
+        "rivela quale sia la causa reale."
+    ),
+    "content": {
+        "application/json": {
+            "schema": {
+                "type": "object",
+                "properties": {"detail": {"type": "string"}},
+                "required": ["detail"],
+            }
+        }
+    },
+}
 
 
 class LoginRequest(BaseModel):
@@ -34,11 +72,18 @@ def _set_cookie(response: Response, name: str, value: str, max_age: int, *, secu
     )
 
 
-@router.post("/login", response_model=UserRead)
+@router.post("/login", response_model=UserRead, responses={401: _LOGIN_UNAUTHORIZED_RESPONSE})
 def login(
     payload: LoginRequest, response: Response, session: SessionDep, settings: SettingsDep
 ) -> UserRead:
-    user = UserService(session).authenticate(payload.email, payload.password)
+    # Same message regardless of which of the three the domain layer detected (unknown
+    # email, wrong password, deactivated user) -- UserService.authenticate already
+    # raises one identical ValidationFailed for all three, on purpose, so there is
+    # nothing here that could distinguish them even if this wanted to.
+    try:
+        user = UserService(session).authenticate(payload.email, payload.password)
+    except ValidationFailed as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Credenziali non valide") from exc
     _set_cookie(
         response,
         ACCESS_COOKIE,

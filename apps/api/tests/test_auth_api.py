@@ -1,11 +1,26 @@
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.auth.schemas import UserCreate, UserUpdate
+from pigrocrm.core.auth.service import UserService
 from pigrocrm.core.config import Settings, get_settings
 from pigrocrm_api.deps import ACCESS_COOKIE, REFRESH_COOKIE, get_session
 from pigrocrm_api.main import create_app
 
 CREDENTIALS = {"email": "admin@pigro.it", "password": "supersegreta1"}
+
+
+def _create_deactivated_user(session: Session, email: str) -> None:
+    """A user who authenticated correctly right up until an admin flipped `attivo`
+    off -- must fail login exactly like a wrong password or an unknown email, per
+    UserService.authenticate's own anti-enumeration contract."""
+    users = UserService(session)
+    user = users.create(
+        UserCreate(email=email, password="supersegreta1", nome="Disattivato", ruolo="admin"),
+        Actor.system(),
+    )
+    users.update(user.id, UserUpdate(attivo=False), Actor.system())
 
 
 def test_login_sets_httponly_cookies(client: TestClient, admin_user) -> None:
@@ -50,15 +65,58 @@ def test_login_does_not_return_the_token_in_the_body(client: TestClient, admin_u
     assert body["email"] == "admin@pigro.it"
 
 
-def test_login_with_wrong_password_is_422_with_a_problem_document(
-    client: TestClient, admin_user
-) -> None:
+def test_login_with_wrong_password_is_401(client: TestClient, admin_user) -> None:
+    """Authentication failing is "not authenticated" (401), not "the request body was
+    unprocessable" (422) -- the same convention an invalid refresh token and an invalid
+    access token already follow a few lines below and in deps.get_actor.
+    UserService.authenticate raises ValidationFailed here, like it does for every
+    caller of this endpoint, but the router now maps that one call site to 401 instead
+    of falling through to STATUS_BY_CODE's default (422), which is still correct for
+    every other endpoint's ValidationFailed."""
     response = client.post("/api/auth/login", json={**CREDENTIALS, "password": "sbagliata"})
-    assert response.status_code == 422
-    assert response.headers["content-type"].startswith("application/problem+json")
-    problem = response.json()
-    assert problem["code"] == "validation_failed"
-    assert "title" in problem and "detail" in problem
+    assert response.status_code == 401
+
+
+def test_login_with_an_unknown_email_is_401(client: TestClient) -> None:
+    response = client.post(
+        "/api/auth/login", json={"email": "nessuno@pigro.it", "password": "irrilevante"}
+    )
+    assert response.status_code == 401
+
+
+def test_login_by_a_deactivated_user_is_401(client: TestClient, api_session: Session) -> None:
+    _create_deactivated_user(api_session, "disattivato@pigro.it")
+    response = client.post(
+        "/api/auth/login",
+        json={"email": "disattivato@pigro.it", "password": "supersegreta1"},
+    )
+    assert response.status_code == 401
+
+
+def test_login_failures_are_byte_identical_regardless_of_cause(
+    client: TestClient, api_session: Session, admin_user
+) -> None:
+    """UserService.authenticate deliberately raises one identical error for unknown
+    email, wrong password, and a deactivated user -- with a constant-time dummy hash so
+    even response timing does not leak which case happened. That property is only worth
+    anything if the HTTP layer preserves it all the way out: this pins the three
+    responses as byte-identical, not merely "all 401", so a future change that gives
+    even one of the three cases its own message would fail this test instead of quietly
+    reopening the enumeration gap."""
+    _create_deactivated_user(api_session, "disattivato@pigro.it")
+
+    unknown_email = client.post(
+        "/api/auth/login", json={"email": "nessuno@pigro.it", "password": "irrilevante"}
+    )
+    wrong_password = client.post("/api/auth/login", json={**CREDENTIALS, "password": "sbagliata"})
+    deactivated_user = client.post(
+        "/api/auth/login",
+        json={"email": "disattivato@pigro.it", "password": "supersegreta1"},
+    )
+
+    for response in (unknown_email, wrong_password, deactivated_user):
+        assert response.status_code == 401
+    assert unknown_email.content == wrong_password.content == deactivated_user.content
 
 
 def test_me_requires_authentication(client: TestClient) -> None:
