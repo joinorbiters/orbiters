@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 
 def _seed_pipeline(logged_in: TestClient) -> None:
@@ -70,6 +71,44 @@ def test_schema_endpoint_describes_the_current_shape(logged_in: TestClient) -> N
     assert body["entity_type"] == "customer"
     assert any(f["key"] == "settore" for f in body["custom_fields"])
     assert "ragione_sociale" in body["native_fields"]
+
+
+def test_schema_endpoint_matches_describe_entity_exactly(
+    logged_in: TestClient, api_session: Session
+) -> None:
+    """`routers/schema.py` returns `EntitySchema(**describe_entity(...))` -- a
+    fixed Pydantic model with named fields, unlike the MCP `describe_schema` tool
+    (Task 16), which returns `describe_entity`'s dict verbatim with no model in
+    between. If `describe_entity` ever grew a key `EntitySchema` doesn't declare,
+    Pydantic's default `extra="ignore"` would drop it here silently -- no error,
+    no failing test, just this endpoint quietly falling behind what MCP reports
+    for the exact same entity. The two surfaces are identical today (verified
+    below, not assumed), and this guards that they stay that way by comparing
+    them directly on the same database, not by trusting they agree because they
+    call the same function.
+
+    Lives here rather than in `apps/mcp/tests` because `apps/mcp` may not import
+    `pigrocrm_api` (enforced by `TID251`; confirmed by attempting exactly that
+    import from a file under `apps/mcp/tests` and getting the ban error) and this
+    project has no reverse constraint stopping `apps/api/tests` from importing
+    `pigrocrm.core` directly.
+    """
+    from pigrocrm.core.schema_registry import describe_entity
+
+    logged_in.post(
+        "/api/field-definitions",
+        json={
+            "entity_type": "customer",
+            "key": "settore",
+            "label": "Settore",
+            "field_type": "text",
+        },
+    )
+
+    direct = describe_entity(api_session, "customer")
+    over_http = logged_in.get("/api/schema/customer").json()
+
+    assert over_http == direct
 
 
 def test_deal_lifecycle_including_the_kanban_move(logged_in: TestClient) -> None:
