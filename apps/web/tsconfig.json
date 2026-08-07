@@ -1,7 +1,13 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    // ES2023.Intl on top of the ES2022 baseline: it's what types `Intl.NumberFormat`'s
+    // `useGrouping: 'always' | 'auto' | 'min2'` (DynamicFieldRenderer.tsx's Italian
+    // currency/number formatting needs the literal 'always' -- see that file's
+    // comment on why 'auto', the default, is not good enough). Purely additive
+    // ambient types, not a `target` bump, and every runtime this app ships to
+    // (Node 18+, all evergreen browsers) already implements the real behaviour.
+    "lib": ["ES2022", "ES2023.Intl", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
