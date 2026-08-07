@@ -1,10 +1,13 @@
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
 
+import pigrocrm.core.auth.refresh_service as refresh_service_module
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.auth.refresh_models import RefreshToken
 from pigrocrm.core.auth.refresh_service import RefreshTokenService
@@ -13,6 +16,7 @@ from pigrocrm.core.auth.schemas import UserCreate, UserUpdate
 from pigrocrm.core.auth.service import UserService
 from pigrocrm.core.auth.tokens import decode_token
 from pigrocrm.core.config import Settings
+from pigrocrm.core.db import session_factory
 from pigrocrm.core.errors import ValidationFailed
 
 SETTINGS = Settings(jwt_secret="test-secret-not-for-production-and-32-chars-long")
@@ -146,3 +150,108 @@ def test_get_active_rejects_a_deactivated_user(db_session: Session) -> None:
 
     with pytest.raises(ValidationFailed):
         UserRepository(db_session).get_active(user.id)
+
+
+def test_two_concurrent_consumes_of_the_same_jti_do_not_both_succeed(
+    db_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exact race the review reproduced: two real sessions, two threads, both
+    racing to consume the *same* jti for the first time -- e.g. an attacker replaying
+    a stolen token at the same moment the legitimate user's browser rotates it. This
+    does not use the db_session fixture: that fixture is one connection wrapped in a
+    savepoint, which cannot exhibit real cross-transaction row locking against itself.
+
+    The delay is injected as an unconditional sleep inside each thread's own call to
+    `datetime.now()` -- not a mutual barrier requiring both SELECTs to complete before
+    either commits. A mutual barrier there would deadlock the *fixed* code: once
+    `with_for_update()` is in place, the second thread's SELECT itself blocks at the
+    database until the first thread commits, so it would never reach a "both SELECTs
+    done" checkpoint. The sleep widens each thread's own window between its SELECT and
+    its write without requiring the other thread to have reached the same point,
+    which is what lets this test mean something in both the broken and the fixed case
+    instead of hanging in one of them.
+    """
+    factory = session_factory(db_engine)
+
+    setup_session = factory()
+    try:
+        user = UserService(setup_session).create(
+            UserCreate(
+                email=f"race-{uuid4()}@test.it",
+                password="supersegreta1",
+                nome="Race",
+                ruolo="admin",
+            ),
+            ADMIN,
+        )
+        setup_service = RefreshTokenService(setup_session)
+        token_a = setup_service.issue(user.id, SETTINGS)  # the token under the race
+        token_b = setup_service.issue(user.id, SETTINGS)  # sibling, never touched directly
+    finally:
+        setup_session.close()
+
+    jti_a = decode_token(token_a, SETTINGS, expected_type="refresh").jti
+    jti_b = decode_token(token_b, SETTINGS, expected_type="refresh").jti
+    assert jti_a is not None
+    assert jti_b is not None
+
+    real_datetime = refresh_service_module.datetime
+
+    class _SlowDateTime(real_datetime):
+        @classmethod
+        def now(cls, tz: object = None) -> datetime:
+            time.sleep(0.3)
+            return real_datetime.now(tz)
+
+    monkeypatch.setattr(refresh_service_module, "datetime", _SlowDateTime)
+
+    start_barrier = threading.Barrier(2)
+    outcomes: list[BaseException | None] = []
+    outcomes_lock = threading.Lock()
+
+    def worker() -> None:
+        session = factory()
+        outcome: BaseException | None = None
+        try:
+            start_barrier.wait()  # release both threads together
+            RefreshTokenService(session).consume(jti_a, user.id)
+        except BaseException as exc:  # noqa: BLE001 - captured and asserted on below
+            outcome = exc
+        finally:
+            session.close()
+        with outcomes_lock:
+            outcomes.append(outcome)
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert all(not thread.is_alive() for thread in threads), (
+        "a thread is still blocked after 10s -- with_for_update() may have deadlocked "
+        "or hung instead of serialising the two consume() calls"
+    )
+    assert len(outcomes) == 2, f"expected both threads to report an outcome: {outcomes!r}"
+
+    unexpected = [o for o in outcomes if o is not None and not isinstance(o, ValidationFailed)]
+    assert not unexpected, f"unexpected exception(s) from concurrent consume(): {unexpected!r}"
+
+    successes = [o for o in outcomes if o is None]
+    failures = [o for o in outcomes if isinstance(o, ValidationFailed)]
+    assert len(successes) == 1, (
+        f"expected exactly one of the two concurrent consume() calls to succeed, "
+        f"got {len(successes)} (outcomes={outcomes!r}) -- without with_for_update() "
+        "both read consumed_at IS NULL before either writes, and both succeed"
+    )
+    assert len(failures) == 1
+
+    # The loser's consume() lands in the "already consumed" branch -- exactly like any
+    # other replay -- which must trigger the same mass revocation: jti_b, never itself
+    # touched by the race, has to be dead too.
+    verify_session = factory()
+    try:
+        with pytest.raises(ValidationFailed):
+            RefreshTokenService(verify_session).consume(jti_b, user.id)
+    finally:
+        verify_session.close()
