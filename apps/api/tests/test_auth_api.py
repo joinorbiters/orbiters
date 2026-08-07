@@ -141,3 +141,41 @@ def test_an_invalid_bearer_token_is_401(client: TestClient) -> None:
 def test_openapi_document_is_served(client: TestClient) -> None:
     schema = client.get("/openapi.json").json()
     assert schema["info"]["title"] == "PigroCRM API"
+
+
+# --- Coordinator follow-up on final review item 1: the NUL-byte gap was live --
+# --- and reachable with zero credentials through /api/auth/login. ------------
+
+
+def test_login_with_a_nul_byte_in_email_is_422_not_500(client: TestClient) -> None:
+    """UserRepository.get_by_email binds `email` straight into a SELECT ... WHERE
+    email = :email; psycopg refuses to adapt any string parameter containing a
+    NUL byte. Before LoginRequest.email was SafeStr, this reached that query raw
+    and came back as an uncaught 500 -- reachable by anyone, no cookie or PAT
+    required, since login is the one endpoint that must work with zero
+    credentials."""
+    response = client.post(
+        "/api/auth/login", json={"email": "admin\x00@pigro.it", "password": "supersegreta1"}
+    )
+    assert response.status_code == 422
+
+
+def test_login_with_a_nul_byte_does_not_reveal_whether_the_email_exists(
+    client: TestClient, admin_user
+) -> None:
+    """The rejection happens at the schema layer, before authenticate() runs any
+    query at all -- so a malformed email that happens to match a real user and
+    one that does not must produce indistinguishable responses, the same
+    anti-enumeration discipline UserService.authenticate already applies via its
+    dummy-hash timing defence for the ordinary wrong-password/unknown-email case."""
+    existing = client.post(
+        "/api/auth/login", json={"email": f"{CREDENTIALS['email']}\x00", "password": "x"}
+    )
+    unknown = client.post(
+        "/api/auth/login", json={"email": "nobody-at-all\x00@example.it", "password": "x"}
+    )
+    assert existing.status_code == unknown.status_code == 422
+    existing_error, unknown_error = existing.json()["detail"][0], unknown.json()["detail"][0]
+    assert existing_error["type"] == unknown_error["type"]
+    assert existing_error["msg"] == unknown_error["msg"]
+    assert existing_error["loc"] == unknown_error["loc"]

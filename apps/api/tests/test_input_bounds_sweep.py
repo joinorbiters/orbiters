@@ -159,3 +159,82 @@ def test_a_users_nome_over_the_column_width_is_422_not_500(logged_in: TestClient
     body = {"email": "long@pigro.it", "password": "supersegreta1", "nome": "x" * 201}
     response = logged_in.post("/api/users", json=body)
     assert response.status_code == 422, response.text
+
+
+# --- Coordinator follow-up on item 1: the list endpoints' own `search`/`stato`/ --
+# --- `custom` query parameters were left unguarded, and `custom` is a surface  --
+# --- this very fix wave introduced (item 10). Unlike a Create/Update body, a   --
+# --- *ListQuery is hand-built inside the route function from already-parsed   --
+# --- FastAPI parameters, so putting SafeStr only on *ListQuery's own fields    --
+# --- does not help: a ValidationError raised there is not converted to a 422  --
+# --- by FastAPI's automatic request-validation handling the way a request     --
+# --- body's is. The fix instead annotates the *query parameter itself* as     --
+# --- SafeStr, so FastAPI's own parameter validation catches it -- the same    --
+# --- mechanism that already bounds `limit` on these same routes.              --
+
+
+def test_a_nul_byte_in_customer_search_is_422_not_500(logged_in: TestClient) -> None:
+    response = logged_in.get("/api/customers", params={"search": NUL})
+    assert response.status_code == 422, response.text
+
+
+def test_a_nul_byte_in_customer_stato_is_422_not_500(logged_in: TestClient) -> None:
+    response = logged_in.get("/api/customers", params={"stato": NUL})
+    assert response.status_code == 422, response.text
+
+
+def test_a_nul_byte_in_customer_custom_filter_is_422_not_500(logged_in: TestClient) -> None:
+    response = logged_in.get("/api/customers", params={"custom": f"settore:{NUL}"})
+    assert response.status_code == 422, response.text
+
+
+def test_a_nul_byte_in_person_search_is_422_not_500(logged_in: TestClient) -> None:
+    response = logged_in.get("/api/people", params={"search": NUL})
+    assert response.status_code == 422, response.text
+
+
+def test_a_nul_byte_in_person_custom_filter_is_422_not_500(logged_in: TestClient) -> None:
+    response = logged_in.get("/api/people", params={"custom": f"seniority:{NUL}"})
+    assert response.status_code == 422, response.text
+
+
+def test_a_nul_byte_in_deal_search_is_422_not_500(logged_in: TestClient) -> None:
+    response = logged_in.get("/api/deals", params={"search": NUL})
+    assert response.status_code == 422, response.text
+
+
+def test_a_nul_byte_in_deal_custom_filter_is_422_not_500(logged_in: TestClient) -> None:
+    response = logged_in.get("/api/deals", params={"custom": f"fonte:{NUL}"})
+    assert response.status_code == 422, response.text
+
+
+def test_ordinary_search_stato_and_custom_values_still_work_on_customers(
+    logged_in: TestClient,
+) -> None:
+    """Regression guard: the SafeStr annotation on the query parameter must not
+    reject or otherwise disturb an ordinary, valid request."""
+    logged_in.post(
+        "/api/field-definitions",
+        json={
+            "entity_type": "customer",
+            "key": "settore",
+            "label": "Settore",
+            "field_type": "text",
+        },
+    )
+    created = logged_in.post(
+        "/api/customers",
+        json={
+            "ragione_sociale": "ACME Srl",
+            "stato": "attivo",
+            "custom_fields": {"settore": "IT"},
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    response = logged_in.get(
+        "/api/customers",
+        params={"search": "ACME", "stato": "attivo", "custom": "settore:IT"},
+    )
+    assert response.status_code == 200, response.text
+    assert [c["ragione_sociale"] for c in response.json()["items"]] == ["ACME Srl"]

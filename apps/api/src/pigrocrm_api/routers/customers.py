@@ -13,6 +13,7 @@ from pigrocrm.core.customers.schemas import (
     CustomerUpdate,
 )
 from pigrocrm.core.customers.service import CustomerService
+from pigrocrm.core.validation import SafeStr
 from pigrocrm_api.deps import ActorDep, SessionDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
 from pigrocrm_api.query_params import CUSTOM_QUERY_DESCRIPTION, parse_custom_filter
@@ -29,9 +30,18 @@ def create(data: CustomerCreate, session: SessionDep, actor: ActorDep) -> Custom
 def list_customers(
     session: SessionDep,
     actor: ActorDep,
-    search: Annotated[str | None, Query()] = None,
-    stato: Annotated[str | None, Query()] = None,
-    custom: Annotated[list[str] | None, Query(description=CUSTOM_QUERY_DESCRIPTION)] = None,
+    # SafeStr here, not just on Create/Update: `search`/`stato`/`custom` are
+    # ordinary FastAPI query parameters, so a NUL byte in one of them is caught by
+    # FastAPI's own request-parameter validation (a clean 422) *before* this
+    # function body ever runs and hand-constructs CustomerListQuery below --
+    # unlike putting SafeStr only on CustomerListQuery's own fields, which would
+    # not help here: this route never lets pydantic validate that construction
+    # for it the way it does for a request-body model, so a ValidationError raised
+    # there would surface as an uncaught 500, not a 422. Verified directly: a NUL
+    # byte in `search` now comes back 422, not 500, with no other change needed.
+    search: Annotated[SafeStr | None, Query()] = None,
+    stato: Annotated[SafeStr | None, Query()] = None,
+    custom: Annotated[list[SafeStr] | None, Query(description=CUSTOM_QUERY_DESCRIPTION)] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     cursor: Annotated[UUID | None, Query()] = None,
 ) -> CustomerPage:

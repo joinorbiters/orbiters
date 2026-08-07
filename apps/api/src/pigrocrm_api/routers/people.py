@@ -13,6 +13,7 @@ from pigrocrm.core.people.schemas import (
     PersonUpdate,
 )
 from pigrocrm.core.people.service import PersonService
+from pigrocrm.core.validation import SafeStr
 from pigrocrm_api.deps import ActorDep, SessionDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
 from pigrocrm_api.query_params import CUSTOM_QUERY_DESCRIPTION, parse_custom_filter
@@ -29,9 +30,13 @@ def create(data: PersonCreate, session: SessionDep, actor: ActorDep) -> PersonRe
 def list_people(
     session: SessionDep,
     actor: ActorDep,
-    search: Annotated[str | None, Query()] = None,
+    # SafeStr: see the identical comment on list_customers (routers/customers.py)
+    # -- these are ordinary query parameters, not Create/Update schema fields, so
+    # the guard has to sit on the parameter itself for FastAPI's own validation to
+    # catch it as a 422 before PersonListQuery is hand-built below.
+    search: Annotated[SafeStr | None, Query()] = None,
     customer_id: Annotated[UUID | None, Query()] = None,
-    custom: Annotated[list[str] | None, Query(description=CUSTOM_QUERY_DESCRIPTION)] = None,
+    custom: Annotated[list[SafeStr] | None, Query(description=CUSTOM_QUERY_DESCRIPTION)] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     cursor: Annotated[UUID | None, Query()] = None,
 ) -> PersonPage:
