@@ -541,3 +541,22 @@ def test_last_page_has_no_cursor(db_session: Session) -> None:
     service = PersonService(db_session)
     service.create(PersonCreate(nome="Solo"), ADMIN)
     assert service.list(PersonListQuery(limit=10), ADMIN).next_cursor is None
+
+
+# --- Final review item 1 (CRITICAL): a NUL byte in a native column ---------------
+#
+# `apps/api/tests/test_input_bounds_sweep.py` sweeps every string field on this
+# schema over real HTTP; this exercises the same gap directly at the schema layer.
+
+
+def test_a_nul_byte_in_nome_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        PersonCreate(nome="Mario\x00Rossi")
+
+
+def test_a_nul_byte_introduced_after_email_normalisation_is_still_caught() -> None:
+    """`_normalise_email`'s `mode="before"` validator strips/lowers ahead of
+    SafeStr's own check -- neither operation removes a NUL byte, so one anywhere in
+    the original input must still be caught after normalisation runs."""
+    with pytest.raises(ValidationError):
+        PersonCreate(nome="Mario", email="  Mario\x00@Example.COM  ")

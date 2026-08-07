@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from pigrocrm.core.validation import SafeStr
+
 # Mirrors Deal's column width (models.py). Without this, an over-length value sails
 # past Pydantic, reaches flush(), and comes back as a raw sqlalchemy.exc.DataError
 # (StringDataRightTruncation) -- not a subclass of IntegrityError, so no handler
@@ -39,9 +41,23 @@ VALORE_MAX_DIGITS = 12
 ORE_MAX_DIGITS = 8
 DECIMAL_PLACES = 2
 
+# No Pydantic `ge`/`le` bound on `probabilita` below, unlike `posizione`/`position`
+# elsewhere in this sweep -- see the final-review item on bounding every Integer
+# column. The reason is the same one documented on `CustomerCreate.partita_iva`
+# (customers/schemas.py) for why that field has no `max_length` either: the
+# service's own `_check_numbers` already requires `0 <= probabilita <= 100` on every
+# create and update, which structurally rejects any value Postgres's `Integer`
+# column could not hold, including `2**40` -- there is no gap left for a schema
+# bound to close. Adding `Field(ge=0, le=100)` here would not close an additional
+# gap; it would instead intercept an out-of-range value *before* `_check_numbers`
+# runs and raise pydantic's own `ValidationError` instead of this project's
+# `ValidationFailed` -- confirmed by actually adding it and watching
+# `test_probability_outside_range_is_rejected` fail with exactly that swapped
+# exception type, a regression a value like 150 must not trigger.
+
 
 class DealCreate(BaseModel):
-    nome: str = Field(max_length=NOME_MAX_LENGTH)
+    nome: SafeStr = Field(max_length=NOME_MAX_LENGTH)
     customer_id: UUID
     pipeline_stage_id: UUID | None = None
     valore_previsto: Decimal | None = Field(
@@ -49,8 +65,11 @@ class DealCreate(BaseModel):
     )
     probabilita: int | None = None
     data_chiusura_prevista: date | None = None
+    # Validated against `users` by `DealService` (`create`/`update` both call
+    # `_check_owner`), the same way `customer_id` is validated against `customers`:
+    # a real foreign key with no schema-level way to bound it further than "a UUID".
     owner_id: UUID | None = None
-    note: str | None = None
+    note: SafeStr | None = None
     ore_preventivate: Decimal | None = Field(
         default=None, max_digits=ORE_MAX_DIGITS, decimal_places=DECIMAL_PLACES
     )
@@ -68,14 +87,14 @@ class DealUpdate(BaseModel):
     # generic update would bypass the validation and probability-settling logic that
     # `create`/`move_stage` exist to enforce. `move_stage` is the only supported way
     # to change a deal's stage.
-    nome: str | None = Field(default=None, max_length=NOME_MAX_LENGTH)
+    nome: SafeStr | None = Field(default=None, max_length=NOME_MAX_LENGTH)
     valore_previsto: Decimal | None = Field(
         default=None, max_digits=VALORE_MAX_DIGITS, decimal_places=DECIMAL_PLACES
     )
     probabilita: int | None = None
     data_chiusura_prevista: date | None = None
     owner_id: UUID | None = None
-    note: str | None = None
+    note: SafeStr | None = None
     ore_preventivate: Decimal | None = Field(
         default=None, max_digits=ORE_MAX_DIGITS, decimal_places=DECIMAL_PLACES
     )

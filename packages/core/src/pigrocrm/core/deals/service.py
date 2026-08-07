@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
+from pigrocrm.core.auth.repository import UserRepository
 from pigrocrm.core.customers.repository import CustomerRepository
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.deals.repository import DealRepository
@@ -80,9 +81,22 @@ class DealService:
         self.session = session
         self.repo = DealRepository(session)
         self.customers = CustomerRepository(session)
+        self.users = UserRepository(session)
         self.pipeline = PipelineService(session)
         self.fields = FieldDefinitionService(session)
         self.activities = ActivityService(session)
+
+    def _check_owner(self, owner_id: UUID | None) -> None:
+        """`owner_id` is nullable -- see `Deal`'s own docstring: a deal may have no
+        assigned owner. A supplied id that does not resolve to a real user is
+        rejected: a dangling FK is worse than no FK. Mirrors
+        `PersonService._check_customer` exactly, on the one real foreign key this
+        class never validated -- `deals.owner_id` -- confirmed reachable before this
+        fix by constructing a `Deal` with a random UUID and watching a raw, uncaught
+        `sqlalchemy.exc.IntegrityError` (`ForeignKeyViolation`) come back from
+        `flush()`/`commit()` instead of this project's own `NotFound`."""
+        if owner_id is not None and self.users.get(owner_id) is None:
+            raise NotFound("user", owner_id)
 
     def _validated_custom(self, values: dict[str, Any]) -> dict[str, Any]:
         """Used by `create` only: `values` is the *complete* desired set of custom
@@ -146,6 +160,7 @@ class DealService:
         # docstring. Unlike Person.customer_id (optional), this is never skipped.
         if self.customers.get(payload["customer_id"]) is None:
             raise NotFound("customer", payload["customer_id"])
+        self._check_owner(payload.get("owner_id"))
 
         # `PipelineService.get` raises NotFound for a stage id that does not resolve
         # to a live row; `default_stage()` raises ValidationFailed if no `open` stage
@@ -179,6 +194,8 @@ class DealService:
         # confused with the field itself being absent -- see `_update_custom_fields`.
         changes = data.model_dump(exclude_none=True, exclude={"custom_fields"})
         _check_numbers(changes)
+        if "owner_id" in changes:
+            self._check_owner(changes["owner_id"])
         if "probabilita" in changes:
             # `update` never changes `deal.pipeline_stage_id` -- that is
             # `move_stage`'s job alone -- so the deal's *current* stage is what

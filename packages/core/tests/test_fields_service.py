@@ -220,3 +220,80 @@ def test_duplicate_key_race_past_the_precheck_still_becomes_a_domain_conflict(
     # The session must still be usable right after -- a leftover PendingRollbackError
     # would blow up on the very next statement issued on it.
     assert len(service.list("customer")) == 1
+
+
+# --- Final review item 2 (CRITICAL): position is a bare Integer, unbounded -------
+#
+# `field_definitions.position` is `Integer`. Nothing anywhere checked its range --
+# unlike `probabilita`/`probabilita_default`, this column has no equivalent
+# service-level guard, so `2**40` reached `flush()` raw as
+# `psycopg.errors.NumericValueOutOfRange` before `Field(ge=..., le=...)` existed on
+# `FieldDefinitionCreate.position`/`FieldDefinitionUpdate.position`.
+
+
+def test_position_at_the_bound_is_accepted_on_create(db_session: Session) -> None:
+    from pigrocrm.core.fields.schemas import POSITION_MAX, POSITION_MIN
+
+    at_min = _create(FieldDefinitionService(db_session), key="a", position=POSITION_MIN)
+    at_max = _create(FieldDefinitionService(db_session), key="b", position=POSITION_MAX)
+    assert at_min.position == POSITION_MIN
+    assert at_max.position == POSITION_MAX
+
+
+def test_position_far_beyond_the_bound_is_rejected_on_create() -> None:
+    with pytest.raises(ValidationError):
+        FieldDefinitionCreate(
+            entity_type="customer", key="x", label="X", field_type="text", position=2**40
+        )
+
+
+def test_position_far_beyond_the_bound_is_rejected_on_update() -> None:
+    with pytest.raises(ValidationError):
+        FieldDefinitionUpdate(position=2**40)
+
+
+def test_a_negative_position_is_rejected() -> None:
+    """Unlike `pipeline_stages.posizione` (which legitimately goes negative -- see
+    test_pipeline.py), nothing in this project ever creates a custom field with a
+    negative display order, so `position` is bounded to `>= 0`."""
+    with pytest.raises(ValidationError):
+        FieldDefinitionCreate(
+            entity_type="customer", key="x", label="X", field_type="text", position=-1
+        )
+
+
+# --- Final review item 1 (CRITICAL): a NUL byte in label or inside options -------
+#
+# `apps/api/tests/test_input_bounds_sweep.py` sweeps both over real HTTP; these
+# exercise the same gap directly at the schema layer.
+
+
+def test_a_nul_byte_in_label_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        FieldDefinitionCreate(entity_type="customer", key="x", label="X\x00Y", field_type="text")
+
+
+def test_a_nul_byte_inside_an_options_entry_is_rejected() -> None:
+    """`options` is `list[SafeStr]`, not a single string -- the guard has to reach
+    into every element, not just a top-level scalar field."""
+    with pytest.raises(ValidationError):
+        FieldDefinitionCreate(
+            entity_type="customer",
+            key="settore",
+            label="Settore",
+            field_type="select",
+            options=["IT", "Retail\x00"],
+        )
+
+
+def test_a_nul_byte_in_key_is_silently_removed_by_slugify_not_rejected() -> None:
+    """Documents a deliberate exception to "reject, don't strip": `key` does not get
+    `SafeStr` (see the comment on `FieldDefinitionCreate.key`) because `_slugify`
+    already runs first and replaces any character outside [a-z0-9] -- including a
+    NUL byte -- with "_". This is pre-existing, reviewed behaviour this fix wave
+    does not change; the test exists so a future reader does not "fix" the
+    inconsistency by adding a SafeStr that would never fire."""
+    field = FieldDefinitionCreate(
+        entity_type="customer", key="a\x00b", label="X", field_type="text"
+    )
+    assert field.key == "a_b"
