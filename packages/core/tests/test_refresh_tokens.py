@@ -104,6 +104,57 @@ def test_reusing_a_consumed_token_revokes_every_other_valid_token_for_that_user(
         service.consume(jti_b, user.id)
 
 
+def test_revoke_all_valid_select_is_ordered_by_id(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verifies the deadlock fix mechanically instead of trying to reproduce a real
+    deadlock: Postgres returns a stable row order for a small, freshly populated
+    table, so the natural race is not reliably reproducible in a test (this project's
+    own 15 runs and the reviewer's 25 never triggered it on the real code) -- but the
+    reviewer *did* force a genuine deadlock with raw SQL, two connections updating the
+    same two rows in opposite order, 3 times out of 3, and confirmed zero deadlocks
+    with both in ascending id order. Without `order_by(id)`, `_revoke_all_valid`
+    UPDATEs whatever order `session.dirty` happens to hand SQLAlchemy; two concurrent
+    replays revoking an overlapping set of sibling rows could then acquire those
+    rows' locks in different orders on each side. A fixed order removes that
+    possibility outright. This test does not exercise concurrency at all -- it
+    inspects the actual SQL `_revoke_all_valid` sends, which is a deterministic,
+    non-flaky way to pin down that the fix is really in the generated query, not just
+    in the source."""
+    user = _make_user(db_session)
+    service = RefreshTokenService(db_session)
+    token_a = service.issue(user.id, SETTINGS)
+    service.issue(user.id, SETTINGS)  # sibling, so there is something to order
+    jti_a = decode_token(token_a, SETTINGS, expected_type="refresh").jti
+    assert jti_a is not None
+    service.consume(jti_a, user.id)  # first, legitimate consumption
+
+    captured: list[object] = []
+    original_execute = db_session.execute
+
+    def spy_execute(stmt: object, *args: object, **kwargs: object) -> object:
+        captured.append(stmt)
+        return original_execute(stmt, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(db_session, "execute", spy_execute)
+
+    with pytest.raises(ValidationFailed):
+        service.consume(jti_a, user.id)  # replay -- triggers _revoke_all_valid
+
+    # _revoke_all_valid's SELECT is the only one of the two this call issues that
+    # filters on `consumed_at IS NULL`; consume()'s own jti lookup does not.
+    revoke_statements = [
+        stmt
+        for stmt in captured
+        if "consumed_at IS NULL" in str(stmt.compile(compile_kwargs={"literal_binds": False}))  # type: ignore[attr-defined]
+    ]
+    assert revoke_statements, f"did not observe _revoke_all_valid's SELECT among {captured!r}"
+    compiled = str(revoke_statements[-1].compile(compile_kwargs={"literal_binds": False}))  # type: ignore[attr-defined]
+    assert "ORDER BY refresh_tokens.id" in compiled, (
+        f"_revoke_all_valid's SELECT is missing ORDER BY id: {compiled}"
+    )
+
+
 def test_a_refresh_token_from_a_different_user_is_rejected(db_session: Session) -> None:
     owner = _make_user(db_session, "owner@refresh.it")
     other = _make_user(db_session, "other@refresh.it")
