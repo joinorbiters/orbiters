@@ -26,5 +26,5 @@ asyncio_mode = "auto"
 [tool.mypy]
 python_version = "3.13"
 strict = true
-mypy_path = ["packages/core/src", "apps/api/src"]
+mypy_path = ["packages/core/src", "apps/api/src", "apps/mcp/src"]
 explicit_package_bases = true
