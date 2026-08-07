@@ -39,7 +39,16 @@ def api_engine() -> Iterator[Engine]:
 def api_session(api_engine: Engine) -> Iterator[Session]:
     connection = api_engine.connect()
     transaction = connection.begin()
-    session = session_factory(api_engine)(bind=connection)
+    # join_transaction_mode="create_savepoint" is load-bearing, not optional -- see
+    # packages/core/tests/conftest.py's identical `db_session` fixture, established
+    # in Task 2 specifically because its absence lets `session.rollback()` propagate
+    # to the real, externally-managed transaction instead of nesting inside it: any
+    # test that exercises a DomainError-then-continue sequence across more than one
+    # request sharing this session would otherwise lose every earlier commit the
+    # moment something later in the same test rolls back -- confirmed directly by
+    # reproducing it with this parameter removed and watching two already-committed
+    # rows disappear after an unrelated later rollback.
+    session = session_factory(api_engine)(bind=connection, join_transaction_mode="create_savepoint")
     try:
         yield session
     finally:
