@@ -70,4 +70,17 @@ export default defineConfig([
       'react-refresh/only-export-components': ['error', { allowExportNames: ['renderFieldValue'] }],
     },
   },
+  {
+    // Same shape again: `customerToFormValues` builds the exact `initial` shape
+    // `CustomerForm` expects, walking the same `NATIVE_FIELD_KEYS` this file
+    // derives from its own `NATIVE_FIELDS` -- the two are coupled by construction
+    // (add a native field here and both need to agree on it), so splitting them
+    // across files would not remove the coupling, only hide it. Persons and Deals
+    // are expected to need the identical override once their own forms copy this
+    // file's shape.
+    files: ['src/features/customers/CustomerForm.tsx'],
+    rules: {
+      'react-refresh/only-export-components': ['error', { allowExportNames: ['customerToFormValues'] }],
+    },
+  },
 ])
