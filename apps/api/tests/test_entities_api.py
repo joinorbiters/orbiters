@@ -182,3 +182,99 @@ def test_a_person_can_be_created_without_a_customer(logged_in: TestClient) -> No
     response = logged_in.post("/api/people", json={"nome": "Mario"})
     assert response.status_code == 201
     assert response.json()["customer_id"] is None
+
+
+# --- Final review item 10 (MINOR): *ListQuery.custom was implemented, GIN-indexed --
+# --- and service-tested, but no router and no MCP tool ever passed it. -----------
+
+
+def test_list_customers_filters_by_a_repeated_custom_query_param(logged_in: TestClient) -> None:
+    logged_in.post(
+        "/api/field-definitions",
+        json={
+            "entity_type": "customer",
+            "key": "settore",
+            "label": "Settore",
+            "field_type": "text",
+        },
+    )
+    logged_in.post(
+        "/api/customers", json={"ragione_sociale": "A", "custom_fields": {"settore": "IT"}}
+    )
+    logged_in.post(
+        "/api/customers", json={"ragione_sociale": "B", "custom_fields": {"settore": "Retail"}}
+    )
+
+    page = logged_in.get("/api/customers", params={"custom": "settore:IT"}).json()
+    assert [c["ragione_sociale"] for c in page["items"]] == ["A"]
+
+
+def test_list_customers_custom_filter_repeated_twice_is_an_and(logged_in: TestClient) -> None:
+    """Mirrors JSONB containment semantics (`@>`): every key given must match."""
+    for key in ("settore", "priorita"):
+        logged_in.post(
+            "/api/field-definitions",
+            json={"entity_type": "customer", "key": key, "label": key, "field_type": "text"},
+        )
+    logged_in.post(
+        "/api/customers",
+        json={"ragione_sociale": "A", "custom_fields": {"settore": "IT", "priorita": "alta"}},
+    )
+    logged_in.post(
+        "/api/customers",
+        json={"ragione_sociale": "B", "custom_fields": {"settore": "IT", "priorita": "bassa"}},
+    )
+
+    page = logged_in.get(
+        "/api/customers", params=[("custom", "settore:IT"), ("custom", "priorita:alta")]
+    ).json()
+    assert [c["ragione_sociale"] for c in page["items"]] == ["A"]
+
+
+def test_list_customers_custom_filter_without_a_colon_is_benign_not_a_500(
+    logged_in: TestClient,
+) -> None:
+    """A malformed `custom` entry must not crash the request -- there is no
+    obviously "correct" interpretation of a value with no `key:value` separator,
+    so it degrades to an empty-string value instead of raising."""
+    response = logged_in.get("/api/customers", params={"custom": "not-key-value"})
+    assert response.status_code == 200
+
+
+def test_list_people_filters_by_a_custom_query_param(logged_in: TestClient) -> None:
+    logged_in.post(
+        "/api/field-definitions",
+        json={
+            "entity_type": "person",
+            "key": "seniority",
+            "label": "Seniority",
+            "field_type": "text",
+        },
+    )
+    logged_in.post("/api/people", json={"nome": "A", "custom_fields": {"seniority": "senior"}})
+    logged_in.post("/api/people", json={"nome": "B", "custom_fields": {"seniority": "junior"}})
+
+    page = logged_in.get("/api/people", params={"custom": "seniority:senior"}).json()
+    assert [p["nome"] for p in page["items"]] == ["A"]
+
+
+def test_list_deals_filters_by_a_custom_query_param(logged_in: TestClient) -> None:
+    _seed_pipeline(logged_in)
+    logged_in.post(
+        "/api/field-definitions",
+        json={"entity_type": "deal", "key": "fonte", "label": "Fonte", "field_type": "text"},
+    )
+    customer_id = logged_in.post("/api/customers", json={"ragione_sociale": "ACME"}).json()["id"]
+    created_a = logged_in.post(
+        "/api/deals",
+        json={"nome": "A", "customer_id": customer_id, "custom_fields": {"fonte": "referral"}},
+    )
+    assert created_a.status_code == 201, created_a.text
+    created_b = logged_in.post(
+        "/api/deals",
+        json={"nome": "B", "customer_id": customer_id, "custom_fields": {"fonte": "outbound"}},
+    )
+    assert created_b.status_code == 201, created_b.text
+
+    page = logged_in.get("/api/deals", params={"custom": "fonte:referral"}).json()
+    assert [d["nome"] for d in page["items"]] == ["A"]

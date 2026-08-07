@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 from uuid import UUID
 
 from mcp.server import MCPServer
@@ -49,6 +49,42 @@ IsoDateStr = Annotated[
     WithJsonSchema(
         {"anyOf": [{"type": "string", "format": "date"}, {"type": "null"}], "default": None}
     ),
+]
+
+# Final review item 9: the same runtime-permissive / schema-only-strict split as
+# `*Changes`/`IsoDateStr` above, applied to every remaining *scalar* numeric
+# parameter -- `limit` and `probabilita` named explicitly by the review, the three
+# deal money fields swept in alongside them for the identical reason. A bare
+# `int`/`float` type on a tool parameter is what let a wrong-TYPE argument (not a
+# wrong-value one) be rejected by the SDK's own pre-call argument coercion, before
+# the guarded call -- and therefore before `_guard`'s `except ValueError` -- ever
+# ran: `search_customers(limit="molti")` came back as a raw, multi-line, English
+# pydantic dump with an `errors.pydantic.dev` link, exactly what spec §8.2 forbids,
+# the same failure `changes`/`data_chiusura_prevista` were already fixed for.
+# `int | str`/`float | str` accept anything a JSON number *or* a JSON string can be
+# at the SDK layer -- confirmed against the installed SDK: a real number passes
+# through unchanged, and a non-numeric string like "molti" passes through as a
+# string instead of being rejected there. The `*ListQuery`/`DealCreate` schema each
+# of these feeds into is what actually enforces "must be a number" -- inside the
+# guarded call, where pydantic's own lax coercion still accepts a numeric *string*
+# (e.g. "50" -> 50) and a genuine mismatch becomes rendered guidance instead of a
+# raw dump.
+BoundedLimit = Annotated[
+    int | str,
+    WithJsonSchema({"type": "integer", "minimum": 1, "maximum": 200, "default": 50}),
+]
+OptionalProbabilita = Annotated[
+    int | str | None,
+    WithJsonSchema(
+        {
+            "anyOf": [{"type": "integer", "minimum": 0, "maximum": 100}, {"type": "null"}],
+            "default": None,
+        }
+    ),
+]
+OptionalMoney = Annotated[
+    float | str | None,
+    WithJsonSchema({"anyOf": [{"type": "number"}, {"type": "null"}], "default": None}),
 ]
 
 
@@ -115,10 +151,31 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
     @mcp.tool()
     @guard
     def search_customers(
-        search: str | None = None, stato: str | None = None, limit: int = 50
+        search: str | None = None,
+        stato: str | None = None,
+        custom: dict[str, Any] | None = None,
+        limit: BoundedLimit = 50,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
-        """Cerca clienti per ragione sociale, P.IVA, codice fiscale o email."""
-        return customers.search(context, CustomerListQuery(search=search, stato=stato, limit=limit))
+        """Cerca clienti per ragione sociale, P.IVA, codice fiscale o email.
+        `custom` filtra sui campi personalizzati per uguaglianza esatta (es.
+        {"settore": "IT"}); chiama `describe_schema` per conoscere le chiavi
+        disponibili. Per leggere la pagina successiva passa `next_cursor` come
+        `cursor` nella chiamata seguente.
+        """
+        return customers.search(
+            context,
+            CustomerListQuery(
+                search=search,
+                stato=stato,
+                custom=custom,
+                # cast: limit is `int | str` at runtime for the SDK-bypass reason
+                # documented on BoundedLimit above; the *ListQuery schema this
+                # feeds is what actually enforces (and coerces) "must be an int".
+                limit=cast(int, limit),
+                cursor=UUID(cursor) if cursor else None,
+            ),
+        )
 
     @mcp.tool()
     @guard
@@ -176,15 +233,29 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
     @mcp.tool()
     @guard
     def search_people(
-        search: str | None = None, customer_id: str | None = None, limit: int = 50
+        search: str | None = None,
+        customer_id: str | None = None,
+        custom: dict[str, Any] | None = None,
+        limit: BoundedLimit = 50,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
-        """Cerca persone per nome, cognome o email, opzionalmente entro un cliente."""
+        """Cerca persone per nome, cognome o email, opzionalmente entro un cliente.
+        `custom` filtra sui campi personalizzati per uguaglianza esatta; chiama
+        `describe_schema` per conoscere le chiavi disponibili. Per leggere la
+        pagina successiva passa `next_cursor` come `cursor` nella chiamata
+        seguente.
+        """
         return people.search(
             context,
             PersonListQuery(
                 search=search,
                 customer_id=UUID(customer_id) if customer_id else None,
-                limit=limit,
+                custom=custom,
+                # cast: limit is `int | str` at runtime for the SDK-bypass reason
+                # documented on BoundedLimit above; the *ListQuery schema this
+                # feeds is what actually enforces (and coerces) "must be an int".
+                limit=cast(int, limit),
+                cursor=UUID(cursor) if cursor else None,
             ),
         )
 
@@ -201,12 +272,12 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
     def create_deal(
         nome: str,
         customer_id: str,
-        valore_previsto: float | None = None,
-        probabilita: int | None = None,
+        valore_previsto: OptionalMoney = None,
+        probabilita: OptionalProbabilita = None,
         data_chiusura_prevista: IsoDateStr = None,
         note: str | None = None,
-        ore_preventivate: float | None = None,
-        valore_preventivato: float | None = None,
+        ore_preventivate: OptionalMoney = None,
+        valore_preventivato: OptionalMoney = None,
         custom_fields: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Crea un deal. Il cliente è obbligatorio; lo stato iniziale è il primo della
@@ -246,16 +317,27 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
         search: str | None = None,
         customer_id: str | None = None,
         stage_id: str | None = None,
-        limit: int = 50,
+        custom: dict[str, Any] | None = None,
+        limit: BoundedLimit = 50,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
-        """Cerca deal per nome, cliente o stato di pipeline."""
+        """Cerca deal per nome, cliente o stato di pipeline. `custom` filtra sui
+        campi personalizzati per uguaglianza esatta; chiama `describe_schema` per
+        conoscere le chiavi disponibili. Per leggere la pagina successiva passa
+        `next_cursor` come `cursor` nella chiamata seguente.
+        """
         return deals.search(
             context,
             DealListQuery(
                 search=search,
                 customer_id=UUID(customer_id) if customer_id else None,
                 stage_id=UUID(stage_id) if stage_id else None,
-                limit=limit,
+                custom=custom,
+                # cast: limit is `int | str` at runtime for the SDK-bypass reason
+                # documented on BoundedLimit above; the *ListQuery schema this
+                # feeds is what actually enforces (and coerces) "must be an int".
+                limit=cast(int, limit),
+                cursor=UUID(cursor) if cursor else None,
             ),
         )
 
@@ -283,10 +365,12 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
 
     @mcp.tool()
     @guard
-    def get_timeline(entity_type: EntityType, entity_id: str, limit: int = 50) -> dict[str, Any]:
+    def get_timeline(
+        entity_type: EntityType, entity_id: str, limit: BoundedLimit = 50
+    ) -> dict[str, Any]:
         """Cronologia di un'entità. `actor_type` distingue le azioni umane da quelle di
         un agente."""
         entries = ActivityService(context.session).timeline(
-            entity_type, UUID(entity_id), limit=limit
+            entity_type, UUID(entity_id), limit=cast(int, limit)
         )
         return {"entries": [entry.model_dump(mode="json") for entry in entries]}

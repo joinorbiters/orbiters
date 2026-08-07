@@ -163,6 +163,149 @@ async def test_search_customers_finds_by_free_text(server, mcp_session: Session)
     assert [c["ragione_sociale"] for c in found["items"]] == ["ACME Srl"]
 
 
+# --- Final review item 10 (MINOR): *ListQuery.custom was implemented, GIN- ------
+# --- indexed and service-tested, but no MCP tool passed it. --------------------
+
+
+async def test_search_customers_filters_by_a_custom_field(server, mcp_session: Session) -> None:
+    FieldDefinitionService(mcp_session).create(
+        FieldDefinitionCreate(
+            entity_type="customer", key="settore", label="Settore", field_type="text"
+        ),
+        ADMIN,
+    )
+    async with Client(server) as client:
+        await client.call_tool(
+            "create_customer", {"ragione_sociale": "A", "custom_fields": {"settore": "IT"}}
+        )
+        await client.call_tool(
+            "create_customer", {"ragione_sociale": "B", "custom_fields": {"settore": "Retail"}}
+        )
+        found = _payload(await client.call_tool("search_customers", {"custom": {"settore": "IT"}}))
+
+    assert [c["ragione_sociale"] for c in found["items"]] == ["A"]
+
+
+async def test_search_people_filters_by_a_custom_field(server, mcp_session: Session) -> None:
+    FieldDefinitionService(mcp_session).create(
+        FieldDefinitionCreate(
+            entity_type="person", key="seniority", label="Seniority", field_type="text"
+        ),
+        ADMIN,
+    )
+    async with Client(server) as client:
+        await client.call_tool(
+            "create_person", {"nome": "A", "custom_fields": {"seniority": "senior"}}
+        )
+        await client.call_tool(
+            "create_person", {"nome": "B", "custom_fields": {"seniority": "junior"}}
+        )
+        found = _payload(
+            await client.call_tool("search_people", {"custom": {"seniority": "senior"}})
+        )
+
+    assert [p["nome"] for p in found["items"]] == ["A"]
+
+
+async def test_search_deals_filters_by_a_custom_field(server, mcp_session: Session) -> None:
+    PipelineService(mcp_session).seed_defaults(ADMIN)
+    FieldDefinitionService(mcp_session).create(
+        FieldDefinitionCreate(entity_type="deal", key="fonte", label="Fonte", field_type="text"),
+        ADMIN,
+    )
+    async with Client(server) as client:
+        customer = _payload(await client.call_tool("create_customer", {"ragione_sociale": "ACME"}))
+        await client.call_tool(
+            "create_deal",
+            {"nome": "A", "customer_id": customer["id"], "custom_fields": {"fonte": "referral"}},
+        )
+        await client.call_tool(
+            "create_deal",
+            {"nome": "B", "customer_id": customer["id"], "custom_fields": {"fonte": "outbound"}},
+        )
+        found = _payload(await client.call_tool("search_deals", {"custom": {"fonte": "referral"}}))
+
+    assert [d["nome"] for d in found["items"]] == ["A"]
+
+
+# --- Final review item 7 (IMPORTANT): search tools returned next_cursor but had --
+# --- no way to pass it back in -- an agent could never reach page 2. -----------
+
+
+async def test_search_customers_can_walk_a_second_page_via_cursor(
+    server, mcp_session: Session
+) -> None:
+    """Before this fix, `search_customers` took no `cursor` parameter at all: the
+    SDK silently drops an argument a tool's signature does not declare, so passing
+    `next_cursor` back returned page 1 again, with `is_error=False` -- an agent
+    could never reach a record beyond the first page, and nothing in the response
+    said so."""
+    async with Client(server) as client:
+        for index in range(3):
+            await client.call_tool("create_customer", {"ragione_sociale": f"Cliente {index:02d}"})
+
+        first = _payload(await client.call_tool("search_customers", {"limit": 2}))
+        assert len(first["items"]) == 2
+        assert first["next_cursor"] is not None
+
+        second = _payload(
+            await client.call_tool("search_customers", {"limit": 2, "cursor": first["next_cursor"]})
+        )
+
+    first_ids = {c["id"] for c in first["items"]}
+    second_ids = {c["id"] for c in second["items"]}
+    assert second_ids, "the second page must not be empty"
+    assert first_ids.isdisjoint(second_ids), "the second page must reach records page 1 lacked"
+
+
+async def test_search_people_can_walk_a_second_page_via_cursor(server) -> None:
+    async with Client(server) as client:
+        for index in range(3):
+            await client.call_tool("create_person", {"nome": f"Persona {index:02d}"})
+
+        first = _payload(await client.call_tool("search_people", {"limit": 2}))
+        second = _payload(
+            await client.call_tool("search_people", {"limit": 2, "cursor": first["next_cursor"]})
+        )
+
+    first_ids = {p["id"] for p in first["items"]}
+    second_ids = {p["id"] for p in second["items"]}
+    assert second_ids
+    assert first_ids.isdisjoint(second_ids)
+
+
+async def test_search_deals_can_walk_a_second_page_via_cursor(server, mcp_session: Session) -> None:
+    PipelineService(mcp_session).seed_defaults(ADMIN)
+    async with Client(server) as client:
+        customer = _payload(await client.call_tool("create_customer", {"ragione_sociale": "ACME"}))
+        for index in range(3):
+            await client.call_tool(
+                "create_deal", {"nome": f"Deal {index:02d}", "customer_id": customer["id"]}
+            )
+
+        first = _payload(await client.call_tool("search_deals", {"limit": 2}))
+        second = _payload(
+            await client.call_tool("search_deals", {"limit": 2, "cursor": first["next_cursor"]})
+        )
+
+    first_ids = {d["id"] for d in first["items"]}
+    second_ids = {d["id"] for d in second["items"]}
+    assert second_ids
+    assert first_ids.isdisjoint(second_ids)
+
+
+async def test_search_customers_with_a_malformed_cursor_produces_guidance_not_a_crash(
+    server,
+) -> None:
+    async with Client(server) as client:
+        result = await client.call_tool("search_customers", {"cursor": "not-a-uuid"})
+
+    assert result.is_error
+    message = result.content[0].text
+    assert "errors.pydantic.dev" not in message
+    assert "cerca" in message.lower()
+
+
 async def test_archive_customer_is_reversible_and_blocks_on_active_deals(
     server, mcp_session: Session
 ) -> None:
@@ -319,6 +462,80 @@ async def test_a_limit_out_of_range_produces_guidance_naming_the_range(
     assert "errors.pydantic.dev" not in message
     assert "200" in message
     assert "Valore atteso" in message
+
+
+# --- Final review item 9 (IMPORTANT): the remaining wrong-TYPE scalars still ---
+# --- leaked pydantic internals -- a wrong value on `limit` was already fixed  ---
+# --- (Task 17), but a wrong *type* on `limit`/`probabilita`/the money fields  ---
+# --- bypassed the guard entirely, at the SDK's own pre-call argument coercion. --
+
+
+async def test_a_wrong_typed_limit_produces_guidance_not_a_raw_pydantic_dump(
+    server, mcp_session: Session
+) -> None:
+    """The exact reproduction named in the review: before BoundedLimit existed,
+    this came back as a raw, multi-line, English pydantic dump carrying an
+    errors.pydantic.dev link, because the SDK's own pre-call coercion for a bare
+    `limit: int` parameter rejected "molti" before `_guard` ever ran."""
+    async with Client(server) as client:
+        result = await client.call_tool("search_customers", {"limit": "molti"})
+
+    assert result.is_error
+    message = result.content[0].text
+    assert "errors.pydantic.dev" not in message
+    assert "limit" in message
+    assert "Valore atteso" in message
+
+
+async def test_a_wrong_typed_probabilita_on_create_deal_produces_guidance(
+    server, mcp_session: Session
+) -> None:
+    PipelineService(mcp_session).seed_defaults(ADMIN)
+    async with Client(server) as client:
+        customer = _payload(await client.call_tool("create_customer", {"ragione_sociale": "ACME"}))
+        result = await client.call_tool(
+            "create_deal",
+            {"nome": "X", "customer_id": customer["id"], "probabilita": "molto alta"},
+        )
+
+    assert result.is_error
+    message = result.content[0].text
+    assert "errors.pydantic.dev" not in message
+    assert "probabilita" in message
+
+
+async def test_a_wrong_typed_money_field_on_create_deal_produces_guidance(
+    server, mcp_session: Session
+) -> None:
+    PipelineService(mcp_session).seed_defaults(ADMIN)
+    async with Client(server) as client:
+        customer = _payload(await client.call_tool("create_customer", {"ragione_sociale": "ACME"}))
+        result = await client.call_tool(
+            "create_deal",
+            {"nome": "X", "customer_id": customer["id"], "valore_previsto": "un sacco"},
+        )
+
+    assert result.is_error
+    message = result.content[0].text
+    assert "errors.pydantic.dev" not in message
+    assert "valore_previsto" in message
+
+
+async def test_create_deal_still_accepts_a_normal_numeric_probabilita(
+    server, mcp_session: Session
+) -> None:
+    """The permissive `int | str` type must not regress the ordinary path."""
+    PipelineService(mcp_session).seed_defaults(ADMIN)
+    async with Client(server) as client:
+        customer = _payload(await client.call_tool("create_customer", {"ragione_sociale": "ACME"}))
+        deal = _payload(
+            await client.call_tool(
+                "create_deal",
+                {"nome": "X", "customer_id": customer["id"], "probabilita": 42},
+            )
+        )
+
+    assert deal["probabilita"] == 42
 
 
 # --- Final review item 5 (CRITICAL): get_timeline's limit was unbounded, unlike --
