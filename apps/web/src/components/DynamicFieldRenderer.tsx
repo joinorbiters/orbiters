@@ -5,6 +5,7 @@ import {
   Select,
   SelectContent,
   SelectItem,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
@@ -19,6 +20,20 @@ interface Props {
 }
 
 const EMPTY = '—'
+
+/** The value carried by the `select` control's "back to empty" entry.
+ *
+ *  Radix's `Select` refuses an item whose `value` is the empty string — that string
+ *  is reserved for "nothing is selected", which is how the placeholder is shown at
+ *  all — so the clear entry has to carry *some* other string, and that string must be
+ *  one no tenant-defined option can ever equal, or picking a legitimate option would
+ *  silently clear the field instead of setting it. A single NUL byte is provably
+ *  that: `FieldDefinitionCreate.options` is `list[SafeStr]`
+ *  (packages/core/src/pigrocrm/core/validation.py), and `SafeStr` rejects any string
+ *  containing "\x00" outright, so this value is unreachable through the only API that
+ *  can define an option. It never leaves this component either — `onValueChange`
+ *  below maps it back to `null` before anything else sees it. */
+const CLEAR_OPTION = '\u0000'
 
 /** Shared by both the label above a control and the label beside a checkbox. Always
  *  the semantic `destructive` token (the AA-compliant Watermelon variant every
@@ -106,7 +121,19 @@ export function DynamicFieldRenderer({ field, value, onChange, error }: Props) {
             )
           case 'select':
             return (
-              <Select value={(value as string) ?? ''} onValueChange={onChange}>
+              // The listbox has to offer a way back to empty, not only the defined
+              // options: a `select` that has been set once is otherwise impossible to
+              // clear anywhere in the UI, and the backend has no problem clearing one
+              // (a custom field's key sent as `null` removes it -- confirmed against
+              // the running API). The clear entry is offered unconditionally, on a
+              // required field too: refusing it here would be a client-side
+              // re-implementation of a rule the server already owns, and a required
+              // field cleared this way comes back as the server's own "campo
+              // obbligatorio" on this very control.
+              <Select
+                value={(value as string) ?? ''}
+                onValueChange={(next) => onChange(next === CLEAR_OPTION ? null : next)}
+              >
                 <SelectTrigger id={id} aria-invalid={invalid} className="w-full">
                   <SelectValue placeholder="Seleziona…" />
                 </SelectTrigger>
@@ -116,6 +143,8 @@ export function DynamicFieldRenderer({ field, value, onChange, error }: Props) {
                       {option}
                     </SelectItem>
                   ))}
+                  <SelectSeparator />
+                  <SelectItem value={CLEAR_OPTION}>Nessuna selezione</SelectItem>
                 </SelectContent>
               </Select>
             )

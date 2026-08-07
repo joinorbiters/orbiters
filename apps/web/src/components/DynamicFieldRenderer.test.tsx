@@ -57,6 +57,39 @@ describe('DynamicFieldRenderer', () => {
     expect(screen.getByText('sospeso')).toBeInTheDocument()
   })
 
+  /** A select that has been set once used to be impossible to unset: the listbox
+   *  offered only the defined options and there was no other way back to empty
+   *  anywhere in the UI. The backend has no such problem -- a custom field's key sent
+   *  as `null` removes it (confirmed against the running API) -- so this was purely a
+   *  missing control. */
+  it('offers a way back to empty and reports it as null', async () => {
+    const onChange = vi.fn()
+    render(
+      <DynamicFieldRenderer
+        field={field({ type: 'select', options: ['attivo', 'sospeso'] })}
+        value="attivo"
+        onChange={onChange}
+      />,
+    )
+    await userEvent.click(screen.getByRole('combobox'))
+    await userEvent.click(screen.getByRole('option', { name: 'Nessuna selezione' }))
+    expect(onChange).toHaveBeenCalledWith(null)
+  })
+
+  it('still reports a real option as itself, never as the clear sentinel', async () => {
+    const onChange = vi.fn()
+    render(
+      <DynamicFieldRenderer
+        field={field({ type: 'select', options: ['attivo', 'sospeso'] })}
+        value={null}
+        onChange={onChange}
+      />,
+    )
+    await userEvent.click(screen.getByRole('combobox'))
+    await userEvent.click(screen.getByRole('option', { name: 'sospeso' }))
+    expect(onChange).toHaveBeenCalledWith('sospeso')
+  })
+
   it('reports edits through onChange', async () => {
     const onChange = vi.fn()
     render(<DynamicFieldRenderer field={field({})} value={null} onChange={onChange} />)
