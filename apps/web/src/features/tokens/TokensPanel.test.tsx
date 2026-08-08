@@ -5,18 +5,19 @@ import { toast } from 'sonner'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TokensPanel } from './TokensPanel'
 import { api } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
+import { useBlocker } from '@tanstack/react-router'
 
-// Keeps the real `unwrap`/`toProblem` (lib/api.ts), only replacing `api.GET/
-// POST/DELETE/PATCH` themselves -- unlike the task brief's own sample (a blanket
-// `unwrap: vi.fn().mockResolvedValue(...)`), this lets later tests in this file
-// express a create call that actually returns the one-time `CreatedToken.token`,
-// and a failed call with a real status, which a fixed `unwrap` mock cannot do.
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return { ...actual, api: { GET: vi.fn(), POST: vi.fn(), DELETE: vi.fn(), PATCH: vi.fn() } }
 })
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
-vi.mock('@/lib/auth', () => ({ useAuth: () => ({ user: { ruolo: 'admin' } }) }))
+vi.mock('@/lib/auth', () => ({ useAuth: vi.fn() }))
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-router')>()
+  return { ...actual, useBlocker: vi.fn() }
+})
 
 function ok(data: unknown) {
   return { data, response: new Response(null, { status: 200 }) } as never
@@ -44,12 +45,40 @@ function renderPanel() {
   )
 }
 
+/**
+ * `useBlocker`'s real type is a three-way overload (current object form, plus
+ * two deprecated ones) purely for the library's own backward compatibility --
+ * this file only ever calls it one way, so asserting that shape directly is
+ * more honest than fighting the overload set to make TS re-derive it, the
+ * same idiom `features/deals/queries.test.tsx`'s own `ok`/`failed` helpers
+ * use for an unrelated overloaded function.
+ */
+interface BlockerCallArgs {
+  shouldBlockFn: (args?: unknown) => boolean | Promise<boolean>
+  enableBeforeUnload: boolean
+}
+
+/** The most recent `shouldBlockFn`/`enableBeforeUnload` this render passed to
+ *  `useBlocker` -- the one the router would actually consult right now. */
+function latestBlockerArgs(): BlockerCallArgs {
+  const call = vi.mocked(useBlocker).mock.calls.at(-1)?.[0] as BlockerCallArgs | undefined
+  if (!call?.shouldBlockFn) throw new Error('useBlocker was not called as expected')
+  return call
+}
+
 beforeEach(() => {
   vi.mocked(api.GET).mockReset()
   vi.mocked(api.POST).mockReset()
   vi.mocked(api.DELETE).mockReset()
   vi.mocked(toast.error).mockReset()
   vi.mocked(toast.success).mockReset()
+  vi.mocked(useBlocker).mockClear()
+  vi.mocked(useAuth).mockReturnValue({
+    user: { id: 'u1', email: 'admin@pigro.it', nome: 'Admin', ruolo: 'admin', attivo: true },
+    isLoading: false,
+    login: vi.fn(),
+    logout: vi.fn(),
+  })
   Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } })
 })
 
@@ -60,12 +89,6 @@ describe('TokensPanel', () => {
     expect(await screen.findByText(/MCP/i)).toBeInTheDocument()
   })
 
-  /**
-   * The brief's own text already says this once ("un token creato da un
-   * amministratore..."); this proves it is not merely a passing remark that
-   * could get edited away, but survives as a real assertion tied to the exact
-   * fact this task called out: no scope, no expiry, full role inheritance.
-   */
   it('states plainly that a token carries its owner’s full role, with no scope and no expiry', async () => {
     vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([])))
     renderPanel()
@@ -92,6 +115,28 @@ describe('TokensPanel', () => {
     renderPanel()
     expect(await screen.findByRole('alert')).toHaveTextContent('Il server non risponde.')
     expect(screen.queryByRole('table')).not.toBeInTheDocument()
+  })
+
+  /**
+   * `useTokens` is mounted the moment this route's guard (`routes/app.tsx`)
+   * has already resolved a real user, so this state is not expected to be
+   * reachable in production -- but the whole point of `enabled: Boolean
+   * (userId)` (features/tokens/queries.ts) is that a future regression here
+   * fails closed (no request, `queryKeys.tokens('')`, never fetched) rather
+   * than open (a live `GET /api/tokens` under an empty-id cache key).
+   */
+  it('never fetches with an empty user id', async () => {
+    vi.mocked(useAuth).mockReturnValue({
+      user: null,
+      isLoading: false,
+      login: vi.fn(),
+      logout: vi.fn(),
+    })
+    vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([])))
+    renderPanel()
+
+    await screen.findByRole('button', { name: /nuovo token/i })
+    expect(api.GET).not.toHaveBeenCalled()
   })
 
   describe('creating a token — the one-time reveal', () => {
@@ -131,20 +176,10 @@ describe('TokensPanel', () => {
     it('lets the value be copied to the clipboard', async () => {
       await createToken()
       await screen.findByDisplayValue('pgc_the-entire-raw-secret-value')
-
       await userEvent.click(screen.getByRole('button', { name: /copia il token/i }))
-
       expect(navigator.clipboard.writeText).toHaveBeenCalledWith('pgc_the-entire-raw-secret-value')
     })
 
-    /**
-     * The exact requirement this task calls out: the plaintext is gone forever
-     * once this dialog closes (the server stores only a hash -- `PatService.
-     * create`'s own comment), so losing it to a stray Escape press or an
-     * outside click would be a silent, unrecoverable data loss with no error to
-     * even signal it happened. Both standard Radix dismissal paths are checked
-     * here, not just one, since either alone dismisses an ordinary Dialog.
-     */
     it('cannot be dismissed with Escape or by clicking outside — only the explicit button closes it', async () => {
       await createToken()
       const secret = await screen.findByDisplayValue('pgc_the-entire-raw-secret-value')
@@ -152,18 +187,54 @@ describe('TokensPanel', () => {
       await userEvent.keyboard('{Escape}')
       expect(screen.getByDisplayValue('pgc_the-entire-raw-secret-value')).toBeInTheDocument()
 
-      // Radix's Dialog sets `pointer-events: none` on `<body>` while open (real
-      // scroll-lock behaviour, visible in the rendered DOM), which makes
-      // `userEvent.click` refuse to target it at all -- correctly, for a real
-      // click, but beside the point here. Radix's own "outside" detection
-      // listens for a raw `pointerdown` on `document`, which `fireEvent`
-      // dispatches directly without user-event's CSS hit-testing, so this is
-      // the one interaction that actually exercises `onPointerDownOutside`.
+      // Radix's Dialog sets `pointer-events: none` on <body> while open, which
+      // makes userEvent.click refuse to target it (correctly, for a real
+      // click) -- fireEvent dispatches the raw pointerdown Radix's own
+      // "outside" detection listens for, without that CSS hit-test.
       fireEvent.pointerDown(document.body)
       expect(screen.getByDisplayValue('pgc_the-entire-raw-secret-value')).toBeInTheDocument()
 
       await userEvent.click(screen.getByRole('button', { name: /ho (copiato|salvato)/i }))
       await waitFor(() => expect(secret).not.toBeInTheDocument())
+    })
+
+    /**
+     * The fourth fix-round item: Escape/click-outside are not the only ways
+     * to lose this value. `useBlocker`'s `shouldBlockFn` is what stands
+     * between an accidental Back/Link click and a silently vanished secret;
+     * this exercises the actual function this component hands the router,
+     * not merely that `useBlocker` was called with *something*.
+     */
+    it('asks useBlocker to block leaving while the token is unconfirmed, and to allow it once the user says so', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(false)
+      await createToken()
+
+      const { shouldBlockFn, enableBeforeUnload } = latestBlockerArgs()
+      expect(enableBeforeUnload).toBe(true)
+      expect(await shouldBlockFn({} as never)).toBe(true) // user cancelled leaving -> block
+
+      vi.mocked(window.confirm).mockReturnValue(true)
+      expect(await shouldBlockFn({} as never)).toBe(false) // user confirmed leaving -> allow
+    })
+
+    it('does not ask to block leaving when no token is currently unconfirmed', async () => {
+      vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([])))
+      renderPanel()
+      await screen.findByRole('button', { name: /nuovo token/i })
+
+      const { shouldBlockFn, enableBeforeUnload } = latestBlockerArgs()
+      expect(enableBeforeUnload).toBe(false)
+      expect(await shouldBlockFn({} as never)).toBe(false)
+    })
+
+    it('stops blocking once the reveal dialog is closed through the explicit button', async () => {
+      await createToken()
+      await screen.findByDisplayValue('pgc_the-entire-raw-secret-value')
+      await userEvent.click(screen.getByRole('button', { name: /ho (copiato|salvato)/i }))
+
+      const { shouldBlockFn, enableBeforeUnload } = latestBlockerArgs()
+      expect(enableBeforeUnload).toBe(false)
+      expect(await shouldBlockFn({} as never)).toBe(false)
     })
   })
 

@@ -16,7 +16,7 @@ vi.mock('@/lib/auth', () => ({
 describe('AppShell', () => {
   it('shows the main navigation in Italian', () => {
     render(<AppShell><div /></AppShell>)
-    for (const label of ['Dashboard', 'Clienti', 'Persone', 'Deal']) {
+    for (const label of ['Dashboard', 'Clienti', 'Persone', 'Deal', 'Token']) {
       expect(screen.getByText(label)).toBeInTheDocument()
     }
   })
@@ -31,6 +31,19 @@ describe('AppShell', () => {
     mockAuth.ruolo = 'collaboratore'
     render(<AppShell><div /></AppShell>)
     expect(screen.queryByText('Impostazioni')).not.toBeInTheDocument()
+  })
+
+  /**
+   * A personal access token is not an admin setting -- `PatService` scopes it
+   * by `actor.id`, not role -- so unlike Impostazioni, this entry must survive
+   * for every role. Checked for both non-admin roles the backend has, not
+   * just one, since "collaboratore" and "readonly" are two different guard
+   * checks that could each independently regress.
+   */
+  it.each(['collaboratore', 'readonly'])('shows Token to a %s, not just to an admin', (ruolo) => {
+    mockAuth.ruolo = ruolo
+    render(<AppShell><div /></AppShell>)
+    expect(screen.getByText('Token')).toBeInTheDocument()
   })
 
   it('renders its children', () => {

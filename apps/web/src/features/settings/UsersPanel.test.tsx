@@ -5,12 +5,18 @@ import { toast } from 'sonner'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { UsersPanel } from './UsersPanel'
 import { api } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return { ...actual, api: { GET: vi.fn(), POST: vi.fn(), DELETE: vi.fn(), PATCH: vi.fn() } }
 })
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
+vi.mock('@/lib/auth', () => ({ useAuth: vi.fn() }))
+
+function sessionAs(user: { id: string; ruolo: string } | null) {
+  return { user, isLoading: false, login: vi.fn(), logout: vi.fn() } as never
+}
 
 function ok(data: unknown) {
   return { data, response: new Response(null, { status: 200 }) } as never
@@ -38,6 +44,15 @@ const DISABLED_USER = {
   created_at: '2026-08-01T10:00:00Z',
 }
 
+const OTHER_ACTIVE_USER = {
+  id: 'u3',
+  email: 'altro@pigro.it',
+  nome: 'Altro Utente',
+  ruolo: 'collaboratore' as const,
+  attivo: true,
+  created_at: '2026-08-01T10:00:00Z',
+}
+
 function renderPanel() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
@@ -53,6 +68,10 @@ beforeEach(() => {
   vi.mocked(api.PATCH).mockReset()
   vi.mocked(toast.error).mockReset()
   vi.mocked(toast.success).mockReset()
+  // Not one of the users any fixture below represents -- tests that care who
+  // "you" are override this explicitly, so a test that doesn't is provably
+  // exercising the not-self path, not passing by accident.
+  vi.mocked(useAuth).mockReturnValue(sessionAs({ id: 'someone-else', ruolo: 'admin' }))
 })
 
 describe('UsersPanel', () => {
@@ -155,5 +174,85 @@ describe('UsersPanel', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Crea' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('esiste già un utente con questa email')
+  })
+
+  /**
+   * Fix-round item 3's second half: the PATCH itself succeeding is not what
+   * used to lie. `useUpdateUser` used to invalidate the list and trust a
+   * second `GET /api/users` to also succeed before the screen could be
+   * trusted -- deactivating your own account kills the session the moment
+   * the PATCH commits, so that second request came back 401 and `DataTable`
+   * (by design) kept showing the stale "Attivo" row next to a toast that had
+   * already promised the opposite. Writing the mutation's own response
+   * straight into the cache removes the second, independently-failable
+   * request entirely -- asserting `api.GET` was called exactly once is what
+   * proves that, not merely that the row happens to show the right text.
+   */
+  it('updates the row from the mutation’s own response, with no second request that could independently fail', async () => {
+    vi.mocked(api.GET).mockReturnValueOnce(Promise.resolve(ok([OTHER_ACTIVE_USER])))
+    vi.mocked(api.PATCH).mockReturnValueOnce(
+      Promise.resolve(ok({ ...OTHER_ACTIVE_USER, attivo: false })),
+    )
+    renderPanel()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Disattiva' }))
+
+    expect(await screen.findByText('Disattivato')).toBeInTheDocument()
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Utente disattivato'))
+    expect(api.GET).toHaveBeenCalledTimes(1)
+  })
+
+  it('changes another user’s role through the real endpoint', async () => {
+    vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([OTHER_ACTIVE_USER])))
+    vi.mocked(api.PATCH).mockReturnValueOnce(
+      Promise.resolve(ok({ ...OTHER_ACTIVE_USER, ruolo: 'admin' })),
+    )
+    renderPanel()
+
+    await userEvent.click(await screen.findByRole('combobox', { name: /ruolo di altro utente/i }))
+    await userEvent.click(screen.getByRole('option', { name: 'Amministratore' }))
+
+    await waitFor(() =>
+      expect(api.PATCH).toHaveBeenCalledWith(
+        '/api/users/{user_id}',
+        expect.objectContaining({
+          params: { path: { user_id: 'u3' } },
+          body: { ruolo: 'admin' },
+        }),
+      ),
+    )
+  })
+
+  /**
+   * Fix-round item 3's first half: with a single admin, self-deactivation
+   * bricks the installation (recovery needs the `createadmin` CLI). Disabling
+   * the control is cheap and rules the whole class out at the one place a
+   * click could start it.
+   */
+  describe('acting on your own account', () => {
+    it('disables "Disattiva" for your own row', async () => {
+      vi.mocked(useAuth).mockReturnValue(sessionAs({ id: ADMIN.id, ruolo: 'admin' }))
+      vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([ADMIN])))
+      renderPanel()
+
+      expect(await screen.findByRole('button', { name: 'Disattiva' })).toBeDisabled()
+    })
+
+    it('still allows deactivating someone else', async () => {
+      vi.mocked(useAuth).mockReturnValue(sessionAs({ id: ADMIN.id, ruolo: 'admin' }))
+      vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([ADMIN, OTHER_ACTIVE_USER])))
+      renderPanel()
+
+      const buttons = await screen.findAllByRole('button', { name: 'Disattiva' })
+      expect(buttons.some((button) => !button.hasAttribute('disabled'))).toBe(true)
+    })
+
+    it('disables the role selector for your own row too, so you cannot demote yourself out of this screen', async () => {
+      vi.mocked(useAuth).mockReturnValue(sessionAs({ id: ADMIN.id, ruolo: 'admin' }))
+      vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([ADMIN])))
+      renderPanel()
+
+      expect(await screen.findByRole('combobox', { name: /ruolo di ada admin/i })).toBeDisabled()
+    })
   })
 })
