@@ -225,6 +225,41 @@ describe('DealForm', () => {
       expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
     })
 
+    /**
+     * A fix-round defect: `isCreate` used to gate only the JSX, while
+     * `useCustomers({limit: 200})` itself ran unconditionally at `DealForm`'s
+     * own top level -- so every deal detail page (which mounts `DealForm`
+     * behind `open={false}` for as long as it is simply being viewed) fired
+     * a `GET /api/customers?limit=200` nobody could ever see the result of.
+     * The picker is now its own component (`CustomerPicker`), mounted -- and
+     * therefore only ever calling `useCustomers` -- inside the same
+     * `{isCreate && ...}` branch the previous test already covers visually;
+     * this test covers the network side of the identical branch.
+     */
+    it('does not fetch the customer list while editing -- the picker is not rendered there', () => {
+      renderWithClient(
+        <DealForm
+          title="Modifica deal"
+          open
+          onOpenChange={vi.fn()}
+          customFields={[]}
+          initial={dealToFormValues(BASE_DEAL)}
+          onSubmit={vi.fn()}
+        />,
+      )
+      expect(mockGet).not.toHaveBeenCalled()
+    })
+
+    it('does fetch the customer list on create -- there is a picker to fill', () => {
+      renderWithClient(
+        <DealForm title="Nuovo deal" open onOpenChange={vi.fn()} customFields={[]} onSubmit={vi.fn()} />,
+      )
+      expect(mockGet).toHaveBeenCalledWith(
+        '/api/customers',
+        expect.objectContaining({ params: expect.objectContaining({ query: expect.objectContaining({ limit: 200 }) }) }),
+      )
+    })
+
     it('omits customer_id on create when none was chosen, adding no client-side gate of its own', async () => {
       const onSubmit = vi.fn()
       renderWithClient(

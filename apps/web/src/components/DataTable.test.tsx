@@ -59,6 +59,49 @@ describe('DataTable', () => {
     expect(screen.getByText('Nessun cliente trovato.')).toBeInTheDocument()
   })
 
+  /**
+   * The defect a fix round caught live on Clienti, Persone and Deal alike: a
+   * failed list request rendered the exact same "Nessun risultato." row an
+   * honestly-empty result gets, with nothing on screen distinguishing "you
+   * have none" from "we could not ask". `isError`/`error` exist to make the
+   * second claim a visibly different shape, the same way `isLoading` already
+   * is -- not a text swap inside the same row.
+   */
+  it('shows the failed request as a distinct banner, not the same shape an empty result gets', () => {
+    const error = { code: 'http_error', detail: 'Il server non risponde.', status: 503 }
+    render(<DataTable columns={COLUMNS} data={[]} isError error={error} />)
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('Il server non risponde.')
+    expect(screen.queryByText('Nessun risultato.')).not.toBeInTheDocument()
+  })
+
+  it('uses the server’s own message in the failed-request banner, not a client-side rewording', () => {
+    const error = { code: 'not_found', detail: 'cliente 123 non trovato' }
+    render(<DataTable columns={COLUMNS} data={[]} isError error={error} />)
+    expect(screen.getByRole('alert')).toHaveTextContent('cliente 123 non trovato')
+  })
+
+  /**
+   * A background refetch can fail while a previous, successful page is still
+   * cached (`data` non-empty even though `isError` is true) -- this must keep
+   * showing that stale-but-real data, not discard it for a banner over one
+   * transient blip. Only the "nothing else to show" case (the test above)
+   * should replace the table at all.
+   */
+  it('keeps showing already-loaded rows instead of a banner when a background refetch fails', () => {
+    render(
+      <DataTable
+        columns={COLUMNS}
+        data={DATA}
+        isError
+        error={{ code: 'http_error', detail: 'Aggiornamento fallito.' }}
+      />,
+    )
+    expect(screen.getByRole('table')).toBeInTheDocument()
+    expect(screen.getByText('ACME Srl')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
   it('calls onRowClick with the original row datum, not a table-internal wrapper', async () => {
     const onRowClick = vi.fn()
     render(<DataTable columns={COLUMNS} data={DATA} onRowClick={onRowClick} />)

@@ -117,6 +117,59 @@ function isBlank(value: unknown): boolean {
   return false
 }
 
+/**
+ * Split out of `DealForm` so `useCustomers` is only ever mounted -- and
+ * therefore only ever called -- while this picker is actually rendered, i.e.
+ * only on create. `DealForm` stays mounted across every dialog open/close
+ * (see the `wasOpen` reset pattern below) and, on the detail route, sits
+ * behind `open={false}` for as long as the page is simply being *viewed* --
+ * before this split, `isCreate` gated only the JSX, so `useCustomers({limit:
+ * 200})` still ran unconditionally and fired a `GET /api/customers?limit=200`
+ * on every single deal detail page view, for a dropdown nobody could see or
+ * use there. Conditionally *rendering* this component, rather than
+ * conditionally *calling* the hook inside the parent, is the same fix
+ * `features/people/$personId.tsx`'s `LinkedCustomerRow` applies for a
+ * different reason (an unsafe empty id there; a wasted request here) --
+ * `DealForm` itself needs no change beyond mounting this only inside
+ * `{isCreate && ...}`.
+ */
+function CustomerPicker({
+  value,
+  onChange,
+}: {
+  value: string
+  onChange: (value: string) => void
+}) {
+  // `limit: 200` mirrors `PersonForm`'s identical picker -- a one-shot cap for
+  // a dropdown, not a paginated list of its own; see that file's own comment.
+  const customers = useCustomers({ limit: 200 })
+
+  return (
+    <div className="space-y-2">
+      <Label htmlFor="deal-customer">
+        Cliente
+        {/* The semantic `destructive` token, matching DynamicFieldRenderer.
+            tsx's own `RequiredMark` -- never the raw brand `--color-
+            watermelon`, which that component's docstring reserves for
+            logos/decorative accents, not small body text like this. */}
+        <span className="ml-1 text-destructive">*</span>
+      </Label>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger id="deal-customer" className="w-full">
+          <SelectValue placeholder="Seleziona un cliente…" />
+        </SelectTrigger>
+        <SelectContent>
+          {customers.data?.items.map((customer) => (
+            <SelectItem key={customer.id} value={customer.id}>
+              {customer.ragione_sociale}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  )
+}
+
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -145,9 +198,6 @@ export function DealForm({
   // "which DynamicForm mode" decision can never disagree with each other or with
   // what `initial` actually says.
   const isCreate = initial === undefined
-  // `limit: 200` mirrors `PersonForm`'s identical picker -- a one-shot cap for a
-  // dropdown, not a paginated list of its own; see that file's own comment.
-  const customers = useCustomers({ limit: 200 })
 
   // Same "reset synchronously when `open` toggles" pattern as `CustomerForm`/
   // `PersonForm`, for the identical reason: this component stays mounted across
@@ -239,31 +289,10 @@ export function DealForm({
         </DialogHeader>
 
         {isCreate && (
-          <div className="space-y-2">
-            <Label htmlFor="deal-customer">
-              Cliente
-              {/* The semantic `destructive` token, matching DynamicFieldRenderer.
-                  tsx's own `RequiredMark` -- never the raw brand `--color-
-                  watermelon`, which that component's docstring reserves for
-                  logos/decorative accents, not small body text like this. */}
-              <span className="ml-1 text-destructive">*</span>
-            </Label>
-            <Select
-              value={(values.native.customer_id as string) ?? ''}
-              onValueChange={(value) => change('customer_id', value)}
-            >
-              <SelectTrigger id="deal-customer" className="w-full">
-                <SelectValue placeholder="Seleziona un cliente…" />
-              </SelectTrigger>
-              <SelectContent>
-                {customers.data?.items.map((customer) => (
-                  <SelectItem key={customer.id} value={customer.id}>
-                    {customer.ragione_sociale}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          <CustomerPicker
+            value={(values.native.customer_id as string) ?? ''}
+            onChange={(value) => change('customer_id', value)}
+          />
         )}
 
         <DynamicForm

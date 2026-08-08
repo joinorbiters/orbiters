@@ -55,6 +55,8 @@ function DealsList() {
         columns={columns}
         data={deals.data?.items ?? []}
         isLoading={deals.isLoading}
+        isError={deals.isError}
+        error={deals.error}
         onRowClick={(row) => void navigate({ to: '/app/deal/$dealId', params: { dealId: row.id } })}
         emptyMessage="Nessun deal."
       />
