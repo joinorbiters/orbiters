@@ -2,6 +2,7 @@ import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { List, Plus } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { QueryErrorBanner } from '@/components/QueryErrorBanner'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { DealForm } from '@/features/deals/DealForm'
@@ -47,6 +48,19 @@ function DealsKanban() {
 
   if (stages.isLoading || deals.isLoading) return <Skeleton className="m-8 h-96" />
 
+  // `KanbanBoard` has no `DataTable` underneath it to fall back on, so it needs
+  // its own version of the same check `DataTable`'s own `isError` prop makes:
+  // a failed fetch with nothing usable cached must not render as "an empty
+  // pipeline" (every column at 0 / 0,00 €, five "Nessun deal") -- see
+  // `QueryErrorBanner`'s own docstring for the live defect this closes. Checked
+  // against actual data length, not the bare `isError` flag alone, for the
+  // identical reason `DataTable` does: a background refetch failing while a
+  // previous, successful load is still cached should keep showing that board,
+  // not replace it with a banner over one transient blip.
+  const stagesUnavailable = stages.isError && (stages.data?.length ?? 0) === 0
+  const dealsUnavailable = deals.isError && (deals.data?.items.length ?? 0) === 0
+  const boardUnavailable = stagesUnavailable || dealsUnavailable
+
   return (
     <div className="p-8">
       <header className="mb-6 flex items-center justify-between">
@@ -72,30 +86,29 @@ function DealsKanban() {
         </div>
       </header>
 
-      {deals.data?.truncated && <TruncatedNotice scope="dalla board e dai totali per colonna" />}
+      {boardUnavailable ? (
+        <QueryErrorBanner error={stagesUnavailable ? stages.error : deals.error} />
+      ) : (
+        <>
+          {deals.data?.truncated && <TruncatedNotice scope="dalla board e dai totali per colonna" />}
 
-      <KanbanBoard
-        stages={stages.data ?? []}
-        deals={deals.data?.items ?? []}
-        canDrag={canWrite}
-        onOpen={(dealId) => void navigate({ to: '/app/deal/$dealId', params: { dealId } })}
-        onMove={(dealId, stageId) =>
-          move.mutate(
-            { dealId, stageId },
-            {
-              // The optimistic move already happened in the cache (see
-              // `useMoveDeal`'s own docstring) and, on this same error, has
-              // already been rolled back -- this is only the half of "make a
-              // failed move visible" this hook cannot do itself: putting the
-              // server's own message in front of the user. Verified live: see
-              // task-8-report.md for the exact reproduction (a soft-deleted
-              // deal's card, dragged from a stale board, 404s with "deal <id>
-              // not found" and the toast shows exactly that).
-              onError: (error) => toast.error(toProblem(error).detail),
-            },
-          )
-        }
-      />
+          <KanbanBoard
+            stages={stages.data ?? []}
+            deals={deals.data?.items ?? []}
+            canDrag={canWrite}
+            onOpen={(dealId) => void navigate({ to: '/app/deal/$dealId', params: { dealId } })}
+            // No per-call `onError` here: `useMoveDeal` itself toasts the
+            // server's message on its own mutation-level `onError`, precisely
+            // so a second drag started before the first one settles cannot
+            // make the first call's callback disappear -- see that hook's own
+            // docstring for the `@tanstack/query-core` mechanics and the live
+            // reproduction (a soft-deleted deal's card, dragged from a stale
+            // board, 404s with "deal <id> not found" and the toast shows
+            // exactly that).
+            onMove={(dealId, stageId) => move.mutate({ dealId, stageId })}
+          />
+        </>
+      )}
 
       <DealForm
         title="Nuovo deal"

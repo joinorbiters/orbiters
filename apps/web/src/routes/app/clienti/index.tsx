@@ -60,6 +60,8 @@ function CustomersPage() {
         columns={columns}
         data={customers.data?.items ?? []}
         isLoading={customers.isLoading}
+        isError={customers.isError}
+        error={customers.error}
         onRowClick={(row) =>
           void navigate({ to: '/app/clienti/$customerId', params: { customerId: row.id } })
         }

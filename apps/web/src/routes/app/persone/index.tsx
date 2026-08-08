@@ -60,6 +60,8 @@ function PeoplePage() {
         columns={columns}
         data={people.data?.items ?? []}
         isLoading={people.isLoading}
+        isError={people.isError}
+        error={people.error}
         onRowClick={(row) =>
           void navigate({ to: '/app/persone/$personId', params: { personId: row.id } })
         }

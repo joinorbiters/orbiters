@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, unwrap } from '@/lib/api'
+import { toast } from 'sonner'
+import { api, toProblem, unwrap } from '@/lib/api'
 import type { components } from '@/lib/api-types'
 import { queryKeys } from '@/lib/query'
 
@@ -152,15 +153,33 @@ export function useUpdateDeal(dealId: string) {
  * exactly as it was, which is what makes the dropped card visually snap back to
  * its original column once React re-renders from the restored data (`KanbanBoard`
  * re-derives each column by filtering on `pipeline_stage_id`, so restoring that
- * one field is enough). The server's own message still has to reach the user
- * separately -- this hook only manages the cache; the caller's `onError` is what
- * shows it (see routes/app/deal/index.tsx's `onMove`, which toasts
- * `toProblem(error).detail`). Verified live against the running API by soft-
- * deleting a deal in a second tab and then dragging its still-cached card in the
- * first: the PATCH 404s (`DealRepository.get` excludes a soft-deleted row, so
- * `move_stage` raises `NotFound`), the card returns to its original column, and a
- * toast reads "deal <id> not found" -- see task-8-report.md for the full
- * transcript.
+ * one field is enough). Verified live against the running API by soft-deleting a
+ * deal in a second tab and then dragging its still-cached card in the first: the
+ * PATCH 404s (`DealRepository.get` excludes a soft-deleted row, so `move_stage`
+ * raises `NotFound`), the card returns to its original column, and a toast reads
+ * "deal <id> not found" -- see task-8-report.md for the full transcript.
+ *
+ * `onError` toasts the server's message itself, on the mutation, rather than
+ * leaving it to a per-call `.mutate(vars, {onError})` at the call site (the
+ * brief's own pattern, and this hook's first shipped version). `useMoveDeal` is
+ * one `useMutation()` instance shared by the whole board, and dragging a second
+ * card before the first PATCH settles calls `mutate()` again on that same
+ * instance -- and `@tanstack/query-core`'s `MutationObserver` re-points itself at
+ * the new call, so a per-call `onError` passed to the *first* call is silently
+ * overwritten and never runs once that first mutation actually settles. The
+ * rollback above is unaffected (it reads the snapshot straight from the
+ * mutation's own context, not the observer), but a toast that lived at the call
+ * site would go missing precisely when it matters most: two failed-then-
+ * succeeded (or vice versa) drags in quick succession, silently. Defining
+ * `onError` here, once, on the mutation's own options, survives being overtaken
+ * by a later call -- confirmed with two overlapping `mutate()` calls in
+ * `queries.test.tsx`, not just one (a single call cannot tell the two designs
+ * apart). Every other mutation on the Kanban screen (`useCreateDeal`, used by
+ * "Nuovo deal") is guarded against this by its own dialog's Salva button being
+ * disabled while `isPending`, so a second call cannot be fired before the first
+ * settles in the first place -- dragging has no equivalent "disable while a move
+ * is pending" gate, which is what makes this hook the one exposed to the trap in
+ * practice.
  *
  * `getQueriesData`/`setQueryData` are typed as `DealsResult` for this hook's own
  * purposes, but the same `['deals', ...]` key prefix also matches `features/
@@ -193,14 +212,24 @@ export function useMoveDeal() {
       }
       return { snapshot }
     },
-    onError: (_error, _variables, context) => {
+    onError: (error, _variables, context) => {
       for (const [key, data] of context?.snapshot ?? []) {
         queryClient.setQueryData(key, data)
       }
+      toast.error(toProblem(error).detail)
     },
     onSettled: (_data, _error, variables) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.deals() })
       void queryClient.invalidateQueries({ queryKey: queryKeys.deal(variables.dealId) })
+      // A stage can be deleted server-side (admin-only, `PipelineService.delete`)
+      // between one load of the board and the next. `useStages`'s own cache has
+      // no other reason to refresh mid-session, so without this a deleted stage
+      // keeps rendering as a phantom column (with whatever deals it still had)
+      // until the next full reload or `staleTime` (30s) lapses on its own --
+      // observed live. A move is the one event on this screen already touching
+      // the pipeline, so it is the natural point to also refresh what the
+      // pipeline itself looks like.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.stages })
     },
   })
 }

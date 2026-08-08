@@ -1,5 +1,6 @@
 import { tableFeatures, useTable, type ColumnDef, type RowData } from '@tanstack/react-table'
 import type { KeyboardEvent } from 'react'
+import { QueryErrorBanner } from '@/components/QueryErrorBanner'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
@@ -48,6 +49,12 @@ interface DataTableProps<T extends RowData> {
   columns: ColumnDef<DataTableFeatures, T>[]
   data: T[]
   isLoading?: boolean
+  /** True when the query behind `data` failed. Distinct from an empty `data`
+   *  array on purpose -- see this function's own docstring. */
+  isError?: boolean
+  /** The query's own error, handed to `QueryErrorBanner` verbatim. Only read
+   *  when `isError` is true. */
+  error?: unknown
   onRowClick?: (row: T) => void
   emptyMessage?: string
 }
@@ -58,18 +65,33 @@ const LOADING_ROW_COUNT = 5
  * One table for every list this product shows -- Clienti, Persone, Deal today,
  * whatever a later slice adds tomorrow.
  *
- * `isLoading` and "zero rows" render as deliberately different shapes, not the
- * same table with different text in one cell: a felt sense of "something is
- * happening" (animated skeleton bars, no header at all) versus a real, completed,
- * honestly-empty result (the full table chrome, one row stating so in words).
- * Collapsing the two into one state would let a slow network masquerade as
- * "there is nothing here", which is a different claim and not this component's
- * to make on the caller's behalf.
+ * `isLoading`, "zero rows", and a failed request render as three deliberately
+ * different shapes, not the same table with different text in one cell: a felt
+ * sense of "something is happening" (animated skeleton bars, no header at all),
+ * a real, completed, honestly-empty result (the full table chrome, one row
+ * stating so in words), and "we do not actually know" (a banner, no table at
+ * all). Collapsing any two of these into one state would let a slow network, or
+ * a failed one, masquerade as "there is nothing here", which is a different
+ * claim and not this component's to make on the caller's behalf -- confirmed as
+ * a real, live defect on Clienti/Persone/Deal alike before this fix: every
+ * column reading zero and "Nessun ..." is indistinguishable from a tenant that
+ * genuinely has nothing, when the true state was "the request failed".
+ *
+ * `isError` only replaces the table when there is nothing else to show
+ * (`data.length === 0`): a background refetch that fails while a previous,
+ * successful page of `data` is still cached keeps showing that stale-but-real
+ * data rather than discarding it for a banner -- the caller's own `data.data?.
+ * items ?? []` fallback already collapses "never fetched" and "fetch failed
+ * with nothing cached" into the same empty array by the time it reaches here,
+ * which is exactly the case this component cannot tell apart from a genuine
+ * empty result without `isError` naming it explicitly.
  */
 export function DataTable<T extends RowData>({
   columns,
   data,
   isLoading,
+  isError,
+  error,
   onRowClick,
   emptyMessage = 'Nessun risultato.',
 }: DataTableProps<T>) {
@@ -83,6 +105,10 @@ export function DataTable<T extends RowData>({
         ))}
       </div>
     )
+  }
+
+  if (isError && data.length === 0) {
+    return <QueryErrorBanner error={error} />
   }
 
   // Enter/Space activate a clickable row from the keyboard, mirroring what
