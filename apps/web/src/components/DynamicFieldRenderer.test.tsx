@@ -123,6 +123,29 @@ describe('renderFieldValue', () => {
     expect(renderFieldValue(field({ type: 'checkbox' }), false)).toBe('No')
   })
 
+  /** A checkbox is the one type with no third state: a yes/no question nobody
+   *  answered is a "no", and the form draws an unchecked box either way. A dash there
+   *  would invent a distinction the control cannot express -- and it is what a record
+   *  created before the field existed, or through the API, legitimately looks like.
+   *  This is what lets the form stop writing `false` into records on edit. */
+  it('renders an absent checkbox as No, never as a dash', () => {
+    expect(renderFieldValue(field({ type: 'checkbox' }), undefined)).toBe('No')
+    expect(renderFieldValue(field({ type: 'checkbox' }), null)).toBe('No')
+  })
+
+  it('still renders every other absent type as a dash', () => {
+    expect(renderFieldValue(field({ type: 'text' }), null)).toBe('—')
+    expect(renderFieldValue(field({ type: 'number' }), null)).toBe('—')
+    expect(renderFieldValue(field({ type: 'currency' }), null)).toBe('—')
+    expect(renderFieldValue(field({ type: 'select' }), null)).toBe('—')
+    expect(renderFieldValue(field({ type: 'multiselect' }), [])).toBe('—')
+  })
+
+  it('keeps zero a value, not an absence', () => {
+    expect(renderFieldValue(field({ type: 'number' }), 0)).toBe('0')
+    expect(renderFieldValue(field({ type: 'currency' }), '0.00')).toContain('0,00')
+  })
+
   it('joins multiselect values', () => {
     expect(renderFieldValue(field({ type: 'multiselect' }), ['a', 'b'])).toBe('a, b')
   })

@@ -9,6 +9,15 @@ interface Props {
   values: Record<string, unknown>
   onChange: (key: string, value: unknown) => void
   problem?: ProblemDetail | null
+  /**
+   * Whether this form is composing a record that does not exist yet, or editing one
+   * that does. Required, with no default, on purpose: the only thing it controls is
+   * whether the form is allowed to put a value into the caller's state that the user
+   * never typed (see the checkbox seeding below), and a component that silently
+   * writes data must never let a call site acquire that behaviour by forgetting a
+   * prop. Persons and Deals will each have to answer the question explicitly.
+   */
+  mode: 'create' | 'edit'
 }
 
 /**
@@ -47,18 +56,28 @@ function unattributedMessage(
  *  highlighted, because a single request can only fail on one field at a time.
  *  Anything it cannot attach is shown above the fields instead (see
  *  `unattributedMessage`), so no server message can go missing. */
-export function DynamicForm({ fields, values, onChange, problem }: Props) {
+export function DynamicForm({ fields, values, onChange, problem, mode }: Props) {
   const fieldError = problem ? fieldErrorFrom(problem) : null
   const formError = problem ? unattributedMessage(problem, fields) : null
 
-  // A checkbox has two states, not three. Nothing writes to a checkbox's slot in
-  // `values` until the user actually clicks it, so an untouched one was
-  // indistinguishable from a field nobody has an opinion about -- the submitted
-  // payload omitted the key entirely, and the record then read as "—" (nothing
-  // stored) where the form had plainly shown an unchecked box meaning "no". Seeding
-  // the absent ones with `false` here, in the shared form, is what makes "untouched"
-  // and "explicitly unchecked" the same thing for every screen built on it, rather
-  // than something each of Customers/Persons/Deals has to remember separately.
+  // On create, and only on create, an unchecked checkbox nobody touched is still an
+  // answer: the user looked at that box in the dialog they were filling in and
+  // submitted it unchecked, so `false` is an honest record of what they sent. Nothing
+  // writes to a checkbox's slot in `values` until it is clicked, so without this the
+  // key was omitted from the POST entirely and "unchecked" and "no opinion" became
+  // indistinguishable in the stored data.
+  //
+  // On edit it is the opposite, and doing it there was a real bug: an edit that only
+  // changed Telefono also persisted `vip: false` on a record that had never had a
+  // value for it -- data the user never chose, written as a side effect of touching
+  // an unrelated field. Untouched native columns are not rewritten either; an
+  // untouched checkbox gets the same respect. The reason this costs nothing is that
+  // the *rendering* rule now carries the meaning instead: `renderFieldValue` reads an
+  // absent checkbox as "No", identically to a stored `false`, in the table and in the
+  // detail view, and the control here draws it as an unchecked box either way. A
+  // checkbox the user actually toggles is a different thing entirely and is sent as
+  // whatever they chose, `false` included -- `isBlank` (CustomerForm) treats `false`
+  // as a value, never as a blank.
   //
   // Idempotent by construction: once the value is present this loop calls nothing, so
   // it settles after exactly one extra render and cannot cycle. It has to be an
@@ -68,13 +87,14 @@ export function DynamicForm({ fields, values, onChange, problem }: Props) {
   // stays mounted across opens (see CustomerForm) resets its values without ever
   // unmounting this form.
   useEffect(() => {
+    if (mode !== 'create') return
     for (const field of fields) {
       const current = values[field.key]
       if (field.type === 'checkbox' && (current === undefined || current === null)) {
         onChange(field.key, false)
       }
     }
-  }, [fields, values, onChange])
+  }, [fields, values, onChange, mode])
 
   return (
     <div className="space-y-5">

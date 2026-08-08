@@ -138,6 +138,82 @@ describe('CustomerForm', () => {
     expect(submitted(onSubmit)).toEqual({ nazione: 'IT', custom_fields: { vip: false } })
   })
 
+  /**
+   * The defect the create-side seeding introduced, reproduced live before this fix:
+   * a record with `custom_fields: {}` was edited to change only Telefono, and the
+   * save persisted `vip: false` -- a value the user never chose, written as a side
+   * effect of touching an unrelated field. Untouched native columns are never
+   * rewritten; an untouched checkbox must not be either. The meaning is carried by
+   * `renderFieldValue` reading an absent checkbox as "No" instead.
+   */
+  it('does not backfill an untouched checkbox on edit, whatever else changed', async () => {
+    const onSubmit = vi.fn()
+    render(
+      <CustomerForm
+        title="Modifica cliente"
+        open
+        onOpenChange={vi.fn()}
+        customFields={[VIP]}
+        initial={customerToFormValues(BASE_CUSTOMER)}
+        onSubmit={onSubmit}
+      />,
+    )
+
+    await userEvent.type(screen.getByLabelText('Telefono'), '02123456')
+    await userEvent.click(screen.getByRole('button', { name: 'Salva' }))
+
+    const payload = submitted(onSubmit)
+    expect(payload.custom_fields).toEqual({})
+    expect(payload).toEqual({
+      ragione_sociale: 'ACME Srl',
+      nazione: 'IT',
+      telefono: '02123456',
+      custom_fields: {},
+    })
+  })
+
+  it('sends false for a checkbox the user actually turns off on edit', async () => {
+    const onSubmit = vi.fn()
+    render(
+      <CustomerForm
+        title="Modifica cliente"
+        open
+        onOpenChange={vi.fn()}
+        customFields={[VIP]}
+        initial={customerToFormValues({ ...BASE_CUSTOMER, custom_fields: { vip: true } })}
+        onSubmit={onSubmit}
+      />,
+    )
+
+    expect(screen.getByRole('checkbox')).toBeChecked()
+    await userEvent.click(screen.getByRole('checkbox'))
+    await userEvent.click(screen.getByRole('button', { name: 'Salva' }))
+
+    // `false`, not `null`: unchecking is choosing "no", not clearing the field.
+    // `isBlank` treats `false` as a value, so this never takes the clear path.
+    expect(submitted(onSubmit).custom_fields).toEqual({ vip: false })
+  })
+
+  it('sends false for a checkbox toggled on and back off from absent on edit', async () => {
+    const onSubmit = vi.fn()
+    render(
+      <CustomerForm
+        title="Modifica cliente"
+        open
+        onOpenChange={vi.fn()}
+        customFields={[VIP]}
+        initial={customerToFormValues(BASE_CUSTOMER)}
+        onSubmit={onSubmit}
+      />,
+    )
+
+    await userEvent.click(screen.getByRole('checkbox'))
+    await userEvent.click(screen.getByRole('checkbox'))
+    await userEvent.click(screen.getByRole('button', { name: 'Salva' }))
+
+    expect(submitted(onSubmit).custom_fields).toEqual({ vip: false })
+  })
+
   it('clears a custom field the user emptied with null, and a native one with an empty string', async () => {
     const onSubmit = vi.fn()
     const initial = customerToFormValues({

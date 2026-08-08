@@ -35,21 +35,26 @@ const VALIDATION_PROBLEM: ProblemDetail = {
 
 describe('DynamicForm', () => {
   it('renders a control for every field, addressable by its label', () => {
-    render(<DynamicForm fields={FIELDS} values={{}} onChange={vi.fn()} />)
+    render(<DynamicForm fields={FIELDS} values={{}} onChange={vi.fn()} mode="edit" />)
     expect(screen.getByLabelText('Partita IVA')).toBeInTheDocument()
     expect(screen.getByLabelText('Note interne')).toBeInTheDocument()
   })
 
   it('reports an edit with the key of the field that changed, not just the value', async () => {
     const onChange = vi.fn()
-    render(<DynamicForm fields={FIELDS} values={{}} onChange={onChange} />)
+    render(<DynamicForm fields={FIELDS} values={{}} onChange={onChange} mode="edit" />)
     await userEvent.type(screen.getByLabelText('Partita IVA'), 'x')
     expect(onChange).toHaveBeenCalledWith('partita_iva', 'x')
   })
 
   it('reads each field from its own key in values, defaulting an absent one to null', () => {
     render(
-      <DynamicForm fields={FIELDS} values={{ partita_iva: '01234567890' }} onChange={vi.fn()} />,
+      <DynamicForm
+        fields={FIELDS}
+        values={{ partita_iva: '01234567890' }}
+        onChange={vi.fn()}
+        mode="edit"
+      />,
     )
     expect(screen.getByLabelText('Partita IVA')).toHaveValue('01234567890')
     expect(screen.getByLabelText('Note interne')).toHaveValue('')
@@ -57,7 +62,13 @@ describe('DynamicForm', () => {
 
   it('attaches the server error to the one field it names, and no other', () => {
     render(
-      <DynamicForm fields={FIELDS} values={{}} onChange={vi.fn()} problem={VALIDATION_PROBLEM} />,
+      <DynamicForm
+        fields={FIELDS}
+        values={{}}
+        onChange={vi.fn()}
+        problem={VALIDATION_PROBLEM}
+        mode="edit"
+      />,
     )
     expect(
       screen.getByText('deve essere di 11 cifre (atteso: 11 cifre numeriche)'),
@@ -67,7 +78,7 @@ describe('DynamicForm', () => {
   })
 
   it('marks nothing invalid when there is no problem at all', () => {
-    render(<DynamicForm fields={FIELDS} values={{}} onChange={vi.fn()} problem={null} />)
+    render(<DynamicForm fields={FIELDS} values={{}} onChange={vi.fn()} problem={null} mode="edit" />)
     expect(screen.getByLabelText('Partita IVA')).toHaveAttribute('aria-invalid', 'false')
     expect(screen.getByLabelText('Note interne')).toHaveAttribute('aria-invalid', 'false')
   })
@@ -79,6 +90,7 @@ describe('DynamicForm', () => {
         values={{}}
         onChange={vi.fn()}
         problem={{ ...VALIDATION_PROBLEM, field: 'qualcos_altro' }}
+        mode="edit"
       />,
     )
     expect(screen.getByLabelText('Partita IVA')).toHaveAttribute('aria-invalid', 'false')
@@ -92,6 +104,7 @@ describe('DynamicForm', () => {
         values={{}}
         onChange={vi.fn()}
         problem={{ ...VALIDATION_PROBLEM, code: 'conflict', field: 'partita_iva' }}
+        mode="edit"
       />,
     )
     expect(screen.getByLabelText('Partita IVA')).toHaveAttribute('aria-invalid', 'false')
@@ -116,6 +129,7 @@ describe('DynamicForm', () => {
           reason: 'campo non definito (campi disponibili: nessuno)',
           expected: undefined,
         }}
+        mode="edit"
       />,
     )
     expect(screen.getByRole('alert')).toHaveTextContent(
@@ -135,6 +149,7 @@ describe('DynamicForm', () => {
           field: undefined,
           detail: 'esiste già un cliente con questa partita IVA',
         }}
+        mode="edit"
       />,
     )
     expect(screen.getByRole('alert')).toHaveTextContent(
@@ -144,29 +159,60 @@ describe('DynamicForm', () => {
 
   it('does not repeat an error a rendered field is already showing', () => {
     render(
-      <DynamicForm fields={FIELDS} values={{}} onChange={vi.fn()} problem={VALIDATION_PROBLEM} />,
+      <DynamicForm
+        fields={FIELDS}
+        values={{}}
+        onChange={vi.fn()}
+        problem={VALIDATION_PROBLEM}
+        mode="edit"
+      />,
     )
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
-  /** A checkbox has two states, not three: an untouched one means "no". Before this,
-   *  nothing wrote to its slot until the user clicked it, so the submitted payload
-   *  omitted the key and the record rendered "—" instead of "No". */
-  it('reports an untouched checkbox as false, so unchecked is a value and not an absence', () => {
+  /** On create the user looked at that unchecked box and submitted it, so `false` is
+   *  an honest record of what they sent. Before this, nothing wrote to a checkbox's
+   *  slot until it was clicked, so the POST omitted the key and the record stored
+   *  nothing at all. */
+  it('reports an untouched checkbox as false on create, so unchecked is a value', () => {
     const onChange = vi.fn()
-    render(<DynamicForm fields={[CHECKBOX]} values={{}} onChange={onChange} />)
+    render(<DynamicForm fields={[CHECKBOX]} values={{}} onChange={onChange} mode="create" />)
     expect(onChange).toHaveBeenCalledWith('vip', false)
+  })
+
+  /** The other side of the same rule, and a bug the create-side fix introduced: doing
+   *  this on edit meant an edit that changed only Telefono also persisted `vip:
+   *  false` on a record that never had a value for it -- data the user never chose,
+   *  written as a side effect of touching an unrelated field. Untouched native
+   *  columns are not rewritten; an untouched checkbox is not either. `renderFieldValue`
+   *  is what carries the meaning instead -- it reads absent as "No". */
+  it('never backfills a checkbox on edit, where the user chose nothing', () => {
+    const onChange = vi.fn()
+    render(<DynamicForm fields={[CHECKBOX]} values={{}} onChange={onChange} mode="edit" />)
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('draws an absent checkbox unchecked on both sides of that rule', () => {
+    const { unmount } = render(
+      <DynamicForm fields={[CHECKBOX]} values={{}} onChange={vi.fn()} mode="edit" />,
+    )
+    expect(screen.getByRole('checkbox')).not.toBeChecked()
+    unmount()
+    render(<DynamicForm fields={[CHECKBOX]} values={{}} onChange={vi.fn()} mode="create" />)
+    expect(screen.getByRole('checkbox')).not.toBeChecked()
   })
 
   it('leaves a checkbox that already carries a value alone', () => {
     const onChange = vi.fn()
-    render(<DynamicForm fields={[CHECKBOX]} values={{ vip: true }} onChange={onChange} />)
+    render(
+      <DynamicForm fields={[CHECKBOX]} values={{ vip: true }} onChange={onChange} mode="create" />,
+    )
     expect(onChange).not.toHaveBeenCalled()
   })
 
   it('does not invent values for the other field types', () => {
     const onChange = vi.fn()
-    render(<DynamicForm fields={FIELDS} values={{}} onChange={onChange} />)
+    render(<DynamicForm fields={FIELDS} values={{}} onChange={onChange} mode="edit" />)
     expect(onChange).not.toHaveBeenCalled()
   })
 })
