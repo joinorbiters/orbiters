@@ -91,4 +91,27 @@ export default defineConfig([
       'react-refresh/only-export-components': ['error', { allowExportNames: ['personToFormValues'] }],
     },
   },
+  {
+    // Deals' own copy of the same override: `dealToFormValues` and `DealForm`
+    // are coupled by construction in exactly the same way as the two overrides
+    // above -- anticipated in this file's own comment on the `CustomerForm.tsx`
+    // entry ("Persons and Deals are expected to need the identical override
+    // once their own forms copy this file's shape").
+    files: ['src/features/deals/DealForm.tsx'],
+    rules: {
+      'react-refresh/only-export-components': ['error', { allowExportNames: ['dealToFormValues'] }],
+    },
+  },
+  {
+    // `resolveMove` is `KanbanBoard`'s own drag-end decision, pulled out into a
+    // plain, exported function so it is directly testable without simulating a
+    // real pointer gesture through jsdom (see its own docstring in
+    // KanbanBoard.tsx). Coupled to `KanbanBoard` by construction the same way
+    // `customerToFormValues`/`personToFormValues`/`dealToFormValues` are coupled
+    // to their own forms -- one file, not split purely to satisfy this rule.
+    files: ['src/features/deals/KanbanBoard.tsx'],
+    rules: {
+      'react-refresh/only-export-components': ['error', { allowExportNames: ['resolveMove'] }],
+    },
+  },
 ])
