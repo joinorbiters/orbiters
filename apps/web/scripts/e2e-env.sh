@@ -24,14 +24,22 @@ export PIGROCRM_DATABASE_URL="postgresql+psycopg://pigrocrm:pigrocrm@localhost:5
 # with that exact string: confirmed by trying it first. This is the same string
 # with a few words appended so the requirement is actually met.
 export PIGROCRM_JWT_SECRET="e2e-secret-not-for-production-but-long-enough"
-# Deliberately left unset (not "false"): `cookie_secure` defaults to `true`
-# (config.py), and that file's own comment on the setting says Chrome/Chromium
-# treats "localhost" as a secure context and accepts a `Secure` cookie over plain
-# HTTP there -- Safari is the one browser that does not, which is exactly why the
-# setting exists at all. `playwright.config.ts` only ever runs the `chromium`
-# project, so the default holds and this stays closer to what production actually
-# runs. Verified live (see task-10-report.md): the seeded admin's login cookie is
-# both set and sent back on the next request under this exact configuration.
+# Fix round 1: this was previously left unset (default `true`) on the
+# reasoning that Chrome/Chromium treats "localhost" as a secure context and
+# sends a `Secure` cookie over plain HTTP there, and `playwright.config.ts`
+# only ever runs the `chromium` project. True as far as it went, but a trap
+# for whoever adds a second browser project later: WebKit does *not* extend
+# "localhost" that same trust and silently discards the cookie instead -- and
+# the failure is vicious, not loud. `auth.spec.ts`'s login test would still
+# pass under WebKit (it only asserts the client-side redirect right after
+# submitting the form, which happens regardless of whether the browser kept
+# the cookie), while every *other* spec would die on a bare 30-second timeout
+# with no diagnostic, since every request after that first one looks
+# unauthenticated. `.env.example` (repo root) documents this exact Safari/
+# WebKit behaviour and sets the same `false` for the same reason; this mirrors
+# it instead of relying on a browser-specific exception that only one of the
+# two obvious future projects (webkit) actually needs.
+export PIGROCRM_COOKIE_SECURE=false
 
 # Exported, not merely `readonly`: e2e/resilience.spec.ts (running inside the
 # Playwright *test* process, a grandchild of e2e.sh via `pnpm exec playwright
@@ -43,3 +51,38 @@ export PIGROCRM_E2E_PG_PORT="55433"
 export PIGROCRM_E2E_API_PORT="8000"
 export PIGROCRM_E2E_API_PIDFILE="/tmp/pigrocrm-e2e-api.pid"
 export PIGROCRM_E2E_API_LOG="/tmp/pigrocrm-e2e-api.log"
+# The frontend dev server Playwright's own `webServer` block (playwright.config.ts)
+# starts. Matches that config's hardcoded `baseURL`/`url`, which is itself pinned
+# to Vite's own default (vite.config.ts's `server.port`) -- there is no single env
+# var to read this back from on either side, so it is repeated as a literal in
+# both places rather than invented here.
+export PIGROCRM_E2E_WEB_PORT="5173"
+
+# Fix round 1: kills whatever is listening on the given TCP port, tolerating
+# "nothing there". Shared by e2e-setup.sh (clearing out a stale leftover
+# *before* starting, so `reuseExistingServer: !CI` can never silently reuse a
+# previous, improperly-torn-down run's server) and e2e-teardown.sh (see that
+# script's own comment on why this exists at all: confirmed live that a real
+# SIGINT to this whole process group -- e2e.sh's `trap ... EXIT` DOES fire and
+# DOES correctly tear down the API and the Postgres container -- leaves the
+# Vite dev server running and still answering HTTP 200, because Playwright
+# launches it fully detached, `ppid=1` from the moment it starts, in its own
+# process group that a broadcast signal to the foreground group never reaches).
+# `lsof -t`, not a pidfile: unlike the API (this suite's own process, whose pid
+# it already controls), the frontend server's pid is Playwright's own internal
+# state, never handed back to the shell that launched `pnpm exec playwright
+# test` -- the port is the only handle this script has on it. Loops the PIDs
+# through a variable rather than piping straight into `xargs kill`, since
+# BSD/macOS `xargs` has no `-r`/`--no-run-if-empty` (a GNU-only flag) and would
+# otherwise invoke `kill` with no arguments at all when the port is already free.
+kill_port() {
+  local port="$1"
+  local pids
+  pids="$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+  [ -z "$pids" ] && return 0
+  echo "$pids" | xargs kill -TERM 2>/dev/null || true
+  sleep 1
+  pids="$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+  [ -z "$pids" ] && return 0
+  echo "$pids" | xargs kill -9 2>/dev/null || true
+}

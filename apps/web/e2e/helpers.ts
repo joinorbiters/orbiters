@@ -1,3 +1,7 @@
+import { readFileSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { spawn } from 'node:child_process'
 import { expect, type Locator, type Page } from '@playwright/test'
 
 // Not a *.spec.ts file on purpose: Playwright's own test-file glob
@@ -69,4 +73,65 @@ export async function dragDealToStage(page: Page, dealName: string, stageName: s
   await page.mouse.move(cardBox.x + cardBox.width / 2 + 20, cardBox.y + cardBox.height / 2 + 20)
   await page.mouse.move(dropBox.x + dropBox.width / 2, dropBox.y + dropBox.height / 2, { steps: 10 })
   await page.mouse.up()
+}
+
+// -- Killing and relaunching the real API mid-suite --------------------------
+//
+// Fix round 1: pulled out of resilience.spec.ts (the only caller before this
+// round) so a second spec -- the Kanban board has its own, separate copy of
+// "a failed request must not look like an empty list" (routes/app/deal/
+// index.tsx's `boardUnavailable`, with no `DataTable` underneath it to inherit
+// coverage from) -- can drive the exact same kill-and-restore sequence without
+// a second, drifting copy of this machinery. Same defaults apps/web/scripts/
+// e2e-env.sh exports, read from `process.env` (inherited from apps/web/
+// scripts/e2e.sh, which sources that file before launching `pnpm exec
+// playwright test`).
+
+const API_PORT = process.env.PIGROCRM_E2E_API_PORT ?? '8000'
+const API_PIDFILE = process.env.PIGROCRM_E2E_API_PIDFILE ?? '/tmp/pigrocrm-e2e-api.pid'
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+
+async function pingApi(): Promise<boolean> {
+  try {
+    const response = await fetch(`http://localhost:${API_PORT}/openapi.json`)
+    return response.ok
+  } catch {
+    return false
+  }
+}
+
+async function waitUntil(condition: () => Promise<boolean>, timeoutMs: number, label: string): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await condition()) return
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  throw new Error(`timed out waiting for: ${label}`)
+}
+
+/** Reads apps/web/scripts/e2e-setup.sh's own pidfile and sends SIGTERM, then
+ *  waits until the API genuinely stops answering -- not a fixed sleep, since
+ *  how long a graceful uvicorn shutdown takes is not this suite's to guess. */
+export async function killApi(): Promise<void> {
+  const pid = Number(readFileSync(API_PIDFILE, 'utf-8').trim())
+  process.kill(pid, 'SIGTERM')
+  await waitUntil(async () => !(await pingApi()), 10_000, 'API to stop answering')
+}
+
+/** Relaunches the same `uv run uvicorn` process apps/web/scripts/e2e-setup.sh
+ *  started, detached from this test process so it outlives the Playwright run,
+ *  and overwrites the pidfile so apps/web/scripts/e2e-teardown.sh -- which runs
+ *  after the whole suite, from a completely different process tree -- kills the
+ *  right one at the end. Waits until the API genuinely answers again before
+ *  returning, for the identical reason `killApi` waits on the way down. */
+export async function relaunchApi(): Promise<void> {
+  const child = spawn('uv', ['run', 'uvicorn', 'pigrocrm_api.main:app', '--port', API_PORT], {
+    cwd: REPO_ROOT,
+    detached: true,
+    stdio: 'ignore',
+    env: process.env,
+  })
+  child.unref()
+  if (child.pid) writeFileSync(API_PIDFILE, String(child.pid))
+  await waitUntil(pingApi, 30_000, 'API to answer again')
 }

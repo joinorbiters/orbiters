@@ -84,18 +84,51 @@ test('a move the server refuses puts the card back in its original column and sa
   const deleteResponse = await page.request.delete(`/api/pipeline-stages/${stage.id}`)
   expect(deleteResponse.ok()).toBe(true)
 
+  // Fix round 1: holds back the GET /api/deals refetch that `useMoveDeal`'s
+  // own `onSettled` fires on every move, win or lose. Without this, the
+  // assertion just below is decorative: a reviewer deleted `onError`'s entire
+  // rollback loop (features/deals/queries.ts) and this same spec still passed
+  // 3 times out of 3, because `onSettled`'s `invalidateQueries` refetches the
+  // server's own (unchanged) truth and lands well inside the assertion's own
+  // retry window regardless of whether the rollback ran at all -- the refetch
+  // alone was fast enough to self-heal the cache and mask a fully-deleted
+  // rollback. Parking this one response is what makes "the card is back in
+  // Lead" attributable *specifically* to `onError`'s synchronous cache
+  // restore (a pure client-side `setQueryData`, no network involved) rather
+  // than to this refetch racing ahead of the check.
+  let releaseRefetch: () => void = () => {}
+  const refetchHeld = new Promise<void>((resolve) => {
+    releaseRefetch = resolve
+  })
+  await page.route(
+    (url) => url.pathname === '/api/deals',
+    async (route) => {
+      if (route.request().method() === 'GET') await refetchHeld
+      await route.continue()
+    },
+  )
+
   await dragDealToStage(page, dealName, stageName)
 
   // `PipelineService.get` raises `NotFound("pipeline_stage", stage_id)`
   // (packages/core/src/pigrocrm/core/pipeline/service.py) before `move_stage`
   // ever touches the deal itself -- asserted by this test's own stage id, not
-  // a loose "something failed".
+  // a loose "something failed". The PATCH itself already resolved (this is
+  // its own response's toast) while the *follow-up* GET above is still parked,
+  // so nothing about the corrective refetch has run yet.
   await expect(page.getByText(new RegExp(`pipeline_stage ${stage.id} not found`, 'i'))).toBeVisible()
 
-  // The deal itself was never touched server-side, so it is still, genuinely,
-  // in Lead -- not merely "not visible anywhere else because the record is
-  // gone", the trap a same-shaped test built around deleting the *deal*
-  // instead would fall into.
+  // The immediate rollback, observed while the self-healing refetch is still
+  // being held back on purpose: if `onError`'s own cache restore had been
+  // deleted, the optimistic move would still be showing the card in the
+  // doomed column right here, since nothing else has had a chance to correct
+  // it yet.
+  await expect(leadColumn.getByText(dealName, { exact: true })).toBeVisible()
+  await expect(doomedColumn.getByText(dealName, { exact: true })).not.toBeVisible()
+
+  // Only now let the parked refetch (and any that follow) through, and prove
+  // the same, already-correct state survives it.
+  releaseRefetch()
   await expect(leadColumn.getByText(dealName, { exact: true })).toBeVisible()
 
   await page.reload()

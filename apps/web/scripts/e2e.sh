@@ -9,8 +9,14 @@
 #
 # Nothing else needs to be running first: no manually-started API, no manually
 # started frontend. Playwright's own `webServer` block (apps/web/playwright.config.ts)
-# starts and stops `pnpm dev` around the run; this script is what does the same job
-# for the one thing that config can't own -- the API and its database.
+# starts `pnpm dev` before the run and stops it after a normal pass or failure --
+# but not reliably after a signal (fix round 1: confirmed live that Playwright
+# launches it fully detached, in its own process group, so a real Ctrl-C to this
+# whole process group never reaches it at all). e2e-teardown.sh's own trap below
+# is what makes "tears down regardless of outcome" actually true rather than true
+# only on the happy path: it kills whatever is bound to the frontend's port
+# directly, on top of -- not instead of -- the API and database this config
+# can't own at all.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"

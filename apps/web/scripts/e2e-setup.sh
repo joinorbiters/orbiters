@@ -16,6 +16,17 @@ cd "$REPO_ROOT"
 # shellcheck source=./e2e-env.sh
 source "$REPO_ROOT/apps/web/scripts/e2e-env.sh"
 
+# Fix round 1: a Vite dev server orphaned by a previous, signal-interrupted run
+# (e2e-teardown.sh's own comment has the full mechanism) would otherwise sit on
+# this port forever, and Playwright's `reuseExistingServer: !CI`
+# (playwright.config.ts) would then silently reuse that stale process for
+# *this* run instead of starting a fresh one -- observed live as "the suite
+# starts passing (or failing) for reasons nobody can reconstruct". Clearing it
+# here as well as in teardown means this invariant holds even the first time
+# this script ever runs after a crash, not only from the second run onward.
+echo "== pigrocrm e2e: clearing a stale frontend dev server on :$PIGROCRM_E2E_WEB_PORT, if any =="
+kill_port "$PIGROCRM_E2E_WEB_PORT"
+
 echo "== pigrocrm e2e: bringing up Postgres on :$PIGROCRM_E2E_PG_PORT =="
 docker rm -f "$PIGROCRM_E2E_CONTAINER" >/dev/null 2>&1 || true
 docker run --rm -d --name "$PIGROCRM_E2E_CONTAINER" \
