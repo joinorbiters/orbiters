@@ -30,8 +30,19 @@ function detailValueFor(page: Page, label: string) {
  * the create-form input, the detail row), then the one direction the brief never
  * exercises at all -- clearing a value back out and confirming the empty state
  * actually reached the database, not just this render.
+ *
+ * Fix round 1: clears *both* halves of the contract side by side, not only the
+ * custom one -- `CustomerForm.submit`'s own docstring is explicit that the two
+ * spellings are not interchangeable (a native column clears on an explicit
+ * `""`, since `CustomerUpdate.model_dump(exclude_none=True)` keeps an empty
+ * string but silently drops an actual `None`; a custom field clears only on an
+ * explicit `null` in `custom_fields`, since `""` there is `is_blank` and a
+ * non-required field just quietly skips it). Getting either spelling wrong, or
+ * swapping them, is exactly the class of defect that cost this project two fix
+ * rounds -- proving only the custom half, as the first draft of this test did,
+ * leaves the native half's own spelling completely unguarded.
  */
-test("a custom field's whole life: appears everywhere with no restart, and a cleared value stays cleared", async ({
+test("a custom field's whole life: appears everywhere with no restart, and a cleared value -- native or custom -- stays cleared", async ({
   page,
 }) => {
   await createTextField(page, 'Referente')
@@ -41,33 +52,34 @@ test("a custom field's whole life: appears everywhere with no restart, and a cle
   await page.goto('/app/clienti')
   await expect(page.getByRole('columnheader', { name: 'Referente' })).toBeVisible()
 
-  // The create-form input.
+  // The create-form input, native (Telefono) and custom (Referente) side by side.
   const name = `Whole Life ${Date.now()}`
   await page.getByRole('button', { name: /nuovo cliente/i }).click()
   const createDialog = page.getByRole('dialog')
   await createDialog.getByLabel('Ragione sociale').fill(name)
+  await createDialog.getByLabel('Telefono').fill('0212345678')
   await createDialog.getByLabel('Referente').fill('Giulia Bianchi')
   await createDialog.getByRole('button', { name: 'Salva' }).click()
   await expect(page.getByText(name)).toBeVisible()
 
-  // The detail row, holding the value just set.
+  // The detail row, holding both values just set.
   await page.getByText(name).click()
+  await expect(detailValueFor(page, 'Telefono')).toHaveText('0212345678')
   await expect(detailValueFor(page, 'Referente')).toHaveText('Giulia Bianchi')
 
-  // Clear it...
+  // Clear both...
   await page.getByRole('button', { name: 'Modifica' }).click()
   const editDialog = page.getByRole('dialog')
+  await editDialog.getByLabel('Telefono').fill('')
   await editDialog.getByLabel('Referente').fill('')
   await editDialog.getByRole('button', { name: 'Salva' }).click()
   await expect(editDialog).toBeHidden()
 
-  // ...and confirm the clear reached the database, not only this render: a
-  // native column clears on an explicit "" (CustomerUpdate keeps an empty
-  // string), a custom field clears only on an explicit `null` in custom_fields
-  // (never on an omitted key, which leaves the old value alone) -- ship either
-  // spelling wrong and "Giulia Bianchi" is still sitting in the database after
-  // this reload.
+  // ...and confirm both clears reached the database, not only this render:
+  // ship either spelling wrong (or the two swapped) and the old value is
+  // still sitting in the database after this reload.
   await page.reload()
+  await expect(detailValueFor(page, 'Telefono')).toHaveText('—')
   await expect(detailValueFor(page, 'Referente')).toHaveText('—')
 })
 
