@@ -1,0 +1,42 @@
+# Both Dockerfile.api and Dockerfile.web build with `context: .` (the repo root,
+# see docker-compose.yml) and then COPY only the specific paths they need -- so
+# this file is not what keeps unwanted files out of the final images. It exists
+# for one load-bearing reason and one speed reason:
+#
+# Load-bearing: Dockerfile.web runs `pnpm install --frozen-lockfile` for a Linux
+# target *inside* the build stage, then `COPY apps/web ./`. Without excluding
+# node_modules here, that second COPY would pull in whatever apps/web/node_modules
+# already exists on the machine running `docker build` (e.g. this repo, right now,
+# has one from local development) and overwrite the freshly-installed Linux one
+# with it. On a Mac or with a different pnpm store, that silently breaks the build
+# on native-binary packages (esbuild, rollup, lightningcss, ...) with the wrong
+# platform underneath -- confirmed by building without this exclusion first.
+#
+# Speed: everything else here just shrinks what gets sent to the Docker daemon as
+# build context (uv/pnpm caches, virtualenvs, git history, other apps' local caches).
+
+.git
+.env
+.env.local
+
+# Python
+.venv/
+**/__pycache__/
+**/*.py[cod]
+.pytest_cache/
+**/.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+**/.ruff_cache/
+.coverage
+
+# Node (see "Load-bearing" above)
+**/node_modules/
+apps/web/dist/
+apps/web/.tanstack/
+**/*.tsbuildinfo
+
+# Editor / tooling noise not needed inside any image
+.superpowers/
+.claude/
+docs/

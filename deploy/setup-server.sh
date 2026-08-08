@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Idempotent: safe to run on every deploy.
+#
+# "Idempotent" needs one qualification: after `certbot --nginx -d "$DOMAIN"` has run
+# on this server (see the note at the bottom of this file), certbot rewrites this
+# same file in place to add the port-443 server block and the certificate paths. A
+# script that unconditionally regenerated the file on every deploy would silently
+# erase that block the next time CI ran this script -- TLS would vanish on the very
+# next push to main, with nothing in the deploy log to say why. So: write the plain
+# HTTP vhost only the first time, or any time it has not yet been TLS-enabled; once
+# `listen 443 ssl` shows up in it (certbot's own signature), leave it alone.
+set -euo pipefail
+
+DOMAIN="${PIGROCRM_DOMAIN:-pigrocrm.humancraft.tech}"
+CONF="/etc/nginx/sites-available/${DOMAIN}"
+
+if [ -f "$CONF" ] && grep -q 'listen 443 ssl' "$CONF"; then
+  echo "nginx per ${DOMAIN} ha già TLS configurato da certbot: non sovrascrivo ${CONF}."
+else
+  cat > "$CONF" <<CONFEOF
+server {
+    listen 80;
+    server_name ${DOMAIN};
+    client_max_body_size 25M;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+CONFEOF
+  echo "nginx configurato per ${DOMAIN} (solo HTTP finché certbot non viene eseguito)."
+fi
+
+ln -sf "$CONF" "/etc/nginx/sites-enabled/${DOMAIN}"
+nginx -t
+systemctl reload nginx
+echo "nginx attivo per ${DOMAIN}"
