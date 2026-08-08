@@ -1,0 +1,310 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import type { ReactElement } from 'react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { PersonForm, personToFormValues } from './PersonForm'
+import type { Person } from './queries'
+import { api } from '@/lib/api'
+import type { FieldDefinition } from '@/lib/schema'
+
+// `api.GET` is spied on directly (not `vi.mock('@/lib/api', ...)`), mirroring
+// `Timeline.test.tsx`: `PersonForm` calls `useCustomers` (for the "Cliente"
+// picker), a real query through the real `unwrap`, so what is under test is this
+// form's own handling of what that hook returns, not a reimplementation of it.
+const mockGet = vi.spyOn(api, 'GET')
+
+function customerPage(items: { id: string; ragione_sociale: string }[]) {
+  return Promise.resolve({
+    data: { items, next_cursor: null },
+    response: new Response(null, { status: 200 }),
+  })
+}
+
+beforeEach(() => {
+  mockGet.mockReset()
+  // Every test renders PersonForm, which always calls `useCustomers` for the
+  // "Cliente" picker -- an empty page is enough for every test that does not
+  // care about its contents; the ones that do override this before rendering.
+  mockGet.mockReturnValue(customerPage([]))
+})
+
+function renderWithClient(ui: ReactElement) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>)
+}
+
+const BASE_PERSON: Person = {
+  id: 'p1',
+  nome: 'Mario',
+  cognome: 'Rossi',
+  email: null,
+  telefono: null,
+  ruolo: null,
+  linkedin: null,
+  note: null,
+  customer_id: null,
+  custom_fields: {},
+  created_at: '2026-08-06T00:00:00Z',
+  updated_at: '2026-08-06T00:00:00Z',
+}
+
+const SENIORITY: FieldDefinition = {
+  key: 'seniority',
+  label: 'Seniority',
+  type: 'select',
+  required: false,
+  options: ['Junior', 'Senior'],
+}
+
+const DISPONIBILE: FieldDefinition = {
+  key: 'disponibile',
+  label: 'Disponibile',
+  type: 'checkbox',
+  required: false,
+  options: [],
+}
+
+function submitted(onSubmit: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  const [first] = onSubmit.mock.calls
+  if (!first) throw new Error('onSubmit was never called')
+  return first[0] as Record<string, unknown>
+}
+
+describe('PersonForm', () => {
+  it('round-trips a value for a field the active schema still defines', async () => {
+    const onSubmit = vi.fn()
+    renderWithClient(
+      <PersonForm
+        title="Modifica persona"
+        open
+        onOpenChange={vi.fn()}
+        customFields={[SENIORITY]}
+        initial={personToFormValues({ ...BASE_PERSON, custom_fields: { seniority: 'Senior' } })}
+        onSubmit={onSubmit}
+      />,
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: 'Salva' }))
+
+    expect(submitted(onSubmit)).toEqual({
+      nome: 'Mario',
+      cognome: 'Rossi',
+      custom_fields: { seniority: 'Senior' },
+    })
+  })
+
+  /**
+   * The defect this guards, identical in shape to `CustomerForm`'s own
+   * (reproduced live there first -- see task-6-report.md): archive a field
+   * definition while a record still carries a value for it, open Modifica,
+   * press Salva with nothing else changed. A flat form state would re-derive
+   * "is this key custom?" from the *active* schema, reclassify the value as
+   * native, and 422 on `PersonUpdate`'s `extra="forbid"`.
+   */
+  it('neither sends an archived field as a native column nor drops its stored value', async () => {
+    const onSubmit = vi.fn()
+    renderWithClient(
+      <PersonForm
+        title="Modifica persona"
+        open
+        onOpenChange={vi.fn()}
+        // The definition was archived: nothing in `customFields` renders it, but
+        // the record still carries the value.
+        customFields={[]}
+        initial={personToFormValues({ ...BASE_PERSON, custom_fields: { seniority: 'Senior' } })}
+        onSubmit={onSubmit}
+      />,
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: 'Salva' }))
+
+    const payload = submitted(onSubmit)
+    expect(payload).not.toHaveProperty('seniority')
+    expect(payload.custom_fields).toEqual({})
+    expect(payload).toEqual({ nome: 'Mario', cognome: 'Rossi', custom_fields: {} })
+  })
+
+  it('sends an untouched checkbox as false on create, never as an absent key', async () => {
+    const onSubmit = vi.fn()
+    renderWithClient(
+      <PersonForm
+        title="Nuova persona"
+        open
+        onOpenChange={vi.fn()}
+        customFields={[DISPONIBILE]}
+        onSubmit={onSubmit}
+      />,
+    )
+
+    await userEvent.type(screen.getByLabelText(/^Nome/), 'Luigi')
+    await userEvent.click(screen.getByRole('button', { name: 'Salva' }))
+
+    expect(submitted(onSubmit)).toEqual({ nome: 'Luigi', custom_fields: { disponibile: false } })
+  })
+
+  /** The other side of the same rule (see `DynamicForm.test.tsx`): doing this on
+   *  edit would persist `disponibile: false` on a record that never had a value
+   *  for it, as a side effect of touching Telefono alone. */
+  it('does not backfill an untouched checkbox on edit, whatever else changed', async () => {
+    const onSubmit = vi.fn()
+    renderWithClient(
+      <PersonForm
+        title="Modifica persona"
+        open
+        onOpenChange={vi.fn()}
+        customFields={[DISPONIBILE]}
+        initial={personToFormValues(BASE_PERSON)}
+        onSubmit={onSubmit}
+      />,
+    )
+
+    await userEvent.type(screen.getByLabelText('Telefono'), '02123456')
+    await userEvent.click(screen.getByRole('button', { name: 'Salva' }))
+
+    const payload = submitted(onSubmit)
+    expect(payload.custom_fields).toEqual({})
+    expect(payload).toEqual({
+      nome: 'Mario',
+      cognome: 'Rossi',
+      telefono: '02123456',
+      custom_fields: {},
+    })
+  })
+
+  it('clears a custom field the user emptied with null, and a native one with an empty string', async () => {
+    const onSubmit = vi.fn()
+    const initial = personToFormValues({
+      ...BASE_PERSON,
+      telefono: '02123456',
+      custom_fields: { seniority: 'Senior' },
+    })
+    renderWithClient(
+      <PersonForm
+        title="Modifica persona"
+        open
+        onOpenChange={vi.fn()}
+        customFields={[SENIORITY]}
+        initial={initial}
+        onSubmit={onSubmit}
+      />,
+    )
+
+    await userEvent.clear(screen.getByLabelText('Telefono'))
+    // Two comboboxes exist in this render: index 0 is the "Cliente" picker every
+    // PersonForm renders unconditionally, index 1 is the Seniority custom field.
+    const [, seniorityCombobox] = screen.getAllByRole('combobox')
+    await userEvent.click(seniorityCombobox!)
+    await userEvent.click(screen.getByRole('option', { name: 'Nessuna selezione' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Salva' }))
+
+    expect(submitted(onSubmit)).toEqual({
+      nome: 'Mario',
+      cognome: 'Rossi',
+      telefono: '',
+      custom_fields: { seniority: null },
+    })
+  })
+
+  describe('customer association', () => {
+    it('does not send customer_id or detach when there was never a customer to begin with', async () => {
+      const onSubmit = vi.fn()
+      renderWithClient(
+        <PersonForm
+          title="Modifica persona"
+          open
+          onOpenChange={vi.fn()}
+          customFields={[]}
+          initial={personToFormValues(BASE_PERSON)}
+          onSubmit={onSubmit}
+        />,
+      )
+
+      await userEvent.click(screen.getByRole('button', { name: 'Salva' }))
+
+      const payload = submitted(onSubmit)
+      expect(payload).not.toHaveProperty('customer_id')
+      expect(payload).not.toHaveProperty('detach')
+    })
+
+    it('sends a chosen customer_id on create', async () => {
+      mockGet.mockReturnValue(customerPage([{ id: 'cust-1', ragione_sociale: 'ACME Srl' }]))
+      const onSubmit = vi.fn()
+      renderWithClient(
+        <PersonForm
+          title="Nuova persona"
+          open
+          onOpenChange={vi.fn()}
+          customFields={[]}
+          onSubmit={onSubmit}
+        />,
+      )
+
+      await userEvent.type(screen.getByLabelText(/^Nome/), 'Luigi')
+      await userEvent.click(screen.getByRole('combobox'))
+      await userEvent.click(await screen.findByRole('option', { name: 'ACME Srl' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Salva' }))
+
+      expect(submitted(onSubmit)).toEqual({
+        nome: 'Luigi',
+        customer_id: 'cust-1',
+        custom_fields: {},
+      })
+    })
+
+    /**
+     * The bug the brief's own sample would have shipped, found by reading
+     * `PersonUpdate`/`PersonService.update` rather than assumed from Customer's
+     * shape (Customer has no such relationship to generalise from): there is no
+     * way to clear `customer_id` with `null` (`model_dump(exclude_none=True)`
+     * drops it before the service ever sees it) or `""` (fails UUID parsing,
+     * 422). Only an explicit `detach: true` removes an existing association.
+     * Selecting "Nessun cliente" on a person who had one must send that flag --
+     * omitting the key, or sending a value the server silently ignores or
+     * rejects, both leave the stale association in place.
+     */
+    it('detaches an existing customer with `detach: true`, never `customer_id: null`', async () => {
+      mockGet.mockReturnValue(customerPage([{ id: 'cust-1', ragione_sociale: 'ACME Srl' }]))
+      const onSubmit = vi.fn()
+      renderWithClient(
+        <PersonForm
+          title="Modifica persona"
+          open
+          onOpenChange={vi.fn()}
+          customFields={[]}
+          initial={personToFormValues({ ...BASE_PERSON, customer_id: 'cust-1' })}
+          onSubmit={onSubmit}
+        />,
+      )
+
+      await userEvent.click(await screen.findByRole('combobox'))
+      await userEvent.click(await screen.findByRole('option', { name: 'Nessun cliente' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Salva' }))
+
+      const payload = submitted(onSubmit)
+      expect(payload.detach).toBe(true)
+      expect(payload).not.toHaveProperty('customer_id')
+    })
+
+    it('keeps sending the same customer_id when the association is untouched on edit', async () => {
+      mockGet.mockReturnValue(customerPage([{ id: 'cust-1', ragione_sociale: 'ACME Srl' }]))
+      const onSubmit = vi.fn()
+      renderWithClient(
+        <PersonForm
+          title="Modifica persona"
+          open
+          onOpenChange={vi.fn()}
+          customFields={[]}
+          initial={personToFormValues({ ...BASE_PERSON, customer_id: 'cust-1' })}
+          onSubmit={onSubmit}
+        />,
+      )
+
+      await userEvent.click(screen.getByRole('button', { name: 'Salva' }))
+
+      const payload = submitted(onSubmit)
+      expect(payload.customer_id).toBe('cust-1')
+      expect(payload).not.toHaveProperty('detach')
+    })
+  })
+})
