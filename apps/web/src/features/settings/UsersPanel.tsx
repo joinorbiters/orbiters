@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { fieldErrorFrom, toProblem, type ProblemDetail } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { useCreateUser, useUpdateUser, useUsers, type UserRecord } from './queries'
 
 const ROLES: { value: UserRecord['ruolo']; label: string }[] = [
@@ -41,6 +42,7 @@ function unattributed(problem: ProblemDetail | null): string | null {
 }
 
 export function UsersPanel() {
+  const { user: currentUser } = useAuth()
   const [open, setOpen] = useState(false)
   const [email, setEmail] = useState('')
   const [nome, setNome] = useState('')
@@ -50,7 +52,7 @@ export function UsersPanel() {
 
   const users = useUsers()
   const create = useCreateUser()
-  const toggleActive = useUpdateUser()
+  const update = useUpdateUser()
 
   const fieldError = problem ? fieldErrorFrom(problem) : null
   const banner = unattributed(problem)
@@ -84,7 +86,45 @@ export function UsersPanel() {
     {
       header: 'Ruolo',
       id: 'ruolo',
-      accessorFn: (row) => ROLES.find((role) => role.value === row.ruolo)?.label ?? row.ruolo,
+      cell: (info) => {
+        const user = info.row.original
+        // Disabled for your own row: nothing server-side stops the last
+        // admin from demoting themselves (`UserService.update` has no such
+        // check), and there is no undo except the `createadmin` CLI -- the
+        // same reasoning as the Disattiva guard below, applied to the other
+        // way an admin can lock themselves out of this exact screen.
+        const isSelf = user.id === currentUser?.id
+        return (
+          <Select
+            value={user.ruolo}
+            disabled={isSelf || update.isPending}
+            onValueChange={(value) =>
+              update.mutate(
+                { userId: user.id, body: { ruolo: value } },
+                {
+                  onSuccess: () => toast.success('Ruolo aggiornato'),
+                  onError: (error) => toast.error(toProblem(error).detail),
+                },
+              )
+            }
+          >
+            <SelectTrigger
+              className="w-40"
+              aria-label={`Ruolo di ${user.nome}`}
+              title={isSelf ? 'Non puoi cambiare il ruolo del tuo stesso account.' : undefined}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {ROLES.map((role) => (
+                <SelectItem key={role.value} value={role.value}>
+                  {role.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )
+      },
     },
     {
       header: 'Stato',
@@ -100,13 +140,17 @@ export function UsersPanel() {
       id: 'actions',
       cell: (info) => {
         const user = info.row.original
+        const isSelf = user.id === currentUser?.id
         return (
           <Button
             variant="ghost"
             size="sm"
-            disabled={toggleActive.isPending}
+            disabled={update.isPending || (user.attivo && isSelf)}
+            title={
+              user.attivo && isSelf ? 'Non puoi disattivare il tuo stesso account.' : undefined
+            }
             onClick={() =>
-              toggleActive.mutate(
+              update.mutate(
                 { userId: user.id, body: { attivo: !user.attivo } },
                 {
                   onSuccess: () =>

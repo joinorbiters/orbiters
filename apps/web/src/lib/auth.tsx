@@ -33,6 +33,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     },
     retry: false,
+    // Without this, a role change or deactivation made from another session
+    // only reaches an already-open tab on its next full reload: `useIsAdmin`/
+    // `useCanWrite` read this same cached value, so a demoted admin kept
+    // every admin screen -- and kept being able to try admin actions, even
+    // though the backend's own `require_admin` would refuse them -- until
+    // something forced a refetch. Polling only while a session actually
+    // exists avoids hammering this on the login page before anyone has
+    // authenticated.
+    refetchInterval: (query) => (query.state.data ? 30_000 : false),
   })
 
   const loginMutation = useMutation({

@@ -5,28 +5,16 @@ import type { EntityType } from '@/lib/schema'
 import { queryKeys } from '@/lib/query'
 
 // -- Field definitions --------------------------------------------------------
-//
-// Every wire shape below is taken directly from the generated OpenAPI schema
-// (`components['schemas'][...]`), the same reasoning `features/deals/queries.ts`/
-// `features/customers/queries.ts` already document for their own aliases: the
-// single source of truth is the Pydantic model in packages/core, and these track
-// it through `pnpm generate:api` automatically.
 
 export type FieldDefinitionRecord = components['schemas']['FieldDefinitionRead']
 type FieldDefinitionCreateBody = components['schemas']['FieldDefinitionCreate']
+type FieldDefinitionUpdateBody = components['schemas']['FieldDefinitionUpdate']
 
 /**
  * `include_archived: true`, always -- unlike `useEntitySchema` (lib/schema.ts),
- * which only ever needs the fields Customers/Persons/Deals currently render and
- * therefore excludes archived ones by design, this admin screen's whole job is to
- * also show what has been archived. Archiving is reversible (`POST .../unarchive`
- * exists and the stored JSONB values are never touched -- see
- * `FieldDefinitionService.archive`'s own docstring), so a list that only ever
- * shows the active half would make that reversibility invisible: nothing on
- * screen would tell an admin that "Segmento" still exists, just hidden, or give
- * them anywhere to click to bring it back. `FieldsPanel` renders every row this
- * returns with a status badge and the one action (archive/unarchive) each row's
- * own state allows, rather than filtering either half out.
+ * which only needs what Customers/Persons/Deals currently render and excludes
+ * archived fields by design, this admin screen's job is to also show what has
+ * been archived, with a way back (`FieldsPanel`'s "Ripristina").
  */
 export function useFieldDefinitions(entityType: EntityType) {
   return useQuery({
@@ -40,16 +28,10 @@ export function useFieldDefinitions(entityType: EntityType) {
   })
 }
 
-/**
- * Every field-definition mutation below invalidates both this admin list *and*
- * `queryKeys.schema` -- the live document `useEntitySchema` (lib/schema.ts) reads
- * to decide what columns/inputs/detail rows Customers, Persons and Deals render.
- * That second invalidation is the entire point of this product's custom-field
- * system: a field created (or archived, or restored) here shows up -- or
- * disappears -- on those three screens immediately, with no reload. Keyed off the
- * response's own `entity_type` rather than a caller-supplied one, so a hook
- * cannot invalidate the wrong entity's schema by a caller's mistake.
- */
+/** Invalidates both this admin list and `queryKeys.schema` -- the second is
+ *  what makes a field created/archived/restored/edited here show up (or
+ *  disappear) on Customers/Persons/Deals immediately. Keyed off the response's
+ *  own `entity_type`, never a caller-supplied one. */
 function invalidateFieldQueries(queryClient: QueryClient, entityType: string) {
   void queryClient.invalidateQueries({ queryKey: queryKeys.fields(entityType) })
   void queryClient.invalidateQueries({ queryKey: queryKeys.schema(entityType) })
@@ -61,6 +43,24 @@ export function useCreateFieldDefinition() {
     mutationFn: (body: Record<string, unknown>) =>
       unwrap(
         api.POST('/api/field-definitions', { body: body as unknown as FieldDefinitionCreateBody }),
+      ),
+    onSuccess: (field) => invalidateFieldQueries(queryClient, field.entity_type),
+  })
+}
+
+/** `FieldDefinitionUpdate` accepts `label`/`options`/`required`/`position` --
+ *  `key`/`field_type`/`entity_type` are absent from the schema itself (identity,
+ *  not a label; see that schema's own docstring), so there is nothing to guard
+ *  client-side: the backend already has no spelling that would change them. */
+export function useUpdateFieldDefinition() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ fieldId, body }: { fieldId: string; body: Record<string, unknown> }) =>
+      unwrap(
+        api.PATCH('/api/field-definitions/{field_id}', {
+          params: { path: { field_id: fieldId } },
+          body: body as unknown as FieldDefinitionUpdateBody,
+        }),
       ),
     onSuccess: (field) => invalidateFieldQueries(queryClient, field.entity_type),
   })
@@ -79,12 +79,9 @@ export function useArchiveFieldDefinition() {
   })
 }
 
-/**
- * Symmetric to `useArchiveFieldDefinition`, and exactly as important: without
- * this, archiving would be a one-way door in the UI even though the API and the
- * data model both treat it as reversible. See `FieldsPanel.tsx` for where this
- * is wired to a visible "Ripristina" action on every archived row.
- */
+/** Symmetric to `useArchiveFieldDefinition` -- without this, archiving would be
+ *  a one-way door in the UI even though the data model treats it as
+ *  reversible. See `FieldsPanel.tsx`'s "Ripristina". */
 export function useUnarchiveFieldDefinition() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -100,13 +97,10 @@ export function useUnarchiveFieldDefinition() {
 
 // -- Pipeline stages ------------------------------------------------------------
 //
-// `Stage` and `useStages` already live in features/deals/queries.ts -- the
-// Kanban board's own read side against this exact endpoint, open to every role
-// (`PipelineService.list` takes no `actor` and applies no role check, since every
-// role needs to see the pipeline to use the board at all). `PipelinePanel`
-// imports that hook directly rather than this module re-declaring a second query
-// for the identical endpoint. Only the admin-only write operations the board has
-// no use for live here.
+// `Stage`/`useStages` already live in features/deals/queries.ts (the Kanban
+// board's own read side, open to every role -- `PipelineService.list` applies
+// no role check). `PipelinePanel` imports that hook directly; only the
+// admin-only writes the board has no use for live here.
 
 type StageCreateBody = components['schemas']['PipelineStageCreate']
 
@@ -119,16 +113,11 @@ export function useCreateStage() {
   })
 }
 
-/**
- * `DELETE /api/pipeline-stages/{id}` is a hard delete -- unlike Customers/People/
- * Deals, `PipelineRepository.delete` calls `session.delete(stage)`, not a
- * soft-delete flag -- and it refuses with a 409 naming how many deals (archived
- * included) still point at the stage (`PipelineService.delete`'s own docstring).
- * This hook does not swallow, retry or reshape that: it only invalidates the
- * list on success, exactly like every other delete in this codebase, and leaves
- * the caller's `onError` to read `toProblem(error)` -- and its `deals` count --
- * for what the user sees. See `PipelinePanel.tsx`'s own `deleteStage` for that.
- */
+/** `DELETE /api/pipeline-stages/{id}` is a hard delete (`PipelineRepository.
+ *  delete` calls `session.delete`, not a soft-delete flag) that refuses with a
+ *  409 naming how many deals -- archived included -- still point at the stage.
+ *  This hook does not reshape that; `PipelinePanel.remove` reads `toProblem`
+ *  and its `deals` count for what the user sees. */
 export function useDeleteStage() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -170,9 +159,22 @@ export function useCreateUser() {
   })
 }
 
-/** Used today only to flip `attivo` (`UsersPanel`'s "Disattiva"/"Riattiva"), but
- *  takes the full partial `UserUpdate` body rather than a narrower `{attivo}`
- *  shape, since nothing about the endpoint itself is toggle-specific. */
+/**
+ * Used for both the active/inactive toggle and the role select in
+ * `UsersPanel`. Writes the server's own response straight into the cached
+ * list (`setQueryData`) instead of invalidating and trusting a second round
+ * trip to succeed.
+ *
+ * That second round trip is exactly what used to lie: deactivating your own
+ * account kills your session as a side effect of the PATCH succeeding, so the
+ * background refetch this hook used to trigger came back 401 -- and
+ * `DataTable` deliberately keeps showing the last good page on a background
+ * error (see its own docstring), which left "Attivo" on screen next to a
+ * toast that had already said "Utente disattivato". The PATCH response is the
+ * authoritative answer to "did this work", already in hand the moment
+ * `onSuccess` runs; a second request that can independently fail for
+ * unrelated reasons was never necessary to trust it.
+ */
 export function useUpdateUser() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -183,52 +185,10 @@ export function useUpdateUser() {
           body: body as unknown as UserUpdateBody,
         }),
       ),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.users }),
-  })
-}
-
-// -- Personal access tokens ----------------------------------------------------
-
-export type TokenRecord = components['schemas']['PatRead']
-export type CreatedToken = components['schemas']['CreatedToken']
-
-/** Scoped to the caller's own tokens server-side (`PatService.list` filters on
- *  `actor.id`), not by role -- any authenticated user, any role, can list, create
- *  and revoke their own tokens. The screen itself still lives inside the
- *  admin-only Impostazioni section for this slice (see `routes/app/impostazioni.
- *  tsx`), consistent with this task's own framing of PATs as part of "the admin
- *  side" alongside fields, pipeline and users. */
-export function useTokens() {
-  return useQuery({
-    queryKey: queryKeys.tokens,
-    queryFn: () => unwrap(api.GET('/api/tokens')),
-  })
-}
-
-/**
- * The response carries the one and only copy of the plaintext token
- * (`CreatedToken.token` -- see tokens.py's own docstring: "shown once, at
- * creation, and never again"; the server stores only a SHA-256 hash). Nothing
- * here persists it beyond the caller's own state -- see `TokensPanel`'s `issued`
- * dialog for the one place it is held, and only for as long as that dialog is
- * open.
- */
-export function useCreateToken() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (nome: string) => unwrap(api.POST('/api/tokens', { body: { nome } })),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.tokens }),
-  })
-}
-
-/** Irreversible -- `PatService` has no "un-revoke", unlike a field definition's
- *  archive/unarchive pair -- so `TokensPanel` guards this behind a confirmation,
- *  the same way an irreversible pipeline-stage delete is guarded. */
-export function useRevokeToken() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (tokenId: string) =>
-      unwrap(api.DELETE('/api/tokens/{token_id}', { params: { path: { token_id: tokenId } } })),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.tokens }),
+    onSuccess: (updated) => {
+      queryClient.setQueryData<UserRecord[]>(queryKeys.users, (previous) =>
+        previous?.map((user) => (user.id === updated.id ? updated : user)),
+      )
+    },
   })
 }

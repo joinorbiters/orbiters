@@ -1,3 +1,4 @@
+import { useBlocker } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
 import { Copy, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
@@ -31,6 +32,9 @@ function formatUsed(value: string | null): string {
   return value === null ? 'mai' : dateFormatter.format(new Date(value))
 }
 
+const LEAVE_WARNING =
+  'Il token mostrato non è stato confermato come copiato: se esci ora sparisce per sempre e dovrai revocarlo e crearne uno nuovo. Uscire comunque?'
+
 export function TokensPanel() {
   const { user } = useAuth()
   const [creating, setCreating] = useState(false)
@@ -42,6 +46,18 @@ export function TokensPanel() {
   const tokens = useTokens()
   const create = useCreateToken()
   const revoke = useRevokeToken()
+
+  // Escape and click-outside are handled by the reveal dialog itself (below);
+  // this covers the two ways those don't: leaving via Back/a Link (an in-app
+  // route change `preventDefault` on a DOM event cannot see at all) and a
+  // real reload/close (a native "leave site?" prompt, via
+  // `enableBeforeUnload` -- see @tanstack/history's own `onBeforeUnload`).
+  // Both ask the same question and both can be declined, unlike the silent,
+  // unrecoverable loss either used to be.
+  useBlocker({
+    shouldBlockFn: () => Boolean(issued) && !window.confirm(LEAVE_WARNING),
+    enableBeforeUnload: Boolean(issued),
+  })
 
   const fieldError = problem ? fieldErrorFrom(problem) : null
   const banner = problem && fieldError?.field !== 'nome' ? problem.detail : null
@@ -56,11 +72,6 @@ export function TokensPanel() {
     setProblem(null)
     create.mutate(nome, {
       onSuccess: (created) => {
-        // Shown exactly once: PatService stores only a SHA-256 hash of this value
-        // (auth/pat_service.py) and has no way to recover or re-display it after
-        // this response. `creating`/`nome` are reset here, on success, so the
-        // create dialog cannot be reopened with stale state while the reveal
-        // dialog below is what actually has the user's attention.
         setIssued(created)
         setCopied(false)
         setCreating(false)
@@ -79,9 +90,6 @@ export function TokensPanel() {
   }
 
   function revokeToken(token: TokenRecord) {
-    // No "un-revoke" exists (`PatService` has no such method) -- unlike a field
-    // definition's archive/unarchive pair, this really is one-way, so it gets the
-    // same confirm guard as an irreversible pipeline-stage delete.
     const confirmed = window.confirm(
       `Revocare il token "${token.nome}"? Chi lo usa smetterà immediatamente di avere accesso. L'operazione non è reversibile.`,
     )
@@ -133,11 +141,11 @@ export function TokensPanel() {
   const roleLabel = user ? (ROLE_LABELS[user.ruolo] ?? user.ruolo) : null
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-start justify-between gap-4">
+    <div className="p-8">
+      <header className="mb-6 flex items-start justify-between gap-4">
         <div>
-          <h2 className="font-semibold">Token di accesso</h2>
-          <p className="text-sm text-muted-foreground">
+          <h1 className="text-2xl font-semibold tracking-tight">Token di accesso</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
             Servono a far usare PigroCRM a un agente (per esempio Claude, tramite il server MCP)
             con le credenziali di questo account. Imposta il token nella variabile
             d&apos;ambiente <code>PIGROCRM_TOKEN</code> di chi lo userà.
@@ -154,7 +162,7 @@ export function TokensPanel() {
           <Plus className="mr-2 size-4" />
           Nuovo token
         </Button>
-      </div>
+      </header>
 
       <DataTable
         columns={columns}
@@ -206,17 +214,13 @@ export function TokensPanel() {
       </Dialog>
 
       {/*
-       * The one and only place this value is ever shown. `showCloseButton={false}`
-       * plus the two handlers below turn off every way to dismiss this dialog
-       * *except* the explicit "Ho copiato il token" button at the bottom -- no
-       * Esc, no click-outside, no X icon. `onOpenChange` is a deliberate no-op for
-       * the same reason: Radix calls it for all three of those dismissal paths,
-       * and the only state change that is allowed to close this dialog is the
-       * user's own explicit acknowledgement that the token is gone once they do.
-       * A copy button is not enough on its own -- a user who selects and copies
-       * the text manually, without ever clicking it, must still be able to leave
-       * with the value saved, which is exactly why closing is a separate,
-       * always-available action rather than gated on `copied`.
+       * The one and only place this value is shown. No Esc, no click-outside,
+       * no X icon (`showCloseButton={false}`, both handlers below
+       * `preventDefault`, `onOpenChange` a deliberate no-op); `useBlocker`
+       * above covers the two paths those three can't (Back/a Link, and a real
+       * reload/close). The only way out is the explicit button at the
+       * bottom -- never gated on `copied`, since selecting and copying the
+       * text by hand is just as valid as clicking Copy.
        */}
       <Dialog open={Boolean(issued)} onOpenChange={() => {}}>
         <DialogContent

@@ -64,6 +64,7 @@ function renderPanel() {
 beforeEach(() => {
   vi.mocked(api.GET).mockReset()
   vi.mocked(api.POST).mockReset()
+  vi.mocked(api.PATCH).mockReset()
   vi.mocked(toast.error).mockReset()
   vi.mocked(toast.success).mockReset()
 })
@@ -138,6 +139,43 @@ describe('FieldsPanel', () => {
     expect(screen.queryByRole('table')).not.toBeInTheDocument()
   })
 
+  /**
+   * The critical fix-round bug: the previous `if (!key) setKey(slug(value))`
+   * guard derives the key once, from whatever the label happened to be at
+   * the moment `key` first became non-empty, and never again -- typing
+   * "Settore" one character at a time set `key` to "s" after the first
+   * keystroke and then left it there, since `!key` is false for every
+   * keystroke after. `userEvent.type` (unlike `fireEvent.change`, which sets
+   * the whole value in a single event) fires one native input event per
+   * character, so this is what actually caught it -- a `.fill()`-style
+   * single-event update would slug the complete string correctly by
+   * accident and this test would pass against the broken code too.
+   */
+  it('derives the key from the whole label, not just its first character, when typed one keystroke at a time', async () => {
+    vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([])))
+    renderPanel()
+
+    await userEvent.click(await screen.findByRole('button', { name: /nuovo campo/i }))
+    const dialog = screen.getByRole('dialog')
+    await userEvent.type(within(dialog).getByLabelText('Etichetta'), 'Segmento cliente')
+
+    expect(within(dialog).getByLabelText('Chiave')).toHaveValue('segmento_cliente')
+  })
+
+  it('stops deriving the key from the label once the user edits Chiave directly', async () => {
+    vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([])))
+    renderPanel()
+
+    await userEvent.click(await screen.findByRole('button', { name: /nuovo campo/i }))
+    const dialog = screen.getByRole('dialog')
+    await userEvent.type(within(dialog).getByLabelText('Etichetta'), 'Segmento')
+    await userEvent.clear(within(dialog).getByLabelText('Chiave'))
+    await userEvent.type(within(dialog).getByLabelText('Chiave'), 'chiave_custom')
+    await userEvent.type(within(dialog).getByLabelText('Etichetta'), ' cliente')
+
+    expect(within(dialog).getByLabelText('Chiave')).toHaveValue('chiave_custom')
+  })
+
   it('does not gate "Crea" on the label/key being filled in -- the backend decides, not the client', async () => {
     vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([])))
     renderPanel()
@@ -183,5 +221,62 @@ describe('FieldsPanel', () => {
     expect(message.closest('div')).toContainElement(
       within(dialog).getByLabelText('Opzioni (una per riga)'),
     )
+  })
+
+  // Fix-round item 7: `PATCH /api/field-definitions/{id}` already accepts
+  // label/options/required/position, but the brief never offered a way to
+  // use it -- a typo'd label or a missing select option meant archive and
+  // recreate. `key`/`field_type` stay immutable (`FieldDefinitionUpdate`
+  // does not accept them), so this dialog never renders a control for either.
+  describe('editing a field', () => {
+    it('prefills the dialog from the field being edited, not from empty state', async () => {
+      vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([ACTIVE_FIELD])))
+      renderPanel()
+
+      await userEvent.click(await screen.findByRole('button', { name: /modifica segmento/i }))
+      const dialog = screen.getByRole('dialog')
+      expect(within(dialog).getByLabelText('Etichetta')).toHaveValue('Segmento')
+      expect(within(dialog).getByText('segmento')).toBeInTheDocument() // Chiave, read-only context
+      expect(screen.queryByLabelText('Chiave')).not.toBeInTheDocument() // not an editable control
+    })
+
+    it('sends only what FieldDefinitionUpdate accepts', async () => {
+      vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([ACTIVE_FIELD])))
+      vi.mocked(api.PATCH).mockReturnValueOnce(Promise.resolve(ok(ACTIVE_FIELD)))
+      renderPanel()
+
+      await userEvent.click(await screen.findByRole('button', { name: /modifica segmento/i }))
+      const dialog = screen.getByRole('dialog')
+      await userEvent.clear(within(dialog).getByLabelText('Etichetta'))
+      await userEvent.type(within(dialog).getByLabelText('Etichetta'), 'Settore commerciale')
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Salva' }))
+
+      await waitFor(() =>
+        expect(api.PATCH).toHaveBeenCalledWith(
+          '/api/field-definitions/{field_id}',
+          expect.objectContaining({
+            params: { path: { field_id: 'f1' } },
+            body: { label: 'Settore commerciale', required: false, position: 0 },
+          }),
+        ),
+      )
+    })
+
+    it('shows the Opzioni control, prefilled, only for a field type that has options', async () => {
+      const selectField = { ...ACTIVE_FIELD, field_type: 'select', options: ['A', 'B'] }
+      vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([selectField])))
+      renderPanel()
+
+      await userEvent.click(await screen.findByRole('button', { name: /modifica segmento/i }))
+      expect(screen.getByLabelText('Opzioni (una per riga)')).toHaveValue('A\nB')
+    })
+
+    it('does not show Opzioni for a plain text field, even though FieldDefinitionUpdate accepts it', async () => {
+      vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([ACTIVE_FIELD])))
+      renderPanel()
+
+      await userEvent.click(await screen.findByRole('button', { name: /modifica segmento/i }))
+      expect(screen.queryByLabelText(/opzioni/i)).not.toBeInTheDocument()
+    })
   })
 })

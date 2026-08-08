@@ -2,6 +2,7 @@ import { Link, useRouterState } from '@tanstack/react-router'
 import {
   Building2,
   Handshake,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   PanelLeftIcon,
@@ -15,11 +16,16 @@ import { Separator } from '@/components/ui/separator'
 import { useAuth, useIsAdmin } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 
+// Token is here, unconditionally, not inside the `isAdmin &&` block below:
+// a personal access token belongs to whoever creates it, any role (`PatService`
+// scopes by `actor.id`, not role) -- gating it to admins would mean a
+// collaborator could never connect an agent to their own account.
 const NAV = [
   { to: '/app', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/app/clienti', label: 'Clienti', icon: Building2 },
   { to: '/app/persone', label: 'Persone', icon: Users },
   { to: '/app/deal', label: 'Deal', icon: Handshake },
+  { to: '/app/token', label: 'Token', icon: KeyRound },
 ] as const
 
 export function AppShell({ children }: { children: ReactNode }) {

@@ -30,5 +30,11 @@ export const queryKeys = {
   schema: (entityType: string) => ['schema', entityType] as const,
   stages: ['pipeline-stages'] as const,
   users: ['users'] as const,
-  tokens: ['tokens'] as const,
+  // Scoped by user id, not a bare `['tokens']`: `GET /api/tokens` already
+  // scopes the *response* to the caller (`PatService.list` filters on
+  // `actor.id`), and `logout()`'s `queryClient.clear()` already wipes this
+  // cache before another user's session could read it either way -- but a
+  // per-user key is what makes a stale cross-user read impossible by
+  // construction, rather than merely unreproduced today.
+  tokens: (userId: string) => ['tokens', userId] as const,
 }
