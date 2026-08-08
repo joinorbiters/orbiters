@@ -220,8 +220,20 @@ function formatIsoDateItalian(value: string): string {
  *  everywhere else. An empty array gets the same treatment for `multiselect`: the
  *  backend never actually persists `[]` (an empty selection is "absent" there too,
  *  see `is_blank`), but a caller handing this function a fresh `[]` before that
- *  round-trip should not see "" where every other empty state reads as "—". */
+ *  round-trip should not see "" where every other empty state reads as "—".
+ *
+ *  `checkbox` is the one type that never reaches that absence check at all, because
+ *  it is the one type with no third state to report. A yes/no question that nobody
+ *  answered is a "no" — the same thing a stored `false` says — so a dash there would
+ *  be inventing a distinction the control itself cannot express: the form draws an
+ *  unchecked box either way. This is deliberately a *rendering* rule and not a
+ *  data-backfilling one: writing `false` into every record that lacks the key would
+ *  put a value in the database the user never chose (see `DynamicForm`'s `mode` prop
+ *  for where that line is drawn), while reading absence as "No" changes nothing and
+ *  is correct for a record created before the field existed, one created through the
+ *  API, and one created through this UI alike. */
 export function renderFieldValue(field: FieldDefinition, value: unknown): string {
+  if (field.type === 'checkbox') return value ? 'Sì' : 'No'
   if (value === null || value === undefined || value === '') return EMPTY
   if (Array.isArray(value) && value.length === 0) return EMPTY
 
@@ -244,8 +256,6 @@ export function renderFieldValue(field: FieldDefinition, value: unknown): string
       return new Intl.NumberFormat('it-IT', { useGrouping: 'always' }).format(Number(value))
     case 'date':
       return formatIsoDateItalian(String(value))
-    case 'checkbox':
-      return value ? 'Sì' : 'No'
     case 'multiselect':
       return Array.isArray(value) ? value.join(', ') : String(value)
     default:

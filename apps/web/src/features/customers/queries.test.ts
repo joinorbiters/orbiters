@@ -76,4 +76,23 @@ describe('buildCustomerColumns', () => {
       '01234567890',
     )
   })
+
+  /** The table is one of the two read surfaces the "absent checkbox reads No" rule
+   *  has to hold on (the detail page is the other, and goes through the same
+   *  `renderFieldValue`). A record created before the field existed, or through the
+   *  API, legitimately has no key at all -- and a dash there claims a third state a
+   *  checkbox does not have. */
+  it('renders a checkbox column as No when the record carries no value for it', () => {
+    const vip: FieldDefinition = {
+      key: 'vip',
+      label: 'Cliente VIP',
+      type: 'checkbox',
+      required: false,
+      options: [],
+    }
+    const [, , , , , vipColumn] = buildCustomerColumns([vip])
+    expect(cellValue(vipColumn!, { ...BASE_CUSTOMER, custom_fields: {} })).toBe('No')
+    expect(cellValue(vipColumn!, { ...BASE_CUSTOMER, custom_fields: { vip: false } })).toBe('No')
+    expect(cellValue(vipColumn!, { ...BASE_CUSTOMER, custom_fields: { vip: true } })).toBe('Sì')
+  })
 })

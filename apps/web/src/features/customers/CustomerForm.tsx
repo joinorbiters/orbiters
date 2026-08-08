@@ -240,6 +240,17 @@ export function CustomerForm({
           values={{ ...values.native, ...values.custom }}
           onChange={change}
           problem={problem}
+          // `initial` is not a prefill, it *is* the record being edited
+          // (`customerToFormValues(customer)`, from the detail route); its absence is
+          // what "Nuovo cliente" means, and the list route passes none. Deriving the
+          // mode from it rather than taking a third prop is what keeps the two from
+          // ever disagreeing -- a `mode="edit"` next to no record, or a
+          // `mode="create"` next to one, would be a contradiction this form could not
+          // resolve. If a create dialog ever does get a prefilled `initial`, the
+          // effect of guessing "edit" here is only that an untouched checkbox is
+          // omitted rather than sent as `false`, which `renderFieldValue` already
+          // reads as "No" anyway -- benign in the one direction it can be wrong.
+          mode={initial === undefined ? 'create' : 'edit'}
         />
 
         <DialogFooter>
