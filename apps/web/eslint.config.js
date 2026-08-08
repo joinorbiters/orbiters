@@ -83,4 +83,12 @@ export default defineConfig([
       'react-refresh/only-export-components': ['error', { allowExportNames: ['customerToFormValues'] }],
     },
   },
+  {
+    // Persons' own copy of the override immediately above: `personToFormValues`
+    // and `PersonForm` are coupled by construction in exactly the same way.
+    files: ['src/features/people/PersonForm.tsx'],
+    rules: {
+      'react-refresh/only-export-components': ['error', { allowExportNames: ['personToFormValues'] }],
+    },
+  },
 ])
