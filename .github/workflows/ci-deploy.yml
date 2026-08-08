@@ -1,0 +1,189 @@
+name: CI & Deploy (PigroCRM)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: '0.9.24'
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Lint
+        run: uv run ruff check . && uv run ruff format --check .
+      - name: Type check
+        run: uv run mypy packages/core/src apps/api/src apps/mcp/src
+      - name: Test
+        # testcontainers starts PostgreSQL itself; no service container needed.
+        run: uv run pytest -v
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm tsc --noEmit
+      - run: pnpm vitest run
+      - run: pnpm build
+
+  # Not in the brief's own sample workflow; added because apps/web/scripts/e2e.sh
+  # is this slice's own documented, one-command way to run the full Playwright
+  # suite, and it is the only automated proof of Definition-of-done Criterion 1
+  # (login, define a custom field, create a customer with it, attach a person
+  # and a deal, drag the deal across the board). Its own disposable Postgres
+  # (container "pigrocrm-e2e", port 55433) and API (port 8000) are kept out of
+  # "backend" and "frontend" above and given their own job/runner specifically
+  # so neither can collide with testcontainers' own ephemeral Postgres in the
+  # backend job, or with anything else sharing a runner.
+  e2e:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: '0.9.24'
+          enable-cache: true
+      - run: uv sync --frozen
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: apps/web
+      - name: Install Playwright's browser (chromium only -- the only project playwright.config.ts defines)
+        run: pnpm exec playwright install --with-deps chromium
+        working-directory: apps/web
+      - name: Run the end-to-end suite
+        run: apps/web/scripts/e2e.sh
+
+  deploy:
+    # This is the one job that must never fire by accident. Two independent
+    # conditions both have to hold, not just one:
+    #
+    # 1. github.event_name == 'push' && github.ref == 'refs/heads/main' -- a real
+    #    merge to main, never a pull_request build and never an ad hoc
+    #    workflow_dispatch run (that trigger still runs backend/frontend/e2e
+    #    above, for manually re-checking a branch; it deliberately cannot reach
+    #    this job at all yet).
+    # 2. vars.PIGROCRM_DEPLOY_ENABLED == 'true' -- a repository (or environment)
+    #    Actions *variable* that does not exist on a fresh repository and is
+    #    empty by default, so this whole expression is false, and the job
+    #    reports "skipped", until a human deliberately creates it. This is the
+    #    actual arming switch: nothing else in this file makes a deploy possible.
+    #
+    # Neither condition names a status-check function (success/failure/always/
+    # cancelled), so GitHub Actions still ANDs in its own implicit success()
+    # check against `needs` -- a failure in backend, frontend or e2e still skips
+    # this job exactly as it would with no `if:` at all.
+    #
+    # The `environment: production` below is a second, optional gate: it does
+    # nothing on its own, but once a repository admin adds required reviewers
+    # (or a deployment branch policy) to an environment of that name in GitHub's
+    # own Settings -> Environments UI, every run of this job then waits for a
+    # human's explicit approval too, on top of the two conditions above. This
+    # workflow does not, and cannot, configure that UI-only setting itself.
+    if: |
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      vars.PIGROCRM_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    needs: [backend, frontend, e2e]
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify deploy secrets are configured
+        # Arming the workflow (the `if:` above) and configuring the actual
+        # target server are two separate, deliberate steps -- someone could flip
+        # PIGROCRM_DEPLOY_ENABLED on before the four secrets below exist. Failing
+        # fast here, with a plain list of what is missing, beats letting
+        # ssh-keyscan/rsync stumble into the same problem with a cryptic error.
+        env:
+          DEPLOY_HOST: ${{ secrets.PIGROCRM_HOST }}
+          DEPLOY_USER: ${{ secrets.PIGROCRM_USER }}
+          DEPLOY_PATH: ${{ secrets.PIGROCRM_DEPLOY_PATH }}
+          DEPLOY_KEY: ${{ secrets.PIGROCRM_SSH_PRIVATE_KEY }}
+        run: |
+          missing=()
+          [ -z "$DEPLOY_HOST" ] && missing+=(PIGROCRM_HOST)
+          [ -z "$DEPLOY_USER" ] && missing+=(PIGROCRM_USER)
+          [ -z "$DEPLOY_PATH" ] && missing+=(PIGROCRM_DEPLOY_PATH)
+          [ -z "$DEPLOY_KEY" ] && missing+=(PIGROCRM_SSH_PRIVATE_KEY)
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf '::error::PIGROCRM_DEPLOY_ENABLED is true but these secrets are missing: %s\n' "${missing[*]}"
+            exit 1
+          fi
+
+      - name: Configure SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.PIGROCRM_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.PIGROCRM_SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+      - name: Sync sources
+        env:
+          DEPLOY_HOST: ${{ secrets.PIGROCRM_HOST }}
+          DEPLOY_USER: ${{ secrets.PIGROCRM_USER }}
+          DEPLOY_PATH: ${{ secrets.PIGROCRM_DEPLOY_PATH }}
+        run: |
+          ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p \"${DEPLOY_PATH}\""
+          rsync -az --delete \
+            --exclude '.git' --exclude '.github' \
+            --exclude '.env' --exclude 'the reference copy' \
+            --exclude 'node_modules' --exclude 'dist' --exclude '.venv' \
+            ./ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}"
+
+      - name: Deploy
+        env:
+          DEPLOY_HOST: ${{ secrets.PIGROCRM_HOST }}
+          DEPLOY_USER: ${{ secrets.PIGROCRM_USER }}
+          DEPLOY_PATH: ${{ secrets.PIGROCRM_DEPLOY_PATH }}
+        run: |
+          ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "DEPLOY_PATH='${DEPLOY_PATH}' bash -s" <<'SSH'
+            set -e
+            cd "${DEPLOY_PATH}"
+            if docker compose version >/dev/null 2>&1; then
+              COMPOSE="docker compose"
+            elif command -v docker-compose >/dev/null 2>&1; then
+              COMPOSE="docker-compose"
+            else
+              echo "Docker Compose non trovato" >&2
+              exit 1
+            fi
+            $COMPOSE up -d --build
+          SSH
+
+      - name: Configure nginx
+        env:
+          DEPLOY_HOST: ${{ secrets.PIGROCRM_HOST }}
+          DEPLOY_USER: ${{ secrets.PIGROCRM_USER }}
+          DEPLOY_PATH: ${{ secrets.PIGROCRM_DEPLOY_PATH }}
+        run: ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "bash \"${DEPLOY_PATH}/deploy/setup-server.sh\""

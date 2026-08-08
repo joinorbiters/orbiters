@@ -1,0 +1,38 @@
+FROM python:3.13-slim-bookworm
+
+# Pandoc and Typst are not needed until slice 2; do not install them here.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:0.9.24 /uv /usr/local/bin/uv
+
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+COPY packages/core/pyproject.toml packages/core/
+COPY apps/api/pyproject.toml apps/api/
+COPY apps/mcp/pyproject.toml apps/mcp/
+RUN uv sync --frozen --no-dev --no-install-project
+
+COPY packages ./packages
+COPY apps/api ./apps/api
+COPY apps/mcp ./apps/mcp
+RUN uv sync --frozen --no-dev
+
+EXPOSE 8000
+# Migrations run at start-up: one instance, so there is no concurrent-migration risk.
+#
+# `--no-sync` on both calls is load-bearing, not decoration: without it, `uv run`
+# re-evaluates the environment against pyproject.toml's *default* group selection --
+# which includes the `dev` group (mypy, ruff, pytest, ...) since nothing here opts
+# out of it the way the two build-time `uv sync --frozen --no-dev` calls above do --
+# and finds the image's venv (built with --no-dev) "out of date", so it syncs dev
+# dependencies in over the network on every single container start. Confirmed live:
+# the very first `docker compose up` of this image, before this flag was added,
+# printed "Downloading mypy (13.5MiB)" / "Downloading ruff (10.4MiB)" to its own
+# startup log. That is dev tooling landing inside a running "production" container
+# after all, just one step later than a `docker build` layer -- and on a host with
+# no route to PyPI, or one where it is slow, this is the difference between the
+# container starting and not. `--no-sync` makes uv trust the image's own venv
+# exactly as built and skip that check entirely.
+CMD ["sh", "-c", "cd packages/core && uv run --no-sync alembic upgrade head && cd /app && uv run --no-sync uvicorn pigrocrm_api.main:app --host 0.0.0.0 --port 8000"]
