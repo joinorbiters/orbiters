@@ -41,9 +41,28 @@ jobs:
           cache-dependency-path: apps/web/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
-      - run: pnpm tsc --noEmit
+      # `pnpm tsc --noEmit` on its own, below, needs `src/routeTree.gen.ts` to
+      # already exist: main.tsx imports it, it is gitignored (apps/web/.gitignore),
+      # there is no `postinstall` that generates it, and `pnpm lint` above is not
+      # type-aware so it never touches it either. On a clean checkout -- exactly
+      # what this job runs against, unlike a developer's own machine, which has
+      # very likely run `pnpm dev` at some point and generated it as a side effect
+      # -- a bare `tsc --noEmit` run first thing would fail every route file with
+      # TS2307, before backend/frontend even finish, which would also make `needs:
+      # [backend, frontend]`/`needs: [backend, frontend, e2e]` skip `e2e`/`deploy`
+      # below every single time (confirmed live against a clean-checkout copy of
+      # this repo). `pnpm vitest run` and `pnpm build` both load the same
+      # `vite.config.ts`, whose `@tanstack/router-plugin` plugin is what actually
+      # writes that file -- `vitest run` does it as a side effect of building its
+      # own Vite-powered test environment (confirmed live: it exists immediately
+      # after a `vitest run` against a checkout with no prior `pnpm dev`/`pnpm
+      # build`), and `pnpm build`'s own `vite build` does the same, which is also
+      # why `Dockerfile.web`'s `pnpm build` step never hit this. Running either one
+      # before the standalone typecheck is what makes this job reproducible on a
+      # fresh clone rather than passing only by the accident of local dev history.
       - run: pnpm vitest run
       - run: pnpm build
+      - run: pnpm tsc --noEmit
 
   # Not in the brief's own sample workflow; added because apps/web/scripts/e2e.sh
   # is this slice's own documented, one-command way to run the full Playwright
@@ -182,6 +201,13 @@ jobs:
           SSH
 
       - name: Configure nginx
+        # setup-server.sh needs root (see that script's own header comment and
+        # README.md's "Deploy" section) -- PIGROCRM_USER, over plain SSH with no
+        # sudo in between, therefore has to already be root or equivalent on the
+        # target host. That is a requirement on how the target server is
+        # provisioned, not something this workflow can satisfy on its own, and it
+        # is documented rather than papered over with a non-interactive `sudo`
+        # this file cannot confirm is even configured on whatever host runs it.
         env:
           DEPLOY_HOST: ${{ secrets.PIGROCRM_HOST }}
           DEPLOY_USER: ${{ secrets.PIGROCRM_USER }}

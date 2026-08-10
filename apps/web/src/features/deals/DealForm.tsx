@@ -46,10 +46,11 @@ const NATIVE_FIELDS: FieldDefinition[] = [
 // absent from this list: it is a foreign key to `users`, needing a user picker no
 // `FieldDefinition` type covers (the nine types are text/textarea/number/
 // currency/date/select/multiselect/checkbox/url -- lib/schema.ts's own
-// `FieldType`), and no `features/users` module exists yet to build one from.
-// Matches the brief's own list; assigning an owner is left to whichever later
-// slice adds user management, the same way `ore_preventivate`/`valore_
-// preventivato` are written now but not read until slice 4.
+// `FieldType`). `features/settings/queries.ts` has `useUsers` for Impostazioni's
+// own Utenti panel, but no owner-picker control built from it exists yet;
+// assigning an owner is left to whichever later slice adds one, the same way
+// `ore_preventivate`/`valore_preventivato` are written now but not read until
+// slice 4.
 
 const NATIVE_FIELD_KEYS = NATIVE_FIELDS.map((field) => field.key)
 
@@ -193,10 +194,9 @@ export function DealForm({
 }: Props) {
   const [values, setValues] = useState<DealFormValues>(initial ?? DEFAULT_CREATE_VALUES)
   // `initial`'s absence is what "Nuovo deal" means, exactly like `CustomerForm`/
-  // `PersonForm` -- derived rather than a separate prop (the brief's own
-  // `lockCustomer?: boolean`) so the "show the Cliente picker" decision and the
-  // "which DynamicForm mode" decision can never disagree with each other or with
-  // what `initial` actually says.
+  // `PersonForm` -- derived rather than a separate boolean prop, so the "show the
+  // Cliente picker" decision and the "which DynamicForm mode" decision can never
+  // disagree with each other or with what `initial` actually says.
   const isCreate = initial === undefined
 
   // Same "reset synchronously when `open` toggles" pattern as `CustomerForm`/

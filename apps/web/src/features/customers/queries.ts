@@ -118,15 +118,12 @@ export function useDeleteCustomer() {
 
 // -- Collegamenti: the customer detail page's own "linked records" tab -------------
 //
-// `usePeople`/`useDeals` do not exist yet -- Persons and Deals are Tasks 7 and 8, not
-// this one -- so importing a `features/people` or `features/deals` module here would
-// fail `tsc`/`pnpm build` today, not merely at some later integration point. Both
-// list endpoints already exist and already accept a `customer_id` filter
-// (apps/api/src/pigrocrm_api/routers/{people,deals}.py), so this is a real fetch
-// against a real, working endpoint -- just deliberately narrow: exactly enough to
-// render this one tab, not a general-purpose people/deals data layer. Tasks 7/8 own
-// building that; a person or deal clicked from here has nowhere to navigate to
-// until they land.
+// Deliberately not `usePeople`/`useDeals` from `features/people`/`features/deals`
+// (which exist now, with their own, more general list hooks): these two are
+// narrower on purpose, exactly enough to render this one tab's short preview list,
+// not a general-purpose people/deals data layer. Both list endpoints already
+// accept a `customer_id` filter (apps/api/src/pigrocrm_api/routers/{people,deals}.py),
+// so this is a real fetch against a real, working endpoint either way.
 export type RelatedPerson = components['schemas']['PersonRead']
 export type RelatedDeal = components['schemas']['DealRead']
 

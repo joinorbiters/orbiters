@@ -67,13 +67,12 @@ interface ActorMeta {
 }
 
 /**
- * Keyed by the real `Actor.type` values (packages/core/src/pigrocrm/core/actor.py)
- * -- confirmed live against a running instance of this API (see
- * task-5-report.md): a browser session records "user"; a personal-access-token
- * call -- the MCP server's own authentication, pat_service.py -- records "mcp",
- * tied to the human who owns the token, not to a null actor; "system" is reserved
- * for actor-less bootstrap actions (`Actor.system()`, today only `pigrocrm
- * createadmin`).
+ * Keyed by the real `Actor.type` values (packages/core/src/pigrocrm/core/actor.py),
+ * confirmed against a running instance of this API: a browser session records
+ * "user"; a personal-access-token call -- the MCP server's own authentication,
+ * pat_service.py -- records "mcp", tied to the human who owns the token, not to a
+ * null actor; "system" is reserved for actor-less bootstrap actions (`Actor.
+ * system()`, today only `pigrocrm createadmin`).
  *
  * The three get deliberately different *visible* treatments, not just three
  * icons at the same weight: "did I do that, or did an agent?" is the first

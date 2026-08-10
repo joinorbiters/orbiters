@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# Needs root (writes /etc/nginx/sites-available/, symlinks into sites-enabled/,
+# runs `nginx -t` and `systemctl reload nginx`): run as `sudo bash
+# deploy/setup-server.sh`, or as a user with sudo equivalent -- see README.md's
+# own "Deploy" section for the full prerequisite and why this is documented
+# rather than silently assumed or auto-elevated with a non-interactive `sudo`.
+# `ci-deploy.yml` invokes this same script over plain SSH, so the deploy user
+# configured there has to already satisfy this, not just whoever runs it by hand.
+#
 # Idempotent: safe to run on every deploy.
 #
 # "Idempotent" needs one qualification: after `certbot --nginx -d "$DOMAIN"` has run

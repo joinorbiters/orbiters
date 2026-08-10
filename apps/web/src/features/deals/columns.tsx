@@ -13,11 +13,10 @@ const EMPTY = '—'
 // this stack's ICU: `Intl.NumberFormat('it-IT').format(2500.5)` renders "2500,50",
 // no separator). Every currency/number surface in this product already forces
 // grouping on for exactly that reason; a Deal-specific formatter that skipped it
-// would be the one screen where a four-figure deal silently lost its separator --
-// which is exactly what the brief's own `KanbanCard`/`KanbanBoard` sample did,
-// and its own required test (`shows the total value per column in euros`,
-// asserting `/2\.500,50/`) would fail against that sample for exactly this
-// reason.
+// would be the one screen where a four-figure deal silently lost its separator,
+// failing `KanbanBoard.test.tsx`'s own required assertion that a Kanban column's
+// total renders with one ("shows the total value per column in euros, with a
+// thousands separator", asserting `/2\.500,50/`).
 const euro = new Intl.NumberFormat('it-IT', {
   style: 'currency',
   currency: 'EUR',
@@ -46,8 +45,7 @@ export function displayNative(value: string | null): string {
  * yet yields `None`); an empty string cannot occur here the way it can for a
  * native text column -- `DealUpdate` has no supported way to write `""` into a
  * `Decimal` field at all (see `sumValorePrevisto`'s docstring below for the one
- * place this matters on this screen, and task-8-report.md for why clearing one
- * of these columns back to empty has no working spelling through the API today).
+ * place this matters on this screen).
  */
 export function formatMoney(value: string | null): string {
   return value === null ? EMPTY : euro.format(Number(value))
@@ -96,9 +94,9 @@ export function formatDate(value: string | null): string {
  * never a binary float (deals/models.py's own comment: "a binary float cannot
  * represent 1234.56 exactly, and that drift is a bug the moment it reaches an
  * invoice"). `deals.reduce((sum, deal) => sum + Number(deal.valore_previsto ??
- * 0), 0)` -- the brief's own line 261 -- throws that guarantee away the moment
- * two or more deals are summed on the client, by routing the addition back
- * through the exact representation `Numeric` exists to avoid.
+ * 0), 0)` throws that guarantee away the moment two or more deals are summed on
+ * the client, by routing the addition back through the exact representation
+ * `Numeric` exists to avoid.
  *
  * The fix is to never let a fractional value touch a floating-point operation at
  * all: split the decimal string into its integer and fractional parts as
@@ -164,9 +162,9 @@ export function sumValorePrevisto(deals: Deal[]): string {
  * definitions` shows up here with no code change. `customFields` already
  * excludes archived definitions (`useEntitySchema`/`describe_specs`), so there is
  * nothing here to filter a second time. `ore_preventivate`/`valore_preventivato`
- * are deliberately not table columns, matching the brief and the detail route's
- * own "Preventivo" card: they are written now but not read until the slice 4
- * estimate-vs-actual report.
+ * are deliberately not table columns, matching the detail route's own
+ * "Preventivo" card (`routes/app/deal/$dealId.tsx`): they are written now but
+ * not read until the slice 4 estimate-vs-actual report.
  */
 export function buildDealColumns(customFields: FieldDefinition[]): ColumnDef<DataTableFeatures, Deal>[] {
   const native: ColumnDef<DataTableFeatures, Deal>[] = [

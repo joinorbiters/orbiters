@@ -23,9 +23,12 @@ function customerPage(items: { id: string; ragione_sociale: string }[]) {
 
 beforeEach(() => {
   mockGet.mockReset()
-  // Every test renders PersonForm, which always calls `useCustomers` for the
-  // "Cliente" picker -- an empty page is enough for every test that does not
-  // care about its contents; the ones that do override this before rendering.
+  // Every test that renders PersonForm with the dialog open reaches
+  // `CustomerPicker`, which calls `useCustomers` for the "Cliente" picker -- an
+  // empty page is enough for every one of those that does not care about its
+  // contents; the ones that do override this before rendering. The one test
+  // below that renders with the dialog closed never calls `api.GET` at all, so
+  // this default simply goes unused there.
   mockGet.mockReturnValue(customerPage([]))
 })
 
@@ -207,6 +210,31 @@ describe('PersonForm', () => {
   })
 
   describe('customer association', () => {
+    /**
+     * A fix-round defect, back-ported from `DealForm.tsx`'s identical fix:
+     * `useCustomers({limit: 200})` used to run at `PersonForm`'s own top level,
+     * unconditionally -- and this form is mounted by both the Persone list and
+     * every person detail page regardless of `open` (only the dialog's own
+     * visibility toggles on it), so every view of either screen fired a
+     * `GET /api/customers?limit=200` for a dropdown nobody had opened. The
+     * picker is now its own component (`CustomerPicker`), mounted -- and
+     * therefore only ever calling `useCustomers` -- inside `DialogContent`,
+     * which Radix does not render at all while `open` is false.
+     */
+    it('does not fetch the customer list while the dialog is closed', () => {
+      renderWithClient(
+        <PersonForm
+          title="Modifica persona"
+          open={false}
+          onOpenChange={vi.fn()}
+          customFields={[]}
+          initial={personToFormValues(BASE_PERSON)}
+          onSubmit={vi.fn()}
+        />,
+      )
+      expect(mockGet).not.toHaveBeenCalled()
+    })
+
     it('does not send customer_id or detach when there was never a customer to begin with', async () => {
       const onSubmit = vi.fn()
       renderWithClient(

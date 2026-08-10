@@ -18,8 +18,9 @@ const EMPTY = '—'
  * value as a blank cell instead of the same dash every other absent value gets.
  * Defined locally rather than imported from `features/customers/columns`: the two
  * features are not coupled today (Customer's own file has no reciprocal import
- * from this one), and this is the same four-line helper Task 6 chose to keep
- * local to its own `columns.tsx` rather than lifting into a shared module.
+ * from this one), and this is the same four-line helper `features/customers/
+ * columns.tsx` itself keeps local to its own file rather than lifting into a
+ * shared module.
  */
 export function displayNative(value: string | null): string {
   return value === null || value === '' ? EMPTY : value

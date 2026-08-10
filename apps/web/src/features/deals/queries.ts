@@ -59,10 +59,10 @@ const MAX_PAGES = 100
  * `GET /api/deals` is cursor-paginated and bounded (`limit` defaults to 50, capped
  * at 200 -- deals/schemas.py's `DealListQuery`, deals/repository.py's keyset
  * pagination on `Deal.id` ascending). A `useDeals` that only ever fetched the
- * first page -- what the brief's own sample did -- silently renders a subset of
- * a stage's deals the moment a tenant passes 50 open deals: the Kanban's own
- * per-column count and total (`columns.tsx`'s `sumValorePrevisto`) would then be
- * wrong with nothing on screen saying so, which is worse than a visible cap.
+ * first page would silently render a subset of a stage's deals the moment a
+ * tenant passes 50 open deals: the Kanban's own per-column count and total
+ * (`columns.tsx`'s `sumValorePrevisto`) would then be wrong with nothing on
+ * screen saying so, which is worse than a visible cap.
  *
  * This walks the cursor at the maximum page size until the server reports no
  * `next_cursor`, aggregating every page into one flat list -- "every deal
@@ -157,7 +157,7 @@ export function useUpdateDeal(dealId: string) {
  * deal in a second tab and then dragging its still-cached card in the first: the
  * PATCH 404s (`DealRepository.get` excludes a soft-deleted row, so `move_stage`
  * raises `NotFound`), the card returns to its original column, and a toast reads
- * "deal <id> not found" -- see task-8-report.md for the full transcript.
+ * "deal <id> not found".
  *
  * `onError` toasts the server's message itself, on the mutation, rather than
  * leaving it to a per-call `.mutate(vars, {onError})` at the call site (the

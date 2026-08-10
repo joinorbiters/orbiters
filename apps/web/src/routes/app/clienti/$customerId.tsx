@@ -4,6 +4,7 @@ import { useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { renderFieldValue } from '@/components/DynamicFieldRenderer'
 import { EntityDetailLayout } from '@/components/EntityDetailLayout'
+import { QueryErrorBanner } from '@/components/QueryErrorBanner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -48,11 +49,11 @@ function formatCurrency(value: string | null): string {
 }
 
 /** A short preview list, not a paginated table: this tab exists so a customer's
- *  linked people/deals are visible at all today, not to replace the full Persone/
- *  Deal screens Tasks 7/8 build. Loading, error and empty are still drawn as three
- *  different things -- the same reason DataTable/Timeline never collapse them --
- *  since a stalled request and a genuinely empty list are different claims even in
- *  a small card. */
+ *  linked people/deals are visible at all here, not to replace the full Persone/
+ *  Deal screens (`routes/app/persone`, `routes/app/deal`). Loading, error and
+ *  empty are still drawn as three different things -- the same reason
+ *  DataTable/Timeline never collapse them -- since a stalled request and a
+ *  genuinely empty list are different claims even in a small card. */
 function LinkedList<T>({
   query,
   emptyMessage,
@@ -80,7 +81,7 @@ function LinkedList<T>({
   return <div>{items.map(renderItem)}</div>
 }
 
-function CustomerDetail() {
+export function CustomerDetail() {
   const { customerId } = useParams({ from: '/app/clienti/$customerId' })
   const navigate = useNavigate()
   const canWrite = useCanWrite()
@@ -88,13 +89,32 @@ function CustomerDetail() {
   const [problem, setProblem] = useState<ProblemDetail | null>(null)
 
   const schema = useEntitySchema('customer')
-  const { data: customer, isLoading } = useCustomer(customerId)
+  const { data: customer, isLoading, isError, error } = useCustomer(customerId)
   const update = useUpdateCustomer(customerId)
   const remove = useDeleteCustomer()
   const people = useCustomerPeople(customerId)
   const deals = useCustomerDeals(customerId)
 
   if (isLoading) return <Skeleton className="m-8 h-96" />
+  // A failed fetch and a genuine 404 both leave `customer` undefined once loading
+  // ends -- collapsing them into the same "Cliente non trovato." a bare `!customer`
+  // check would show is exactly the bug `DataTable`/`QueryErrorBanner` and
+  // `Timeline`'s own `isError` branch exist to rule out everywhere else in this
+  // product: a 500, a 502 or a dropped connection would tell the user the record
+  // does not exist, when the truth is "we could not ask". `toProblem(error).status`
+  // is the transport-level signal that actually distinguishes the two (see that
+  // function's own docstring: it is never ambiguous, unlike the response body
+  // shape) -- a real 404 keeps this screen's own wording, anything else reuses the
+  // same banner every other failed request in this app shows, rather than a fourth
+  // way of saying "something went wrong".
+  if (isError) {
+    if (toProblem(error).status === 404) return <p className="p-8">Cliente non trovato.</p>
+    return (
+      <div className="p-8">
+        <QueryErrorBanner error={error} />
+      </div>
+    )
+  }
   if (!customer) return <p className="p-8">Cliente non trovato.</p>
 
   const custom = schema.data?.custom_fields ?? []

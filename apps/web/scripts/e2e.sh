@@ -17,7 +17,7 @@
 # only on the happy path: it kills whatever is bound to the frontend's port
 # directly, on top of -- not instead of -- the API and database this config
 # can't own at all.
-set -uo pipefail
+set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$REPO_ROOT"
