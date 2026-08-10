@@ -9,12 +9,15 @@
 # after deliberately killing it mid-suite. Sourcing the same file from both places
 # is what keeps the two copies from ever drifting apart.
 #
-# Lives under apps/web/ (not a repo-root scripts/, which is what the task-10 brief's
-# own sample used) because this task's own binding rule is narrower than the brief
-# it started from: "Only apps/web/ may change" -- this worktree is one of several
-# sibling slices sharing the same repo, and a repo-root scripts/ is exactly the kind
-# of shared directory that would collide with another one on merge. Every *value*
-# below is still the brief's own, verbatim; only the path holding them moved.
+# Lives under apps/web/ (not a repo-root scripts/) because the rule in force when
+# this was written was narrower than usual: "Only apps/web/ may change" -- this
+# worktree is one of several sibling slices sharing the same repo, and a repo-root
+# scripts/ is exactly the kind of shared directory that would collide with another
+# one on merge. That rule was itself scoped to this slice's own frontend-only
+# tasks; the deploy task later in this same branch ships root-level files by
+# design (.github/, Dockerfile.*, docker-compose.yml, deploy/), and did not move
+# this file when it did -- there is no reason to, once a repo-root scripts/ is no
+# longer the merge hazard it was.
 
 export PIGROCRM_DATABASE_URL="postgresql+psycopg://pigrocrm:pigrocrm@localhost:55433/pigrocrm_e2e"
 # The brief's own literal value here ("e2e-secret-not-for-production") is 29

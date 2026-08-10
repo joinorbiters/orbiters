@@ -6,7 +6,22 @@ import { defineConfig } from 'vite'
 import { configDefaults } from 'vitest/config'
 
 export default defineConfig({
-  plugins: [tanstackRouter({ target: 'react', autoCodeSplitting: true }), react(), tailwindcss()],
+  plugins: [
+    tanstackRouter({
+      target: 'react',
+      autoCodeSplitting: true,
+      // Without this, a `*.test.tsx` colocated next to a route file (the same
+      // convention every other feature in this codebase already uses -- see
+      // `routes/app/clienti/$customerId.test.tsx` and its two siblings) is scanned
+      // as a route candidate too, and warns on every dev/build/test run ("does not
+      // export a Route") since it obviously does not export one. A raw regex
+      // source string, matched against the bare filename (confirmed by reading
+      // `@tanstack/router-generator`'s own `getRouteNodes`), not a glob.
+      routeFileIgnorePattern: '\\.test\\.tsx$',
+    }),
+    react(),
+    tailwindcss(),
+  ],
   resolve: { alias: { '@': path.resolve(__dirname, './src') } },
   server: {
     port: 5173,

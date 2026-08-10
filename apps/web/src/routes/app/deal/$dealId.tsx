@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { renderFieldValue } from '@/components/DynamicFieldRenderer'
 import { EntityDetailLayout } from '@/components/EntityDetailLayout'
+import { QueryErrorBanner } from '@/components/QueryErrorBanner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -54,7 +55,7 @@ function DealCustomerCard({ customerId }: { customerId: string }) {
   )
 }
 
-function DealDetail() {
+export function DealDetail() {
   const { dealId } = useParams({ from: '/app/deal/$dealId' })
   const navigate = useNavigate()
   const canWrite = useCanWrite()
@@ -62,12 +63,25 @@ function DealDetail() {
   const [problem, setProblem] = useState<ProblemDetail | null>(null)
 
   const schema = useEntitySchema('deal')
-  const { data: deal, isLoading } = useDeal(dealId)
+  const { data: deal, isLoading, isError, error } = useDeal(dealId)
   const stages = useStages()
   const update = useUpdateDeal(dealId)
   const remove = useDeleteDeal()
 
   if (isLoading) return <Skeleton className="m-8 h-96" />
+  // See `routes/app/clienti/$customerId.tsx`'s identical guard for the full
+  // reasoning: without this, a 500/502/dropped connection reads as "Deal non
+  // trovato." exactly like a genuine 404 does, since both leave `deal` undefined
+  // once loading ends. `toProblem(error).status` is the one place that is never
+  // ambiguous; only a real 404 keeps this screen's own wording.
+  if (isError) {
+    if (toProblem(error).status === 404) return <p className="p-8">Deal non trovato.</p>
+    return (
+      <div className="p-8">
+        <QueryErrorBanner error={error} />
+      </div>
+    )
+  }
   if (!deal) return <p className="p-8">Deal non trovato.</p>
 
   const custom = schema.data?.custom_fields ?? []

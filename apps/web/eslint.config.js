@@ -114,4 +114,23 @@ export default defineConfig([
       'react-refresh/only-export-components': ['error', { allowExportNames: ['resolveMove'] }],
     },
   },
+  {
+    // The three top-level detail routes now export their component directly
+    // (`CustomerDetail`/`PersonDetail`/`DealDetail`), not only wrapped inside the
+    // `{ component: ... }` object `createFileRoute` already received, so their
+    // own isError/404 handling is directly testable without rendering a full
+    // router (see each file's own `*.test.tsx`). Same shape as the
+    // `customerToFormValues`/`personToFormValues`/`dealToFormValues` overrides
+    // above, just naming the *non*-component half of the pair: `Route` --
+    // `createFileRoute`'s own descriptor object, not a component -- is what this
+    // rule would otherwise flag, mixed in the same file as a real component export.
+    files: [
+      'src/routes/app/clienti/$customerId.tsx',
+      'src/routes/app/persone/$personId.tsx',
+      'src/routes/app/deal/$dealId.tsx',
+    ],
+    rules: {
+      'react-refresh/only-export-components': ['error', { allowExportNames: ['Route'] }],
+    },
+  },
 ])

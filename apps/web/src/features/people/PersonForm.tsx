@@ -104,6 +104,59 @@ function isBlank(value: unknown): boolean {
   return false
 }
 
+/**
+ * Split out of `PersonForm`, back-porting `DealForm.tsx`'s own `CustomerPicker`
+ * fix: `useCustomers({limit: 200})` used to run at `PersonForm`'s own top level,
+ * unconditionally, on every render of this component -- and `PersonForm` itself
+ * stays mounted by its callers regardless of `open` (the `wasOpen` reset pattern
+ * below only makes sense because of that), so every view of the Persone list and
+ * every person detail page fired `GET /api/customers?limit=200` for a dropdown
+ * nobody had opened there. Moving the hook into a child rendered here, inside
+ * `DialogContent`, fixes it the same way: Radix does not render `DialogContent`'s
+ * children at all while its `Dialog` is closed, so this only ever mounts -- and
+ * only ever calls `useCustomers` -- while the dialog is actually open. Unlike
+ * `DealForm`'s copy, this one is never additionally gated by an `isCreate` check:
+ * a person's customer can be changed or detached on edit, not only chosen once at
+ * create (see `submit`'s own `detach` handling below), so this picker belongs in
+ * both modes, not create-only.
+ */
+function CustomerPicker({
+  value,
+  onChange,
+}: {
+  value: string | null
+  onChange: (value: string | null) => void
+}) {
+  // `limit: 200` mirrors `DealForm`'s identical picker -- a one-shot cap for a
+  // dropdown, not this screen's own list -- pagination for the Clienti list
+  // itself is a known limitation of `routes/app/clienti/index.tsx` (a single
+  // unpaginated page, no further-pages control), not something this picker
+  // needs to solve.
+  const customers = useCustomers({ limit: 200 })
+
+  return (
+    <div className="space-y-2">
+      <Label htmlFor="customer">Cliente</Label>
+      <Select
+        value={value ?? NO_CUSTOMER}
+        onValueChange={(next) => onChange(next === NO_CUSTOMER ? null : next)}
+      >
+        <SelectTrigger id="customer" className="w-full">
+          <SelectValue placeholder="Nessun cliente" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NO_CUSTOMER}>Nessun cliente</SelectItem>
+          {customers.data?.items.map((customer) => (
+            <SelectItem key={customer.id} value={customer.id}>
+              {customer.ragione_sociale}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  )
+}
+
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -126,11 +179,6 @@ export function PersonForm({
   title,
 }: Props) {
   const [values, setValues] = useState<PersonFormValues>(initial ?? DEFAULT_CREATE_VALUES)
-  // `limit: 200` (the same bound `PersonListQuery`/`CustomerListQuery` both cap
-  // at) is a one-shot cap for a dropdown, not this screen's own list -- pagination
-  // for the Clienti list itself is Task 6's own known, flagged limitation, not
-  // something this picker needs to solve.
-  const customers = useCustomers({ limit: 200 })
 
   // Same "reset synchronously when `open` toggles" pattern as `CustomerForm`,
   // for the identical reason: this component stays mounted across dialog opens
@@ -236,25 +284,10 @@ export function PersonForm({
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-2">
-          <Label htmlFor="customer">Cliente</Label>
-          <Select
-            value={(values.native.customer_id as string | null) ?? NO_CUSTOMER}
-            onValueChange={(value) => change('customer_id', value === NO_CUSTOMER ? null : value)}
-          >
-            <SelectTrigger id="customer" className="w-full">
-              <SelectValue placeholder="Nessun cliente" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={NO_CUSTOMER}>Nessun cliente</SelectItem>
-              {customers.data?.items.map((customer) => (
-                <SelectItem key={customer.id} value={customer.id}>
-                  {customer.ragione_sociale}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        <CustomerPicker
+          value={(values.native.customer_id as string | null) ?? null}
+          onChange={(value) => change('customer_id', value)}
+        />
 
         <DynamicForm
           fields={[...NATIVE_FIELDS, ...customFields]}

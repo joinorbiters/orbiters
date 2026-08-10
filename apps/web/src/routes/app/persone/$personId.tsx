@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { renderFieldValue } from '@/components/DynamicFieldRenderer'
 import { EntityDetailLayout } from '@/components/EntityDetailLayout'
+import { QueryErrorBanner } from '@/components/QueryErrorBanner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -47,7 +48,7 @@ function LinkedCustomerRow({ customerId }: { customerId: string }) {
   return <Row label="Ragione sociale" value={customer.data?.ragione_sociale ?? '…'} />
 }
 
-function PersonDetail() {
+export function PersonDetail() {
   const { personId } = useParams({ from: '/app/persone/$personId' })
   const navigate = useNavigate()
   const canWrite = useCanWrite()
@@ -55,11 +56,24 @@ function PersonDetail() {
   const [problem, setProblem] = useState<ProblemDetail | null>(null)
 
   const schema = useEntitySchema('person')
-  const { data: person, isLoading } = usePerson(personId)
+  const { data: person, isLoading, isError, error } = usePerson(personId)
   const update = useUpdatePerson(personId)
   const remove = useDeletePerson()
 
   if (isLoading) return <Skeleton className="m-8 h-96" />
+  // See `routes/app/clienti/$customerId.tsx`'s identical guard for the full
+  // reasoning: without this, a 500/502/dropped connection reads as "Persona non
+  // trovata." exactly like a genuine 404 does, since both leave `person`
+  // undefined once loading ends. `toProblem(error).status` is the one place that
+  // is never ambiguous; only a real 404 keeps this screen's own wording.
+  if (isError) {
+    if (toProblem(error).status === 404) return <p className="p-8">Persona non trovata.</p>
+    return (
+      <div className="p-8">
+        <QueryErrorBanner error={error} />
+      </div>
+    )
+  }
   if (!person) return <p className="p-8">Persona non trovata.</p>
 
   const custom = schema.data?.custom_fields ?? []
