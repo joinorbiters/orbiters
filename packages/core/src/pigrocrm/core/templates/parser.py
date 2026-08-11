@@ -1,0 +1,277 @@
+"""Segment first, then tokenise. Never a regex over the whole document at once.
+
+Segmentation is what gives every placeholder its destination context. Tokenisation
+runs *inside* a segment, so a placeholder cannot acquire the wrong escaping rule by
+being near something else on the page -- and a placeholder whose `{{` and `}}` fall in
+*different* segments (a fence opened mid-mustache, say) is tokenised nowhere at all,
+rather than merged into some third, unintended context: `_TOKEN_RE.finditer` only ever
+sees one segment's text at a time, so a dangling `{{` in segment N and a dangling `}}`
+in segment N+1 can never pair up (see
+test_a_placeholder_spanning_a_fence_boundary_becomes_two_inert_text_fragments).
+
+Every claim below about what Pandoc actually does with a given byte sequence was
+checked against a real `pandoc -t json` / `pandoc -t typst` run (Pandoc 3.8.2.1) rather
+than derived from the CommonMark grammar by reasoning -- see the "for_real" tests in
+test_template_parser.py, which repeat the same checks as executable proof.
+"""
+
+import re
+from dataclasses import dataclass
+
+from pigrocrm.core.errors import ValidationFailed
+from pigrocrm.core.templates.ast import EachNode, IfNode, Node, TextNode, VariableNode
+from pigrocrm.core.templates.escaping import RenderContext
+
+ENTITY = "template"
+FIELD = "corpo_markdown"
+
+# The three regions that are not ordinary Markdown body text, in one alternation so a
+# single left-to-right scan cannot produce overlapping or out-of-order segments:
+#   fence  -- ```{=typst} ... ``` , Pandoc's raw-attribute block. DOTALL, and lazy, so
+#             it stops at the first valid closing fence rather than the last one in the
+#             file.
+#   inline -- `...`{=typst} , the span form of the same thing.
+#   url    -- ](...) , a Markdown link or image destination.
+#
+# Three refinements earned against real Pandoc, not against the CommonMark spec text:
+#
+# - `(?P<fence_ticks>`{3,})` and its later backreference `(?P=fence_ticks)`` `*`,
+#   rather than a literal ```` ``` ````: CommonMark accepts an opening run of three OR
+#   MORE backticks, and a closing run of at least as many. This matters here because
+#   Typst's own raw-code syntax also uses backticks, so a raw block that itself needs
+#   to *contain* a literal ``` has to open with four -- confirmed live, a 4-backtick
+#   fence around content containing a bare `` `raw code` `` line round-trips through
+#   `pandoc -t typst` with that line untouched.
+# - `[ ]{0,3}` before the opening and closing backticks: CommonMark still recognises a
+#   fence indented up to three spaces -- four turns it into a plain indented code
+#   block instead, which cannot carry a `{=typst}` attribute at all and is confirmed
+#   live to keep the fence markers as literal text. Three spaces also happens to be
+#   exactly what a single, unnested `- ` or `1. ` list item needs for its own raw
+#   block, confirmed live against Pandoc's own AST: a fence indented two spaces inside
+#   a bullet item is a real `RawBlock`, a sibling of the item's paragraph, not
+#   something this segmenter has to special-case for lists as such. A fence nested
+#   two list levels deep needs more than three spaces and is a documented, tested gap
+#   (test_a_fence_nested_two_list_levels_deep_is_not_recognised_as_typst) rather than a
+#   silent one: this is a flat regex, not a container-aware Markdown parser, and
+#   getting that specific case right would require becoming one.
+# - `\{=typst[ \t]*\}`, not `\{=typst\}`: Pandoc tolerates trailing whitespace before
+#   the closing brace (confirmed live: ` ```{=typst } ` still becomes a real `RawBlock`
+#   and still survives the `-t typst` writer) but not a space right after `=` --
+#   ` ```{= typst} ` is not recognised as an attribute at all and falls back to an
+#   ordinary, multi-line inline code span, confirmed live. Deliberately not lenient
+#   about that one: treating it as a typst segment here would escape a value for a
+#   context Pandoc itself never puts it in.
+#
+# The `inline` alternative requires its delimiter to be exactly one backtick, not
+# adjacent to another one on either side (`(?<!`)`` `` `(?!`)`` ``, twice). Without
+# that guard, the second and third characters of an *unterminated* fence's own opening
+# line ("```{=typst}" with no closing fence anywhere in the document) match `inline`
+# on their own -- two of the three backticks plus the attribute -- because a bare
+# `[^`\n]*` between two single backticks does not care that one of those backticks has
+# a sibling immediately behind it. Confirmed live: Pandoc's own reader does not do
+# this; with no closing fence, the whole opening line is ordinary paragraph text, see
+# test_an_unterminated_fence_is_ordinary_markdown_text_not_a_broken_inline_match.
+_SEGMENT_RE = re.compile(
+    r"(?P<fence>^[ ]{0,3}(?P<fence_ticks>`{3,})\{=typst[ \t]*\}[ \t]*\n"
+    r".*?^[ ]{0,3}(?P=fence_ticks)`*[ \t]*$)"
+    r"|(?P<inline>(?<!`)`(?!`)[^`\n]*(?<!`)`(?!`)\{=typst\})"
+    r"|(?P<url>\]\([^)\n]*\))",
+    re.DOTALL | re.MULTILINE,
+)
+
+_TOKEN_RE = re.compile(r"\{\{(?P<body>.*?)\}\}", re.DOTALL)
+
+# `re.fullmatch` against this, never `re.match` with `$`: `$` matches before a
+# trailing newline, so `{{a\n}}` would be accepted as the path `a` and the newline
+# would silently vanish. The project has already paid for that distinction once, on a
+# 12-character P.IVA that reached Postgres as an uncaught DataError. See
+# `parse_template` below for the other half of this: `fullmatch` only protects a
+# caller who still has the newline in hand by the time it runs it.
+_PATH_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
+
+
+def _normalize_newlines(source: str) -> str:
+    """CRLF, and lone CR, collapsed to `\\n` before anything else touches `source`.
+
+    Narrower than `escaping._NEWLINE_EQUIVALENTS` on purpose: that set defends a
+    *value* a customer controls, so it also collapses the exotic separators Typst's
+    lexer treats as line breaks. This is the template's own source, written by
+    whoever authors offers, not attacker-controlled in the same way -- the only
+    realistic threat here is an editor that saved `\\r\\n`, and every anchor below
+    (`^`, `$`, the literal `\\n` after a fence's attribute line) is written against a
+    single `\\n` convention and would otherwise silently fail to match a line that
+    actually ends in `\\r\\n`.
+    """
+    return source.replace("\r\n", "\n").replace("\r", "\n")
+
+
+@dataclass(frozen=True)
+class Segment:
+    text: str
+    context: RenderContext
+    line: int
+
+
+def _line_of(source: str, offset: int) -> int:
+    return source.count("\n", 0, offset) + 1
+
+
+def _fail(line: int, reason: str, expected: str | None = None) -> None:
+    raise ValidationFailed(ENTITY, FIELD, f"riga {line}: {reason}", expected=expected)
+
+
+def segment(source: str) -> tuple[Segment, ...]:
+    """Split `source` into typed regions, in order, covering it completely."""
+    source = _normalize_newlines(source)
+    segments: list[Segment] = []
+    cursor = 0
+    for match in _SEGMENT_RE.finditer(source):
+        if match.start() > cursor:
+            segments.append(
+                Segment(source[cursor : match.start()], "markdown", _line_of(source, cursor))
+            )
+        # Checked by presence, not `match.lastgroup`: `fence` now has a nested group
+        # of its own (`fence_ticks`), which is *numbered* after `fence` and therefore
+        # participates as the match's last-matched group whenever `fence` does --
+        # `lastgroup` would report "fence_ticks", not "fence", for every raw block.
+        # Irrelevant to the two-way choice actually made here (only "url" is special),
+        # but asking for the group this code means by name, rather than the highest
+        # group number that happened to participate, is not the kind of coincidence
+        # worth relying on.
+        context: RenderContext = "url" if match.group("url") is not None else "typst"
+        segments.append(Segment(match.group(0), context, _line_of(source, match.start())))
+        cursor = match.end()
+    if cursor < len(source):
+        segments.append(Segment(source[cursor:], "markdown", _line_of(source, cursor)))
+    return tuple(segments)
+
+
+def _parse_path(raw: str, line: int) -> tuple[str, ...]:
+    if not _PATH_RE.fullmatch(raw):
+        _fail(
+            line,
+            f"percorso '{raw}' non valido",
+            expected="un percorso puntato, es. cliente.ragione_sociale",
+        )
+    return tuple(raw.split("."))
+
+
+class _Frame:
+    """One open block on the stack, plus where its children accumulate."""
+
+    def __init__(self, kind: str, path: tuple[str, ...], line: int) -> None:
+        self.kind = kind
+        self.path = path
+        self.line = line
+        self.children: list[Node] = []
+        self.otherwise: list[Node] | None = None
+
+    def emit(self, node: Node) -> None:
+        (self.otherwise if self.otherwise is not None else self.children).append(node)
+
+
+def parse_template(source: str) -> tuple[Node, ...]:
+    """Parse a template into a node tree, or raise `ValidationFailed` naming the line."""
+    root = _Frame("root", (), 1)
+    stack: list[_Frame] = [root]
+
+    for seg in segment(source):
+        cursor = 0
+        for match in _TOKEN_RE.finditer(seg.text):
+            if match.start() > cursor:
+                stack[-1].emit(TextNode(seg.text[cursor : match.start()]))
+            line = seg.line + seg.text.count("\n", 0, match.start())
+            # `.strip(" \t")`, never a bare `.strip()`: a bare strip removes a
+            # trailing "\n" along with the spaces, which is exactly the P.IVA-shaped
+            # mistake `_PATH_RE`'s own `fullmatch` comment warns about, just moved one
+            # call earlier -- `{{a\n}}` would reach `_parse_path` already reduced to
+            # the valid path "a", the newline discarded before `fullmatch` ever saw
+            # it. Stripping only horizontal whitespace keeps `{{ cliente.nome }}`
+            # ergonomic for whoever writes templates while leaving an embedded
+            # newline in place for the checks below to reject.
+            body = match.group("body").strip(" \t")
+            _consume_token(stack, body, line, seg.context)
+            cursor = match.end()
+        if cursor < len(seg.text):
+            stack[-1].emit(TextNode(seg.text[cursor:]))
+
+    if len(stack) > 1:
+        open_frame = stack[-1]
+        _fail(open_frame.line, f"blocco {{{{#{open_frame.kind}}}}} non chiuso")
+    return tuple(root.children)
+
+
+def _consume_token(stack: list[_Frame], body: str, line: int, context: RenderContext) -> None:
+    """One `{{...}}`. Mutates `stack`; appends to the frame on top of it."""
+    if body.startswith("#"):
+        keyword, _, rest = body[1:].partition(" ")
+        if keyword not in ("if", "each"):
+            _fail(line, f"blocco '{keyword}' sconosciuto", expected="if oppure each")
+        stack.append(_Frame(keyword, _parse_path(rest.strip(), line), line))
+        return
+
+    if body.startswith("/"):
+        keyword = body[1:].strip()
+        if len(stack) == 1:
+            _fail(line, f"chiusura {{{{/{keyword}}}}} senza blocco aperto")
+        frame = stack.pop()
+        if frame.kind != keyword:
+            _fail(line, f"{{{{/{keyword}}}}} non corrisponde a {{{{#{frame.kind}}}}}")
+        node: Node = (
+            IfNode(frame.path, frame.line, tuple(frame.children), tuple(frame.otherwise or ()))
+            if frame.kind == "if"
+            else EachNode(frame.path, frame.line, tuple(frame.children))
+        )
+        stack[-1].emit(node)
+        return
+
+    if body == "else":
+        if len(stack) == 1 or stack[-1].kind != "if":
+            _fail(line, "{{else}} fuori da un blocco {{#if}}")
+        if stack[-1].otherwise is not None:
+            # Not named in the brief's test list, but silently free to get right:
+            # without this, a second {{else}} in the same block would quietly
+            # re-open `otherwise` as a fresh empty list, discarding whatever the
+            # first else-branch had already accumulated with no error at all.
+            _fail(line, "{{else}} duplicato nello stesso blocco {{#if}}")
+        stack[-1].otherwise = []
+        return
+
+    # A space in the body would be a helper call -- `{{uppercase nome}}`. The engine
+    # has none, by design: a template is a document, not a program, and an engine that
+    # executes code inside a template is an attack surface this product has no reason
+    # to have (spec 3.2).
+    if " " in body or "\n" in body:
+        _fail(
+            line,
+            f"sintassi '{body}' non ammessa: il motore non ha helper ne' espressioni",
+            expected="un percorso puntato, es. cliente.ragione_sociale",
+        )
+    stack[-1].emit(VariableNode(_parse_path(body, line), context, line))
+
+
+def declared_paths(nodes: tuple[Node, ...]) -> tuple[tuple[str, ...], ...]:
+    """Every distinct variable path a template reads, in first-seen order.
+
+    Used by `describe_template` so an agent can ask what a template wants *before*
+    asking the user, and by the template service to check declared variables against
+    what the body actually uses.
+    """
+    seen: list[tuple[str, ...]] = []
+
+    def walk(items: tuple[Node, ...]) -> None:
+        for node in items:
+            match node:
+                case VariableNode(path=path):
+                    if path not in seen:
+                        seen.append(path)
+                case IfNode(then=then, otherwise=otherwise):
+                    walk(then)
+                    walk(otherwise)
+                case EachNode(body=body):
+                    walk(body)
+                case TextNode():
+                    pass
+
+    walk(nodes)
+    return tuple(seen)
