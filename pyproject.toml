@@ -28,3 +28,9 @@ python_version = "3.13"
 strict = true
 mypy_path = ["packages/core/src", "apps/api/src", "apps/mcp/src"]
 explicit_package_bases = true
+# Matches .github/workflows/*.yml's own `uv run mypy packages/core/src apps/api/src
+# apps/mcp/src` exactly, so the bare `uv run mypy` gate this repo's own task briefs
+# name actually passes instead of failing on "Missing target module, package, files,
+# or command" every time -- a gate that always fails trains people to read failure as
+# normal, and read a real one as more of the same.
+files = ["packages/core/src", "apps/api/src", "apps/mcp/src"]
