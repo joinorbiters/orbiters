@@ -1,4 +1,4 @@
-"""Escaping a value for the context it lands in, never once for the whole document.
+r"""Escaping a value for the context it lands in, never once for the whole document.
 
 The render is two-staged: a Markdown template becomes compiled Markdown, Pandoc turns
 that into Typst, Typst composes the PDF. A value in an ordinary paragraph is escaped
@@ -7,61 +7,78 @@ for Markdown and Pandoc handles the Typst layer for it; a value inside a raw
 stands between it and the compiler. Acme applied one uniform `escapeTypstText` to
 everything (`website/vite.config.js:71-77`) and patched the character list each time a
 new symbol broke a document -- the commit `fix(pdf): escape @ and other
-typst-sensitive chars in placeholders` is that pattern in its final form. The fix is
-not a longer list; it is knowing which list applies.
+typst-sensitive chars in placeholders` is that pattern in its final form.
+
+The fix is not a longer list, and -- found in review, against real compiles, not
+just the two strings this module's own first version was tested with -- it is not two
+shorter, hand-picked lists either. That first version gave `escape_typst` an `@` and
+did not give `escape_markdown` one; gave neither a `/`, and a bare `//` opens a Typst
+line comment, so a customer named `Rossi // nota` deleted the rest of that line from a
+real, cleanly-compiled PDF with no error at all. Two independently curated lists drift
+apart from each other for the same reason one list drifts from correct over time:
+nothing forces either to be complete, or to agree with the other. The fix is to stop
+enumerating which characters are dangerous and escape the entire ASCII punctuation
+class, unconditionally, in both contexts: both Pandoc's Markdown and Typst's markup
+accept a backslash before any of the 32 characters in `string.punctuation` as that
+character literally, in any position, so there is no character left for a list to
+omit -- confirmed by compiling real PDFs with all 32 present at once, see
+`test_every_ascii_punctuation_character_survives_markdown_context` and its `typst`
+sibling below.
+
+Known, accepted limitation, not closed by this module: a value that lands in ordinary
+Markdown body text and happens to contain a literal `--`, `---`, or `...` still
+reaches the compiled PDF retypeset as an en dash, an em dash, or an ellipsis. Escaping
+does not prevent this, because it cannot reach far enough: `escape_markdown`'s output
+is Markdown *source*, and Pandoc's own Typst *writer* re-serialises that source's
+parsed content afterwards, on its own rules, before Typst ever sees it. Pandoc's
+writer does defend a lone character that is individually dangerous to Typst (`$`, `~`,
+a backtick) by re-escaping it on the way out, but a lone `-` or `.` is not individually
+dangerous, so it writes each one out bare -- and Typst's *own* lexer, independent of
+Pandoc, merges two or three adjacent bare ones into a dash or an ellipsis no matter
+which template put them there. `escape_typst` does not have this problem: its output
+is never re-serialised by anything, so an escaped `--` (`\-\-`) reaches Typst already
+protected and survives.
 """
 
 import re
+import string
 from typing import Literal
 from urllib.parse import quote
 
 RenderContext = Literal["markdown", "typst", "url"]
 
-# Pandoc's Markdown accepts a backslash escape before any ASCII punctuation mark, so
-# every character here becomes literal text rather than syntax.
-#
-# `&` is not in the spec's §3.3 list and is added deliberately: Pandoc reads `&amp;`
-# as a character entity, so a customer whose name really contains the six characters
-# `&amp;` would otherwise see a bare `&` in the PDF -- data quietly altered, which is
-# the same class of defect as stripping a NUL byte.
-#
-# `#` is absent from this tuple on purpose: it is only syntax at the start of a line
-# (an ATX heading) and is handled separately below, because escaping every `#` would
-# turn "C#" into "C\#" in the output of engines less forgiving than Pandoc.
-_MARKDOWN_SPECIALS: tuple[str, ...] = ("\\", "`", "*", "_", "[", "]", "<", ">", "&")
+# Every ASCII punctuation character, escaped unconditionally, in both contexts -- see
+# the module docstring for why a curated subset per context is exactly the defect this
+# replaces. Escaping `#` unconditionally rather than only at the start of a line (the
+# first version's rule, since a bare `#` mid-sentence is already literal to Pandoc) is
+# simpler and no less correct: a backslash-escaped `#` mid-sentence round-trips through
+# Pandoc to the identical bare `#` an unescaped one would have produced.
+_ASCII_PUNCTUATION: frozenset[str] = frozenset(string.punctuation)
 
-# Typst treats `\` followed by any non-alphanumeric character as that character
-# literally, so the same one-backslash rule applies here.
+# Typst's own lexer treats as a line terminator: a lone `\r` or `\n`, the two-character
+# `\r\n`, and five characters Pandoc's Markdown reader never treats as line-structuring
+# whitespace at all -- U+000B (vertical tab), U+000C (form feed), U+0085 (next line),
+# U+2028 (line separator) and U+2029 (paragraph separator).
 #
-# The spec's §3.3 list is `\ # $ @ " < >`. Four characters are added:
-#   `[` `]` -- a raw {=typst} block in this project's own carried-over template writes
-#             each table cell as `[...]` (see render/assets/template-offer.md, the
-#             `#table(...)` block); an unbalanced bracket in a value closes the cell
-#             early and the compile fails.
-#   `*` `_` -- Typst's own strong/emphasis markers. Unescaped, a value containing them
-#             renders bold inside a raw block, which is the Markdown bug one layer down.
-# The backtick is added for the same reason as `*`: it opens a raw block in Typst markup.
-_TYPST_SPECIALS: tuple[str, ...] = (
-    "\\",
-    "#",
-    "$",
-    "@",
-    '"',
-    "<",
-    ">",
-    "[",
-    "]",
-    "*",
-    "_",
-    "`",
+# An ordinary `\n`, or a real blank-line paragraph break, is already safe without this:
+# Pandoc's own AST records where a block began, so its Typst writer defends whatever
+# character starts the next one (confirmed live: a literal `=` placed right after a
+# genuine paragraph break comes out of Pandoc as `\=`, not a bare `=`). The five exotic
+# characters get no such defence, because Pandoc's reader does not recognise any of
+# them as a boundary in the first place -- each passes through a value as ordinary,
+# harmless-looking text and reaches the compiled Typst source as a literal code point,
+# where Typst's lexer, unlike Pandoc's reader, does treat it as a real line break
+# (confirmed live: "Rossi" + U+2028 + "= TITOLO" compiles to a genuine level-1 heading,
+# in both contexts this module serves). Collapsing every one of them to a plain space
+# removes the line a value could otherwise manufacture, rather than relying on
+# whichever compiler's own escaping happens to defend that particular position.
+_NEWLINE_EQUIVALENTS = re.compile(
+    "\r\n|[\r\n\v\f"  # CRLF as one unit; lone CR/LF; vertical tab; form feed
+    + chr(0x85)  # NEL, next line
+    + chr(0x2028)  # LS, line separator
+    + chr(0x2029)  # PS, paragraph separator
+    + "]"
 )
-
-# `re.fullmatch` is used everywhere in this project rather than `re.match` with `$`,
-# because `$` matches before a trailing newline. Here the pattern is used with `sub`,
-# where that distinction does not arise -- but the anchor is written `\Z`-free and
-# line-anchored explicitly so nobody has to reason about it.
-_LINE_LEADING_HASH = re.compile(r"^([ \t]*)#", re.MULTILINE)
-_ANY_NEWLINE = re.compile(r"\r\n|\r|\n")
 
 
 def _reject_nul(value: str) -> str:
@@ -73,7 +90,7 @@ def _reject_nul(value: str) -> str:
     return value
 
 
-def _escape_each(value: str, specials: tuple[str, ...]) -> str:
+def _escape_each(value: str, specials: frozenset[str]) -> str:
     """One pass over the *original* characters.
 
     Escaping character by character in a single loop is what makes the backslash
@@ -83,25 +100,46 @@ def _escape_each(value: str, specials: tuple[str, ...]) -> str:
     is why Acme's chain had to put `\\` first and could still be broken by adding a
     new rule above it.
     """
-    marked = set(specials)
-    return "".join("\\" + ch if ch in marked else ch for ch in value)
+    return "".join("\\" + ch if ch in specials else ch for ch in value)
 
 
 def escape_markdown(value: str) -> str:
-    """For a placeholder that lands in ordinary Markdown body text."""
-    escaped = _escape_each(_reject_nul(value), _MARKDOWN_SPECIALS)
-    return _LINE_LEADING_HASH.sub(r"\1\\#", escaped)
+    """For a placeholder that lands in ordinary Markdown body text.
+
+    Escapes every ASCII punctuation character, unconditionally -- see
+    `_ASCII_PUNCTUATION`. Collapses every Typst-recognised line terminator to a
+    single space -- see `_NEWLINE_EQUIVALENTS` -- even though this value's
+    *immediate* target is Pandoc, not Typst: it still ends its life as Typst source
+    one stage later, once Pandoc's own writer re-serialises it, and Pandoc's own
+    notion of where a line boundary is is not Typst's.
+    """
+    flattened = _NEWLINE_EQUIVALENTS.sub(" ", _reject_nul(value))
+    return _escape_each(flattened, _ASCII_PUNCTUATION)
 
 
 def escape_typst(value: str) -> str:
-    """For a placeholder that lands inside a raw ```{=typst} block or span.
+    """For a placeholder that lands inside a raw ```{=typst} block, in *markup*
+    position -- as ordinary text, or as the content of a `[...]` block.
 
-    Newlines collapse to a single space: the value is landing inside a syntactic
-    unit -- a table cell, a header field -- and a raw newline there changes the
-    layout of a document nobody is going to proof-read before it is sent.
+    This is not correct for *string-literal* position -- inside `#text("...")`,
+    `#link("...")` and similar, which are common inside a raw typst block. A Typst
+    string literal has its own, much smaller escape grammar (`\\`, `\"`, and a
+    handful of named/unicode escapes); a backslash before any other character is not
+    a recognised escape there, and Typst keeps the backslash as a visible, literal
+    character instead of consuming it (confirmed live: `#text("C\\# dev")` renders as
+    the four characters `C\\# dev`, backslash included). A value bound for
+    string-literal position needs a different, narrower escaper -- doubling only `\\`
+    and `"` -- which this module does not provide; put such a value in markup
+    position (its own `[...]` content block) instead of passing it as a string
+    argument.
+
+    Newlines -- and everything else Typst's own lexer treats as one, see
+    `_NEWLINE_EQUIVALENTS` -- collapse to a single space: the value is landing inside
+    a syntactic unit -- a table cell, a header field -- and a raw line break there
+    changes the layout of a document nobody is going to proof-read before it is sent.
     """
-    flattened = _ANY_NEWLINE.sub(" ", _reject_nul(value))
-    return _escape_each(flattened, _TYPST_SPECIALS)
+    flattened = _NEWLINE_EQUIVALENTS.sub(" ", _reject_nul(value))
+    return _escape_each(flattened, _ASCII_PUNCTUATION)
 
 
 def escape_url(value: str) -> str:
