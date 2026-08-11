@@ -100,6 +100,33 @@ il conteggio dei record coinvolti.
 
 ---
 
+## B6 — Un volume Postgres preesistente fa fallire l'API con un errore che non spiega niente
+
+Postgres applica `POSTGRES_PASSWORD` **solo alla prima inizializzazione del volume**. Se il volume
+esiste già da un tentativo precedente con una password diversa, l'API riparte in loop e l'unica
+traccia è `FATAL: password authentication failed for user "pigrocrm"` in fondo a uno stack trace
+SQLAlchemy — mentre nginx risponde 502 e lo SPA si carica normalmente, il che suggerisce all'operatore
+di guardare nel posto sbagliato. Riprodotto durante la verifica dello stack.
+
+**Cura:** una riga nel runbook che dica di usare `docker compose down -v` quando si vuole davvero un
+primo avvio, e la spiegazione del sintomo. Non è un difetto del compose file: è comportamento
+standard di Postgres, ma costa mezz'ora a chi non lo sa.
+
+---
+
+## B7 — Verificare il login con `curl` non dimostra che funzioni in un browser
+
+`PIGROCRM_COOKIE_SECURE` non viene inoltrato al container (scelta deliberata: in produzione vale il
+default `true`). Nella verifica dello stack, login e richieste autenticate sono passate in HTTP
+semplice **perché `curl` ha comunque rimandato il cookie `Secure`**, cosa che un browser non fa.
+
+Quindi: lo stack compose è verificato end-to-end via `curl` — build, migrazioni, creazione admin,
+login, cliente creato — ma quella prova **non copre** il caso che il runbook segnala, cioè che senza
+TLS un browser scarta il cookie in silenzio. La verifica in browser resta da fare su un deploy con
+TLS vero.
+
+---
+
 ## B5 — `useUpdateUser` è una sola mutazione condivisa da tutte le righe
 
 Il selettore di ruolo e l'interruttore Disattiva vivono sulla stessa istanza, quindi l'`isPending`
