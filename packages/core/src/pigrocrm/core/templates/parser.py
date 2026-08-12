@@ -13,6 +13,11 @@ Every claim below about what Pandoc actually does with a given byte sequence was
 checked against a real `pandoc -t json` / `pandoc -t typst` run (Pandoc 3.8.2.1) rather
 than derived from the CommonMark grammar by reasoning -- see the "for_real" tests in
 test_template_parser.py, which repeat the same checks as executable proof.
+
+`parse_template` also stamps every raw typst *block* fence with a `// pigrocrm:line=`
+comment naming its own template line -- see `TYPST_LINE_MARKER_PREFIX` below for why
+this lives here rather than in the renderer that walks the resulting tree: this is the
+only place the true line is ever known.
 """
 
 import re
@@ -230,6 +235,37 @@ class _Frame:
         (self.otherwise if self.otherwise is not None else self.children).append(node)
 
 
+# Emitted as the first line inside a raw ```{=typst} block's *body* -- any fence
+# spelling this segmenter recognises (backtick or tilde, three or more, indented
+# inside a list, quoted inside a blockquote): confirmed live, against real Pandoc
+# and Typst, that inserting this exact bare, unindented line does not stop the
+# fence from being read as one raw block and does not leak into whatever sibling
+# block follows, regardless of the fence's own indentation or blockquote nesting --
+# Pandoc's own lazy-continuation handling absorbs it either way. Pandoc copies a
+# raw block through to the Typst writer verbatim, line for line, so this survives
+# into the intermediate .typ file -- which is what lets a later stage
+# (render/diagnostics.py, not built yet) turn a Typst compiler error at
+# "intermediate.typ:57" into "riga 12 del template" by arithmetic rather than by
+# guessing. `//` is a Typst line comment: the marker produces no output of its own.
+#
+# Never applied to an *inline* raw span (`` `...`{=typst} ``): that content lives on
+# a single line with no independent "body" of its own to prepend a line to, and this
+# segmenter's own grammar guarantees an inline match never contains a newline (its
+# token class explicitly excludes one -- see `_SEGMENT_RE`'s `inline` alternative).
+# So "does this typst segment's matched text contain a newline" is exactly the test
+# for "this is the block form", with no need to also recognise which delimiter or
+# how much indentation it used.
+TYPST_LINE_MARKER_PREFIX = "// pigrocrm:line="
+
+
+def _insert_typst_line_marker(text: str, body_line: int) -> str:
+    """`text` is a typst *block*-fence segment's matched text (guaranteed to contain
+    at least one "\\n" by the caller); returns it with the marker inserted as a new
+    line immediately after the fence's own opening line."""
+    opening, _, body = text.partition("\n")
+    return f"{opening}\n{TYPST_LINE_MARKER_PREFIX}{body_line}\n{body}"
+
+
 def parse_template(source: str) -> tuple[Node, ...]:
     """Parse a template into a node tree, or raise `ValidationFailed` naming the line."""
     root = _Frame("root", (), 1)
@@ -254,11 +290,26 @@ def parse_template(source: str) -> tuple[Node, ...]:
             if seg.text:
                 stack[-1].emit(TextNode(seg.text))
             continue
+        text = seg.text
+        # Computed here, not in the renderer: counting newlines *within* a single
+        # TextNode's own string, with no visibility into how many lines came before
+        # it in the wider document, is wrong for any fence that is not the first
+        # thing in the template -- this segment's `seg.line` is already the true
+        # line, carried all the way from `segment()`'s own full-document scan.
+        marked = seg.context == "typst" and "\n" in text
+        if marked:
+            text = _insert_typst_line_marker(text, seg.line + 1)
         cursor = 0
-        for match in _TOKEN_RE.finditer(seg.text):
+        for match in _TOKEN_RE.finditer(text):
             if match.start() > cursor:
-                stack[-1].emit(TextNode(seg.text[cursor : match.start()]))
-            line = seg.line + seg.text.count("\n", 0, match.start())
+                stack[-1].emit(TextNode(text[cursor : match.start()]))
+            # The marker inserts one whole extra line before every placeholder that
+            # can occur in this segment -- never on the fence's own opening line,
+            # since the grammar requires a literal newline right after the
+            # attribute brace, leaving no room for a placeholder there -- so it must
+            # be subtracted back out to report the template's own line, not the
+            # marker-shifted one.
+            line = seg.line + text.count("\n", 0, match.start()) - (1 if marked else 0)
             # `.strip(" \t")`, never a bare `.strip()`: a bare strip removes a
             # trailing "\n" along with the spaces, which is exactly the P.IVA-shaped
             # mistake `_PATH_RE`'s own `fullmatch` comment warns about, just moved one
@@ -270,8 +321,8 @@ def parse_template(source: str) -> tuple[Node, ...]:
             body = match.group("body").strip(" \t")
             _consume_token(stack, body, line, seg.context)
             cursor = match.end()
-        if cursor < len(seg.text):
-            stack[-1].emit(TextNode(seg.text[cursor:]))
+        if cursor < len(text):
+            stack[-1].emit(TextNode(text[cursor:]))
 
     if len(stack) > 1:
         open_frame = stack[-1]

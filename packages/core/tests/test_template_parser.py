@@ -8,7 +8,12 @@ import pytest
 
 from pigrocrm.core.errors import ValidationFailed
 from pigrocrm.core.templates.ast import EachNode, IfNode, TextNode, VariableNode
-from pigrocrm.core.templates.parser import declared_paths, parse_template, segment
+from pigrocrm.core.templates.parser import (
+    TYPST_LINE_MARKER_PREFIX,
+    declared_paths,
+    parse_template,
+    segment,
+)
 
 TYPST_BLOCK_TEMPLATE = """Gentile {{cliente.ragione_sociale}},
 
@@ -763,3 +768,112 @@ def test_for_real_an_inline_span_with_double_backticks_is_raw_inline(tmp_path: P
     ).stdout
     assert "#emph[x]" in written
     assert "`" not in written
+
+
+# --- Task 3 (the renderer): the parser stamps every raw typst block fence with a
+# `// pigrocrm:line=<N>` comment naming its own template line, so a later stage can
+# map a Typst compiler error back to "riga N del template" by arithmetic. Tested here
+# rather than only in the renderer's own suite because computing the line is entirely
+# this module's responsibility -- `segment()` already carries the true line through
+# CRLF, list indentation and blockquote nesting; a marker computed by counting
+# newlines within a single TextNode's own string, with no visibility into how many
+# lines came before it in the wider document, would be wrong for any fence that is
+# not the first thing in the template. That specific wrong-but-plausible shortcut is
+# exactly what the first test below pins.
+
+
+def test_a_typst_fence_far_from_the_document_start_gets_the_correct_line_marker() -> None:
+    # A naive "count the newlines inside this fence's own TextNode" approach cannot
+    # see "una", "due", "tre" or "quattro" at all and would report line 3, not 7.
+    source = "una\ndue\ntre\nquattro\n\n```{=typst}\n#table([x])\n```\n"
+    nodes = parse_template(source)
+    text = "".join(n.text for n in nodes if isinstance(n, TextNode))
+    assert f"{TYPST_LINE_MARKER_PREFIX}7" in text
+
+
+def test_two_typst_fences_each_get_their_own_correct_line_marker() -> None:
+    # Guards against an implementation that carries state between segments (e.g.
+    # counting cumulatively) instead of computing each fence's marker independently
+    # from that segment's own `seg.line`.
+    source = "intro\n\n```{=typst}\n#table([x])\n```\n\nmezzo\n\n```{=typst}\n#table([y])\n```\n"
+    nodes = parse_template(source)
+    text = "".join(n.text for n in nodes if isinstance(n, TextNode))
+    assert f"{TYPST_LINE_MARKER_PREFIX}4" in text
+    assert f"{TYPST_LINE_MARKER_PREFIX}10" in text
+
+
+def test_a_placeholders_line_is_unaffected_by_its_own_fences_inserted_marker() -> None:
+    # The marker inserts a real extra line before the fence's body; the offset that
+    # compensates for it must land every placeholder's reported line back on the
+    # template's own numbering, not the marker-shifted one.
+    source = "una\ndue\n\n```{=typst}\n#table([{{a}}])\n```\n"
+    nodes = parse_template(source)
+    variable = next(n for n in nodes if isinstance(n, VariableNode))
+    assert variable.line == 5
+    assert variable.context == "typst"
+
+
+def test_a_tilde_fenced_typst_block_also_gets_a_line_marker() -> None:
+    # Generalised beyond the one exact spelling (three backticks, lowercase, no
+    # indentation) the task brief's own sample code checks for with a literal
+    # `.startswith(...)` -- this segmenter recognises tilde fences too (see
+    # test_segment_recognises_a_tilde_fence_as_typst above), and a marker that only
+    # fires for one fence spelling would silently not work for the others.
+    source = "prima\n\n~~~{=typst}\n#table([x])\n~~~\n\ndopo\n"
+    nodes = parse_template(source)
+    text = "".join(n.text for n in nodes if isinstance(n, TextNode))
+    assert f"{TYPST_LINE_MARKER_PREFIX}4" in text
+
+
+def test_a_typst_fence_indented_inside_a_list_still_gets_a_correct_line_marker() -> None:
+    # Confirmed live (pandoc -t typst, then a real typst compile) before writing this:
+    # inserting a bare, unindented marker line does not stop Pandoc from reading the
+    # rest of the list-indented fence as the same raw block, and the compiled PDF
+    # shows no trace of the marker -- see the task report for the full transcript.
+    source = "- voce uno\n  ```{=typst}\n  #table([{{riga.totale}}])\n  ```\n- voce due\n"
+    nodes = parse_template(source)
+    text = "".join(n.text for n in nodes if isinstance(n, TextNode))
+    assert f"{TYPST_LINE_MARKER_PREFIX}3" in text
+    variable = next(n for n in nodes if isinstance(n, VariableNode))
+    assert variable.line == 3
+    assert variable.context == "typst"
+
+
+def test_a_typst_fence_inside_a_blockquote_still_gets_a_correct_line_marker() -> None:
+    # Same live confirmation as the list case above, for blockquote nesting instead.
+    source = "> testo\n> ```{=typst}\n> #table([{{a}}])\n> ```\n"
+    nodes = parse_template(source)
+    text = "".join(n.text for n in nodes if isinstance(n, TextNode))
+    assert f"{TYPST_LINE_MARKER_PREFIX}3" in text
+
+
+def test_an_inline_typst_span_never_gets_a_line_marker() -> None:
+    # An inline raw span is one line with no independent "body" to prepend a line
+    # to; this segmenter's own grammar guarantees its matched text never contains a
+    # newline, which is the exact signal `parse_template` uses to skip it.
+    source = "prima `#emph[{{x}}]`{=typst} dopo"
+    nodes = parse_template(source)
+    text = "".join(n.text for n in nodes if isinstance(n, TextNode))
+    assert TYPST_LINE_MARKER_PREFIX not in text
+
+
+@requires_real_compiler
+def test_for_real_the_line_marker_survives_pandoc_and_produces_no_visible_text(
+    tmp_path: Path,
+) -> None:
+    source = "prima\n\n```{=typst}\n#table([x])\n```\n\ndopo\n"
+    nodes = parse_template(source)
+    rendered = "".join(n.text for n in nodes if isinstance(n, TextNode))
+    md_path = tmp_path / "doc.md"
+    typst_path = tmp_path / "doc.typst"
+    pdf_path = tmp_path / "doc.pdf"
+    md_path.write_text(rendered + "\n", encoding="utf-8")
+    subprocess.run(["pandoc", str(md_path), "-t", "typst", "-o", str(typst_path)], check=True)
+    written = typst_path.read_text(encoding="utf-8")
+    assert f"{TYPST_LINE_MARKER_PREFIX}4" in written
+    subprocess.run(["typst", "compile", str(typst_path), str(pdf_path)], check=True)
+    text = subprocess.run(
+        ["pdftotext", "-layout", str(pdf_path), "-"], check=True, capture_output=True, text=True
+    ).stdout
+    assert "pigrocrm:line" not in text
+    assert "prima" in text and "dopo" in text
