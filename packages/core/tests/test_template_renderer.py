@@ -156,6 +156,24 @@ def test_each_falls_back_to_the_outer_scope_for_a_path_the_item_lacks() -> None:
     assert out == "A@ACME;B@ACME;"
 
 
+def test_nested_each_scopes_do_not_leak_into_each_other() -> None:
+    # Beyond the brief: a nested #each pushes a second frame on top of the first,
+    # and the push/pop discipline in _render_each has to keep both loops' own
+    # items distinct while still letting the inner one fall back to the outer's
+    # scope (not the root's) for a name the inner item lacks -- and to leave no
+    # trace of the first outer item's frame behind for the second one to see.
+    out = render_template(
+        "{{#each ordini}}{{cliente}}:{{#each righe}}{{nome}}({{cliente}}),{{/each}};{{/each}}",
+        {
+            "ordini": [
+                {"cliente": "A", "righe": [{"nome": "x"}, {"nome": "y"}]},
+                {"cliente": "B", "righe": [{"nome": "z"}]},
+            ]
+        },
+    )
+    assert out == "A:x(A),y(A),;B:z(B),;"
+
+
 def test_each_over_a_non_list_fails_naming_the_line() -> None:
     with pytest.raises(ValidationFailed) as excinfo:
         render_template("x\n{{#each r}}X{{/each}}", {"r": "non una lista"})
