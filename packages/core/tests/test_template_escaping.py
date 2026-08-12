@@ -148,6 +148,15 @@ def test_escape_for_rejects_an_unknown_context() -> None:
         escape_for("latex", "x")  # type: ignore[arg-type]
 
 
+def test_escape_for_verbatim_raises_since_it_should_never_be_called() -> None:
+    # No escaper exists for "verbatim" on purpose: the parser never tokenises a
+    # verbatim segment, so no VariableNode should ever carry this context. This
+    # pins the invariant loudly rather than silently -- if it is ever violated, this
+    # is what should fail, not a backslash quietly showing up in a rendered PDF.
+    with pytest.raises(ValueError, match="verbatim non ha una regola di escaping"):
+        escape_for("verbatim", "x")
+
+
 def test_a_nul_byte_is_rejected_not_stripped_in_every_context() -> None:
     # Same rule as pigrocrm.core.validation.SafeStr: silently deleting one invisible
     # byte from a user's text is a lost character nobody notices.

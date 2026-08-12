@@ -280,23 +280,31 @@ def test_a_fence_nested_two_list_levels_deep_is_not_recognised_as_typst() -> Non
     assert all(s.context == "markdown" for s in segments)
 
 
-def test_segment_does_not_treat_a_language_class_attribute_as_typst() -> None:
+def test_segment_treats_a_language_class_attribute_as_verbatim_not_typst() -> None:
     # `{.typst}` is a syntax-highlighting *class*, not the `=format` raw-block marker
-    # -- a different Pandoc feature entirely, and its content is code to be displayed,
-    # not Typst source to be passed through untouched.
+    # -- a different Pandoc feature entirely (a real CodeBlock, confirmed live in
+    # test_for_real_a_language_class_attribute_is_a_code_block_not_a_raw_block), and
+    # its content is code to be displayed, not Typst source to be passed through
+    # untouched. Fix round 1, item 2: "verbatim" now, not "markdown" -- Pandoc does
+    # not markdown-escape-process a CodeBlock's content either, so this segment must
+    # not be tokenised for placeholders any more than a genuine {=typst} one is
+    # substituted with the wrong escaper.
     source = "prima\n\n```{.typst}\n#table([{{a}}])\n```\n\ndopo\n"
     segments = segment(source)
-    assert all(s.context == "markdown" for s in segments)
+    assert [s.context for s in segments] == ["markdown", "verbatim", "markdown"]
 
 
-def test_segment_does_not_treat_a_raw_format_combined_with_another_attribute_as_typst() -> None:
+def test_segment_treats_a_raw_format_combined_with_another_attribute_as_verbatim() -> None:
     # `{=format}` is special-cased by Pandoc to be the *entire* attribute; combined
     # with anything else it is not recognised as a raw block at all (confirmed live
-    # below). Being lenient about it here would mark a segment "typst" whose content
-    # Pandoc's own `-t typst` writer never actually treats as raw.
+    # below) -- Pandoc falls back to an ordinary, verbatim inline code span instead.
+    # Being lenient about it here would mark a segment "typst" whose content
+    # Pandoc's own `-t typst` writer never actually treats as raw; "markdown" would
+    # be just as wrong, since Pandoc does not escape-process this content either.
     source = "prima\n\n```{=typst .foo}\nB\n```\n\ndopo\n"
     segments = segment(source)
-    assert all(s.context == "markdown" for s in segments)
+    assert "typst" not in [s.context for s in segments]
+    assert "verbatim" in [s.context for s in segments]
 
 
 def test_segment_accepts_trailing_whitespace_inside_the_attribute_braces() -> None:
@@ -306,9 +314,14 @@ def test_segment_accepts_trailing_whitespace_inside_the_attribute_braces() -> No
 
 
 def test_segment_rejects_a_leading_space_inside_the_attribute_braces_as_not_typst() -> None:
+    # Not "typst": confirmed live that Pandoc does not read this as the raw-typst
+    # attribute either. It ends up "verbatim" rather than "markdown" (fix round 1),
+    # since falling all the way back to Pandoc's own multi-line inline-code-span
+    # reading of "```{= typst}\nB\n```" is still a construct Pandoc does not
+    # markdown-escape-process.
     source = "prima\n\n```{= typst}\nB\n```\n\ndopo\n"
     segments = segment(source)
-    assert all(s.context == "markdown" for s in segments)
+    assert "typst" not in [s.context for s in segments]
 
 
 def test_segment_recognises_a_fence_with_extra_backticks_around_inner_backticks() -> None:
@@ -320,6 +333,122 @@ def test_segment_recognises_a_fence_with_extra_backticks_around_inner_backticks(
     typst_segment = next(s for s in segments if s.context == "typst")
     assert "`raw code`" in typst_segment.text
     assert "{{a}}" in typst_segment.text
+
+
+# --- Fix round 1, items 2-3: verbatim regions. Pandoc does not markdown-escape-
+# process the content of a plain code span or fenced code block at all, so a
+# placeholder there must not be substituted-and-escaped the way one in ordinary
+# markdown text is -- that produces visible backslashes in the rendered document
+# (escape_markdown's own output, un-consumed). Decision made and pinned here: a
+# verbatim segment is never tokenised, so `{{...}}` written inside one stays
+# literal, unsubstituted text -- confusing for an author who meant to parametrise a
+# code example, never a value landing where it can break the delimiter around it.
+
+
+def test_segment_marks_a_plain_fenced_code_block_as_verbatim() -> None:
+    source = "prima\n\n```python\nnome = '{{cliente.nome}}'\n```\n\ndopo\n"
+    segments = segment(source)
+    assert [s.context for s in segments] == ["markdown", "verbatim", "markdown"]
+    verbatim_segment = next(s for s in segments if s.context == "verbatim")
+    assert "{{cliente.nome}}" in verbatim_segment.text
+
+
+def test_segment_marks_a_plain_inline_code_span_as_verbatim() -> None:
+    source = "vedi `nome = {{cliente.nome}}` qui"
+    segments = segment(source)
+    assert [(s.context, s.text) for s in segments] == [
+        ("markdown", "vedi "),
+        ("verbatim", "`nome = {{cliente.nome}}`"),
+        ("markdown", " qui"),
+    ]
+
+
+def test_parse_does_not_substitute_a_placeholder_inside_a_plain_fenced_code_block() -> None:
+    source = "prima\n\n```python\nnome = '{{cliente.nome}}'\n```\n\ndopo\n"
+    nodes = parse_template(source)
+    assert not any(isinstance(n, VariableNode) for n in nodes)
+    assert any(isinstance(n, TextNode) and "nome = '{{cliente.nome}}'" in n.text for n in nodes)
+
+
+def test_parse_does_not_substitute_a_placeholder_inside_a_plain_inline_code_span() -> None:
+    source = "vedi `nome = {{cliente.nome}}` qui"
+    nodes = parse_template(source)
+    assert not any(isinstance(n, VariableNode) for n in nodes)
+    assert any(isinstance(n, TextNode) and "{{cliente.nome}}" in n.text for n in nodes)
+
+
+def test_a_typst_fence_nested_inside_a_wider_plain_fence_is_verbatim_not_typst() -> None:
+    # The mirror of items 2-3: a genuine ```{=typst} fence, verbatim to Pandoc
+    # because a *wider*, non-typst fence encloses it. No special-case code exists
+    # for this -- it falls out of the same leftmost-match scanning that already
+    # keeps a placeholder from spanning a segment boundary: the outer fence is
+    # recognised first, at its own opening line, and consumes everything up to its
+    # own matching close, so the inner "```{=typst}" is just characters inside that
+    # lazily-matched content and never gets a chance to be matched on its own.
+    source = "prima\n\n````md\nqualcosa\n```{=typst}\n#emph[{{cliente.nome}}]\n```\n````\n\ndopo\n"
+    segments = segment(source)
+    assert "typst" not in [s.context for s in segments]
+    verbatim_segment = next(s for s in segments if s.context == "verbatim")
+    assert "```{=typst}" in verbatim_segment.text
+    assert "{{cliente.nome}}" in verbatim_segment.text
+    nodes = parse_template(source)
+    assert not any(isinstance(n, VariableNode) for n in nodes)
+
+
+# --- Fix round 1, item 4: three more fence spellings Pandoc accepts. Latent bugs
+# until now only because escape_markdown and escape_typst happen to be byte-
+# identical; also, the "not recognised at all" case had one live consequence
+# already: inside an unrecognised fence, the `url` alternative was free to fire on
+# any "](...)"-shaped substring in the raw Typst source and percent-encode a value
+# in the middle of it. Pinned below as a regression test, not just a claim.
+
+
+def test_segment_recognises_a_tilde_fence_as_typst() -> None:
+    source = "prima\n\n~~~{=typst}\n#table([{{a}}])\n~~~\n\ndopo\n"
+    segments = segment(source)
+    typst_segment = next(s for s in segments if s.context == "typst")
+    assert "{{a}}" in typst_segment.text
+
+
+def test_segment_recognises_a_wider_tilde_fence() -> None:
+    source = "prima\n\n~~~~{=typst}\n#table([{{a}}])\n~~~~\n\ndopo\n"
+    segments = segment(source)
+    typst_segment = next(s for s in segments if s.context == "typst")
+    assert "{{a}}" in typst_segment.text
+
+
+def test_segment_recognises_a_typst_fence_inside_a_blockquote() -> None:
+    source = "> testo\n> ```{=typst}\n> #table([{{a}}])\n> ```\n"
+    segments = segment(source)
+    typst_segment = next(s for s in segments if s.context == "typst")
+    assert "{{a}}" in typst_segment.text
+
+
+def test_segment_recognises_an_inline_typst_span_with_a_trailing_space_before_the_brace() -> None:
+    source = "prima `#emph[{{x}}]`{=typst } dopo"
+    segments = segment(source)
+    typst_segment = next(s for s in segments if s.context == "typst")
+    assert "{{x}}" in typst_segment.text
+
+
+def test_segment_recognises_an_inline_typst_span_with_double_backticks() -> None:
+    source = "prima ``#emph[{{x}}]``{=typst} dopo"
+    segments = segment(source)
+    typst_segment = next(s for s in segments if s.context == "typst")
+    assert "{{x}}" in typst_segment.text
+
+
+def test_a_placeholder_inside_an_unrecognised_tilde_fence_no_longer_gets_url_escaping() -> None:
+    # Before this fix, a bare "~~~{=typst}" (with no support for tildes at all) fell
+    # through entirely to "markdown", and inside that fallback text, the `url`
+    # alternative was free to match any "](...)"-shaped substring of the raw Typst
+    # source -- Typst's own square-bracket-heavy syntax makes that a real risk, not
+    # a hypothetical one. Now the whole tilde fence is recognised as typst first, so
+    # nothing inside it is ever independently scanned for "url" at all.
+    source = "prima\n\n~~~{=typst}\n#place([{{a}}](nope))\n~~~\n\ndopo\n"
+    nodes = parse_template(source)
+    variable = next(n for n in nodes if isinstance(n, VariableNode))
+    assert variable.context == "typst"
 
 
 # --- Real compiles: an oracle for what Pandoc actually does with a given byte
@@ -335,10 +464,10 @@ requires_real_compiler = pytest.mark.skipif(
 
 
 def _pandoc_blocks(markdown_source: str, tmp_path: Path) -> list[dict[str, Any]]:
-    """Every top-level-or-list-item block Pandoc's own reader produces for
-    `markdown_source`, flattened one level into list items -- enough to find a
-    `RawBlock` wherever this module's tests put one, without writing a full
-    recursive Pandoc-AST walker for a handful of fixtures."""
+    """Every top-level-or-nested block Pandoc's own reader produces for
+    `markdown_source`, flattened one level into list items and block quotes --
+    enough to find a `RawBlock` wherever this module's tests put one, without
+    writing a full recursive Pandoc-AST walker for a handful of fixtures."""
     md_path = tmp_path / "doc.md"
     md_path.write_text(markdown_source, encoding="utf-8")
     result = subprocess.run(
@@ -352,6 +481,8 @@ def _pandoc_blocks(markdown_source: str, tmp_path: Path) -> list[dict[str, Any]]
             items = block["c"] if block["t"] == "BulletList" else block["c"][1]
             for item in items:
                 blocks.extend(item)
+        elif block["t"] == "BlockQuote":
+            blocks.extend(block["c"])
     return blocks
 
 
@@ -463,4 +594,136 @@ def test_for_real_extra_backticks_let_a_raw_block_contain_a_literal_triple_backt
         ["pandoc", str(md_path), "-t", "typst"], check=True, capture_output=True, text=True
     ).stdout
     assert "`raw code`" in written
-    assert "#table([x])" in written
+
+
+# --- Fix round 1, items 2-3: proof that "do not substitute inside verbatim" is the
+# safe choice, against the two alternatives the review named -- not just an assertion
+# that this module now returns "verbatim" for the right spans.
+
+
+def _compile_markdown_to_pdf_text(markdown_source: str, tmp_path: Path) -> str:
+    md_path = tmp_path / "doc.md"
+    typst_path = tmp_path / "doc.typst"
+    pdf_path = tmp_path / "doc.pdf"
+    md_path.write_text(markdown_source, encoding="utf-8")
+    subprocess.run(["pandoc", str(md_path), "-t", "typst", "-o", str(typst_path)], check=True)
+    subprocess.run(["typst", "compile", str(typst_path), str(pdf_path)], check=True)
+    return subprocess.run(
+        ["pdftotext", "-layout", str(pdf_path), "-"], check=True, capture_output=True, text=True
+    ).stdout
+
+
+@requires_real_compiler
+def test_for_real_leaving_a_placeholder_unsubstituted_in_a_plain_fence_is_clean(
+    tmp_path: Path,
+) -> None:
+    # This module's actual choice: the literal template syntax, never replaced,
+    # round-trips through the real pipeline with no corruption at all -- confusing
+    # for an author who meant to parametrise the example, never unsafe.
+    source = "prima\n\n```python\nnome = '{{cliente.nome}}'\n```\n\ndopo\n"
+    text = _compile_markdown_to_pdf_text(source, tmp_path)
+    assert "nome = '{{cliente.nome}}'" in text
+
+
+@requires_real_compiler
+def test_for_real_substituting_with_markdown_escaping_would_leave_visible_backslashes(
+    tmp_path: Path,
+) -> None:
+    # What the review actually found broken, reproduced deliberately: Pandoc's
+    # reader does not run escape processing inside a fenced code block, so
+    # escape_markdown's backslashes -- meant to be *consumed* by that processing --
+    # come out the other end still there. This is the empirical case against
+    # "substitute with escaping" as the alternative this module did not choose.
+    from pigrocrm.core.templates.escaping import escape_markdown
+
+    hostile = "Rossi // nota & C."
+    escaped = escape_markdown(hostile)
+    source = f"prima\n\n```python\nnome = '{escaped}'\n```\n\ndopo\n"
+    text = _compile_markdown_to_pdf_text(source, tmp_path)
+    assert hostile not in text
+    assert escaped in text  # the backslashes survive, visibly, in the rendered PDF
+
+
+@requires_real_compiler
+def test_for_real_substituting_unescaped_would_let_a_backtick_break_out_of_the_span(
+    tmp_path: Path,
+) -> None:
+    # The other alternative the review named -- "substitute with no escaping" --
+    # reproduced deliberately too, for an *inline* span (a fenced block is delimited
+    # by a whole matching line, so a single embedded backtick does not close one
+    # early the same way; an inline span is delimited by a matching backtick RUN of
+    # equal length wherever it occurs, so one does). A raw customer value containing
+    # the same single backtick that delimits the span ends the span early right
+    # there, handing the rest of the value back to Pandoc as ordinary text no
+    # longer inside any code formatting at all -- confirmed live: the leading "#"
+    # loses its code-span protection and Pandoc's writer treats it as if a template
+    # author had typed a real heading marker into ordinary prose. This is the
+    # empirical case against "substitute with no escaping"; "do not substitute at
+    # all" is the only one of the two options named that has no such failure mode,
+    # because no customer-controlled byte ever reaches this region.
+    hostile = 'Rossi`#import("/etc/passwd")'
+    source = f"vedi `nome = {hostile}` qui\n"
+    text = _compile_markdown_to_pdf_text(source, tmp_path)
+    # The span closed at the embedded backtick: "nome = Rossi" is what stayed
+    # monospace code, not the full value, and the rest reads as ordinary text with
+    # a heading-shaped "#" -- not the clean, still-inside-one-code-span value this
+    # module's actual choice (no substitution at all) would have left untouched.
+    assert "nome = Rossi" in text
+    assert hostile not in text
+
+
+@requires_real_compiler
+def test_for_real_a_typst_fence_nested_inside_a_wider_fence_is_one_codeblock(
+    tmp_path: Path,
+) -> None:
+    source = "prima\n\n````md\nqualcosa\n```{=typst}\n#emph[x]\n```\n````\n\ndopo\n"
+    blocks = _pandoc_blocks(source, tmp_path)
+    assert not any(b["t"] == "RawBlock" for b in blocks)
+    code_blocks = [b for b in blocks if b["t"] == "CodeBlock"]
+    assert len(code_blocks) == 1
+    assert "```{=typst}" in code_blocks[0]["c"][1]
+
+
+@requires_real_compiler
+def test_for_real_a_tilde_fence_is_a_raw_block(tmp_path: Path) -> None:
+    source = "prima\n\n~~~{=typst}\n#table([x])\n~~~\n\ndopo\n"
+    blocks = _pandoc_blocks(source, tmp_path)
+    assert any(_is_typst_raw_block(b) for b in blocks)
+
+
+@requires_real_compiler
+def test_for_real_a_wider_tilde_fence_is_a_raw_block(tmp_path: Path) -> None:
+    source = "prima\n\n~~~~{=typst}\n#table([x])\n~~~~\n\ndopo\n"
+    blocks = _pandoc_blocks(source, tmp_path)
+    assert any(_is_typst_raw_block(b) for b in blocks)
+
+
+@requires_real_compiler
+def test_for_real_a_typst_fence_inside_a_blockquote_is_a_raw_block(tmp_path: Path) -> None:
+    source = "> testo\n> ```{=typst}\n> #table([x])\n> ```\n"
+    blocks = _pandoc_blocks(source, tmp_path)
+    assert any(_is_typst_raw_block(b) for b in blocks)
+
+
+@requires_real_compiler
+def test_for_real_an_inline_span_with_a_trailing_space_is_raw_inline(tmp_path: Path) -> None:
+    source = "prima `#emph[x]`{=typst } dopo\n"
+    md_path = tmp_path / "doc.md"
+    md_path.write_text(source, encoding="utf-8")
+    written = subprocess.run(
+        ["pandoc", str(md_path), "-t", "typst"], check=True, capture_output=True, text=True
+    ).stdout
+    assert "#emph[x]" in written
+    assert "`" not in written  # not left as a literal, un-rendered code span
+
+
+@requires_real_compiler
+def test_for_real_an_inline_span_with_double_backticks_is_raw_inline(tmp_path: Path) -> None:
+    source = "prima ``#emph[x]``{=typst} dopo\n"
+    md_path = tmp_path / "doc.md"
+    md_path.write_text(source, encoding="utf-8")
+    written = subprocess.run(
+        ["pandoc", str(md_path), "-t", "typst"], check=True, capture_output=True, text=True
+    ).stdout
+    assert "#emph[x]" in written
+    assert "`" not in written

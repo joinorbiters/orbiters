@@ -45,7 +45,7 @@ import string
 from typing import Literal
 from urllib.parse import quote, urlsplit
 
-RenderContext = Literal["markdown", "typst", "url"]
+RenderContext = Literal["markdown", "typst", "url", "verbatim"]
 
 # Every ASCII punctuation character, escaped unconditionally, in both contexts -- see
 # the module docstring for why a curated subset per context is exactly the defect this
@@ -212,4 +212,20 @@ def escape_for(context: RenderContext, value: str) -> str:
             return escape_typst(value)
         case "url":
             return escape_url(value)
+        case "verbatim":
+            # No escaper exists for this context on purpose, not by omission: a
+            # verbatim region (a plain code span or fenced code block, as opposed to
+            # a raw {=typst} one) is not markdown-escape-processed by Pandoc at all,
+            # so a backslash this module might add would show up as a literal
+            # backslash in the rendered document instead of being consumed as an
+            # escape (fix round 1, items 2-3). The parser never tokenises inside a
+            # verbatim segment for exactly this reason -- see
+            # pigrocrm.core.templates.parser, where a verbatim Segment's whole text
+            # becomes one opaque TextNode and no VariableNode is ever created with
+            # this context. Reaching this branch at all means that invariant broke.
+            raise ValueError(
+                "verbatim non ha una regola di escaping: un placeholder in un "
+                "segmento verbatim non viene mai sostituito, quindi non dovrebbe "
+                "mai raggiungere escape_for"
+            )
     raise ValueError(f"contesto di escaping sconosciuto: {context!r}")
