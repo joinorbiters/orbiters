@@ -1,0 +1,360 @@
+import shutil
+import subprocess
+from datetime import date
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+
+from pigrocrm.core.errors import ValidationFailed
+from pigrocrm.core.templates.renderer import (
+    TYPST_LINE_MARKER_PREFIX,
+    DeclaredVariable,
+    format_value,
+    render_template,
+)
+
+TYPST_INJECTION = '#import "/etc/passwd"'
+MARKDOWN_INJECTION = "**Grassetto** & <script>"
+
+BOTH_CONTEXTS = """Spett.le **{{cliente.ragione_sociale}}**
+
+```{=typst}
+#table(
+  columns: (0.8fr, 0.2fr),
+  [{{cliente.ragione_sociale}}],
+  [{{offerta.totale}}],
+)
+```
+"""
+
+
+def test_a_plain_variable_is_substituted() -> None:
+    assert render_template("Ciao {{nome}}!", {"nome": "Ivan"}) == "Ciao Ivan!"
+
+
+def test_a_dotted_path_walks_nested_dicts() -> None:
+    out = render_template("{{cliente.sede.comune}}", {"cliente": {"sede": {"comune": "Milano"}}})
+    assert out == "Milano"
+
+
+def test_typst_injection_is_literal_text_in_the_markdown_context() -> None:
+    # Overrides the brief's own expected value, which was written against the
+    # pre-Task-1-fix design where "#" was escaped only at the start of a line. The
+    # shipped `escape_markdown` (escaping.py) escapes the full ASCII punctuation
+    # class unconditionally, "#" included -- see that module's own
+    # test_markdown_escapes_hash_unconditionally_not_only_at_line_start and its
+    # docstring: a curated, position-dependent rule is exactly the defect a
+    # reviewer broke by compiling a real PDF, and this task is told to read that
+    # module and use its escaper as given, not second-guess it with a narrower rule
+    # of its own. The value still reads back as the identical literal text once
+    # Pandoc consumes the escapes -- this assertion is about the intermediate
+    # *compiled Markdown* string, proven end-to-end in
+    # test_for_real_the_spec_3_3_acceptance_scenario_compiles_clean_with_both_injections
+    # below.
+    out = render_template("Spett.le {{c}}", {"c": TYPST_INJECTION})
+    assert out == r"Spett.le \#import \"\/etc\/passwd\""
+
+
+def test_typst_injection_is_neutralised_in_the_typst_context() -> None:
+    out = render_template("```{=typst}\n#text[{{c}}]\n```\n", {"c": TYPST_INJECTION})
+    assert r"\#import" in out
+    assert "\n#import" not in out
+
+
+def test_markdown_injection_is_literal_text_in_the_markdown_context() -> None:
+    out = render_template("Spett.le {{c}}", {"c": MARKDOWN_INJECTION})
+    assert out == r"Spett.le \*\*Grassetto\*\* \& \<script\>"
+
+
+def test_markdown_injection_is_neutralised_in_the_typst_context() -> None:
+    out = render_template("```{=typst}\n#text[{{c}}]\n```\n", {"c": MARKDOWN_INJECTION})
+    assert r"\*\*Grassetto\*\*" in out
+    assert r"\<script\>" in out
+
+
+def test_the_same_value_is_escaped_the_same_way_in_both_contexts() -> None:
+    # Overrides the brief's own name and first assertion ("...escaped differently
+    # in the two contexts"), for the same reason as
+    # test_typst_injection_is_literal_text_in_the_markdown_context above:
+    # escape_markdown and escape_typst are, by Task 1's own deliberate design, the
+    # identical function body (escaping.py's own docstring: "escape the entire
+    # ASCII punctuation class, unconditionally, in both contexts... so there is no
+    # character left for a list to omit"). The same value placed in a markdown
+    # segment and a typst segment is escaped *identically* now, not "differently"
+    # the way an earlier, two-independently-curated-lists design would have. What
+    # the spec's own acceptance test actually needs -- the same value is safe
+    # wherever it lands -- still holds, and holds more robustly for being uniform
+    # rather than context-dependent; see
+    # test_the_renderer_calls_escape_for_with_each_nodes_own_context_never_a_guess
+    # below for a check that does not depend on the two escapers ever disagreeing.
+    out = render_template(
+        BOTH_CONTEXTS,
+        {
+            "cliente": {"ragione_sociale": TYPST_INJECTION},
+            "offerta": {"totale": MARKDOWN_INJECTION},
+        },
+    )
+    markdown_part, typst_part = out.split("```{=typst}", 1)
+    assert r"\#import \"\/etc\/passwd\"" in markdown_part
+    assert r"\#import" in typst_part
+    assert r"\*\*Grassetto\*\*" in typst_part
+
+
+def test_a_typst_block_carries_a_line_marker_naming_its_template_line() -> None:
+    out = render_template(
+        BOTH_CONTEXTS,
+        {"cliente": {"ragione_sociale": "ACME"}, "offerta": {"totale": "100,00"}},
+    )
+    assert f"{TYPST_LINE_MARKER_PREFIX}4" in out
+    # The marker is the first line inside the fence, so Pandoc passes it through and
+    # the line arithmetic in render/diagnostics.py holds.
+    body = out.split("```{=typst}\n", 1)[1]
+    assert body.splitlines()[0] == f"{TYPST_LINE_MARKER_PREFIX}4"
+
+
+def test_if_renders_the_then_branch_when_truthy() -> None:
+    assert render_template("{{#if iva}}con{{else}}senza{{/if}}", {"iva": True}) == "con"
+
+
+def test_if_renders_the_else_branch_when_falsy() -> None:
+    assert render_template("{{#if iva}}con{{else}}senza{{/if}}", {"iva": False}) == "senza"
+
+
+@pytest.mark.parametrize("falsy", [False, None, "", [], {}, 0])
+def test_if_treats_every_empty_shape_as_false(falsy: object) -> None:
+    assert render_template("{{#if x}}s{{else}}n{{/if}}", {"x": falsy}) == "n"
+
+
+def test_if_with_a_missing_path_takes_the_else_branch_rather_than_failing() -> None:
+    # A conditional's whole job is to ask whether something is there.
+    assert render_template("{{#if x}}s{{else}}n{{/if}}", {}) == "n"
+
+
+def test_each_iterates_and_exposes_item_properties() -> None:
+    out = render_template(
+        "{{#each righe}}{{nome}}={{totale}};{{/each}}",
+        {"righe": [{"nome": "A", "totale": "1"}, {"nome": "B", "totale": "2"}]},
+    )
+    assert out == "A=1;B=2;"
+
+
+def test_each_exposes_this_for_a_list_of_scalars() -> None:
+    assert render_template("{{#each r}}[{{this}}]{{/each}}", {"r": ["x", "y"]}) == "[x][y]"
+
+
+def test_each_over_a_missing_or_empty_path_renders_nothing() -> None:
+    assert render_template("a{{#each r}}X{{/each}}b", {}) == "ab"
+    assert render_template("a{{#each r}}X{{/each}}b", {"r": []}) == "ab"
+
+
+def test_each_falls_back_to_the_outer_scope_for_a_path_the_item_lacks() -> None:
+    out = render_template(
+        "{{#each r}}{{nome}}@{{azienda}};{{/each}}",
+        {"azienda": "ACME", "r": [{"nome": "A"}, {"nome": "B"}]},
+    )
+    assert out == "A@ACME;B@ACME;"
+
+
+def test_each_over_a_non_list_fails_naming_the_line() -> None:
+    with pytest.raises(ValidationFailed) as excinfo:
+        render_template("x\n{{#each r}}X{{/each}}", {"r": "non una lista"})
+    assert "riga 2" in excinfo.value.details["reason"]
+    assert "lista" in excinfo.value.details["reason"]
+
+
+def test_an_unresolvable_variable_fails_naming_the_path_and_the_line() -> None:
+    with pytest.raises(ValidationFailed) as excinfo:
+        render_template("riga1\nriga2 {{cliente.inesistente}}", {"cliente": {}})
+    assert "riga 2" in excinfo.value.details["reason"]
+    assert "cliente.inesistente" in excinfo.value.details["reason"]
+
+
+def test_a_missing_required_declared_variable_fails_before_rendering() -> None:
+    declared = (
+        DeclaredVariable(nome="oggetto", etichetta="Oggetto", tipo="text", obbligatoria=True),
+    )
+    with pytest.raises(ValidationFailed) as excinfo:
+        render_template("{{oggetto}}", {}, declared)
+    assert excinfo.value.details["field"] == "oggetto"
+    assert "obbligatoria" in excinfo.value.details["reason"]
+
+
+def test_a_missing_optional_declared_variable_renders_as_empty() -> None:
+    declared = (DeclaredVariable(nome="note", etichetta="Note", tipo="text", obbligatoria=False),)
+    assert render_template("[{{note}}]", {}, declared) == "[]"
+
+
+def test_a_blank_string_does_not_satisfy_a_required_variable() -> None:
+    declared = (
+        DeclaredVariable(nome="oggetto", etichetta="Oggetto", tipo="text", obbligatoria=True),
+    )
+    with pytest.raises(ValidationFailed):
+        render_template("{{oggetto}}", {"oggetto": "   "}, declared)
+
+
+def test_false_and_zero_satisfy_a_required_variable() -> None:
+    # Mirrors `is_blank` in fields/validator.py: False and 0 are values, not blanks.
+    declared = (DeclaredVariable(nome="x", etichetta="X", tipo="checkbox", obbligatoria=True),)
+    assert render_template("{{#if x}}s{{else}}n{{/if}}", {"x": False}, declared) == "n"
+    assert render_template("{{x}}", {"x": 0}, declared) == "0"
+
+
+def test_format_value_renders_money_as_a_decimal_string_never_a_float() -> None:
+    assert format_value(Decimal("1234.56")) == "1234.56"
+    assert format_value(Decimal("0.10")) == "0.10"
+
+
+def test_format_value_renders_a_date_as_iso() -> None:
+    assert format_value(date(2026, 8, 10)) == "2026-08-10"
+
+
+def test_format_value_renders_booleans_in_italian() -> None:
+    assert format_value(True) == "Si"
+    assert format_value(False) == "No"
+
+
+def test_format_value_renders_none_as_empty() -> None:
+    assert format_value(None) == ""
+
+
+def test_a_nul_byte_in_a_value_is_rejected() -> None:
+    with pytest.raises(ValidationFailed) as excinfo:
+        render_template("{{x}}", {"x": "a\x00b"})
+    assert "carattere nullo" in excinfo.value.details["reason"]
+
+
+# --- Beyond the brief's own list. This module's whole risk, named explicitly in the
+# task brief, is that applying the wrong escaper is silent: escape_markdown and
+# escape_typst currently produce byte-identical output for every input (see
+# escaping.py's own docstring), so a mix-up between "markdown" and "typst" cannot be
+# caught by comparing rendered strings -- both tests above already pass whichever of
+# the two gets used for a given node. The tests below target the actual risk instead
+# of the part a string comparison happens to be able to see.
+
+
+def test_the_renderer_calls_escape_for_with_each_nodes_own_context_never_a_guess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Proven at the one point that actually matters: what `escape_for` is called
+    # with, for a template that places the *same* value once in a markdown segment
+    # and once in a typst segment. A renderer that ever re-derived context from the
+    # path, the value, or anything other than the node the parser built would still
+    # pass this file's string-comparison tests above (the two escapers agree today)
+    # but would fail this one the moment it called escape_for with the wrong label.
+    import pigrocrm.core.templates.renderer as renderer_module
+
+    calls: list[tuple[str, str]] = []
+    original = renderer_module.escape_for
+
+    def spy(context: str, value: str) -> str:
+        calls.append((context, value))
+        return original(context, value)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(renderer_module, "escape_for", spy)
+    render_template(
+        BOTH_CONTEXTS,
+        {"cliente": {"ragione_sociale": "ACME"}, "offerta": {"totale": "100"}},
+    )
+    assert ("markdown", "ACME") in calls
+    assert ("typst", "ACME") in calls
+    assert ("typst", "100") in calls
+    assert ("markdown", "100") not in calls
+
+
+def test_the_same_path_is_escaped_per_its_own_segment_not_a_global_guess() -> None:
+    # Unlike markdown vs typst, the "url" escaper *does* produce visibly different
+    # output from "markdown" for the same input -- which makes this a case a plain
+    # string comparison actually can catch, using the same value in two segments the
+    # way the brief's own BOTH_CONTEXTS fixture does for markdown vs typst.
+    url = "https://esempio.it/a?b=c"
+    out = render_template(
+        "Sito: {{cliente.sito_web}} - [link]({{cliente.sito_web}})",
+        {"cliente": {"sito_web": url}},
+    )
+    assert r"Sito: https\:\/\/esempio\.it\/a\?b\=c" in out
+    assert "[link](<https://esempio.it/a?b=c>)" in out
+
+
+def test_a_typst_fence_inside_an_each_body_repeats_the_same_template_line_marker() -> None:
+    # The marker names the *template* line the fence is written on, which does not
+    # change across iterations -- three rows of the same `{{#each}}` body should
+    # show the same "// pigrocrm:line=N" three times, not three different numbers
+    # and not a marker that got lost, duplicated wrongly, or escaped by mistake
+    # after the first iteration. The fence opener must start its own line (the
+    # segmenter's fence pattern requires it), so it sits on the line after
+    # `{{#each righe}}`, not the same one.
+    source = "{{#each righe}}\n```{=typst}\n#text[{{nome}}]\n```\n{{/each}}\n"
+    out = render_template(source, {"righe": [{"nome": "A"}, {"nome": "B"}, {"nome": "C"}]})
+    assert out.count(f"{TYPST_LINE_MARKER_PREFIX}3") == 3
+    assert "A" in out and "B" in out and "C" in out
+
+
+# --- Real compiles: settling the module's own flagship claim -- "the same value,
+# escaped differently in the two contexts, both compile clean" -- against a real PDF
+# rather than a string, the same way Task 1 and Task 2 settled theirs. Skipped
+# cleanly when Pandoc/Typst/pdftotext are missing; on a machine that has them (this
+# one), every subprocess call uses `check=True`, so a real compile error is a test
+# failure, never something the skip is allowed to absorb.
+
+_MISSING_TOOLS = [tool for tool in ("pandoc", "typst", "pdftotext") if shutil.which(tool) is None]
+requires_real_compiler = pytest.mark.skipif(
+    bool(_MISSING_TOOLS),
+    reason=f"real Pandoc/Typst round-trip tests need these on PATH: {', '.join(_MISSING_TOOLS)}",
+)
+
+
+def _compile_to_pdf_text(markdown_source: str, tmp_path: Path) -> str:
+    md_path = tmp_path / "doc.md"
+    typst_path = tmp_path / "doc.typst"
+    pdf_path = tmp_path / "doc.pdf"
+    md_path.write_text(markdown_source, encoding="utf-8")
+    subprocess.run(["pandoc", str(md_path), "-t", "typst", "-o", str(typst_path)], check=True)
+    subprocess.run(["typst", "compile", str(typst_path), str(pdf_path)], check=True)
+    return subprocess.run(
+        ["pdftotext", "-layout", str(pdf_path), "-"], check=True, capture_output=True, text=True
+    ).stdout
+
+
+@requires_real_compiler
+def test_for_real_the_spec_3_3_acceptance_scenario_compiles_clean_with_both_injections(
+    tmp_path: Path,
+) -> None:
+    rendered = render_template(
+        BOTH_CONTEXTS,
+        {
+            "cliente": {"ragione_sociale": TYPST_INJECTION},
+            "offerta": {"totale": MARKDOWN_INJECTION},
+        },
+    )
+    text = _compile_to_pdf_text(rendered, tmp_path)
+    # Neither injected string executed or altered the document's structure: both
+    # come out the other end as the literal characters a person typed them as.
+    # Checked as separate substrings, not one contiguous phrase: `pdftotext
+    # -layout` wraps a long table cell's content across lines by column width,
+    # which is a text-extraction layout artefact, not an escaping defect.
+    assert '#import "/etc/passwd"' in text
+    assert "**Grassetto**" in text
+    assert "<script>" in text
+    # And the line marker that made the round trip produced no visible artefact.
+    assert "pigrocrm:line" not in text
+
+
+@requires_real_compiler
+def test_for_real_an_each_body_with_a_typst_fence_compiles_clean_for_every_row(
+    tmp_path: Path,
+) -> None:
+    source = "intro\n\n{{#each righe}}\n```{=typst}\n#text[{{nome}}: {{nota}}]\n```\n{{/each}}\n"
+    rendered = render_template(
+        source,
+        {
+            "righe": [
+                {"nome": "Rossi", "nota": "// annullato"},
+                {"nome": "Bianchi", "nota": "normale"},
+            ]
+        },
+    )
+    text = _compile_to_pdf_text(rendered, tmp_path)
+    assert "Rossi: // annullato" in text
+    assert "Bianchi: normale" in text
+    assert "pigrocrm:line" not in text
