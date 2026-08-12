@@ -328,28 +328,76 @@ def _consume_token(stack: list[_Frame], body: str, line: int, context: RenderCon
     stack[-1].emit(VariableNode(_parse_path(body, line), context, line))
 
 
-def declared_paths(nodes: tuple[Node, ...]) -> tuple[tuple[str, ...], ...]:
-    """Every distinct variable path a template reads, in first-seen order.
+@dataclass(frozen=True)
+class DeclaredPaths:
+    """What `declared_paths` reports, split by whether the caller can actually
+    supply it directly.
+
+    `root` is what a caller must have at the top level of the values it passes in:
+    every `{{path}}` referenced outside any `#each`, plus the path an `#if` or
+    `#each` itself names -- a template that only ever does
+    `{{#if offerta.sconto}}...{{/if}}` still needs `offerta.sconto` supplied, even
+    though no bare `{{offerta.sconto}}` ever appears.
+
+    `loop_relative` is everything referenced *inside* an `#each` body: `this` and
+    the current element's own properties. These are never something a caller
+    supplies at the root -- they describe the shape of each element of whichever
+    root array the enclosing `#each` iterates -- so mixing them into `root` would
+    tell a caller it needs to supply a top-level `nome`, when what is actually true
+    is that each element of (say) `righe` needs one.
+    """
+
+    root: tuple[tuple[str, ...], ...]
+    loop_relative: tuple[tuple[str, ...], ...]
+
+
+def declared_paths(nodes: tuple[Node, ...]) -> DeclaredPaths:
+    """Every distinct path a template needs from its caller, in first-seen order,
+    split into `root` and `loop_relative` -- see `DeclaredPaths`.
 
     Used by `describe_template` so an agent can ask what a template wants *before*
     asking the user, and by the template service to check declared variables against
     what the body actually uses.
-    """
-    seen: list[tuple[str, ...]] = []
 
-    def walk(items: tuple[Node, ...]) -> None:
+    Overrides the original brief, which asked for one flat tuple of every
+    VariableNode's path, `#if`/`#each` paths not included. That shape defeats the
+    reason this function exists: a template whose entire behaviour depends on
+    `{{#if offerta.sconto}}...{{/if}}` and `{{#each righe}}...{{/each}}` declared
+    that it needed nothing at all, since a block's own path was never collected and
+    a loop-relative `{{nome}}` looked identical to a root one. `describe_template`
+    is only worth having if it can actually tell an agent what to ask the user for
+    *before* asking -- so this now collects a block's own path alongside every
+    VariableNode's, and keeps anything reached through an `#each` body in a
+    separate bucket rather than silently treating it as a root requirement.
+    """
+    root: list[tuple[str, ...]] = []
+    loop_relative: list[tuple[str, ...]] = []
+
+    def add(path: tuple[str, ...], *, inside_each: bool) -> None:
+        target = loop_relative if inside_each else root
+        if path not in target:
+            target.append(path)
+
+    def walk(items: tuple[Node, ...], *, inside_each: bool) -> None:
         for node in items:
             match node:
                 case VariableNode(path=path):
-                    if path not in seen:
-                        seen.append(path)
-                case IfNode(then=then, otherwise=otherwise):
-                    walk(then)
-                    walk(otherwise)
-                case EachNode(body=body):
-                    walk(body)
+                    add(path, inside_each=inside_each)
+                case IfNode(path=path, then=then, otherwise=otherwise):
+                    add(path, inside_each=inside_each)
+                    walk(then, inside_each=inside_each)
+                    walk(otherwise, inside_each=inside_each)
+                case EachNode(path=path, body=body):
+                    add(path, inside_each=inside_each)
+                    # The path naming *this* each is declared at the current level
+                    # (a caller still needs to supply "righe" at the root, or on the
+                    # current loop item if this each is itself nested); everything
+                    # inside its own body is relative to the element it iterates,
+                    # regardless of whether the current level was already loop-
+                    # relative -- so this is unconditionally True, not `inside_each`.
+                    walk(body, inside_each=True)
                 case TextNode():
                     pass
 
-    walk(nodes)
-    return tuple(seen)
+    walk(nodes, inside_each=False)
+    return DeclaredPaths(root=tuple(root), loop_relative=tuple(loop_relative))

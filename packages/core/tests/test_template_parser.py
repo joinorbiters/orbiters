@@ -161,9 +161,45 @@ def test_parse_rejects_a_helper_call_because_the_engine_has_no_helpers() -> None
     assert "non ammessa" in excinfo.value.details["reason"]
 
 
-def test_declared_paths_collects_every_variable_once_in_order() -> None:
+# Overrides the brief: task-2-brief.md's own version of this test asserted
+# `declared_paths(nodes) == (("a", "b"), ("nome",), ("c",))`, a single flat tuple
+# that both omits the "#each r" block's own path entirely and puts the loop-
+# relative "nome" in the same list as the root path "a.b". The coordinator
+# overrode this: a template whose entire behaviour depends on an `#if`/`#each`
+# path (the spec's own example is `offerta.sconto`) used to declare that it
+# needed nothing at all, which defeats what `describe_template` exists for. See
+# `DeclaredPaths` and `declared_paths`'s own docstring in parser.py.
+
+
+def test_declared_paths_collects_every_root_path_once_in_order() -> None:
     nodes = parse_template("{{a.b}}{{#each r}}{{nome}}{{/each}}{{a.b}}{{c}}")
-    assert declared_paths(nodes) == (("a", "b"), ("nome",), ("c",))
+    declared = declared_paths(nodes)
+    assert declared.root == (("a", "b"), ("r",), ("c",))
+    assert declared.loop_relative == (("nome",),)
+
+
+def test_declared_paths_reports_an_if_blocks_own_path_as_a_root_requirement() -> None:
+    # The spec's own motivating example: a template that only ever does
+    # {{#if offerta.sconto}}...{{/if}} still needs offerta.sconto supplied, even
+    # though no bare {{offerta.sconto}} ever appears as a VariableNode.
+    nodes = parse_template("{{#if offerta.sconto}}scontato{{/if}}")
+    assert declared_paths(nodes).root == (("offerta", "sconto"),)
+
+
+def test_declared_paths_keeps_a_conditional_inside_a_loop_out_of_the_root_set() -> None:
+    # this.iva is relative to the current element of "righe" -- a caller does not,
+    # and cannot, supply a root-level "this".
+    nodes = parse_template("{{#each righe}}{{#if this.iva}}IVA{{/if}}{{/each}}")
+    declared = declared_paths(nodes)
+    assert declared.root == (("righe",),)
+    assert declared.loop_relative == (("this", "iva"),)
+
+
+def test_declared_paths_a_nested_each_path_is_loop_relative_to_the_outer_one() -> None:
+    nodes = parse_template("{{#each ordini}}{{#each righe}}{{nome}}{{/each}}{{/each}}")
+    declared = declared_paths(nodes)
+    assert declared.root == (("ordini",),)
+    assert declared.loop_relative == (("righe",), ("nome",))
 
 
 def test_a_template_with_no_placeholders_is_one_text_node() -> None:
