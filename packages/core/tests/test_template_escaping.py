@@ -1,7 +1,9 @@
+import re
 import shutil
 import string
 import subprocess
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 
@@ -77,6 +79,64 @@ def test_url_percent_encodes_everything_unsafe() -> None:
     assert escape_url(TYPST_INJECTION) == "%23import%20%22%2Fetc%2Fpasswd%22"
 
 
+# --- Fix round 1: escape_url used to quote(value, safe="") *every* value, including
+# a genuine absolute URL -- "https://esempio.it/a?b=c" came out as
+# "https%3A%2F%2Fesempio.it%2Fa%3Fb%3Dc", which Pandoc writes into the PDF's own link
+# annotation byte-for-byte, so a customer's real website link pointed nowhere. See
+# the real-compile tests further down for the annotation read back out of a PDF; the
+# tests here are the string-level contract that fix rests on.
+
+
+def test_url_wraps_a_trustworthy_absolute_url_in_angle_brackets_unencoded() -> None:
+    # ":", "/", "?", "=" all stay literal -- the whole point of the angle-bracket
+    # destination form is that none of them needs escaping there.
+    assert escape_url("https://esempio.it/a?b=c") == "<https://esempio.it/a?b=c>"
+    assert escape_url("http://esempio.it") == "<http://esempio.it>"
+
+
+def test_url_escapes_backslash_and_angle_brackets_inside_a_trusted_url() -> None:
+    # The only three characters that mean anything inside "<...>": a literal ">"
+    # would close the destination early, "<" is disallowed unescaped by the same
+    # grammar, and "\" has to be escaped first so it cannot be read as introducing
+    # one of the other two escapes.
+    assert escape_url("https://esempio.it/a>b") == "<https://esempio.it/a\\>b>"
+    assert escape_url("https://esempio.it/a<b") == "<https://esempio.it/a\\<b>"
+    assert escape_url(r"https://esempio.it/a\b") == "<https://esempio.it/a\\\\b>"
+
+
+def test_url_does_not_trust_a_non_http_scheme() -> None:
+    # A scheme this module has never vetted does not get the literal-link treatment
+    # just because nothing here would technically break -- javascript:/data:/file:
+    # all fall through to the same opaque, inert destination as any other value that
+    # is not an absolute http(s) URL.
+    assert escape_url("javascript:alert(1)") == quote("javascript:alert(1)", safe="")
+    assert escape_url("data:text/html,<b>x</b>") == quote("data:text/html,<b>x</b>", safe="")
+
+
+def test_url_does_not_trust_a_schemeless_value() -> None:
+    # A bare domain with no "http(s)://" is common real-world data (a customer typed
+    # "esempio.it" into the field) but this module will not guess a scheme for it.
+    assert escape_url("esempio.it") == quote("esempio.it", safe="")
+
+
+def test_url_does_not_trust_a_value_containing_whitespace_or_a_control_character() -> None:
+    # Even with a valid http(s) scheme and host, a value carrying whitespace or a
+    # control character never reaches the angle-bracket branch: nothing in this
+    # module invents percent-encoding *inside* "<...>", so a raw space or newline
+    # there would either break CommonMark's own angle-bracket grammar (no line
+    # endings allowed) or -- for a space -- silently do something this function has
+    # not verified is safe against every Pandoc version. Falling back to the
+    # existing, already-proven-safe percent-encoding is the conservative choice.
+    for hostile in (
+        "https://esempio.it/a b",
+        "https://esempio.it/a\nb",
+        "https://esempio.it/a\tb",
+        "https://esempio.it/a\x01b",
+    ):
+        assert escape_url(hostile) == quote(hostile, safe="")
+        assert not escape_url(hostile).startswith("<")
+
+
 def test_escape_for_dispatches_on_context() -> None:
     assert escape_for("markdown", MARKDOWN_INJECTION) == escape_markdown(MARKDOWN_INJECTION)
     assert escape_for("typst", TYPST_INJECTION) == escape_typst(TYPST_INJECTION)
@@ -148,7 +208,9 @@ def test_newline_equivalents_all_collapse_to_one_space_in_both_contexts() -> Non
 # every `subprocess.run` below uses `check=True`: a real compile error is a test
 # failure, never something the skip is allowed to quietly absorb instead.
 
-_MISSING_TOOLS = [tool for tool in ("pandoc", "typst", "pdftotext") if shutil.which(tool) is None]
+_MISSING_TOOLS = [
+    tool for tool in ("pandoc", "typst", "pdftotext", "strings") if shutil.which(tool) is None
+]
 requires_real_compiler = pytest.mark.skipif(
     bool(_MISSING_TOOLS),
     reason=f"real Pandoc/Typst round-trip tests need these on PATH: {', '.join(_MISSING_TOOLS)}",
@@ -275,3 +337,127 @@ def test_known_limitation_typst_own_ligature_still_alters_repeated_dash_in_markd
     escaped = escape_markdown("Rossi -- Bianchi")
     text = _compile_markdown_paragraph_to_pdf_text(escaped, tmp_path)
     assert "Rossi – Bianchi" in text  # en dash: the residual gap, not the fix
+
+
+# --- Fix round 1, item 1: the url context. A unit test asserts a string; it cannot
+# tell you what a PDF viewer would actually navigate to if you clicked the link.
+# Typst's PDF writer does not compress the objects these fixtures produce, so the
+# link annotation's own "/URI (...)" entry is readable straight out of the PDF's
+# bytes with `strings` -- confirmed once by hand in the scratchpad before writing
+# this helper, the same way every other claim in this file is settled by compiling
+# something real rather than by trusting the grammar on paper.
+
+_URI_RE = re.compile(r"/URI\s*\(((?:\\.|[^()\\])*)\)")
+
+
+def _compile_markdown_to_pdf_uris(body_markdown: str, tmp_path: Path) -> list[str]:
+    """Every `/URI (...)` link-annotation target in the PDF Pandoc+Typst produce
+    from `body_markdown`, in the order `strings` finds them in the file, with the
+    PDF's own backslash-escapes for `(`, `)` and `\\` undone."""
+    md_path = tmp_path / "doc.md"
+    typst_path = tmp_path / "doc.typst"
+    pdf_path = tmp_path / "doc.pdf"
+    md_path.write_text(body_markdown + "\n", encoding="utf-8")
+    subprocess.run(["pandoc", str(md_path), "-t", "typst", "-o", str(typst_path)], check=True)
+    subprocess.run(["typst", "compile", str(typst_path), str(pdf_path)], check=True)
+    raw = subprocess.run(
+        ["strings", str(pdf_path)], check=True, capture_output=True, text=True
+    ).stdout
+    return [
+        m.group(1).replace("\\(", "(").replace("\\)", ")").replace("\\\\", "\\")
+        for m in _URI_RE.finditer(raw)
+    ]
+
+
+@requires_real_compiler
+def test_url_context_makes_the_customers_own_site_a_working_link_for_real(
+    tmp_path: Path,
+) -> None:
+    # The brief's own flagship example, and the bug this round's fix closes: before
+    # it, this produced a PDF whose link annotation was the literal string
+    # "https%3A%2F%2Fesempio.it%2Fa%3Fb%3Dc" -- a broken, relative-looking path, not
+    # the customer's site.
+    real_url = "https://esempio.it/a?b=c"
+    escaped = escape_url(real_url)
+    body = f"vedi [il sito]({escaped}) fine"
+    uris = _compile_markdown_to_pdf_uris(body, tmp_path)
+    assert uris == [real_url]
+    text = _compile_markdown_paragraph_to_pdf_text(body, tmp_path)
+    assert "fine" in text
+
+
+@requires_real_compiler
+def test_url_context_a_non_absolute_value_is_a_safe_but_inert_destination_for_real(
+    tmp_path: Path,
+) -> None:
+    # A schemeless value ("esempio.it", plausible real customer data for a field
+    # named "sito web") is not guessed into a link -- it becomes the same opaque,
+    # percent-encoded destination as before this fix, which still compiles and still
+    # cannot be mistaken for the customer's real, unentered URL.
+    non_url = "esempio.it"
+    escaped = escape_url(non_url)
+    body = f"vedi [il sito]({escaped}) fine"
+    uris = _compile_markdown_to_pdf_uris(body, tmp_path)
+    assert uris == [quote(non_url, safe="")]
+    text = _compile_markdown_paragraph_to_pdf_text(body, tmp_path)
+    assert "fine" in text
+
+
+@requires_real_compiler
+def test_url_context_a_trusted_url_with_parens_and_brackets_does_not_break_the_link_for_real(
+    tmp_path: Path,
+) -> None:
+    # No whitespace, so this reaches the angle-bracket branch -- and a raw ")" and a
+    # "](" are both completely inert there, unlike in the bare destination form: one
+    # link annotation, "fine" still its own separate text, not a destination that
+    # ended early or a second, unintended link.
+    #
+    # "]" itself comes back as "%5D" in the annotation -- confirmed by hand in the
+    # scratchpad to happen identically for a hand-written destination with no
+    # escaping involved at all, e.g. "[x](<https://e.it/a]b>)". That is Pandoc's own
+    # writer normalising a character URIs treat as reserved (used for IPv6 literal
+    # hosts, "[::1]"), on every link it emits regardless of source -- not something
+    # escape_url does or could turn off, and not a gap this fix needs to close: the
+    # value still ends up exactly as inert-or-real as escape_url decided, just with
+    # Pandoc's own unrelated normalisation applied on top, same as it would be for a
+    # template author's own hand-typed link.
+    hostile_but_trusted = "https://esempio.it/a)b](c"
+    escaped = escape_url(hostile_but_trusted)
+    body = f"vedi [il sito]({escaped}) fine"
+    uris = _compile_markdown_to_pdf_uris(body, tmp_path)
+    assert uris == ["https://esempio.it/a)b%5D(c"]
+    text = _compile_markdown_paragraph_to_pdf_text(body, tmp_path)
+    assert "fine" in text
+
+
+@requires_real_compiler
+def test_url_context_a_hostile_non_url_value_does_not_break_the_document_for_real(
+    tmp_path: Path,
+) -> None:
+    # Space, closing paren, newline and "](" all at once, in a value with no http(s)
+    # scheme at all -- the percent-encoding fallback path. The document must still
+    # compile as ONE link followed by "fine", not have "fine" swallowed into the
+    # destination or turned into a second, unintended link.
+    hostile = "non e' un url) ]( con spazi\ne newline"
+    escaped = escape_url(hostile)
+    assert not escaped.startswith("<")
+    body = f"vedi [il sito]({escaped}) fine"
+    uris = _compile_markdown_to_pdf_uris(body, tmp_path)
+    assert uris == [quote(hostile, safe="")]
+    text = _compile_markdown_paragraph_to_pdf_text(body, tmp_path)
+    assert "fine" in text
+
+
+@requires_real_compiler
+def test_url_context_two_spellings_of_the_same_intent_now_agree_for_real(
+    tmp_path: Path,
+) -> None:
+    # The brief's own two spellings of "link to the customer's site" -- inline
+    # destination vs. a reference-style link, which never goes through escape_url at
+    # all, only escape_markdown -- used to disagree (one worked, one produced a
+    # broken relative path). They now both produce the same working link.
+    real_url = "https://esempio.it/a?b=c"
+    inline = f"vedi [il sito]({escape_url(real_url)}) fine"
+    reference = f"vedi [il sito][r] fine\n\n[r]: {escape_markdown(real_url)}\n"
+    assert _compile_markdown_to_pdf_uris(inline, tmp_path) == [real_url]
+    assert _compile_markdown_to_pdf_uris(reference, tmp_path) == [real_url]

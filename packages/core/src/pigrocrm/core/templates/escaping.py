@@ -43,7 +43,7 @@ protected and survives.
 import re
 import string
 from typing import Literal
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 RenderContext = Literal["markdown", "typst", "url"]
 
@@ -142,14 +142,66 @@ def escape_typst(value: str) -> str:
     return _escape_each(flattened, _ASCII_PUNCTUATION)
 
 
-def escape_url(value: str) -> str:
-    """For a placeholder that lands in a link or image destination.
+def _is_trustworthy_absolute_url(value: str) -> bool:
+    """True for a value this module will write out as a literal link, rather than
+    treat as opaque data.
 
-    `safe=""` on purpose: a destination is a single opaque component here, so even
-    `/` and `:` are encoded. A placeholder is never the whole URL in this project's
-    templates -- it is always a path segment or a query value.
+    Deliberately narrow: `http`/`https` scheme, a non-empty host, and no whitespace
+    or control character anywhere in the value. A customer's own `sito_web` field is
+    the case this exists for; a scheme this module has never seen (`javascript:`,
+    `data:`, a bare `esempio.it` with no scheme at all) or a value carrying a
+    character that has no business in a URL falls through to the opaque path below
+    instead, on purpose -- this function decides *whether* to trust the value as a
+    URL at all, not how to neutralise one that has already been trusted.
     """
-    return quote(_reject_nul(value), safe="")
+    if any(ch.isspace() or ord(ch) < 0x20 for ch in value):
+        return False
+    parsed = urlsplit(value)
+    return parsed.scheme.lower() in ("http", "https") and bool(parsed.netloc)
+
+
+def escape_url(value: str) -> str:
+    r"""For a placeholder that lands in a link or image destination.
+
+    A customer's own URL -- `cliente.sito_web`, the case the spec names -- is meant
+    to end up as a *working* link, not as inert text: the whole point of putting it
+    in `[il sito]({{cliente.sito_web}})` is that "il sito" is clickable. This
+    function used to `quote(value, safe="")` unconditionally, which percent-encodes
+    `:` and `/` right along with everything else -- `https://esempio.it/a?b=c` came
+    out as `https%3A%2F%2Fesempio.it%2Fa%3Fb%3Dc`, a string Pandoc writes out
+    byte-for-byte as the link target, so the PDF's own link annotation pointed at
+    that literal, broken, relative-looking path instead of the customer's site
+    (confirmed live by reading the annotation back out of a compiled PDF, not by
+    asserting a string -- see test_template_escaping.py's real-compile tests below).
+
+    So a value trusted as an absolute `http`/`https` URL (`_is_trustworthy_absolute_
+    url` above) is written in Pandoc's *angle-bracket* destination form, `<...>`,
+    instead: the one destination spelling in this grammar where `:`, `/`, `?`, `=`
+    and `&` stay literal, because the closing delimiter is `>`, not "the next
+    unescaped `)`, space, or end of line" the way the bare form's is. Only `\`, `<`
+    and `>` need escaping inside it -- `_is_trustworthy_absolute_url` already
+    refused to trust a value containing whitespace or a control character, so a
+    space or a newline never reaches this branch to begin with, and there is nothing
+    else left to neutralise. A hostile value cannot use this path to break out of
+    the destination: a raw `)`, a `](`, or any other bare-form-only special
+    character is just literal text between `<` and `>` -- confirmed live for a value
+    containing all four at once (test_url_context_survives_a_hostile_value_without_
+    breaking_the_document_for_real).
+
+    A value this function will not vouch for -- no scheme, a scheme that is not
+    `http`/`https`, or anything containing whitespace or a control character -- is
+    still `quote(value, safe="")`'d exactly as before: an opaque, inert destination
+    that cannot break out of the surrounding `(...)` either, just one that does not
+    go anywhere in particular. Explicit, not a bug: this module will render a
+    customer's real website link, but it will not turn arbitrary customer text into
+    a clickable destination on the strength of it merely being unescaped-safe to do
+    so, and it will not follow a `javascript:`/`data:`/`file:` scheme just because
+    nothing here would technically break.
+    """
+    value = _reject_nul(value)
+    if _is_trustworthy_absolute_url(value):
+        return "<" + _escape_each(value, frozenset({"\\", "<", ">"})) + ">"
+    return quote(value, safe="")
 
 
 def escape_for(context: RenderContext, value: str) -> str:
