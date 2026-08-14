@@ -121,6 +121,28 @@ def test_max_key_length_is_255() -> None:
         # both forms -- not silently accepted under one spelling and not the other.
         "caff\u00e8.pdf",  # "caffè", NFC: e-grave as one codepoint
         "caffe\u0300.pdf",  # "caffè", NFD: "e" + combining grave accent
+        # Fix round 1: uppercase is refused outright (see the case-collision test
+        # below for why) -- a bare uppercase letter, an uppercase extension, and one
+        # letter capitalised in an otherwise-ordinary key.
+        "A.pdf",
+        "acme-01234567/0199abcd/V1.PDF",
+        "ACME-01234567/0199abcd/v1.pdf",
+        # Fix round 1: pinned explicitly, not just implied by "the charset is
+        # ASCII-only" -- URL-encoded and doubly-encoded traversal (a decoding step
+        # this function must never perform), an RTL-override and a zero-width
+        # character (either could make a rendered filename lie about what bytes it
+        # actually is), and two Unicode lookalikes for "/" (a real second path
+        # separator would reintroduce traversal; none of `%`, U+202E, U+200B, U+2044,
+        # U+FF0F is in `[a-z0-9._-]`, so all five are refused, same as any other
+        # non-ASCII byte).
+        "%2e%2e%2f",
+        "..%2ffuori.pdf",
+        "a%2fb.pdf",
+        "..%c0%affuori.pdf",
+        "acme‮/report.pdf",  # RTL override
+        "a​.pdf",  # zero-width space
+        "a⁄b.pdf",  # fraction slash, reads like "/"
+        "a／b.pdf",  # fullwidth solidus, reads like "/"
     ],
 )
 def test_an_unsafe_key_is_refused_before_any_filesystem_call(bad: str) -> None:
@@ -135,7 +157,11 @@ def test_an_unsafe_key_is_refused_before_any_filesystem_call(bad: str) -> None:
         "a.pdf",
         "a/b.pdf",
         "acme-01/0199ab/v12.pdf",
-        "A_b.C-1/x.pdf",
+        # Fix round 1: lowercase-only is now enforced (see the bad-key list and the
+        # case-collision test below), so the brief's own original example here --
+        # "A_b.C-1/x.pdf" -- is replaced by its lowercase equivalent rather than kept
+        # as a now-invalid "good" case.
+        "a_b.c-1/x.pdf",
         # Exactly at MAX_KEY_LENGTH: the boundary the overlength case above sits one
         # character past.
         "x" * 255,
@@ -145,10 +171,34 @@ def test_an_unsafe_key_is_refused_before_any_filesystem_call(bad: str) -> None:
         # A stem that merely starts with a reserved prefix ("com", "aux") but is not
         # equal to it: the reserved-name check must not over-match by substring.
         "com-mercio/auxiliary.pdf",
+        # Fix round 1: an ordinary segment containing ".." in the middle is not a
+        # traversal attempt and must not be refused by a substring check on the whole
+        # key (it now is not -- ".." is compared per segment, exactly, not as a
+        # substring; see validate_storage_key's docstring).
+        "a..b/c.pdf",
     ],
 )
 def test_a_safe_key_is_accepted(good: str) -> None:
     assert validate_storage_key(good) == good
+
+
+def test_a_key_that_differs_only_in_case_is_refused_not_silently_collided(
+    tmp_path: Path,
+) -> None:
+    """Fix round 1: on a case-insensitive filesystem (macOS/APFS, Windows/NTFS by
+    default) `KEY` and `KEY.upper()` can name the *same* file even though they are
+    different Python strings -- reproduced, before this fix, by writing one and then
+    the other and finding the first document silently gone. Lowercase-only in
+    `validate_storage_key` closes this by refusing the second spelling outright, rather
+    than trying to detect or merge the collision after the fact. Proved through the
+    real API: the first document's bytes must still be exactly what was written."""
+    storage = LocalFileStorage(tmp_path)
+    storage.put(KEY, PDF, "application/pdf")
+
+    with pytest.raises(ValidationFailed):
+        storage.put(KEY.upper(), b"contenuto di un attaccante o di un bug", "application/pdf")
+
+    assert storage.get(KEY) == PDF
 
 
 def test_traversal_is_refused_by_put_and_get_and_delete(tmp_path: Path) -> None:
