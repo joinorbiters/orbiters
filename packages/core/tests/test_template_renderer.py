@@ -213,6 +213,39 @@ def test_a_missing_optional_declared_variable_renders_as_empty() -> None:
     assert render_template("[{{note}}]", {}, declared) == "[]"
 
 
+# --- Fix round 1, item 3: declaring a variable optional must never make a
+# template *more* likely to fail than leaving it undeclared. `optional_defaults`
+# used to seed `""` regardless of `tipo`, which broke exactly this for
+# `multiselect`: `{{#each righe}}` resolved `righe` to the string `""`, not a
+# list, and raised where the undeclared, unsupplied case renders nothing.
+
+
+def test_an_optional_declared_multiselect_left_unsupplied_renders_like_undeclared() -> None:
+    declared = (
+        DeclaredVariable(nome="righe", etichetta="Righe", tipo="multiselect", obbligatoria=False),
+    )
+    with_declaration = render_template("a{{#each righe}}X{{/each}}b", {}, declared)
+    without_declaration = render_template("a{{#each righe}}X{{/each}}b", {})
+    assert with_declaration == without_declaration == "ab"
+
+
+def test_an_optional_declared_checkbox_left_unsupplied_takes_the_if_else_branch() -> None:
+    declared = (
+        DeclaredVariable(nome="attivo", etichetta="Attivo", tipo="checkbox", obbligatoria=False),
+    )
+    out = render_template("{{#if attivo}}si{{else}}no{{/if}}", {}, declared)
+    assert out == "no"
+
+
+def test_an_optional_declared_variable_of_any_type_still_renders_blank_when_bare() -> None:
+    # format_value(None) == "" regardless of which of the nine field types
+    # declared the variable -- the fix does not need a per-type table of empty
+    # values to get every type right, only the one it actually breaks.
+    for tipo in ("text", "textarea", "number", "currency", "date", "select", "url"):
+        declared = (DeclaredVariable(nome="x", etichetta="X", tipo=tipo, obbligatoria=False),)
+        assert render_template("[{{x}}]", {}, declared) == "[]"
+
+
 def test_a_blank_string_does_not_satisfy_a_required_variable() -> None:
     declared = (
         DeclaredVariable(nome="oggetto", etichetta="Oggetto", tipo="text", obbligatoria=True),
