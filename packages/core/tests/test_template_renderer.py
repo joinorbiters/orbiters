@@ -28,6 +28,16 @@ BOTH_CONTEXTS = """Spett.le **{{cliente.ragione_sociale}}**
 ```
 """
 
+# Declared up front, not next to its first use: several sections below need
+# `requires_real_compiler` before the file reaches the "Real compiles" section that
+# originally defined it, and a decorator has to exist at function-definition time,
+# not merely somewhere later in the same module.
+_MISSING_TOOLS = [tool for tool in ("pandoc", "typst", "pdftotext") if shutil.which(tool) is None]
+requires_real_compiler = pytest.mark.skipif(
+    bool(_MISSING_TOOLS),
+    reason=f"real Pandoc/Typst round-trip tests need these on PATH: {', '.join(_MISSING_TOOLS)}",
+)
+
 
 def test_a_plain_variable_is_substituted() -> None:
     assert render_template("Ciao {{nome}}!", {"nome": "Ivan"}) == "Ciao Ivan!"
@@ -308,18 +318,158 @@ def test_a_typst_fence_inside_an_each_body_repeats_the_same_template_line_marker
     assert "A" in out and "B" in out and "C" in out
 
 
+# --- Fix round 1, item 1: line mapping must survive control flow *inside* a fence.
+# The single fence-open marker plus "count newlines from here" is exactly wrong the
+# moment a branch is skipped (its template lines vanish from the render, but the
+# template still had them) or a loop body repeats (its lines multiply). This helper
+# plays the part a later diagnostics module will actually play: given a rendered
+# typst fence, find the nearest preceding marker and add the line distance -- the
+# same arithmetic the module docstring on `_resume_marker` describes. A test that
+# only checked "a marker with the right value appears somewhere in the output"
+# would have passed against the original, unfixed code too (it does emit *a*
+# marker); checking what this arithmetic actually *resolves to* for a line that
+# comes after the control flow is what catches the bug.
+
+
+def _predicted_template_line(rendered_typst_body: str, target: str) -> int:
+    lines = rendered_typst_body.splitlines()
+    target_idx = next(i for i, line in enumerate(lines) if target in line)
+    for i in range(target_idx, -1, -1):
+        if lines[i].startswith(TYPST_LINE_MARKER_PREFIX):
+            marker_value = int(lines[i][len(TYPST_LINE_MARKER_PREFIX) :])
+            return marker_value + (target_idx - i - 1)
+    raise AssertionError(f"no line marker precedes {target!r}")
+
+
+# The coordinator's own reproduction: a skipped #if branch inside a fence.
+_IF_FENCE = (
+    "```{=typst}\n"
+    "{{#if mai}}\n"
+    "#text[nascosto]\n"
+    "{{/if}}\n"
+    "#text[ok]\n"
+    "#nonesistente[boom]\n"  # template line 6
+    "```\n"
+)
+
+
+def test_line_after_a_skipped_if_branch_is_still_mapped_to_its_true_template_line() -> None:
+    out = render_template(_IF_FENCE, {"mai": False})
+    assert _predicted_template_line(out, "#nonesistente[boom]") == 6
+
+
+def test_line_after_a_taken_if_branch_is_still_mapped_to_its_true_template_line() -> None:
+    out = render_template(_IF_FENCE, {"mai": True})
+    assert _predicted_template_line(out, "#text[nascosto]") == 3
+    assert _predicted_template_line(out, "#nonesistente[boom]") == 6
+
+
+_IF_ELSE_FENCE = (
+    "```{=typst}\n"
+    "{{#if mai}}\n"
+    "#text[A]\n"
+    "{{else}}\n"
+    "#text[B]\n"  # template line 5
+    "{{/if}}\n"
+    "#text[ok]\n"  # template line 7
+    "```\n"
+)
+
+
+def test_line_inside_and_after_a_taken_else_branch_is_mapped_correctly() -> None:
+    out = render_template(_IF_ELSE_FENCE, {"mai": False})
+    assert _predicted_template_line(out, "#text[B]") == 5
+    assert _predicted_template_line(out, "#text[ok]") == 7
+
+
+# The coordinator's own reproduction: an #each loop, three rows, inside a fence.
+_EACH_FENCE = (
+    "```{=typst}\n"
+    "{{#each righe}}\n"
+    "#text[{{nome}}]\n"
+    "{{/each}}\n"
+    "#nonesistente[boom]\n"  # template line 5
+    "```\n"
+)
+
+
+def test_line_after_an_each_loop_with_three_rows_is_still_mapped_to_its_true_line() -> None:
+    out = render_template(_EACH_FENCE, {"righe": [{"nome": "A"}, {"nome": "B"}, {"nome": "C"}]})
+    assert _predicted_template_line(out, "#nonesistente[boom]") == 5
+
+
+def test_line_after_an_each_loop_with_zero_rows_is_still_mapped_to_its_true_line() -> None:
+    out = render_template(_EACH_FENCE, {"righe": []})
+    assert _predicted_template_line(out, "#nonesistente[boom]") == 5
+
+
+def test_line_mapping_survives_a_nested_if_inside_an_each_inside_a_fence() -> None:
+    source = (
+        "```{=typst}\n"
+        "{{#each righe}}\n"
+        "{{#if this.iva}}\n"
+        "#text[IVA]\n"
+        "{{/if}}\n"
+        "#text[{{nome}}]\n"  # template line 6
+        "{{/each}}\n"
+        "#dopo[x]\n"  # template line 8
+        "```\n"
+    )
+    out = render_template(
+        source, {"righe": [{"nome": "A", "iva": True}, {"nome": "B", "iva": False}]}
+    )
+    assert _predicted_template_line(out, "#text[A]") == 6
+    assert _predicted_template_line(out, "#text[B]") == 6
+    assert _predicted_template_line(out, "#dopo") == 8
+
+
+@requires_real_compiler
+def test_for_real_line_mapping_survives_a_skipped_if_branch_through_pandoc(tmp_path: Path) -> None:
+    # Settled by compiling, not just by string arithmetic: writes the rendered
+    # markdown out, runs the real Pandoc -t typst step, and reads the *actual*
+    # intermediate .typ file back to confirm the marker Pandoc actually preserved
+    # is still adjacent to the real content the way the arithmetic assumes -- the
+    # same standard this slice has used for every other line-number claim.
+    rendered = render_template(_IF_FENCE, {"mai": False})
+    md_path = tmp_path / "doc.md"
+    typst_path = tmp_path / "doc.typst"
+    md_path.write_text(rendered, encoding="utf-8")
+    subprocess.run(["pandoc", str(md_path), "-t", "typst", "-o", str(typst_path)], check=True)
+    written = typst_path.read_text(encoding="utf-8")
+    assert _predicted_template_line(written, "#nonesistente[boom]") == 6
+    pdf_path = tmp_path / "doc.pdf"
+    # And the marker still produces no visible artefact once actually compiled --
+    # Typst rejects #nonesistente as an undefined function, which is the expected,
+    # honest failure for a real error in the template's own typst content; this
+    # test is about the *line mapping*, not about making that error disappear.
+    result = subprocess.run(
+        ["typst", "compile", str(typst_path), str(pdf_path)], capture_output=True, text=True
+    )
+    assert result.returncode != 0
+    assert "pigrocrm:line" not in result.stderr
+
+
+@requires_real_compiler
+def test_for_real_line_mapping_survives_a_three_row_each_loop_through_pandoc(
+    tmp_path: Path,
+) -> None:
+    rendered = render_template(
+        _EACH_FENCE, {"righe": [{"nome": "A"}, {"nome": "B"}, {"nome": "C"}]}
+    )
+    md_path = tmp_path / "doc.md"
+    typst_path = tmp_path / "doc.typst"
+    md_path.write_text(rendered, encoding="utf-8")
+    subprocess.run(["pandoc", str(md_path), "-t", "typst", "-o", str(typst_path)], check=True)
+    written = typst_path.read_text(encoding="utf-8")
+    assert _predicted_template_line(written, "#nonesistente[boom]") == 5
+
+
 # --- Real compiles: settling the module's own flagship claim -- "the same value,
 # escaped differently in the two contexts, both compile clean" -- against a real PDF
 # rather than a string, the same way Task 1 and Task 2 settled theirs. Skipped
 # cleanly when Pandoc/Typst/pdftotext are missing; on a machine that has them (this
 # one), every subprocess call uses `check=True`, so a real compile error is a test
 # failure, never something the skip is allowed to absorb.
-
-_MISSING_TOOLS = [tool for tool in ("pandoc", "typst", "pdftotext") if shutil.which(tool) is None]
-requires_real_compiler = pytest.mark.skipif(
-    bool(_MISSING_TOOLS),
-    reason=f"real Pandoc/Typst round-trip tests need these on PATH: {', '.join(_MISSING_TOOLS)}",
-)
 
 
 def _compile_to_pdf_text(markdown_source: str, tmp_path: Path) -> str:
