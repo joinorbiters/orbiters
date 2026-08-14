@@ -159,12 +159,34 @@ def render_template(
     """
     _check_declared(declared, values)
     nodes = parse_template(source)
-    # An optional declared variable defaults to "", so `{{note}}` for a note nobody
-    # filled in renders as empty text, not as an unresolved-variable error -- the
-    # error is reserved for a path the template needs that no supplied *or*
-    # declared-optional value covers. `values` is layered on top and always wins,
-    # so an actual (even falsy) value is never masked by this default.
-    optional_defaults = {v.nome: "" for v in declared if not v.obbligatoria}
+    # An optional declared variable defaults to `None`, so `{{note}}` for a note
+    # nobody filled in renders as empty text rather than as an unresolved-variable
+    # error -- the error is reserved for a path the template needs that no
+    # supplied *or* declared-optional value covers. `values` is layered on top and
+    # always wins, so an actual (even falsy) value is never masked by this default.
+    #
+    # Fix round 1, item 3: this used to seed `""` unconditionally, regardless of
+    # `tipo`. For a scalar type that is merely cosmetic -- `format_value("")` and
+    # `format_value(None)` are both `""`, and `bool("")`/`bool(None)` are both
+    # falsy, so `{{note}}` and `{{#if note}}` behave identically either way -- but
+    # for `multiselect` it was a real bug: `{{#each righe}}` resolved `righe` to
+    # the string `""`, which is not a list, and raised "'righe' non e' una lista"
+    # -- on the exact template that renders as nothing at all if `righe` is never
+    # declared. Declaring an optional variable must never make a template *more*
+    # likely to fail than leaving it undeclared.
+    #
+    # `None` is the fix, for every type, not a per-type table of empty values
+    # (`[]` for multiselect, `False` for checkbox, ...): a hardcoded table is
+    # exactly one more list this project has already paid once for trusting to
+    # stay complete (see escaping.py's own docstring) -- and it is unnecessary
+    # here, because every consumer of a resolved value already interprets `None`
+    # correctly for whatever shape it is actually used as. `_render_each` already
+    # treats `value is None` as "no rows" (the same branch a genuinely absent
+    # path takes); plain Python truthiness already treats `None` as falsy for
+    # `#if`, the same as `False`, `0` or `[]`; and `format_value(None)` is `""`
+    # for a bare substitution. `tipo` therefore still is not consulted here --
+    # matching it correctly does not require branching on it.
+    optional_defaults: dict[str, Any] = {v.nome: None for v in declared if not v.obbligatoria}
     scopes: list[dict[str, Any]] = [{**optional_defaults, **values}]
     out: list[str] = []
     _render_nodes(nodes, scopes, out)
