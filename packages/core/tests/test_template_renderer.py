@@ -48,6 +48,72 @@ def test_a_dotted_path_walks_nested_dicts() -> None:
     assert out == "Milano"
 
 
+# --- Fix round 2: a placeholder that resolves to a dict or a list is a template
+# author's mistake -- `{{cliente}}` where `{{cliente.nome}}` was meant -- not a
+# value to best-effort stringify. Before this fix, `{{cliente}}` with
+# `{"nome": "Rossi", "note_interne": "cattivo pagatore"}` printed the value's own
+# Python repr, internal keys included, into a document sent *to* that customer,
+# with no error at all -- confirmed live before writing the fix. `#each` over the
+# same shape is the separate, legitimate case it already was and is untouched.
+
+
+def test_a_dict_value_is_a_precise_error_not_a_repr_dump() -> None:
+    with pytest.raises(ValidationFailed) as excinfo:
+        render_template(
+            "Cliente: {{cliente}}",
+            {"cliente": {"nome": "Rossi", "note_interne": "cattivo pagatore", "id": 42}},
+        )
+    assert excinfo.value.details["field"] == "cliente"
+    assert "riga 1" in excinfo.value.details["reason"]
+    # The whole point: the leaked internal note must never appear anywhere in
+    # the exception either, the same as it must never reach the rendered text.
+    assert "cattivo pagatore" not in str(excinfo.value.details)
+
+
+def test_a_list_value_is_a_precise_error_not_a_repr_dump() -> None:
+    with pytest.raises(ValidationFailed) as excinfo:
+        render_template("riga1\nriga2 {{righe}}", {"righe": [1, 2, 3]})
+    assert excinfo.value.details["field"] == "righe"
+    assert "riga 2" in excinfo.value.details["reason"]
+
+
+def test_a_dict_value_inside_an_each_body_is_also_a_precise_error() -> None:
+    # Not just the root case: a row's own property that happens to be a nested
+    # container is the identical mistake, one level in.
+    with pytest.raises(ValidationFailed) as excinfo:
+        render_template(
+            "{{#each righe}}{{dettagli}}{{/each}}",
+            {"righe": [{"dettagli": {"segreto": "no"}}]},
+        )
+    assert excinfo.value.details["field"] == "dettagli"
+
+
+def test_each_over_a_list_is_unaffected_by_the_dict_and_list_value_guard() -> None:
+    # The separate, legitimate case: #each is exactly the right construct for a
+    # list, and must keep working exactly as before.
+    out = render_template("{{#each righe}}{{nome}};{{/each}}", {"righe": [{"nome": "A"}]})
+    assert out == "A;"
+
+
+def test_render_nodes_fails_loudly_on_a_node_type_it_does_not_recognise() -> None:
+    # Pins the exhaustiveness guard added alongside the dict/list fix: a node
+    # type _render_nodes's own match does not recognise must fail loudly, the
+    # same class of bug as a future Node variant silently rendering as nothing
+    # -- just later, and quieter. Reaches directly into the private
+    # _render_nodes to prove the invariant, since parse_template can never
+    # produce a fifth node type through the public API for this to test against
+    # -- the same reasoning test_escape_for_verbatim_raises_since_it_should_
+    # never_be_called (test_template_escaping.py) uses for its own
+    # should-never-happen case.
+    import pigrocrm.core.templates.renderer as renderer_module
+
+    class _NotARealNode:
+        pass
+
+    with pytest.raises(AssertionError):
+        renderer_module._render_nodes((_NotARealNode(),), [{}], [])  # type: ignore[arg-type]
+
+
 def test_typst_injection_is_literal_text_in_the_markdown_context() -> None:
     # Overrides the brief's own expected value, which was written against the
     # pre-Task-1-fix design where "#" was escaped only at the start of a line. The

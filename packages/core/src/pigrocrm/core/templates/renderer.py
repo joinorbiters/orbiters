@@ -25,7 +25,7 @@ terms and stay that way even if this one misuses them:
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, assert_never
 
 from pigrocrm.core.errors import ValidationFailed
 from pigrocrm.core.templates.ast import EachNode, IfNode, Node, TextNode, VariableNode
@@ -97,7 +97,12 @@ def _is_blank(value: Any) -> bool:
 
 
 def format_value(value: Any) -> str:
-    """A value as text, before escaping.
+    """A value as text, before escaping. Meant for a *scalar*: a `dict`, `list` or
+    `tuple` still falls through to the final `str(value)` here (this function's
+    own contract does not promise otherwise), but `_render_variable` -- this
+    function's only caller -- refuses one with a precise error before ever
+    reaching this point, fix round 2, precisely to stop a container's own
+    `repr` (internal keys included) from reaching a rendered document.
 
     `Decimal` is formatted with `str`, never `float`: a binary float cannot represent
     1234.56 exactly, and the drift is a bug the moment it reaches an offer. The same
@@ -280,6 +285,16 @@ def _render_nodes(nodes: tuple[Node, ...], scopes: list[dict[str, Any]], out: li
                 _render_nodes(then if found and value else otherwise, scopes, out)
             case EachNode(path=path, line=line, body=body):
                 _render_each(path, line, body, scopes, out)
+            case _:
+                # Fix round 2: a future fifth `Node` variant silently rendering as
+                # nothing here is the same class of failure as any of the errors
+                # above -- just later, and quieter. `assert_never` makes it
+                # impossible to add one to the `ast.py` union without this match
+                # failing mypy first (`node`'s narrowed type here is only ever
+                # `Never` while the four cases above are exhaustive), and, should
+                # that check ever be bypassed, raises loudly at run time instead
+                # of dropping the node's content with no trace.
+                assert_never(node)
 
 
 def _render_variable(
@@ -297,6 +312,26 @@ def _render_variable(
             dotted,
             f"riga {line}: variabile '{dotted}' non risolta",
             expected="una variabile dichiarata dal template",
+        )
+    if isinstance(value, (dict, list, tuple)):
+        # Fix round 2: a dict or a list in *value* position -- a bare `{{cliente}}`
+        # where the author meant `{{cliente.nome}}` -- used to fall through to
+        # `format_value`'s final `str(value)` and print the value's own Python
+        # `repr` into the document, internal keys included: confirmed live,
+        # `{{cliente}}` with `{"nome": "Rossi", "note_interne": "cattivo
+        # pagatore"}` put the customer's own internal note into a document sent
+        # *to* that customer, with no error at all. This is a template author's
+        # mistake -- the fix is the same shape as every other one in this
+        # module: a precise error naming the variable and the line, never a
+        # best-effort stringification of something that was never meant to be
+        # displayed whole. `#each` over the same shape is unaffected: it is
+        # `_render_each`'s job, a separate, legitimate case for exactly this
+        # type, checked before any of this ever runs.
+        raise ValidationFailed(
+            ENTITY,
+            dotted,
+            f"riga {line}: '{dotted}' e' un oggetto o una lista, non un valore singolo",
+            expected=f"un percorso piu' specifico (es. {dotted}.campo) o un blocco #each",
         )
     # `context` came from the node the parser built for this exact placeholder --
     # never re-derived from the path, the value, or anything else this function
