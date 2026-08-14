@@ -45,7 +45,7 @@ import string
 from typing import Literal
 from urllib.parse import quote, urlsplit
 
-RenderContext = Literal["markdown", "typst", "url", "verbatim"]
+RenderContext = Literal["markdown", "typst", "typst_string", "url", "verbatim"]
 
 # Every ASCII punctuation character, escaped unconditionally, in both contexts -- see
 # the module docstring for why a curated subset per context is exactly the defect this
@@ -127,11 +127,13 @@ def escape_typst(value: str) -> str:
     handful of named/unicode escapes); a backslash before any other character is not
     a recognised escape there, and Typst keeps the backslash as a visible, literal
     character instead of consuming it (confirmed live: `#text("C\\# dev")` renders as
-    the four characters `C\\# dev`, backslash included). A value bound for
-    string-literal position needs a different, narrower escaper -- doubling only `\\`
-    and `"` -- which this module does not provide; put such a value in markup
-    position (its own `[...]` content block) instead of passing it as a string
-    argument.
+    the four characters `C\\# dev`, backslash included). Fix round 1, item 2: a
+    reviewer found this live and unguarded -- `#link("{{u}}")` is an obvious thing
+    for a template author to write, and this escaper turns a working URL into a
+    dead one (`#link("https\\:\\/\\/esempio\\.it")`, confirmed live by reading the
+    compiled PDF's own `/URI` annotation). `escape_typst_string` below is the
+    narrower escaper for that position; `pigrocrm.core.templates.parser` decides,
+    at parse time, which of the two a given placeholder needs.
 
     Newlines -- and everything else Typst's own lexer treats as one, see
     `_NEWLINE_EQUIVALENTS` -- collapse to a single space: the value is landing inside
@@ -140,6 +142,40 @@ def escape_typst(value: str) -> str:
     """
     flattened = _NEWLINE_EQUIVALENTS.sub(" ", _reject_nul(value))
     return _escape_each(flattened, _ASCII_PUNCTUATION)
+
+
+# Only these two characters are a recognised escape inside a Typst string literal
+# (plus a handful of named/unicode escapes -- `\n`, `\u{...}` and similar -- this
+# module has no reason to produce, since it only ever escapes *literal* characters
+# a customer's own value happens to contain, never emits a named escape itself).
+_TYPST_STRING_SPECIALS: frozenset[str] = frozenset({"\\", '"'})
+
+
+def escape_typst_string(value: str) -> str:
+    r"""For a placeholder that lands inside a Typst *string literal* -- the
+    argument of `#link("...")`, `#text("...")` and similar, as opposed to markup
+    position (`escape_typst`, above).
+
+    Escaping the full ASCII punctuation class here -- `escape_typst`'s own rule --
+    is wrong in this position for the same reason that function's docstring
+    describes: a backslash before, say, `&` is not a recognised escape inside a
+    string literal, so Typst keeps it as a visible, literal backslash instead of
+    consuming it (confirmed live: `#text("Rossi \& C\.")` renders the backslashes).
+    Only `\` and `"` need doubling here; escaping anything else would be visible,
+    not merely redundant.
+
+    Escaping `"` is what stops a hostile value from closing the string early and
+    handing the rest of itself to Typst as real code -- confirmed live with a value
+    built to do exactly that (`x") #import("/etc/passwd") #text("`), which stays
+    inert literal text end to end once escaped this way, never a second argument,
+    never a second function call.
+
+    Newlines still collapse to a single space, for the same reason `escape_typst`
+    collapses them: the value is landing inside one syntactic unit, not a place a
+    raw line break belongs.
+    """
+    flattened = _NEWLINE_EQUIVALENTS.sub(" ", _reject_nul(value))
+    return _escape_each(flattened, _TYPST_STRING_SPECIALS)
 
 
 def _is_trustworthy_absolute_url(value: str) -> bool:
@@ -210,6 +246,8 @@ def escape_for(context: RenderContext, value: str) -> str:
             return escape_markdown(value)
         case "typst":
             return escape_typst(value)
+        case "typst_string":
+            return escape_typst_string(value)
         case "url":
             return escape_url(value)
         case "verbatim":
