@@ -139,6 +139,41 @@ _SEGMENT_RE = re.compile(
 
 _TOKEN_RE = re.compile(r"\{\{(?P<body>.*?)\}\}", re.DOTALL)
 
+# Fix round 1, item 2: a placeholder that is the *entire* content of a Typst
+# string-literal function argument -- `#link("{{u}}")`, `#text("{{n}}")`, the
+# reviewer's own two examples -- needs escape_typst_string (escaping.py), not
+# escape_typst: the latter is correct for markup position, but a Typst string
+# literal's own escape grammar only recognises `\` and `"`, so escape_typst's
+# extra backslashes are not consumed and stay visible, and (the sharper failure)
+# a URL escaped that way is no longer a working link -- confirmed live in both
+# escaping.py's own tests and test_template_renderer.py's.
+#
+# Deliberately narrow, not a general Typst string-literal parser: `#` unambiguously
+# introduces Typst code mode for one expression, so `#identifier(` directly before
+# an opening quote is not ambiguous with anything else in the grammar -- unlike a
+# bare `"` on its own, which Typst's *markup* mode also uses for an ordinary
+# quotation in prose (`Il cliente ha detto "{{testo}}"`), where escape_typst is
+# the *correct* escaper and this pattern must not fire. Requiring the identifier
+# and the open-paren immediately before the quote is what tells the two apart.
+# A value split across a concatenation (`"a" + "{{x}}"`), a multi-argument call
+# (`#link("{{u}}", "label")`), or a placeholder not tightly adjacent to both
+# quotes falls outside this pattern and keeps the existing "typst" (markup)
+# context -- not a regression, since escape_typst's full-punctuation-class
+# escaping is a strict superset of what a string literal needs to stay safe, just
+# a cosmetically wrong superset (visible backslashes, or a broken link) for that
+# narrower set of cases this pattern does not reach. See the module docstring.
+_TYPST_STRING_ARG_OPEN_RE = re.compile(r'#[A-Za-z_][A-Za-z0-9_-]*\(\s*"$')
+_TYPST_STRING_ARG_CLOSE_RE = re.compile(r'^"\s*\)')
+
+
+def _is_typst_string_literal_argument(text: str, start: int, end: int) -> bool:
+    """True when `text[start:end]` (a `{{...}}` match's span) is immediately and
+    exclusively wrapped by `#identifier("..." )` -- see the constants above."""
+    return bool(_TYPST_STRING_ARG_OPEN_RE.search(text[:start])) and bool(
+        _TYPST_STRING_ARG_CLOSE_RE.match(text[end:])
+    )
+
+
 # `re.fullmatch` against this, never `re.match` with `$`: `$` matches before a
 # trailing newline, so `{{a\n}}` would be accepted as the path `a` and the newline
 # would silently vanish. The project has already paid for that distinction once, on a
@@ -363,7 +398,17 @@ def parse_template(source: str) -> tuple[Node, ...]:
             # ergonomic for whoever writes templates while leaving an embedded
             # newline in place for the checks below to reject.
             body = match.group("body").strip(" \t")
-            is_structural = _consume_token(stack, body, line, seg.context)
+            # Fix round 1, item 2: a placeholder that is the entire content of a
+            # Typst string-literal argument -- `#link("{{u}}")` -- gets the
+            # narrower "typst_string" context instead of "typst" (markup). See
+            # `_is_typst_string_literal_argument`'s own comment for what this
+            # does and does not catch, and why.
+            effective_context = seg.context
+            if seg.context == "typst" and _is_typst_string_literal_argument(
+                text, match.start(), match.end()
+            ):
+                effective_context = "typst_string"
+            is_structural = _consume_token(stack, body, line, effective_context)
             if seg.context == "typst" and is_structural:
                 pending_resume_line = line
             cursor = match.end()

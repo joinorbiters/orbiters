@@ -877,3 +877,74 @@ def test_for_real_the_line_marker_survives_pandoc_and_produces_no_visible_text(
     ).stdout
     assert "pigrocrm:line" not in text
     assert "prima" in text and "dopo" in text
+
+
+# --- Fix round 1, item 2: a placeholder that is the entire content of a Typst
+# string-literal function argument (`#link("{{u}}")`) needs escape_typst_string,
+# not escape_typst -- see parser.py's own comment on _TYPST_STRING_ARG_OPEN_RE for
+# why this is narrow by design (a confidently-safe subset, not a general Typst
+# string-literal parser) and why "#identifier(" immediately before the quote is
+# what makes it safe to detect at all: "#" unambiguously introduces Typst code
+# mode, unlike a bare quote on its own, which markup mode also uses for an
+# ordinary quotation in prose.
+
+
+def test_a_placeholder_wrapping_a_single_string_argument_gets_the_typst_string_context() -> None:
+    source = '```{=typst}\n#link("{{cliente.sito_web}}")[sito]\n```\n'
+    nodes = parse_template(source)
+    variable = next(n for n in nodes if isinstance(n, VariableNode))
+    assert variable.context == "typst_string"
+
+
+def test_a_placeholder_as_a_second_string_argument_also_gets_the_typst_string_context() -> None:
+    source = '```{=typst}\n#link("{{cliente.sito_web}}")[{{cliente.nome}}]\n```\n'
+    nodes = parse_template(source)
+    contexts = {n.path: n.context for n in nodes if isinstance(n, VariableNode)}
+    assert contexts[("cliente", "sito_web")] == "typst_string"
+    # The second placeholder is markup content (a link's label), not a string
+    # argument -- it must keep the ordinary typst context, not be swept along.
+    assert contexts[("cliente", "nome")] == "typst"
+
+
+def test_a_placeholder_in_ordinary_markup_position_keeps_the_typst_context() -> None:
+    # No "#identifier(" precedes this quote at all -- it is not code position.
+    source = "```{=typst}\n#text[{{cliente.nome}}]\n```\n"
+    nodes = parse_template(source)
+    variable = next(n for n in nodes if isinstance(n, VariableNode))
+    assert variable.context == "typst"
+
+
+def test_a_placeholder_quoted_in_ordinary_prose_keeps_the_typst_context() -> None:
+    # The false-positive risk this pattern is deliberately narrow enough to avoid:
+    # a bare quote around a placeholder in plain markup text (a prose quotation,
+    # not a function argument) must not be mistaken for string-literal position --
+    # doing so would apply the *weaker* escaper to a value that actually needs
+    # the full markup one, which is a real regression, not a cosmetic one.
+    source = '```{=typst}\nIl cliente ha detto "{{testo}}"\n```\n'
+    nodes = parse_template(source)
+    variable = next(n for n in nodes if isinstance(n, VariableNode))
+    assert variable.context == "typst"
+
+
+def test_a_placeholder_split_across_a_concatenation_keeps_the_typst_context() -> None:
+    # Not the whole string-argument content -- outside this pattern's narrow
+    # reach on purpose (documented residual, not silently wrong: escape_typst is
+    # a safe, if cosmetically imperfect, superset for this position).
+    source = '```{=typst}\n#link("https://" + "{{cliente.sito_web}}")[sito]\n```\n'
+    nodes = parse_template(source)
+    variable = next(n for n in nodes if isinstance(n, VariableNode))
+    assert variable.context == "typst"
+
+
+def test_a_placeholder_in_a_multi_argument_call_keeps_the_typst_context() -> None:
+    source = '```{=typst}\n#link("{{cliente.sito_web}}", "extra")[sito]\n```\n'
+    nodes = parse_template(source)
+    variable = next(n for n in nodes if isinstance(n, VariableNode))
+    assert variable.context == "typst"
+
+
+def test_an_inline_typst_span_can_also_get_the_typst_string_context() -> None:
+    source = 'prima `#link("{{u}}")[sito]`{=typst} dopo'
+    nodes = parse_template(source)
+    variable = next(n for n in nodes if isinstance(n, VariableNode))
+    assert variable.context == "typst_string"

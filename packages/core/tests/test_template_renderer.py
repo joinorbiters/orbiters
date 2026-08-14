@@ -464,6 +464,66 @@ def test_for_real_line_mapping_survives_a_three_row_each_loop_through_pandoc(
     assert _predicted_template_line(written, "#nonesistente[boom]") == 5
 
 
+# --- Fix round 1, item 2: a placeholder that is the whole content of a Typst
+# string-literal argument (`#link("{{u}}")`) must be escaped with
+# escape_typst_string, not escape_typst -- see parser.py's detection and
+# escaping.py's two escapers. The two reviewer examples, through the full
+# render_template path this time, not just the escaper called directly.
+
+
+def test_a_url_inside_link_survives_the_full_render_as_a_working_link_string() -> None:
+    out = render_template(
+        '```{=typst}\n#link("{{cliente.sito_web}}")[il sito]\n```\n',
+        {"cliente": {"sito_web": "https://esempio.it"}},
+    )
+    assert '#link("https://esempio.it")' in out
+
+
+def test_a_value_inside_text_survives_the_full_render_with_no_visible_backslashes() -> None:
+    out = render_template('```{=typst}\n#text("{{nome}}")\n```\n', {"nome": "Rossi & C."})
+    assert '#text("Rossi & C.")' in out
+    assert "\\&" not in out
+
+
+@requires_real_compiler
+def test_for_real_a_customers_url_inside_link_is_a_working_link_end_to_end(
+    tmp_path: Path,
+) -> None:
+    real_url = "https://esempio.it"
+    rendered = render_template(
+        '```{=typst}\n#link("{{cliente.sito_web}}")[il sito]\n```\n',
+        {"cliente": {"sito_web": real_url}},
+    )
+    md_path = tmp_path / "doc.md"
+    typst_path = tmp_path / "doc.typst"
+    pdf_path = tmp_path / "doc.pdf"
+    md_path.write_text(rendered, encoding="utf-8")
+    subprocess.run(["pandoc", str(md_path), "-t", "typst", "-o", str(typst_path)], check=True)
+    subprocess.run(["typst", "compile", str(typst_path), str(pdf_path)], check=True)
+    raw = subprocess.run(
+        ["strings", str(pdf_path)], check=True, capture_output=True, text=True
+    ).stdout
+    assert f"/URI ({real_url})" in raw
+
+
+@requires_real_compiler
+def test_for_real_an_injection_attempt_inside_a_string_argument_stays_inert(
+    tmp_path: Path,
+) -> None:
+    hostile = 'x") #import("/etc/passwd") #text("'
+    rendered = render_template('```{=typst}\n#text("{{n}}")\n```\n', {"n": hostile})
+    md_path = tmp_path / "doc.md"
+    typst_path = tmp_path / "doc.typst"
+    pdf_path = tmp_path / "doc.pdf"
+    md_path.write_text(rendered, encoding="utf-8")
+    subprocess.run(["pandoc", str(md_path), "-t", "typst", "-o", str(typst_path)], check=True)
+    subprocess.run(["typst", "compile", str(typst_path), str(pdf_path)], check=True)
+    text = subprocess.run(
+        ["pdftotext", "-layout", str(pdf_path), "-"], check=True, capture_output=True, text=True
+    ).stdout
+    assert hostile in text
+
+
 # --- Real compiles: settling the module's own flagship claim -- "the same value,
 # escaped differently in the two contexts, both compile clean" -- against a real PDF
 # rather than a string, the same way Task 1 and Task 2 settled theirs. Skipped

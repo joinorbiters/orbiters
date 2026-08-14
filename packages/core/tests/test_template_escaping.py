@@ -11,6 +11,7 @@ from pigrocrm.core.templates.escaping import (
     escape_for,
     escape_markdown,
     escape_typst,
+    escape_typst_string,
     escape_url,
 )
 
@@ -72,6 +73,50 @@ def test_typst_collapses_newlines_to_a_space() -> None:
 
 def test_typst_escapes_the_backslash_first_and_only_once() -> None:
     assert escape_typst(r"a\#b") == r"a\\\#b"
+
+
+# --- Fix round 1, item 2: escape_typst_string, for Typst *string-literal* position
+# (`#link("...")`, `#text("...")`), as opposed to escape_typst's markup position.
+# Only `\` and `"` are a recognised escape inside a Typst string; escaping anything
+# else (escape_typst's own rule) is not merely redundant there, it is visibly wrong
+# -- confirmed live below and in the real-compile tests further down.
+
+
+def test_typst_string_escapes_only_backslash_and_double_quote() -> None:
+    # Everything else that escape_typst would have escaped -- "&", "#", "$", "[",
+    # "]", "<", ">" and the rest of string.punctuation -- has no recognised escape
+    # inside a Typst string literal and must stay bare here.
+    assert escape_typst_string("Rossi & C.") == "Rossi & C."
+    assert escape_typst_string("#import x $y$ [z] <w>") == "#import x $y$ [z] <w>"
+
+
+def test_typst_string_escapes_the_backslash_first_and_only_once() -> None:
+    assert escape_typst_string(r"a\b") == r"a\\b"
+
+
+def test_typst_string_escapes_a_literal_double_quote() -> None:
+    # This is the one that matters most: an unescaped `"` closes the string early
+    # and hands the rest of the value to Typst as real code, not data.
+    assert escape_typst_string('Rossi "il migliore"') == r"Rossi \"il migliore\""
+
+
+def test_typst_string_neutralises_an_attempt_to_break_out_and_inject_code() -> None:
+    hostile = 'x") #import("/etc/passwd") #text("'
+    escaped = escape_typst_string(hostile)
+    # Every one of the 4 literal quotes in `hostile` is escaped -- none of them is
+    # a bare `"` left for Typst's own string-literal lexer to read as the string
+    # ending early.
+    assert re.findall(r'(?<!\\)"', escaped) == []
+    assert escaped == r"""x\") #import(\"/etc/passwd\") #text(\""""
+
+
+def test_typst_string_collapses_newlines_to_a_space() -> None:
+    assert escape_typst_string("riga1\nriga2") == "riga1 riga2"
+
+
+def test_typst_string_rejects_a_nul_byte() -> None:
+    with pytest.raises(ValueError, match="carattere nullo"):
+        escape_typst_string("a\x00b")
 
 
 def test_url_percent_encodes_everything_unsafe() -> None:
@@ -278,6 +323,83 @@ def test_every_ascii_punctuation_character_survives_typst_context_for_real(
     escaped = escape_typst(payload)
     text = _compile_typst_markup_to_pdf_text(f"X{escaped}Y", tmp_path)
     assert f"X{payload}Y" in text
+
+
+# --- Fix round 1, item 2, settled by compiling: escape_typst is correct for markup
+# position but wrong for a Typst string-literal argument, and #link("...") is an
+# obvious thing for a template author to write. Confirmed live below, both ways --
+# the bug the reviewer found, and the fix.
+
+
+def _compile_typst_markup_to_pdf_uris(markup: str, tmp_path: Path) -> list[str]:
+    """Every `/URI (...)` link-annotation target Typst produces from raw `markup`,
+    no Pandoc involved -- the string-literal-position sibling of
+    `_compile_markdown_to_pdf_uris` below, which goes through Pandoc instead."""
+    typst_path = tmp_path / "doc.typst"
+    pdf_path = tmp_path / "doc.pdf"
+    typst_path.write_text(markup + "\n", encoding="utf-8")
+    subprocess.run(["typst", "compile", str(typst_path), str(pdf_path)], check=True)
+    raw = subprocess.run(
+        ["strings", str(pdf_path)], check=True, capture_output=True, text=True
+    ).stdout
+    return [
+        m.group(1).replace("\\(", "(").replace("\\)", ")").replace("\\\\", "\\")
+        for m in _URI_RE.finditer(raw)
+    ]
+
+
+@requires_real_compiler
+def test_for_real_escape_typst_in_string_literal_position_produces_a_dead_link(
+    tmp_path: Path,
+) -> None:
+    # The bug exactly as the reviewer reported it: escape_typst (markup position's
+    # escaper) applied to a #link(...) string argument turns a real URL into a
+    # broken one -- confirmed by reading the compiled PDF's own link annotation,
+    # not by asserting a string.
+    real_url = "https://esempio.it"
+    wrong = escape_typst(real_url)
+    uris = _compile_typst_markup_to_pdf_uris(f'#link("{wrong}")[sito]', tmp_path)
+    assert uris != [real_url]
+    assert uris == [r"https\:\/\/esempio\.it"]
+
+
+@requires_real_compiler
+def test_for_real_escape_typst_string_makes_the_link_work(tmp_path: Path) -> None:
+    real_url = "https://esempio.it"
+    right = escape_typst_string(real_url)
+    uris = _compile_typst_markup_to_pdf_uris(f'#link("{right}")[sito]', tmp_path)
+    assert uris == [real_url]
+
+
+@requires_real_compiler
+def test_for_real_escape_typst_in_string_literal_position_leaves_visible_backslashes(
+    tmp_path: Path,
+) -> None:
+    hostile = "Rossi & C."
+    wrong = escape_typst(hostile)
+    text = _compile_typst_markup_to_pdf_text(f'#text("{wrong}")', tmp_path)
+    assert hostile not in text
+    assert wrong in text  # the backslashes survive, visibly, exactly as reported
+
+
+@requires_real_compiler
+def test_for_real_escape_typst_string_renders_the_clean_value(tmp_path: Path) -> None:
+    hostile = "Rossi & C."
+    right = escape_typst_string(hostile)
+    text = _compile_typst_markup_to_pdf_text(f'#text("{right}")', tmp_path)
+    assert hostile in text
+
+
+@requires_real_compiler
+def test_for_real_escape_typst_string_prevents_breaking_out_of_the_string(
+    tmp_path: Path,
+) -> None:
+    hostile = 'x") #import("/etc/passwd") #text("'
+    escaped = escape_typst_string(hostile)
+    text = _compile_typst_markup_to_pdf_text(f'#text("{escaped}")', tmp_path)
+    # The whole hostile string reads back as inert literal text -- no second
+    # function call, no attempted import, nothing executed.
+    assert hostile in text
 
 
 @requires_real_compiler
