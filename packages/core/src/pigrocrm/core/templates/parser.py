@@ -266,6 +266,41 @@ def _insert_typst_line_marker(text: str, body_line: int) -> str:
     return f"{opening}\n{TYPST_LINE_MARKER_PREFIX}{body_line}\n{body}"
 
 
+def _resume_marker(text: str, tag_line: int) -> str:
+    """`text` is the TextNode fragment about to be emitted immediately after a
+    block-structural token (`#if`/`#each` opening, `else`, or a `/if`/`/each`
+    close) consumed at template line `tag_line`, inside a typst fence.
+
+    Fix round 1, item 1: the fence-open marker alone gives a diagnostics mapper a
+    single anchor plus "count newlines from here" -- which is exactly wrong the
+    moment a branch is skipped (its lines vanish from the render but the template
+    still had them) or a loop body repeats (its lines multiply). Re-anchoring here,
+    at every point the *rendered* line count can diverge from the template's, is
+    what keeps the arithmetic honest afterwards: everything between two markers is,
+    by construction, contiguous unmodified template text with no possible
+    intervening structural change, so plain counting from the nearer marker is
+    correct again -- confirmed against real Pandoc/Typst compiles, see
+    test_template_parser.py and test_template_renderer.py.
+
+    Handles the common case, a block tag alone on its own line: the fragment
+    starts with that line's own trailing newline (a "phantom" line with nothing
+    on it once the tag itself disappears from the render), which is swapped for
+    the marker naming the real next template line -- not merely prefixed, because
+    counting the phantom blank line as if it were live content would itself
+    introduce a one-line error the marker exists to prevent.
+
+    Does *not* re-anchor when the tag shares a physical line with real content
+    (`{{#if x}}foo{{/if}}` all on one line): `text` does not start with "\\n" in
+    that case, so it is returned unchanged, and a `//` marker -- which can only
+    ever occupy a whole line of its own -- is not inserted, since doing so would
+    itself split a line that was not split in the template. Recorded as a known,
+    narrower residual rather than solved: see the module docstring.
+    """
+    if not text.startswith("\n"):
+        return text
+    return f"{TYPST_LINE_MARKER_PREFIX}{tag_line + 1}\n{text[1:]}"
+
+
 def parse_template(source: str) -> tuple[Node, ...]:
     """Parse a template into a node tree, or raise `ValidationFailed` naming the line."""
     root = _Frame("root", (), 1)
@@ -299,10 +334,19 @@ def parse_template(source: str) -> tuple[Node, ...]:
         marked = seg.context == "typst" and "\n" in text
         if marked:
             text = _insert_typst_line_marker(text, seg.line + 1)
+        # Re-armed after every block-structural token consumed inside a typst
+        # segment (see `_resume_marker`); `None` means "nothing to re-anchor",
+        # i.e. either no block token has fired yet in this segment, or the most
+        # recent one was already applied to the text that followed it.
+        pending_resume_line: int | None = None
         cursor = 0
         for match in _TOKEN_RE.finditer(text):
             if match.start() > cursor:
-                stack[-1].emit(TextNode(text[cursor : match.start()]))
+                gap = text[cursor : match.start()]
+                if pending_resume_line is not None:
+                    gap = _resume_marker(gap, pending_resume_line)
+                    pending_resume_line = None
+                stack[-1].emit(TextNode(gap))
             # The marker inserts one whole extra line before every placeholder that
             # can occur in this segment -- never on the fence's own opening line,
             # since the grammar requires a literal newline right after the
@@ -319,10 +363,15 @@ def parse_template(source: str) -> tuple[Node, ...]:
             # ergonomic for whoever writes templates while leaving an embedded
             # newline in place for the checks below to reject.
             body = match.group("body").strip(" \t")
-            _consume_token(stack, body, line, seg.context)
+            is_structural = _consume_token(stack, body, line, seg.context)
+            if seg.context == "typst" and is_structural:
+                pending_resume_line = line
             cursor = match.end()
         if cursor < len(text):
-            stack[-1].emit(TextNode(text[cursor:]))
+            tail = text[cursor:]
+            if pending_resume_line is not None:
+                tail = _resume_marker(tail, pending_resume_line)
+            stack[-1].emit(TextNode(tail))
 
     if len(stack) > 1:
         open_frame = stack[-1]
@@ -330,14 +379,22 @@ def parse_template(source: str) -> tuple[Node, ...]:
     return tuple(root.children)
 
 
-def _consume_token(stack: list[_Frame], body: str, line: int, context: RenderContext) -> None:
-    """One `{{...}}`. Mutates `stack`; appends to the frame on top of it."""
+def _consume_token(stack: list[_Frame], body: str, line: int, context: RenderContext) -> bool:
+    """One `{{...}}`. Mutates `stack`; appends to the frame on top of it.
+
+    Returns whether this token was block-structural (`#if`/`#each` opening, `else`,
+    or a `/if`/`/each` close) rather than an ordinary variable substitution -- the
+    caller uses this to decide whether the *next* text it emits inside a typst fence
+    needs a fresh line marker (see `_resume_marker`): a block token is exactly the
+    place where the fence's rendered line count can stop matching the template's,
+    because the branch not taken vanishes, or the loop body repeats.
+    """
     if body.startswith("#"):
         keyword, _, rest = body[1:].partition(" ")
         if keyword not in ("if", "each"):
             _fail(line, f"blocco '{keyword}' sconosciuto", expected="if oppure each")
         stack.append(_Frame(keyword, _parse_path(rest.strip(), line), line))
-        return
+        return True
 
     if body.startswith("/"):
         keyword = body[1:].strip()
@@ -352,7 +409,7 @@ def _consume_token(stack: list[_Frame], body: str, line: int, context: RenderCon
             else EachNode(frame.path, frame.line, tuple(frame.children))
         )
         stack[-1].emit(node)
-        return
+        return True
 
     if body == "else":
         if len(stack) == 1 or stack[-1].kind != "if":
@@ -364,7 +421,7 @@ def _consume_token(stack: list[_Frame], body: str, line: int, context: RenderCon
             # first else-branch had already accumulated with no error at all.
             _fail(line, "{{else}} duplicato nello stesso blocco {{#if}}")
         stack[-1].otherwise = []
-        return
+        return True
 
     # A space in the body would be a helper call -- `{{uppercase nome}}`. The engine
     # has none, by design: a template is a document, not a program, and an engine that
@@ -377,6 +434,7 @@ def _consume_token(stack: list[_Frame], body: str, line: int, context: RenderCon
             expected="un percorso puntato, es. cliente.ragione_sociale",
         )
     stack[-1].emit(VariableNode(_parse_path(body, line), context, line))
+    return False
 
 
 @dataclass(frozen=True)
