@@ -261,6 +261,50 @@ def test_a_preexisting_symlink_cannot_redirect_delete_outside_root(tmp_path: Pat
     assert victim.exists()
 
 
+def test_a_self_referential_symlink_segment_raises_a_domain_error_not_a_raw_oserror(
+    tmp_path: Path,
+) -> None:
+    """Fix round 1: a symlink pointing at itself makes real `resolve()` raise a raw
+    `OSError` (errno 62, "too many levels of symbolic links") from *inside* the
+    containment check itself -- confirmed against this Python on this host before
+    fixing it, not assumed. `_resolve_or_refuse` catches it and refuses the key with
+    the same domain error any other unsafe destination gets, on all three methods."""
+    root = tmp_path / "storage"
+    root.mkdir()
+    loop = root / "acme-01234567"
+    loop.symlink_to(loop)
+
+    storage = LocalFileStorage(root)
+    for call in (
+        lambda: storage.put(KEY, PDF, "application/pdf"),
+        lambda: storage.get(KEY),
+        lambda: storage.delete(KEY),
+    ):
+        with pytest.raises(ValidationFailed):
+            call()
+
+
+def test_a_file_where_a_key_needs_a_directory_raises_a_domain_error_not_a_raw_oserror(
+    tmp_path: Path,
+) -> None:
+    """Fix round 1: if a segment of the key already exists as a plain *file* (an
+    upstream bug reusing an id, or a stale write -- not necessarily an attacker),
+    descending into it as if it were a directory raises a raw `NotADirectoryError` on
+    all three methods, confirmed against the code as it stood before this fix. Now
+    caught once, in `_resolve_or_refuse`, rather than needing a separate guard in each
+    method."""
+    (tmp_path / "acme-01234567").write_bytes(b"un file, non una directory")
+
+    storage = LocalFileStorage(tmp_path)
+    for call in (
+        lambda: storage.put(KEY, PDF, "application/pdf"),
+        lambda: storage.get(KEY),
+        lambda: storage.delete(KEY),
+    ):
+        with pytest.raises(ValidationFailed):
+            call()
+
+
 # --- A key that is not a symlink trick but still collides with an existing directory
 # (an upstream bug reusing an id, or a stale write) must not surface a raw OSError
 # either: `get` and `delete` translate it into the same domain errors as any other

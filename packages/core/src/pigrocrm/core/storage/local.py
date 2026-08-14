@@ -13,21 +13,52 @@ class LocalFileStorage:
     def __init__(self, root: Path) -> None:
         self.root = Path(root)
 
-    def _path(self, key: str) -> Path:
-        """The one place every method maps a key to a real filesystem location.
+    def _resolve_or_refuse(self, candidate: Path) -> Path:
+        """Resolves `candidate`, refusing it if resolution fails for any reason other
+        than the path (or a suffix of it) simply not existing yet -- which is normal
+        and expected for a `put` target that has never been written before.
 
-        Two independent gates, in order. `validate_storage_key` rejects an unsafe
-        *string* before any filesystem call -- traversal, absolute paths, reserved
-        names, length. The containment check below then catches what that first gate
-        cannot: a key made of only safe segments still resolves through whatever is
-        physically sitting at each of those segments, and if a symlink was planted at
-        one of them ahead of time, pointing outside `root`, the resolved path lands
-        outside `root` even though the key string itself was fine. Comparing resolved
-        paths, rather than trusting the join, is what catches that.
+        Two distinct failures land here, both confirmed against a real reproduction on
+        this host, not assumed from documentation:
+
+        - A self-referential or looping symlink planted among the key's own segments
+          makes `resolve()` raise `OSError` (errno ELOOP, "too many levels of symbolic
+          links"). The *non-strict* `resolve()` this class used to call unconditionally
+          swallows that internally and falls back to treating the loop as a literal,
+          not-yet-existing path -- which let a still-broken destination through
+          containment-checking, only to raise that same raw `OSError` later, deeper
+          inside `mkdir`/`read_bytes`/`is_dir`, on all three of `put`/`get`/`delete`.
+        - A segment that already exists as a plain *file* where the key needs a
+          directory raises `NotADirectoryError` -- also not `FileNotFoundError`, and
+          also, before this method existed, reached the caller raw from all three
+          methods, not only `put`.
+
+        Trying the strict resolution first, and falling back to the lenient one only
+        for the single error that means "does not exist yet", catches both failures
+        here, uniformly, instead of leaking either one from deeper in the call.
         """
-        validated = validate_storage_key(key)
-        candidate = self.root / validated
-        if not candidate.resolve().is_relative_to(self.root.resolve()):
+        try:
+            return candidate.resolve(strict=True)
+        except FileNotFoundError:
+            return candidate.resolve(strict=False)
+        except OSError as exc:
+            raise ValidationFailed(
+                "document_version",
+                "storage_key",
+                "impossibile risolvere il percorso di storage",
+                expected="una chiave la cui destinazione sia risolvibile e resti nella radice",
+            ) from exc
+
+    def _ensure_contained(self, candidate: Path) -> Path:
+        """Refuses `candidate` if its real destination is not inside `root`.
+
+        A key can be a perfectly safe *string* (`validate_storage_key`) and still
+        resolve outside root if a symlink was already planted at one of its segments
+        before this call -- the string check has no way to see that, since it never
+        touches the filesystem. Comparing resolved paths, rather than trusting the
+        join, is what catches it.
+        """
+        if not self._resolve_or_refuse(candidate).is_relative_to(self.root.resolve()):
             raise ValidationFailed(
                 "document_version",
                 "storage_key",
@@ -35,6 +66,16 @@ class LocalFileStorage:
                 expected="una chiave la cui destinazione reale resti dentro la radice",
             )
         return candidate
+
+    def _path(self, key: str) -> Path:
+        """The one place every method maps a key to a real filesystem location.
+
+        Two independent gates, in order: `validate_storage_key` rejects an unsafe
+        *string* before any filesystem call -- traversal, absolute paths, reserved
+        names, length, case. `_ensure_contained` then rejects a safe string whose real,
+        on-disk destination is not inside `root` anyway.
+        """
+        return self._ensure_contained(self.root / validate_storage_key(key))
 
     def put(self, key: str, data: bytes, content_type: str) -> None:
         """`content_type` is accepted and ignored: a filesystem has no place to record
