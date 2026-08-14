@@ -39,8 +39,13 @@ __all__ = [
     "render_template",
 ]
 
+# The generic "template body" field name, unused as of fix round 1, item 4: every
+# error this module raises now names the specific variable or dotted path at
+# fault as `field` instead (`variable.nome`, or `".".join(path)`) -- naming
+# "which variable" via the same structured detail every caller already knows to
+# read, not only recoverable by parsing the free-text `reason`. Kept as ENTITY
+# only; there is no more FIELD constant to keep alongside it.
 ENTITY = "template"
-FIELD = "corpo_markdown"
 
 
 @dataclass(frozen=True)
@@ -136,13 +141,74 @@ def _resolve(path: tuple[str, ...], scopes: list[dict[str, Any]]) -> tuple[bool,
     return False, None
 
 
-def _check_declared(declared: tuple[DeclaredVariable, ...], values: dict[str, Any]) -> None:
+def _first_root_line_referencing(nodes: tuple[Node, ...], nome: str) -> int | None:
+    """The template line of the first node -- a bare `{{nome...}}`, or the path an
+    `#if`/`#each` itself names -- whose top-level path segment is `nome`, at the
+    *root* level only. Mirrors `parser.declared_paths`'s own root/loop_relative
+    split exactly (same recursion, same `inside_each` gate): a `{{nome}}` inside
+    an `#each` body is relative to that loop's current item, a different
+    name-space from a root-level declared variable, even when the two happen to
+    share a spelling, and must not be mistaken for a match.
+
+    Used only to enrich a missing-required-variable error with a line, on a
+    genuinely best-effort basis: `None` when `nome` is declared but never
+    referenced anywhere at the root level, which is a legitimate shape --
+    declared, not deduced (spec 4.3) -- not a bug to paper over with a fabricated
+    line number.
+    """
+
+    def walk(items: tuple[Node, ...], *, inside_each: bool) -> int | None:
+        for node in items:
+            match node:
+                case VariableNode(path=path, line=line):
+                    if not inside_each and path[0] == nome:
+                        return line
+                case IfNode(path=path, line=line, then=then, otherwise=otherwise):
+                    if not inside_each and path[0] == nome:
+                        return line
+                    found = walk(then, inside_each=inside_each)
+                    if found is not None:
+                        return found
+                    found = walk(otherwise, inside_each=inside_each)
+                    if found is not None:
+                        return found
+                case EachNode(path=path, line=line, body=body):
+                    if not inside_each and path[0] == nome:
+                        return line
+                    found = walk(body, inside_each=True)
+                    if found is not None:
+                        return found
+                case TextNode():
+                    pass
+        return None
+
+    return walk(nodes, inside_each=False)
+
+
+def _check_declared(
+    nodes: tuple[Node, ...], declared: tuple[DeclaredVariable, ...], values: dict[str, Any]
+) -> None:
+    """Fix round 1, item 4: `field` is the variable's own name and `reason` names
+    the line of its first root-level reference, when it has one -- both were
+    previously missing (`field` was the constant "corpo_markdown", the generic
+    template-body field; `reason` had no line at all, because this check used to
+    run *before* `parse_template`, when no tree existed yet to search). `entity`
+    stays the constant "template": this function has no notion of *which*
+    template it is -- `render_template` takes raw source text, not a name or an
+    id -- so there is genuinely nothing more specific to put there at this layer;
+    a caller that knows which template it is dealing with is the one positioned
+    to enrich a caught `ValidationFailed` with that fact, not this pure function.
+    """
     for variable in declared:
         if variable.obbligatoria and _is_blank(values.get(variable.nome)):
+            reason = f"variabile obbligatoria mancante: {variable.etichetta}"
+            line = _first_root_line_referencing(nodes, variable.nome)
+            if line is not None:
+                reason = f"riga {line}: {reason}"
             raise ValidationFailed(
                 ENTITY,
                 variable.nome,
-                f"variabile obbligatoria mancante: {variable.etichetta}",
+                reason,
                 expected="un valore non vuoto",
             )
 
@@ -157,8 +223,8 @@ def render_template(
     a required declared variable, an unresolved `{{path}}`, an `#each` pointed at
     something that is not a list -- rather than rendering a PDF with a hole in it.
     """
-    _check_declared(declared, values)
     nodes = parse_template(source)
+    _check_declared(nodes, declared, values)
     # An optional declared variable defaults to `None`, so `{{note}}` for a note
     # nobody filled in renders as empty text rather than as an unresolved-variable
     # error -- the error is reserved for a path the template needs that no
@@ -219,12 +285,17 @@ def _render_nodes(nodes: tuple[Node, ...], scopes: list[dict[str, Any]], out: li
 def _render_variable(
     path: tuple[str, ...], context: RenderContext, line: int, scopes: list[dict[str, Any]]
 ) -> str:
+    # Fix round 1, item 4: `field` is the dotted path itself, not the constant
+    # "corpo_markdown" -- naming *which* variable failed via the same structured
+    # detail `_check_declared`'s error uses (`variable.nome` there), rather than
+    # leaving that fact recoverable only by parsing the free-text `reason`.
+    dotted = ".".join(path)
     found, value = _resolve(path, scopes)
     if not found:
         raise ValidationFailed(
             ENTITY,
-            FIELD,
-            f"riga {line}: variabile '{'.'.join(path)}' non risolta",
+            dotted,
+            f"riga {line}: variabile '{dotted}' non risolta",
             expected="una variabile dichiarata dal template",
         )
     # `context` came from the node the parser built for this exact placeholder --
@@ -236,7 +307,7 @@ def _render_variable(
         return escape_for(context, format_value(value))
     except ValueError as exc:
         raise ValidationFailed(
-            ENTITY, FIELD, f"riga {line}: {exc}", expected="testo senza caratteri di controllo"
+            ENTITY, dotted, f"riga {line}: {exc}", expected="testo senza caratteri di controllo"
         ) from exc
 
 
@@ -257,10 +328,13 @@ def _render_each(
         # Anything else -- a string, a number, a dict -- is not "no rows", it is
         # the wrong shape entirely, and worth surfacing rather than silently
         # iterating zero (or, for a string, character-by-character) times.
+        # `field` is the dotted path, not the generic "corpo_markdown" constant --
+        # fix round 1, item 4, same as `_render_variable`'s two errors above.
+        dotted = ".".join(path)
         raise ValidationFailed(
             ENTITY,
-            FIELD,
-            f"riga {line}: '{'.'.join(path)}' non e' una lista",
+            dotted,
+            f"riga {line}: '{dotted}' non e' una lista",
             expected="una lista di elementi",
         )
     for item in value:

@@ -198,6 +198,24 @@ def test_an_unresolvable_variable_fails_naming_the_path_and_the_line() -> None:
     assert "cliente.inesistente" in excinfo.value.details["reason"]
 
 
+# --- Fix round 1, item 4: `field` names the specific variable or dotted path at
+# fault -- the same structured detail across every error this module raises --
+# rather than the generic "corpo_markdown" constant that used to appear here and
+# in the #each "not a list" error, recoverable only by parsing free-text `reason`.
+
+
+def test_an_unresolvable_variables_field_is_its_own_dotted_path_not_the_generic_body() -> None:
+    with pytest.raises(ValidationFailed) as excinfo:
+        render_template("{{cliente.inesistente}}", {"cliente": {}})
+    assert excinfo.value.details["field"] == "cliente.inesistente"
+
+
+def test_an_each_over_a_non_lists_field_is_its_own_path_not_the_generic_body() -> None:
+    with pytest.raises(ValidationFailed) as excinfo:
+        render_template("{{#each r}}X{{/each}}", {"r": "non una lista"})
+    assert excinfo.value.details["field"] == "r"
+
+
 def test_a_missing_required_declared_variable_fails_before_rendering() -> None:
     declared = (
         DeclaredVariable(nome="oggetto", etichetta="Oggetto", tipo="text", obbligatoria=True),
@@ -205,6 +223,61 @@ def test_a_missing_required_declared_variable_fails_before_rendering() -> None:
     with pytest.raises(ValidationFailed) as excinfo:
         render_template("{{oggetto}}", {}, declared)
     assert excinfo.value.details["field"] == "oggetto"
+    assert "obbligatoria" in excinfo.value.details["reason"]
+
+
+# --- Fix round 1, item 4 continued: the missing-required-variable error also
+# names the line of its first root-level reference in the template, when it has
+# one -- this check used to run *before* parsing, so no tree existed yet to
+# search, and no line could ever be reported at all.
+
+
+def test_a_missing_required_declared_variable_names_the_line_of_its_first_use() -> None:
+    declared = (
+        DeclaredVariable(nome="oggetto", etichetta="Oggetto", tipo="text", obbligatoria=True),
+    )
+    with pytest.raises(ValidationFailed) as excinfo:
+        render_template("riga1\nriga2 {{oggetto}}\n", {}, declared)
+    assert "riga 2" in excinfo.value.details["reason"]
+
+
+def test_a_missing_required_variable_referenced_only_by_an_if_names_that_line() -> None:
+    # The spec's own motivating shape for declared_paths (parser.py): a
+    # template's entire behaviour can depend on `{{#if x}}...{{/if}}` with no
+    # bare `{{x}}` ever appearing. The line search must still find it.
+    declared = (
+        DeclaredVariable(nome="sconto", etichetta="Sconto", tipo="checkbox", obbligatoria=True),
+    )
+    with pytest.raises(ValidationFailed) as excinfo:
+        render_template("riga1\nriga2\n{{#if sconto}}s{{/if}}\n", {}, declared)
+    assert "riga 3" in excinfo.value.details["reason"]
+
+
+def test_a_missing_required_variable_referenced_only_inside_each_is_not_a_false_match() -> None:
+    # A `{{sconto}}` inside `{{#each righe}}` is relative to the loop's current
+    # item, a different name-space from a root-level declared variable of the
+    # same spelling -- it must not be mistaken for the declared variable's own
+    # first use, even though the name matches textually.
+    declared = (
+        DeclaredVariable(nome="sconto", etichetta="Sconto", tipo="checkbox", obbligatoria=True),
+    )
+    with pytest.raises(ValidationFailed) as excinfo:
+        render_template("riga1\n{{#each righe}}\n{{sconto}}\n{{/each}}\n", {"righe": []}, declared)
+    # No root-level reference exists (the one inside #each does not count), so
+    # no line is fabricated -- the reason names the missing variable, not a line.
+    assert "riga" not in excinfo.value.details["reason"]
+
+
+def test_a_missing_required_variable_never_referenced_anywhere_omits_the_line() -> None:
+    # Declared, not deduced (spec 4.3): a required variable the template body
+    # never actually mentions is a legitimate shape, not a bug -- and there is no
+    # honest line to report for it, so none is fabricated.
+    declared = (
+        DeclaredVariable(nome="oggetto", etichetta="Oggetto", tipo="text", obbligatoria=True),
+    )
+    with pytest.raises(ValidationFailed) as excinfo:
+        render_template("nessun placeholder qui\n", {}, declared)
+    assert "riga" not in excinfo.value.details["reason"]
     assert "obbligatoria" in excinfo.value.details["reason"]
 
 
