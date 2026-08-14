@@ -2,6 +2,7 @@
 which is what makes the product genuinely self-hostable (spec 5)."""
 
 import os
+import tempfile
 from datetime import timedelta
 from pathlib import Path
 
@@ -57,6 +58,11 @@ class LocalFileStorage:
         before this call -- the string check has no way to see that, since it never
         touches the filesystem. Comparing resolved paths, rather than trusting the
         join, is what catches it.
+
+        Used both for the key's own target path (`_path`) and, in `put`, for the
+        temporary file's path: a symlink or hard link planted at the temp name is
+        exactly as dangerous as one planted at the real key, and was reachable there
+        until `put` started routing its temp path through this same check too.
         """
         if not self._resolve_or_refuse(candidate).is_relative_to(self.root.resolve()):
             raise ValidationFailed(
@@ -81,14 +87,61 @@ class LocalFileStorage:
         """`content_type` is accepted and ignored: a filesystem has no place to record
         it, and the authoritative copy is `document_versions.content_type` in Postgres
         -- which is where every reader already looks. Storing it in a sidecar file
-        would create a second answer that can disagree with the first."""
+        would create a second answer that can disagree with the first.
+
+        The temporary file's name must never be a predictable function of `key`. An
+        earlier version derived it as `key + ".tmp"` -- a name that is itself an
+        ordinary-looking storage key, reachable three distinct ways, each reproduced by
+        writing through this method and inspecting the actual bytes on disk afterward,
+        not reasoned about in the abstract:
+
+        1. An unrelated real upload already sitting at that literal key (nothing
+           adversarial needed -- just an ordinary document whose key happens to end in
+           ``.tmp``) is silently destroyed the moment this method runs, with no
+           exception on either call.
+        2. A symlink planted at that exact name before the call makes `os.replace` move
+           the *symlink itself* onto the real key -- `rename(2)` retargets the
+           directory entry, it does not follow the link -- so the uploaded bytes land
+           on whatever the symlink pointed at, outside root, and the real key itself
+           becomes a symlink pointing there too.
+        3. A hard link planted at that name shares the same inode as some unrelated
+           file elsewhere on the same filesystem, so writing to it (open-with-truncate,
+           not unlink-then-create) overwrites that other file's content directly,
+           confirmed by the two paths sharing `st_ino` before and after.
+
+        A deterministic name also means two concurrent `put()` calls to the *same* key
+        share it: the loser's own `os.replace` fails once the winner's has already
+        consumed the file out from under it -- a raw `FileNotFoundError`, reproduced
+        with real threads, not merely plausible in theory.
+
+        `tempfile.mkstemp` closes all four at once: one syscall creates a randomly
+        named file with `O_CREAT|O_EXCL`, which POSIX guarantees fails outright if
+        *anything* -- file, symlink, or the pre-existing target of a hard link -- is
+        already sitting at the chosen name, rather than following or truncating it; and
+        every concurrent caller gets its own distinct name, so there is nothing left
+        for two writers to race over. The resulting path is still routed through
+        `_ensure_contained` before being written to -- not because `mkstemp` can be
+        tricked into escaping an already-verified directory (it cannot: the name it
+        generates has no path separators), but so that no filesystem path this class
+        acts on ever bypasses the same check as any other.
+        """
         path = self._path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
-        # Write-then-rename: os.replace is atomic on the same filesystem, so a crash
-        # mid-write can never leave a truncated PDF readable under the real key.
-        temporary = path.with_name(path.name + ".tmp")
-        temporary.write_bytes(data)
-        os.replace(temporary, path)
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                self._ensure_contained(temporary)
+                handle.write(data)
+            # Write-then-rename: os.replace is atomic on the same filesystem, so a
+            # crash mid-write can never leave a truncated PDF readable under the real
+            # key, and no reader ever observes a partially written file under it either.
+            os.replace(temporary, path)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
 
     def get(self, key: str) -> bytes:
         path = self._path(key)

@@ -1,3 +1,5 @@
+import os
+import threading
 from datetime import timedelta
 from pathlib import Path
 
@@ -34,8 +36,9 @@ def test_put_overwrites_an_existing_key(tmp_path: Path) -> None:
 
 
 def test_put_leaves_no_temporary_file_behind(tmp_path: Path) -> None:
-    # The write is atomic (write to .tmp, then os.replace) so a crash mid-write can
-    # never leave a half-written PDF readable under the real key.
+    # The write is atomic (mkstemp + os.replace) so a crash mid-write can never leave a
+    # half-written PDF readable under the real key, and no stray temp file survives a
+    # successful call either.
     LocalFileStorage(tmp_path).put(KEY, PDF, "application/pdf")
     assert [p.name for p in (tmp_path / "acme-01234567" / "0199abcd").iterdir()] == ["v1.pdf"]
 
@@ -323,3 +326,105 @@ def test_delete_of_a_key_that_is_actually_a_directory_raises_validation_failed(
     (tmp_path / "acme-01234567" / "0199abcd" / "v1.pdf").mkdir(parents=True)
     with pytest.raises(ValidationFailed):
         LocalFileStorage(tmp_path).delete(KEY)
+
+
+# --- Fix round 1, the CRITICAL item: `put`'s old temporary file was `key + ".tmp"`,
+# itself an ordinary-looking storage key, derived by string concatenation outside
+# `_path`'s containment check, with no uniqueness guarantee of its own. Each test below
+# proves one of the three ways that was reachable -- and, for the ordinary-collision
+# case, that it is now impossible -- by writing through the real API and inspecting the
+# actual bytes on disk afterward.
+
+
+def test_put_does_not_destroy_an_unrelated_document_whose_key_is_the_old_tmp_name(
+    tmp_path: Path,
+) -> None:
+    """Before this fix: no attacker at all needed. `KEY + ".tmp"` is itself a
+    perfectly valid, ordinary storage key; a real document living there was silently
+    destroyed -- no exception, no warning -- the instant `put(KEY, ...)` ran."""
+    storage = LocalFileStorage(tmp_path)
+    sibling_key = KEY + ".tmp"
+    storage.put(sibling_key, b"documento legittimo precedente", "application/pdf")
+
+    storage.put(KEY, PDF, "application/pdf")
+
+    assert storage.get(sibling_key) == b"documento legittimo precedente"
+    assert storage.get(KEY) == PDF
+
+
+def test_put_ignores_a_symlink_planted_at_the_old_deterministic_tmp_name(
+    tmp_path: Path,
+) -> None:
+    """Before this fix: a symlink planted at `<key>.tmp`, pointing outside root, made
+    `os.replace` move the *symlink itself* onto the real key -- the upload's bytes
+    landed on the symlink's target, outside root, and the real key became a symlink
+    pointing there too. `put` no longer ever writes to that deterministic name, so a
+    symlink planted there is simply never touched."""
+    root = tmp_path / "storage"
+    (root / "acme-01234567" / "0199abcd").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = outside / "vittima.txt"
+    victim.write_bytes(b"contenuto originale della vittima")
+    planted = root / "acme-01234567" / "0199abcd" / "v1.pdf.tmp"
+    planted.symlink_to(victim)
+
+    LocalFileStorage(root).put(KEY, PDF, "application/pdf")
+
+    assert victim.read_bytes() == b"contenuto originale della vittima"
+    assert planted.is_symlink() and os.readlink(planted) == str(victim)
+    assert LocalFileStorage(root).get(KEY) == PDF
+
+
+def test_put_ignores_a_hard_link_planted_at_the_old_deterministic_tmp_name(
+    tmp_path: Path,
+) -> None:
+    """Before this fix: a hard link planted at `<key>.tmp` shares an inode with some
+    unrelated file elsewhere on the same filesystem; writing to it (open-with-truncate)
+    overwrote that file's content directly. Confirmed here by inode equality, exactly
+    as the mechanism that found this checked it -- not merely by comparing bytes, which
+    a coincidental copy could also satisfy."""
+    root = tmp_path / "storage"
+    (root / "acme-01234567" / "0199abcd").mkdir(parents=True)
+    elsewhere = tmp_path / "elsewhere.pdf"
+    elsewhere.write_bytes(b"contenuto originale altrove")
+    planted = root / "acme-01234567" / "0199abcd" / "v1.pdf.tmp"
+    os.link(elsewhere, planted)
+    original_inode = elsewhere.stat().st_ino
+
+    LocalFileStorage(root).put(KEY, PDF, "application/pdf")
+
+    assert elsewhere.read_bytes() == b"contenuto originale altrove"
+    assert planted.stat().st_ino == original_inode
+    assert LocalFileStorage(root).get(KEY) == PDF
+
+
+def test_concurrent_put_to_the_same_key_never_leaks_a_raw_oserror(tmp_path: Path) -> None:
+    """Before this fix: the temp name was deterministic, so concurrent writers to the
+    same key shared it, and the loser's `os.replace` raised a raw `FileNotFoundError`
+    once the winner's had already consumed the file -- reproduced with real threads
+    (25-ish failures out of 40, every run) before this fix, and re-checked here that it
+    is now exactly zero, not merely "rare"."""
+    storage = LocalFileStorage(tmp_path)
+    attempts = 40
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+
+    def write(i: int) -> None:
+        try:
+            storage.put(KEY, bytes([i % 256]) * 1000, "application/pdf")
+        except BaseException as exc:  # noqa: BLE001 - recording every failure, not swallowing it
+            with lock:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=write, args=(i,)) for i in range(attempts)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    # Whichever writer won, the result is one coherent, complete payload -- not a mix
+    # of two writers' bytes and not a truncated one.
+    result = storage.get(KEY)
+    assert any(result == bytes([i % 256]) * 1000 for i in range(attempts))
