@@ -9,10 +9,13 @@ from pigrocrm_api.routers import (
     auth,
     customers,
     deals,
+    documents,
+    emitter,
     fields,
     people,
     pipeline,
     schema,
+    templates,
     tokens,
     users,
 )
@@ -40,7 +43,20 @@ def create_app() -> FastAPI:
     )
     app.add_exception_handler(DomainError, domain_error_handler)
 
-    for module in (auth, customers, people, deals, fields, pipeline, users, tokens, schema):
+    for module in (
+        auth,
+        customers,
+        people,
+        deals,
+        fields,
+        pipeline,
+        users,
+        tokens,
+        schema,
+        documents,
+        templates,
+        emitter,
+    ):
         app.include_router(module.router)
 
     # PROBLEM_RESPONSES (attached to every router above) declares a 422 that

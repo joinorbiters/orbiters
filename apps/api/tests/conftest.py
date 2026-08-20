@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -6,12 +7,13 @@ from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 from testcontainers.community.postgres import PostgresContainer
 
-from pigrocrm.core.actor import Actor
+from pigrocrm.core.actor import Actor, Role
 from pigrocrm.core.auth.schemas import UserCreate
 from pigrocrm.core.auth.service import UserService
 from pigrocrm.core.config import Settings, get_settings
 from pigrocrm.core.db import Base, create_engine_from_settings, session_factory
-from pigrocrm_api.deps import get_session
+from pigrocrm.core.storage import LocalFileStorage
+from pigrocrm_api.deps import get_session, get_storage
 from pigrocrm_api.main import create_app
 
 ADMIN_EMAIL = "admin@pigro.it"
@@ -58,9 +60,16 @@ def api_session(api_engine: Engine) -> Iterator[Session]:
 
 
 @pytest.fixture
-def client(api_session: Session) -> Iterator[TestClient]:
+def client(api_session: Session, tmp_path: Path) -> Iterator[TestClient]:
     app = create_app()
     app.dependency_overrides[get_session] = lambda: api_session
+    # Documents/templates tests upload and download real bytes; without this override
+    # `get_storage` falls through to `storage_from_settings(get_settings())`, which
+    # defaults to a `LocalFileStorage` rooted at the repository's own `./var/documents`
+    # -- writing real files into the working tree on every test run, left behind for
+    # git to notice. A fresh `tmp_path` per test keeps storage exactly as isolated as
+    # the database already is (`api_session`'s own rolled-back transaction).
+    app.dependency_overrides[get_storage] = lambda: LocalFileStorage(tmp_path)
     # The login/refresh cookies are `Secure` on purpose (production sits behind TLS
     # termination) and httpx's cookie jar honours that against the request's URL
     # scheme -- over the default "http://testserver" it would store the cookie but
@@ -85,3 +94,27 @@ def logged_in(client: TestClient, admin_user) -> TestClient:
     )
     assert response.status_code == 200, response.text
     return client
+
+
+def _client_as(client: TestClient, session: Session, *, email: str, ruolo: Role) -> TestClient:
+    """The same shape as `admin_user`/`logged_in` above, generalised over `ruolo` so a
+    router's own `actor.require_write`/`actor.require_admin` gate can be exercised
+    over real HTTP -- not only at the service layer, where every existing test in
+    this suite already covers it."""
+    UserService(session).create(
+        UserCreate(email=email, password=ADMIN_PASSWORD, nome="Test", ruolo=ruolo),
+        Actor.system(),
+    )
+    response = client.post("/api/auth/login", json={"email": email, "password": ADMIN_PASSWORD})
+    assert response.status_code == 200, response.text
+    return client
+
+
+@pytest.fixture
+def readonly_client(client: TestClient, api_session: Session) -> TestClient:
+    return _client_as(client, api_session, email="readonly@pigro.it", ruolo="readonly")
+
+
+@pytest.fixture
+def collaborator_client(client: TestClient, api_session: Session) -> TestClient:
+    return _client_as(client, api_session, email="collaboratore@pigro.it", ruolo="collaboratore")

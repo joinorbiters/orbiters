@@ -13,6 +13,7 @@ from pigrocrm.core.auth.tokens import decode_token
 from pigrocrm.core.config import Settings, get_settings
 from pigrocrm.core.db import create_engine_from_settings, session_factory
 from pigrocrm.core.errors import DomainError
+from pigrocrm.core.storage import DocumentStorage, storage_from_settings
 
 ACCESS_COOKIE = "pigrocrm_access"
 REFRESH_COOKIE = "pigrocrm_refresh"
@@ -47,6 +48,17 @@ def get_session() -> Iterator[Session]:
 
 SessionDep = Annotated[Session, Depends(get_session)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+
+
+def get_storage(settings: SettingsDep) -> DocumentStorage:
+    """One backend per process, chosen from settings. `settings` is already
+    `get_settings`'s own `lru_cache`d singleton, so this builds at most one
+    `GDriveStorage` (whose own token cache is then shared across requests) rather
+    than re-authenticating on every call."""
+    return storage_from_settings(settings)
+
+
+StorageDep = Annotated[DocumentStorage, Depends(get_storage)]
 
 
 def get_actor(request: Request, session: SessionDep, settings: SettingsDep) -> Actor:
