@@ -13,17 +13,19 @@ from sqlalchemy.orm import Session
 
 from pigrocrm.core.customers.schemas import CustomerCreate
 from pigrocrm.core.deals.schemas import DealCreate
+from pigrocrm.core.documents.schemas import DocumentCreate
 from pigrocrm.core.fields.dynamic import describe_specs
 from pigrocrm.core.fields.schemas import EntityType
 from pigrocrm.core.fields.service import FieldDefinitionService
 from pigrocrm.core.people.schemas import PersonCreate
 
-ENTITY_TYPES: tuple[EntityType, ...] = ("customer", "person", "deal")
+ENTITY_TYPES: tuple[EntityType, ...] = ("customer", "person", "deal", "document")
 
 CREATE_MODELS: dict[str, type[BaseModel]] = {
     "customer": CustomerCreate,
     "person": PersonCreate,
     "deal": DealCreate,
+    "document": DocumentCreate,
 }
 
 

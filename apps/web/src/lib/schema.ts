@@ -40,7 +40,7 @@ export interface FieldDefinition {
   options: string[]
 }
 
-export type EntityType = 'customer' | 'person' | 'deal'
+export type EntityType = 'customer' | 'person' | 'deal' | 'document'
 
 export interface EntitySchema {
   entity_type: string
