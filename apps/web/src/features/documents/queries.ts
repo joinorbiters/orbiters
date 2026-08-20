@@ -131,25 +131,40 @@ export function useCreateFromTemplate(owner: DocumentOwner) {
  * travels; no `Content-Type` is set by hand, because the browser must append its own
  * multipart boundary.
  */
-export function useUploadVersion(documentId: string) {
+async function putVersion(documentId: string, file: File): Promise<DocumentVersion> {
+  const body = new FormData()
+  body.append('file', file)
+  const response = await fetch(`/api/documents/${documentId}/versions`, {
+    method: 'POST',
+    credentials: 'include',
+    body,
+  })
+  const payload: unknown = await response.json().catch(() => null)
+  if (!response.ok) throw toProblem(payload, response.status)
+  return payload as DocumentVersion
+}
+
+/**
+ * The document id travels in the mutation's own call, not as a constructor
+ * argument: `DocumentsTab.handleFiles` only learns the id once `useCreateDocument`
+ * resolves, in the same async handler that then has to upload the first version --
+ * a hook whose id is instead fixed at *render* time (the brief's own original
+ * shape, `useUploadVersion(documentId)`) would still be reading the id from the
+ * render where it was `null`, since setting state and re-rendering never happens
+ * synchronously inside that same handler. Reproduced live: an upload landed on
+ * `/api/documents//versions` and came back 404 before this fix.
+ */
+export function useUploadVersion() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (file: File): Promise<DocumentVersion> => {
-      const body = new FormData()
-      body.append('file', file)
-      const response = await fetch(`/api/documents/${documentId}/versions`, {
-        method: 'POST',
-        credentials: 'include',
-        body,
-      })
-      const payload: unknown = await response.json().catch(() => null)
-      if (!response.ok) throw toProblem(payload, response.status)
-      return payload as DocumentVersion
-    },
-    onSuccess: () => {
+    mutationFn: (args: { documentId: string; file: File }) =>
+      putVersion(args.documentId, args.file),
+    onSuccess: (_data, variables) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.documents() })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.document(documentId) })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.documentVersions(documentId) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.document(variables.documentId) })
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.documentVersions(variables.documentId),
+      })
     },
   })
 }

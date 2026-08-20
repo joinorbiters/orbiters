@@ -96,4 +96,17 @@ describe('EntityDetailLayout', () => {
     await userEvent.click(screen.getByRole('tab', { name: 'Timeline' }))
     expect(timelineSpy).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ limit: undefined }))
   })
+
+  it('has no Documenti tab when documents is not given -- Person has no documents', () => {
+    renderLayout()
+    expect(screen.queryByRole('tab', { name: 'Documenti' })).not.toBeInTheDocument()
+  })
+
+  it('shows a Documenti tab with its own contents when documents is given', async () => {
+    renderLayout({ documents: <p>lista documenti</p> })
+    const tab = screen.getByRole('tab', { name: 'Documenti' })
+    expect(tab).toBeInTheDocument()
+    await userEvent.click(tab)
+    expect(screen.getByText('lista documenti')).toBeInTheDocument()
+  })
 })

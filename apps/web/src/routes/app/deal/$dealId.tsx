@@ -13,6 +13,7 @@ import { useCustomer } from '@/features/customers/queries'
 import { DealForm, dealToFormValues } from '@/features/deals/DealForm'
 import { displayNative, formatDate, formatHours, formatMoney } from '@/features/deals/columns'
 import { useDeal, useDeleteDeal, useStages, useUpdateDeal } from '@/features/deals/queries'
+import { DocumentsTab } from '@/features/documents/DocumentsTab'
 import { toProblem, type ProblemDetail } from '@/lib/api'
 import { useCanWrite } from '@/lib/auth'
 import { useEntitySchema } from '@/lib/schema'
@@ -115,6 +116,7 @@ export function DealDetail() {
         subtitle="Deal"
         entityType="deal"
         entityId={dealId}
+        documents={<DocumentsTab owner={{ dealId }} />}
         actions={
           canWrite && (
             <>

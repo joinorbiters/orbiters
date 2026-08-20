@@ -9,6 +9,13 @@ interface EntityDetailLayoutProps {
   actions?: ReactNode
   overview: ReactNode
   links?: ReactNode
+  /**
+   * The Documenti tab's contents. Optional because Person has no documents: a
+   * document belongs to a customer or to a deal, never to a contact. When absent the
+   * tab is not rendered at all rather than rendered empty -- an empty tab invites the
+   * user to look for something that does not exist for this entity.
+   */
+  documents?: ReactNode
   entityType: EntityType
   entityId: string
   /**
@@ -36,6 +43,7 @@ export function EntityDetailLayout({
   actions,
   overview,
   links,
+  documents,
   entityType,
   entityId,
   timelineLimit,
@@ -53,6 +61,7 @@ export function EntityDetailLayout({
       <Tabs defaultValue="panoramica">
         <TabsList>
           <TabsTrigger value="panoramica">Panoramica</TabsTrigger>
+          {documents && <TabsTrigger value="documenti">Documenti</TabsTrigger>}
           <TabsTrigger value="timeline">Timeline</TabsTrigger>
           <TabsTrigger value="collegamenti">Collegamenti</TabsTrigger>
         </TabsList>
@@ -60,6 +69,11 @@ export function EntityDetailLayout({
         <TabsContent value="panoramica" className="mt-6">
           {overview}
         </TabsContent>
+        {documents && (
+          <TabsContent value="documenti" className="mt-6">
+            {documents}
+          </TabsContent>
+        )}
         <TabsContent value="timeline" className="mt-6">
           <Timeline entityType={entityType} entityId={entityId} limit={timelineLimit} />
         </TabsContent>
