@@ -164,17 +164,28 @@ class TemplateService:
         return TemplateRead.model_validate(template)
 
     def describe(self, template_id: UUID, actor: Actor) -> TemplateDescription:
+        """Root paths only in `percorsi_usati`: `describe` answers "what must the
+        caller supply", and a caller supplies root-level values, never a
+        loop-relative one -- see `TemplateDescription`'s own docstring. A declared
+        variable is "used" when its own name is the first segment of some root path
+        the body reads (`{{oggetto}}` and `{{oggetto.riga}}` both count); anything
+        declared but never referenced that way is a compilation-form field nobody's
+        document will ever show, worth flagging as `variabili_non_usate` -- an
+        authoring mistake, not merely a naming curiosity.
+        """
         template = self.repo.get(template_id)
         if template is None:
             raise NotFound(ENTITY, template_id)
-        paths = declared_paths(parse_template(template.corpo_markdown))
+        declared = [TemplateVariable(**v) for v in template.variabili_dichiarate]
+        root_paths = declared_paths(parse_template(template.corpo_markdown)).root
+        used_names = {path[0] for path in root_paths}
         return TemplateDescription(
             id=template.id,
             nome=template.nome,
             tipo=template.tipo,
-            variabili_dichiarate=[TemplateVariable(**v) for v in template.variabili_dichiarate],
-            percorsi_radice=[".".join(path) for path in paths.root],
-            percorsi_per_ciclo=[".".join(path) for path in paths.loop_relative],
+            variabili=declared,
+            percorsi_usati=[list(path) for path in root_paths],
+            variabili_non_usate=[v.nome for v in declared if v.nome not in used_names],
         )
 
     def declared_variables(self, template: Template) -> tuple[DeclaredVariable, ...]:
