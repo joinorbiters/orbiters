@@ -1,0 +1,32 @@
+#set page(
+  margin: (x: 1.25in, y: 1.25in),
+  numbering: "1",
+  header: [
+    #grid(
+      columns: (auto, 1fr),
+      column-gutter: 0.6cm,
+      [
+        #box(inset: (top: 20pt))[
+          #image("./media/logo.png", width: 60pt)
+        ]
+      ],
+      [
+        #align(right)[
+          #text(size: 8pt)[
+            {{emittente.ragione_sociale}} \
+            P.IVA {{emittente.partita_iva}}
+          ]
+        ]
+      ],
+    )
+  ],
+  footer: [
+    #align(left)[
+      #text(size: 7pt)[
+        contatti: {{emittente.email}} | {{emittente.telefono}} | {{emittente.pec}} \
+        web: {{emittente.sito_web}} \
+        sede: {{emittente.indirizzo}}, {{emittente.comune}}, {{emittente.cap}}, {{emittente.provincia}}
+      ]
+    ]
+  ],
+)

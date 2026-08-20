@@ -1,9 +1,29 @@
 FROM python:3.13-slim-bookworm
 
-# Pandoc and Typst are not needed until slice 2; do not install them here.
+# Pinned to the exact versions `pigrocrm.core.render` was built and verified against
+# (real compiles, real PDFs read back with `pdftotext` -- see
+# packages/core/tests/test_render_pdf.py and test_template_escaping.py): Pandoc
+# 3.8.2.1 and Typst 0.14.2, not the older pair `the reference copy/Dockerfile` used
+# (Pandoc 3.1.12.2 / Typst 0.11.0). Typst's own diagnostic format
+# (`render/diagnostics.py`'s `_LOCATION_RE`) and the auto-typography workaround
+# (`render/pdf.py`'s `_defeat_typst_autotypography`) were both confirmed against
+# 0.14.2 specifically, not assumed stable across major Typst releases. Typst embeds
+# Libertinus Serif, so no separate font package is needed here.
+ARG TYPST_VERSION=0.14.2
+ARG PANDOC_VERSION=3.8.2.1
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential libpq5 \
-    && rm -rf /var/lib/apt/lists/*
+      build-essential libpq5 ca-certificates curl xz-utils \
+    && curl -fL "https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-linux-amd64.tar.gz" \
+       | tar -xz -C /tmp \
+    && mv /tmp/pandoc-${PANDOC_VERSION}/bin/pandoc /usr/local/bin/pandoc \
+    && chmod +x /usr/local/bin/pandoc \
+    && curl -fL "https://github.com/typst/typst/releases/download/v${TYPST_VERSION}/typst-x86_64-unknown-linux-musl.tar.xz" \
+       | tar -xJ -C /tmp \
+    && mv /tmp/typst-x86_64-unknown-linux-musl/typst /usr/local/bin/typst \
+    && chmod +x /usr/local/bin/typst \
+    && apt-get purge -y curl xz-utils && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/* /tmp/pandoc-${PANDOC_VERSION} /tmp/typst-x86_64-unknown-linux-musl
 
 COPY --from=ghcr.io/astral-sh/uv:0.9.24 /uv /usr/local/bin/uv
 
