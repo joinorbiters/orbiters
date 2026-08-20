@@ -8,8 +8,10 @@ from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ResourceError, ResourceNotFoundError
 
+from pigrocrm.core.config import get_settings
 from pigrocrm.core.errors import DomainError
 from pigrocrm.core.fields.schemas import EntityType
+from pigrocrm.core.storage import DocumentStorage, storage_from_settings
 from pigrocrm_mcp.context import ActorProvider, McpContext, SessionProvider
 from pigrocrm_mcp.errors import to_agent_message, to_domain_error
 from pigrocrm_mcp.resources import entities
@@ -45,7 +47,11 @@ def _as_protocol_error(exc: DomainError) -> ResourceError:
     return ResourceError(message)
 
 
-def build_server(session_provider: SessionProvider, actor_provider: ActorProvider) -> MCPServer:
+def build_server(
+    session_provider: SessionProvider,
+    actor_provider: ActorProvider,
+    storage: DocumentStorage | None = None,
+) -> MCPServer:
     # `session_provider` is still called once, up front, and the one Session it
     # returns is shared by every tool/resource for the server's whole lifetime --
     # matching `__main__.py`'s single long-lived Session, unlike the API's
@@ -56,7 +62,18 @@ def build_server(session_provider: SessionProvider, actor_provider: ActorProvide
     # more than once (`resources/entities.py`'s renders read it up to four times),
     # so a provider called fresh on each read would leak that many un-closed
     # sessions per call instead of the one this comment is describing.
-    context = McpContext(session_provider, actor_provider)
+    #
+    # `storage` is an explicit, optional parameter -- not always resolved
+    # internally from `get_settings()` -- for the same reason `session_provider`/
+    # `actor_provider` are already constructor-injected rather than imported: a
+    # test builds its own isolated backend (a tmp-dir-backed `LocalFileStorage`)
+    # instead of a document/version tool call writing real files into this
+    # repository's own working tree under the default `./var/documents` root.
+    # `__main__.py` never passes one, so production still gets exactly one
+    # `storage_from_settings(get_settings())` per process, same as the API.
+    context = McpContext(
+        session_provider, actor_provider, storage or storage_from_settings(get_settings())
+    )
     mcp = MCPServer("PigroCRM", instructions=INSTRUCTIONS)
 
     def _guard[T: Callable[..., Any]](fn: T) -> T:
