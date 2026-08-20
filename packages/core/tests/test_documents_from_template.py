@@ -1,0 +1,250 @@
+import shutil
+from pathlib import Path
+
+import pytest
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.documents.schemas import DocumentCreate, DocumentFromTemplate
+from pigrocrm.core.documents.service import OFFER_TRANSITIONS, DocumentService
+from pigrocrm.core.emitter.schemas import EmitterProfileUpsert
+from pigrocrm.core.emitter.service import EmitterProfileService
+from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
+from pigrocrm.core.storage import LocalFileStorage
+from pigrocrm.core.templates.escaping import escape_markdown, escape_typst
+from pigrocrm.core.templates.schemas import TemplateCreate, TemplateVariable
+from pigrocrm.core.templates.service import TemplateService
+
+ADMIN = Actor(id=None, type="system", role="admin")
+needs_binaries = pytest.mark.skipif(
+    shutil.which("pandoc") is None or shutil.which("typst") is None,
+    reason="pandoc e typst vivono nell'immagine dell'API",
+)
+
+BODY = """{{offerta.data}}
+
+Spett.le **{{cliente.ragione_sociale}}**
+
+Oggetto: {{offerta.oggetto}}
+
+```{=typst}
+#table(
+  columns: (0.8fr, 0.2fr),
+  [{{cliente.ragione_sociale}}],
+  [{{offerta.oggetto}}],
+)
+```
+
+{{emittente.ragione_sociale}}
+"""
+
+
+@pytest.fixture
+def setup(db_session: Session, tmp_path: Path) -> tuple[DocumentService, Customer, object]:
+    EmitterProfileService(db_session).upsert(
+        EmitterProfileUpsert(ragione_sociale="Humancraft di Ivan Sala", partita_iva="14518240966"),
+        ADMIN,
+    )
+    template = TemplateService(db_session).create(
+        TemplateCreate(
+            nome="Consulenza CTO",
+            tipo="offerta",
+            corpo_markdown=BODY,
+            variabili_dichiarate=[
+                TemplateVariable(
+                    nome="offerta", etichetta="Offerta", tipo="text", obbligatoria=True
+                ),
+            ],
+        ),
+        ADMIN,
+    )
+    customer = Customer(ragione_sociale="ACME S.r.l.")
+    db_session.add(customer)
+    db_session.flush()
+    return DocumentService(db_session, LocalFileStorage(tmp_path)), customer, template
+
+
+def _payload(customer: Customer, template: object, **overrides: object) -> DocumentFromTemplate:
+    values: dict[str, object] = {
+        "template_id": template.id,  # type: ignore[attr-defined]
+        "customer_id": customer.id,
+        "titolo": "Offerta 2026-01",
+        "variabili": {"offerta": {"data": "10/08/2026", "oggetto": "Advisory"}},
+    }
+    values.update(overrides)
+    return DocumentFromTemplate(**values)  # type: ignore[arg-type]
+
+
+@needs_binaries
+def test_create_from_template_produces_a_pdf_version(setup: tuple) -> None:
+    service, customer, template = setup
+    document = service.create_from_template(_payload(customer, template), ADMIN)
+    assert document.versione_corrente == 1
+    data, content_type, _ = service.download(document.id, None, ADMIN)
+    assert data.startswith(b"%PDF")
+    assert content_type == "application/pdf"
+
+
+def test_the_version_keeps_the_template_and_the_variables_for_regeneration(setup: tuple) -> None:
+    service, customer, template = setup
+    document = service.create_from_template(_payload(customer, template), ADMIN)
+    version = service.versions(document.id, ADMIN)[0]
+    assert version.template_id == template.id  # type: ignore[attr-defined]
+    stored = service.repo.version(document.id, 1)
+    assert stored is not None
+    assert stored.variabili["offerta"]["oggetto"] == "Advisory"
+    assert "Advisory" in stored.sorgente_markdown
+
+
+def test_the_customer_is_injected_into_the_template_scope(setup: tuple) -> None:
+    # `escape_markdown` backslash-escapes every ASCII punctuation character
+    # unconditionally (escaping.py) -- so "ACME S.r.l." never reaches the compiled
+    # markdown literally, only as its escaped form. Checking for the raw string
+    # here would be checking for text this pipeline is specifically designed never
+    # to produce.
+    service, customer, template = setup
+    document = service.create_from_template(_payload(customer, template), ADMIN)
+    stored = service.repo.version(document.id, 1)
+    assert stored is not None
+    assert escape_markdown(customer.ragione_sociale) in stored.sorgente_markdown
+
+
+def test_an_injecting_customer_name_is_literal_in_both_contexts(
+    setup: tuple, db_session: Session
+) -> None:
+    """ "Literal" means inert, not unescaped: `escape_markdown` and `escape_typst`
+    both backslash-protect every ASCII punctuation character (escaping.py), so the
+    hostile value never reaches either context as the bytes '#import "/etc/passwd"'
+    -- it reaches both as that same string with every punctuation character
+    escaped, which is exactly what stops Pandoc's Typst writer (markdown context)
+    or the raw fence's own Typst parser (typst context) from treating '#import' as
+    a real directive."""
+    service, customer, template = setup
+    customer.ragione_sociale = '#import "/etc/passwd"'
+    db_session.flush()
+    document = service.create_from_template(_payload(customer, template), ADMIN)
+    stored = service.repo.version(document.id, 1)
+    assert stored is not None
+    markdown_part, typst_part = stored.sorgente_markdown.split("```{=typst}", 1)
+    assert customer.ragione_sociale not in markdown_part
+    assert customer.ragione_sociale not in typst_part
+    assert escape_markdown(customer.ragione_sociale) in markdown_part
+    assert escape_typst(customer.ragione_sociale) in typst_part
+
+
+def test_a_missing_required_variable_fails_before_anything_is_written(setup: tuple) -> None:
+    service, customer, template = setup
+    with pytest.raises(ValidationFailed) as excinfo:
+        service.create_from_template(_payload(customer, template, variabili={}), ADMIN)
+    assert excinfo.value.details["field"] == "offerta"
+    assert service.list.__self__ is service  # sanity: the service is intact
+    from pigrocrm.core.documents.schemas import DocumentListQuery
+
+    assert service.list(DocumentListQuery(customer_id=customer.id), ADMIN).items == []
+
+
+def test_an_unknown_template_raises_not_found(setup: tuple) -> None:
+    from uuid import uuid4
+
+    service, customer, _ = setup
+    with pytest.raises(NotFound):
+        service.create_from_template(
+            DocumentFromTemplate(
+                template_id=uuid4(), customer_id=customer.id, titolo="X", variabili={}
+            ),
+            ADMIN,
+        )
+
+
+def test_without_an_emitter_profile_the_render_fails_with_a_clear_error(
+    setup: tuple, db_session: Session
+) -> None:
+    from pigrocrm.core.emitter.models import EmitterProfile
+
+    service, customer, template = setup
+    db_session.query(EmitterProfile).delete()
+    db_session.flush()
+    with pytest.raises(NotFound) as excinfo:
+        service.create_from_template(_payload(customer, template), ADMIN)
+    assert excinfo.value.details["entity"] == "emitter_profile"
+
+
+@needs_binaries
+def test_regenerate_reproduces_an_old_version_as_a_new_one(setup: tuple) -> None:
+    service, customer, template = setup
+    document = service.create_from_template(_payload(customer, template), ADMIN)
+    first = service.repo.version(document.id, 1)
+    regenerated = service.regenerate(document.id, 1, ADMIN)
+    assert regenerated.numero == 2
+    second = service.repo.version(document.id, 2)
+    assert second is not None and first is not None
+    # Identical source means identical bytes: the whole promise of storing both
+    # template_id and variabili (spec 11 criterion 4).
+    assert second.sorgente_markdown == first.sorgente_markdown
+    assert second.hash_sha256 == first.hash_sha256
+
+
+def test_regenerate_of_an_uploaded_version_is_refused(setup: tuple, tmp_path: Path) -> None:
+    service, customer, _ = setup
+    document = service.create(
+        DocumentCreate(customer_id=customer.id, tipo="documento", titolo="Scansione"), ADMIN
+    )
+    service.add_version(document.id, b"%PDF-1.7\n", "application/pdf", ADMIN)
+    with pytest.raises(ValidationFailed) as excinfo:
+        service.regenerate(document.id, 1, ADMIN)
+    assert "template" in excinfo.value.details["reason"]
+
+
+def test_the_offer_state_machine_allows_only_the_declared_transitions(setup: tuple) -> None:
+    service, customer, template = setup
+    document = service.create(
+        DocumentCreate(customer_id=customer.id, tipo="offerta", titolo="O"), ADMIN
+    )
+    assert service.get(document.id, ADMIN).stato == "bozza"
+    assert service.set_offer_state(document.id, "inviata", ADMIN).stato == "inviata"
+    assert service.set_offer_state(document.id, "accettata", ADMIN).stato == "accettata"
+
+
+def test_an_undeclared_transition_is_refused(setup: tuple) -> None:
+    service, customer, _ = setup
+    document = service.create(
+        DocumentCreate(customer_id=customer.id, tipo="offerta", titolo="O"), ADMIN
+    )
+    with pytest.raises(Conflict) as excinfo:
+        service.set_offer_state(document.id, "accettata", ADMIN)
+    assert "bozza" in excinfo.value.details["reason"]
+
+
+def test_an_accepted_offer_is_terminal(setup: tuple) -> None:
+    service, customer, _ = setup
+    document = service.create(
+        DocumentCreate(customer_id=customer.id, tipo="offerta", titolo="O"), ADMIN
+    )
+    service.set_offer_state(document.id, "inviata", ADMIN)
+    service.set_offer_state(document.id, "accettata", ADMIN)
+    assert OFFER_TRANSITIONS["accettata"] == frozenset()
+    with pytest.raises(Conflict):
+        service.set_offer_state(document.id, "bozza", ADMIN)
+
+
+def test_a_non_offer_has_no_state_to_set(setup: tuple) -> None:
+    service, customer, _ = setup
+    document = service.create(
+        DocumentCreate(customer_id=customer.id, tipo="verbale", titolo="V"), ADMIN
+    )
+    with pytest.raises(ValidationFailed) as excinfo:
+        service.set_offer_state(document.id, "inviata", ADMIN)
+    assert excinfo.value.details["field"] == "stato"
+
+
+def test_a_state_change_leaves_a_timeline_entry(setup: tuple, db_session: Session) -> None:
+    from pigrocrm.core.activities.service import ActivityService
+
+    service, customer, _ = setup
+    document = service.create(
+        DocumentCreate(customer_id=customer.id, tipo="offerta", titolo="O"), ADMIN
+    )
+    service.set_offer_state(document.id, "inviata", ADMIN)
+    kinds = [a.kind for a in ActivityService(db_session).timeline("document", document.id)]
+    assert "state_changed" in kinds

@@ -35,6 +35,24 @@ PANDOC_FROM = "markdown+link_attributes+pipe_tables+raw_attribute"
 # Typst 0.14 embeds Libertinus Serif, so no font package is needed in the image.
 MAIN_FONT = "Libertinus Serif"
 
+# Typst stamps the PDF's own `/CreationDate` with the wall-clock time of the compile
+# by default -- confirmed live: two `render_pdf` calls on byte-identical `markdown`
+# and `header_typst`, seconds apart, produced PDFs differing only in that one
+# metadata field, and therefore two different SHA-256 hashes (`DocumentVersion.
+# hash_sha256`). That silently breaks spec 11's whole reproducibility promise: a
+# `regenerate` that reproduces the same *source* but not the same *bytes* is not
+# reproduction, it is merely re-rendering. Pinned to a fixed value -- the
+# reproducible-builds.org SOURCE_DATE_EPOCH convention, which Typst implements
+# natively as this same flag -- rather than left to derive from `document.created_at`
+# or similar: the document's own true creation instant is already recorded, honestly,
+# in the database row and (via `{{offerta.data}}`-style declared variables) in the
+# document's own visible text; the PDF container's internal metadata field is not a
+# fact this project has ever promised to keep truthful, and making every render use
+# the same fixed value is what buys byte-for-byte reproducibility unconditionally,
+# for every render, not only a regeneration that remembers to thread the original
+# instant back through.
+PDF_CREATION_TIMESTAMP = "0"
+
 # Typst's own markup grammar -- independent of Pandoc, and with no compile-time flag
 # to turn it off (checked against `typst compile --help` on the pinned version) --
 # unconditionally merges a bare run of two-or-more adjacent "-" into an en/em dash and
@@ -187,6 +205,8 @@ def render_pdf(markdown: str, *, header_typst: str, settings: Settings) -> bytes
                 "compile",
                 "--root",
                 str(workdir),
+                "--creation-timestamp",
+                PDF_CREATION_TIMESTAMP,
                 str(intermediate),
                 str(output),
             ],
