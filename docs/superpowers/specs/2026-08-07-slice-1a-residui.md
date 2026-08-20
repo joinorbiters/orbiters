@@ -92,3 +92,95 @@ La colonna `code` è stata aggiunta durante la review del Task 9, come identità
 Diciannove difetti reali sono emersi durante l'esecuzione dei 17 task, e **quasi tutti erano nel piano scritto in anticipo**, non negli errori di chi implementava. Sono emersi perché i reviewer hanno *eseguito* invece di leggere: hanno cronometrato l'autenticazione, forgiato token JWT firmati, avviato container Postgres per verificare che i valori accettati si scrivessero davvero, forzato deadlock con SQL grezzo, e riprodotto race con thread reali e barriere.
 
 La famiglia di difetti più ricorrente — sei occorrenze — è sempre la stessa: *un input non validato raggiunge Postgres e torna come eccezione grezza*. Ogni fix aveva coperto solo la forma di colonna che aveva davanti. La review finale l'ha diagnosticata come classe e le ha chiuse insieme, aggiungendo `SafeStr` e i vincoli sugli interi ai vincoli globali del piano.
+
+---
+
+## R12 — Una partita IVA estera non si può nemmeno salvare
+
+**Trovato scrivendo la spec dello slice 3 (fatturazione), 2026-08-20.**
+
+`customers.partita_iva` è validata `^\d{11}$` — undici cifre, cioè il formato italiano e nient'altro.
+Un freelance italiano con un cliente tedesco o francese non può registrarne la partita IVA in nessun
+campo nativo.
+
+Non è un dettaglio di validazione: la FatturaPA per un cliente estero richiede un `IdPaese`
+diverso e `CodiceDestinatario = XXXXXXX`, quindi la lacuna si propaga direttamente sulla
+fatturazione. Lo slice 3 la aggira dichiarando i clienti esteri fuori ambito e rifiutando
+l'emissione quando `nazione != 'IT'` — che è onesto ma è una rinuncia, non una soluzione.
+
+**Da decidere:** un `partita_iva` che accetti il formato VIES (prefisso paese più corpo variabile)
+con la validazione stretta applicata solo quando `nazione == 'IT'`, oppure un campo separato per
+l'identificativo estero. La prima strada è più semplice e non duplica il concetto.
+
+---
+
+## R13 — La promessa che `entity_type` sia «aperto» è inesatta, e costa un'indagine per slice
+
+Sia la spec dello slice 1 (§5.6) sia quella dello slice 2 (§4.1) affermano che aggiungere un nuovo
+`entity_type` non richiede modifiche. La colonna sul database è davvero `String(30)` senza vincolo,
+quindi **il database** è aperto. Il codice no: `fields/schemas.py` dichiara
+`EntityType = Literal["customer", "person", "deal"]`, e ci sono `ENTITY_TYPES` e `CREATE_MODELS` in
+`schema_registry.py` più `EntityType` in `apps/web/src/lib/schema.ts`.
+
+Il costo è basso — una riga in quattro posti — ma la promessa è stata verificata e smentita **tre
+volte** da tre agenti diversi, una per slice. La formulazione va corretta alla fonte invece di far
+ripetere l'indagine: «il database è aperto, il tipo va esteso in quattro punti, nessuna migrazione».
+
+---
+
+## Aggiornamento del 2026-08-20 — R5 e R10 non sono più «da decidere»: bloccano lo slice 5
+
+Scrivendo la spec dello slice 5 (Gmail) è emerso che i due residui sui token non sono più una
+questione di igiene rimandabile. Gmail aggiunge una credenziale **di terze parti** sulla casella di
+posta di una persona reale. Con i PAT come sono oggi — senza scope, con il ruolo pieno del
+proprietario, senza scadenza e senza traccia in audit (R10 e R5) — un token creato per leggere i
+deal leggerebbe anche la corrispondenza, e non resterebbe alcuna traccia di chi l'ha creato.
+
+Quindi, **prima** dello slice 5, serve la parte minima di R10 e R5:
+
+- scope sui PAT, con `gmail:*` **spento per difetto**;
+- scadenza obbligatoria su qualunque token che porti uno scope Gmail;
+- voci di timeline sulla creazione e sulla revoca di un token.
+
+Non è la soluzione completa di R10 — resta aperta la domanda generale su scope e scadenze per tutti
+i token — ma è il taglio minimo che impedisce di moltiplicare il problema invece di limitarlo.
+
+## Aggiornamento del 2026-08-20 — la landing è un prerequisito TECNICO di Gmail
+
+Controintuitivo e va scritto, perché cambia l'ordine dei lavori: Google non concede gli scope Gmail
+ristretti a un client senza **homepage pubblica e privacy policy**, e un client non verificato resta
+in Testing, dove i refresh token degli account consumer **scadono ogni 7 giorni**. La landing non è
+la vetrina di Gmail: ne è la condizione di esistenza, e va rilasciata prima.
+
+Conseguenza sul frontend già spedito: `apps/web/src/routes/index.tsx` reindirizza `/` su `/app` e va
+rimosso; `deploy/nginx/spa.conf` serve la SPA dalla radice e va portato alla forma con prefisso
+`/app/`, con `base: '/app/'` in `vite.config.ts`, la rotta di login spostata e le spec E2E aggiornate.
+
+## Aggiornamento del 2026-08-20 — `customers.email` non è indicizzata
+
+`people.email` lo è, `customers.email` no, e la risoluzione della rilevanza in Gmail interroga
+entrambe. Costo basso, va sistemato quando si tocca quell'area.
+
+---
+
+## Aggiornamento del 2026-08-20 — i residui non sono più rimandabili: sono la strada critica
+
+Scrivendo le spec degli slice 4 e 5 è emerso che tre voci di questo documento hanno smesso di essere
+«da decidere» e sono diventate **prerequisiti bloccanti**. Non per eleganza: perché senza di esse le
+funzionalità di quegli slice sarebbero sbagliate, non solo scomode.
+
+| Residuo | Perché blocca | Chi |
+|---|---|---|
+| **R1** — sessione SQLAlchemy condivisa sull'MCP | `log_time` è un tool di **scrittura** ed è il centro della superficie agentica dello slice 4. La misura dello slice 1A — 10 scritture concorrenti, 0 successi, 0 righe — è esattamente ciò che accadrebbe. | Slice 4 |
+| **A13** — chiave custom che collide con una colonna nativa | Le colonne native dello slice 4 si chiamano `ore`, `data`, `importo`, `descrizione`: sono i nomi che un utente digiterebbe per primo definendo un campo. | Slice 4 |
+| **A14** — nessuna grafia azzera una colonna nativa numerica | `ore_preventivate` ha due soli stati raggiungibili, `NULL` e `0.00`, che significano l'opposto per il confronto preventivo/consuntivo — e **solo uno dei due è scrivibile**. Una stima sbagliata resta incastrata e si legge come «zero ore preventivate, sforamento infinito». Lo slice 3 aggirava A14 sostituendo le righe in blocco; qui quella via d'uscita non esiste. | Slice 4 |
+| **R10 + R5** — PAT senza scope, senza scadenza, senza audit | Gmail aggiunge una credenziale di terze parti sulla casella di una persona reale: un token creato per leggere i deal leggerebbe la corrispondenza, senza traccia. | Slice 5 |
+
+**Conseguenza sull'ordine dei lavori:** fra lo slice 2 e gli slice 4-5 serve una passata di
+irrobustimento sullo slice 1A, che è già in `main`. Non è un rifacimento: sono quattro interventi
+circoscritti — una sessione per chiamata sull'MCP, una guardia di collisione in
+`FieldDefinitionService.create`, il passaggio da `exclude_none=True` a `exclude_unset=True` sui
+servizi, e scope più scadenza più audit sui PAT.
+
+Il terzo è il più invasivo perché cambia il contratto di aggiornamento di tutti i servizi, ed è la
+ragione per cui A14 andava affrontato quando era ancora una scomodità.
