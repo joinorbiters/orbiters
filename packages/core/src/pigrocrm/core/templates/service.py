@@ -1,0 +1,218 @@
+"""`TemplateService`: CRUD over `Template` rows, plus `describe` and `preview`.
+
+No brief exists for this task (`task-8-brief.md` was never written to
+`.superpowers/sdd/2026-08-10-slice-2-documenti-e-template/` -- see the coordinator's
+own note in the launch instructions and this task's report). Mutation permissions,
+the uniqueness-conflict shape and the list/pagination shape are drawn directly from
+the closest sibling in this codebase: `PipelineService` and `FieldDefinitionService`
+both gate their own config-shaped entities (pipeline stages, custom field
+definitions) behind `actor.require_admin`, not `require_write` -- a template is the
+same kind of thing, an org-wide configuration object that shapes every future
+document, not a day-to-day record like a customer or a deal, so it follows the same
+rule here.
+
+`describe` and `preview` are the two methods this task exists for:
+
+- `describe` reports what a template needs from a caller *before* asking the user
+  to supply anything -- the compilation-form variables (`variabili_dichiarate`,
+  declared, not deduced) plus every other path the template body actually
+  references (`templates.parser.declared_paths`), split exactly as that function
+  already splits them (root vs. loop-relative). This is what makes an MCP
+  `describe_template` tool worth calling at all: without the paths half, an agent
+  would learn only about the handful of variables a human is meant to fill in and
+  have no way to know the template also needs, say, `cliente.ragione_sociale` or
+  `emittente.partita_iva` supplied by whatever calls `preview`/renders the document.
+- `preview` compiles a template's `corpo_markdown` against caller-supplied values
+  and returns the compiled Markdown (not a PDF -- PDF rendering is
+  `pigrocrm.core.render.pdf`, not built yet). All of the "fail precisely rather than
+  render a document with a hole in it" behaviour already lives in
+  `templates.renderer.render_template`; this method's only job is translating the
+  stored `variabili_dichiarate` (plain dicts, JSONB) into the `DeclaredVariable`
+  tuple that function expects, and turning "no such template" into `NotFound` before
+  ever reaching it.
+"""
+
+from typing import Any
+from uuid import UUID
+
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.activities.service import ActivityService
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.errors import Conflict, NotFound
+from pigrocrm.core.templates.models import Template
+from pigrocrm.core.templates.parser import declared_paths, parse_template
+from pigrocrm.core.templates.renderer import DeclaredVariable, render_template
+from pigrocrm.core.templates.repository import TemplateRepository
+from pigrocrm.core.templates.schemas import (
+    TemplateCreate,
+    TemplateDescription,
+    TemplateListQuery,
+    TemplatePage,
+    TemplatePreview,
+    TemplateRead,
+    TemplateUpdate,
+    TemplateVariable,
+)
+
+ENTITY = "template"
+
+
+def _conflicting_nome(nome: str) -> Conflict:
+    return Conflict(ENTITY, "esiste già un template con questo nome", nome=nome)
+
+
+def _declared_variables(template: Template) -> tuple[DeclaredVariable, ...]:
+    """`template.variabili_dichiarate` is JSONB -- plain `dict`s, one per declared
+    variable, validated on the way in by `TemplateVariable` (schemas.py) but stored
+    with no Python type of their own. `render_template` (renderer.py) wants the
+    dataclass it already defines for exactly this shape; only the four fields it
+    actually reads are passed through, `options` (schemas.py's own addition, for the
+    compilation form, not the renderer) is dropped here rather than in storage, so a
+    round trip through `describe` still returns it.
+    """
+    return tuple(
+        DeclaredVariable(
+            nome=v["nome"],
+            etichetta=v["etichetta"],
+            tipo=v["tipo"],
+            obbligatoria=v["obbligatoria"],
+        )
+        for v in template.variabili_dichiarate
+    )
+
+
+class TemplateService:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+        self.repo = TemplateRepository(session)
+        self.activities = ActivityService(session)
+
+    def create(self, data: TemplateCreate, actor: Actor) -> TemplateRead:
+        actor.require_admin("create_template")
+        # Fails fast, at save time, naming the offending template line -- rather
+        # than at the first `preview`/render, which could be long after whoever
+        # wrote the template has moved on. `parse_template` already raises
+        # `ValidationFailed(entity="template", field="corpo_markdown", ...)` itself
+        # (parser.py's own ENTITY/FIELD constants), so there is nothing to catch or
+        # re-wrap here.
+        parse_template(data.corpo_markdown)
+        if self.repo.get_by_nome(data.nome) is not None:
+            raise _conflicting_nome(data.nome)
+
+        template = Template(**data.model_dump())
+        try:
+            self.repo.add(template)
+            self.activities.record(ENTITY, template.id, "created", actor, {"nome": template.nome})
+            self.session.commit()
+        except IntegrityError as exc:
+            # The pre-check above cannot cover two concurrent creates that both pass
+            # it before either commits -- `uq_templates_nome` (case-insensitive, on
+            # `lower(nome)`) is the real authority, so a case-only duplicate ("Offerta
+            # Standard" vs. "OFFERTA STANDARD") still surfaces as this same clean
+            # Conflict rather than a raw IntegrityError. The rollback is mandatory:
+            # without it the caller's session is unusable on its next statement.
+            self.session.rollback()
+            raise _conflicting_nome(data.nome) from exc
+        return TemplateRead.model_validate(template)
+
+    def update(self, template_id: UUID, data: TemplateUpdate, actor: Actor) -> TemplateRead:
+        actor.require_admin("update_template")
+        template = self.repo.get(template_id)
+        if template is None:
+            raise NotFound(ENTITY, template_id)
+
+        changes = data.model_dump(exclude_none=True)
+        if "corpo_markdown" in changes:
+            parse_template(changes["corpo_markdown"])
+        if "nome" in changes:
+            existing = self.repo.get_by_nome(changes["nome"])
+            # `existing is not template`, not merely `is not None`: renaming a
+            # template to a case-only variant of its own current name (e.g.
+            # "Offerta" -> "OFFERTA") must not conflict with itself. Both `existing`
+            # and `template` come from the same `Session`'s identity map, so a
+            # lookup that resolves to this same row returns the identical Python
+            # object, not merely an equal one.
+            if existing is not None and existing is not template:
+                raise _conflicting_nome(changes["nome"])
+        for key, value in changes.items():
+            setattr(template, key, value)
+
+        try:
+            self.activities.record(
+                ENTITY, template.id, "updated", actor, {"changed": sorted(changes)}
+            )
+            self.session.commit()
+        except IntegrityError as exc:
+            self.session.rollback()
+            raise _conflicting_nome(changes.get("nome", template.nome)) from exc
+        return TemplateRead.model_validate(template)
+
+    def get(self, template_id: UUID, actor: Actor) -> TemplateRead:
+        template = self.repo.get(template_id)
+        if template is None:
+            raise NotFound(ENTITY, template_id)
+        return TemplateRead.model_validate(template)
+
+    def deactivate(self, template_id: UUID, actor: Actor) -> TemplateRead:
+        """Sets `attivo = False`. `Template` has no `deleted_at` (Task 6's own
+        decision: see the model's docstring) -- this is that model's equivalent of
+        every other domain's soft delete, hiding a template from `list`'s default
+        view and from being picked for a new document while keeping every document
+        already generated from it, and its own history, fully intact."""
+        actor.require_admin("deactivate_template")
+        template = self.repo.get(template_id)
+        if template is None:
+            raise NotFound(ENTITY, template_id)
+        was_active = template.attivo
+        template.attivo = False
+        if was_active:
+            self.activities.record(ENTITY, template.id, "deactivated", actor)
+        self.session.commit()
+        return TemplateRead.model_validate(template)
+
+    def activate(self, template_id: UUID, actor: Actor) -> TemplateRead:
+        actor.require_admin("activate_template")
+        template = self.repo.get(template_id)
+        if template is None:
+            raise NotFound(ENTITY, template_id)
+        was_active = template.attivo
+        template.attivo = True
+        if not was_active:
+            self.activities.record(ENTITY, template.id, "activated", actor)
+        self.session.commit()
+        return TemplateRead.model_validate(template)
+
+    def describe(self, template_id: UUID, actor: Actor) -> TemplateDescription:
+        template = self.repo.get(template_id)
+        if template is None:
+            raise NotFound(ENTITY, template_id)
+        paths = declared_paths(parse_template(template.corpo_markdown))
+        return TemplateDescription(
+            id=template.id,
+            nome=template.nome,
+            tipo=template.tipo,
+            variabili_dichiarate=[TemplateVariable(**v) for v in template.variabili_dichiarate],
+            percorsi_radice=[".".join(path) for path in paths.root],
+            percorsi_per_ciclo=[".".join(path) for path in paths.loop_relative],
+        )
+
+    def preview(self, template_id: UUID, values: dict[str, Any], actor: Actor) -> TemplatePreview:
+        template = self.repo.get(template_id)
+        if template is None:
+            raise NotFound(ENTITY, template_id)
+        markdown = render_template(template.corpo_markdown, values, _declared_variables(template))
+        return TemplatePreview(markdown=markdown)
+
+    # `list` must stay the last method defined in this class -- see
+    # `TemplateRepository.list`'s identical comment for the import-time crash this
+    # avoids.
+    def list(self, query: TemplateListQuery, actor: Actor) -> TemplatePage:
+        rows = self.repo.list(query)
+        has_more = len(rows) > query.limit
+        items = rows[: query.limit]
+        return TemplatePage(
+            items=[TemplateRead.model_validate(t) for t in items],
+            next_cursor=items[-1].id if has_more and items else None,
+        )
