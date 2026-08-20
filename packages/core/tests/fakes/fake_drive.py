@@ -42,7 +42,13 @@ class FakeDrive:
     calls: list[tuple[str, str]] = field(default_factory=list)
     next_id: int = 1
     token_requests: int = 0
-    fail_next_with: int | None = None
+    # A queue of statuses to return, consumed one per call (FIFO), before falling
+    # through to the real handling below. A single-shot failure is `fail_with = [403]`;
+    # `fail_with = [429, 429]` simulates two transient failures followed by a normal
+    # response, for testing retry-then-succeed. Every call while this is non-empty is
+    # intercepted -- including the OAuth token request -- since a real transient
+    # failure does not know or care which endpoint it happens to hit.
+    fail_with: list[int] = field(default_factory=list)
 
     def _new_id(self) -> str:
         self.next_id += 1
@@ -52,8 +58,8 @@ class FakeDrive:
         self, method: str, url: str, headers: dict[str, str], body: bytes | None
     ) -> tuple[int, bytes]:
         self.calls.append((method, url))
-        if self.fail_next_with is not None:
-            status, self.fail_next_with = self.fail_next_with, None
+        if self.fail_with:
+            status = self.fail_with.pop(0)
             return status, json.dumps({"error": {"message": "boom"}}).encode()
         parsed = urlparse(url)
         if parsed.netloc == "oauth2.googleapis.com":

@@ -14,12 +14,14 @@ when real credentials are absent -- a suite that silently skips without credenti
 proves nothing.
 """
 
+import io
 import threading
+import urllib.error
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
-from fakes.fake_drive import FakeDrive
+from fakes.fake_drive import FakeDrive, _File
 
 from pigrocrm.core.config import Settings
 from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
@@ -29,7 +31,7 @@ from pigrocrm.core.storage import (
     LocalFileStorage,
     storage_from_settings,
 )
-from pigrocrm.core.storage.gdrive import _escape_drive_query
+from pigrocrm.core.storage.gdrive import APP_PROPERTY_KEY, _escape_drive_query, _urllib_call
 
 PDF = b"%PDF-1.7\nfinto\n"
 KEY = "acme-01234567/0199abcd/v1.pdf"
@@ -172,6 +174,39 @@ def test_signed_url_is_either_none_or_a_https_url(storage: DocumentStorage) -> N
     assert url is None or url.startswith("https://")
 
 
+def test_an_empty_payload_round_trips(storage: DocumentStorage) -> None:
+    """A zero-byte document is a legitimate, if odd, thing to store -- an upload that
+    failed after creating the record but before any bytes arrived, say. Neither
+    backend should treat "no bytes" as "no file": `LocalFileStorage.get` would raise
+    `NotFound` here if `put` had ever skipped the write for empty data, and Drive's
+    multipart body construction (gdrive.py's `put`) has an empty media part to get
+    right, not just a small one."""
+    storage.put(KEY, b"", "application/pdf")
+    assert storage.get(KEY) == b""
+
+
+def test_a_large_payload_round_trips_intact(storage: DocumentStorage) -> None:
+    """Large enough to catch a backend that silently truncates or chunks incorrectly
+    -- comfortably past any small internal buffer size either implementation might
+    otherwise get away with using -- without being slow enough to make the suite
+    itself slow."""
+    large = bytes(range(256)) * 20_000  # ~5.1 MB, not a round number of any buffer
+    storage.put(KEY, large, "application/pdf")
+    assert storage.get(KEY) == large
+
+
+def test_a_payload_ending_in_crlf_round_trips_intact(storage: DocumentStorage) -> None:
+    """Not a hypothetical: `FakeDrive._create`'s multipart parser has to distinguish
+    the framing `\\r\\n` before Drive's own closing boundary from a `\\r\\n` that is
+    part of the document's *own* last two bytes -- confirmed against a real payload of
+    exactly this shape the first time that parser ran, not merely reasoned about in a
+    comment. A payload that happens to end in `\\r\\n` must come back whole, on every
+    backend, not just on the one whose multipart framing this originally broke."""
+    payload = b"contenuto legittimo che termina con una sequenza CRLF\r\n"
+    storage.put(KEY, payload, "application/pdf")
+    assert storage.get(KEY) == payload
+
+
 # --- Drive-only behaviour, tested through the same public surface -------------------
 
 
@@ -191,18 +226,29 @@ def test_drive_reuses_an_existing_folder_instead_of_creating_a_second() -> None:
     assert sorted(f.name for f in drive.files.values()) == ["acme-0123", "doc", "v1.pdf", "v2.pdf"]
 
 
-def test_drive_lookup_ignores_a_duplicate_folder_left_behind_by_a_create_race() -> None:
-    """Decision 3's whole point: two concurrent first-uploads for a customer can each
-    create a folder of the same name under the same parent, leaving the tree
-    genuinely ambiguous. A lookup keyed on the file's `appProperties` must not care --
-    it must find the file even when a second, empty folder sharing its parent's name
-    exists and could just as easily have been the one a name-based walk chose."""
+def test_get_and_delete_never_query_by_folder_membership() -> None:
+    """The structural property decision 3 exists to guarantee: `get` and `delete`
+    locate a file purely by its `appProperties`, never by asking Drive "what is in
+    this folder" (a `q` filter containing `'<id>' in parents`). Proven here by
+    inspecting the actual call log for that clause, not by planting a decoy folder and
+    checking the *outcome* -- an earlier version of this test did exactly that
+    (`test_drive_lookup_ignores_a_duplicate_folder_left_behind_by_a_create_race`) and
+    was decorative: `get`'s call sequence was byte-for-byte identical whether or not
+    the decoy existed, because `get` never queries folders at all, so planting one
+    could not have made the test fail for the reason its name claimed. Confirmed this
+    version can fail: temporarily routing `get` through `_walk`-style folder
+    resolution made this test fail with a real `'... in parents'` clause in the log,
+    before being reverted.
+    """
     storage, drive = _drive_storage()
     storage.put(KEY, PDF, "application/pdf")
-    real_leaf_folder = next(f for f in drive.files.values() if f.name == "0199abcd")
-    drive._create_folder({"name": "0199abcd", "parents": [real_leaf_folder.parent]})
+    drive.calls.clear()
 
-    assert storage.get(KEY) == PDF
+    storage.get(KEY)
+    storage.delete(KEY)
+
+    folder_scoped_queries = [url for _, url in drive.calls if "parents" in url]
+    assert folder_scoped_queries == []
 
 
 def test_drive_asks_for_an_access_token_once_and_reuses_it() -> None:
@@ -225,7 +271,7 @@ def test_drive_sends_supports_all_drives_on_every_call() -> None:
 
 def test_drive_turns_a_transport_failure_into_a_domain_conflict() -> None:
     storage, drive = _drive_storage()
-    drive.fail_next_with = 403
+    drive.fail_with = [403]
     with pytest.raises(Conflict) as excinfo:
         storage.put(KEY, PDF, "application/pdf")
     assert excinfo.value.details["entity"] == "document_blob"
@@ -279,6 +325,187 @@ def test_drive_verify_root_accessible_fails_clearly_when_root_is_not_on_a_shared
     )
     with pytest.raises(RuntimeError, match="Shared Drive"):
         storage.verify_root_accessible()
+
+
+# --- The create-race: two concurrent first-writers for a brand-new key can each miss
+# the other's not-yet-visible file and each create one carrying the same
+# `appProperties`. Reproduced here by planting both files directly rather than by
+# racing real threads against the fake -- a deterministic reproduction, not a
+# probabilistic one, of exactly what a reviewer found by instrumenting the fake's
+# call log. `test_concurrent_put_to_the_same_key_converges_on_one_coherent_value`
+# above covers the same race through real concurrency, for both backends; these two
+# are Drive-specific because only Drive can produce this particular duplicate shape.
+
+
+def test_delete_removes_every_file_left_by_a_create_race() -> None:
+    """The bug a reviewer found: `delete` used to remove only the one file
+    `_find_file_by_key` resolved to (the lowest id), leaving the other sitting on
+    Drive under the same `appProperties`. The next `get` would then resolve to the
+    survivor and return content the caller had just been told was deleted. This
+    reproduces the duplicate directly and proves both are gone, and that `get`
+    afterwards raises `NotFound` rather than resurrecting the second file."""
+    storage, drive = _drive_storage()
+    drive.files["id-a"] = _File(
+        "id-a", "v1.pdf", drive.root_id, "application/pdf", b"from-A", {APP_PROPERTY_KEY: KEY}
+    )
+    drive.files["id-b"] = _File(
+        "id-b", "v1.pdf", drive.root_id, "application/pdf", b"from-B", {APP_PROPERTY_KEY: KEY}
+    )
+
+    storage.delete(KEY)
+
+    assert drive.files == {}
+    with pytest.raises(NotFound):
+        storage.get(KEY)
+
+
+def test_put_heals_duplicates_left_by_a_create_race_onto_one_file() -> None:
+    """What `put` does when it finds duplicates already present, decided here rather
+    than left implicit: it converges on the lowest id as canonical (the same one
+    `get` already reads), writes the new bytes there, and deletes the rest -- so a
+    write to a raced key is also a repair of it. `delete` does not depend on this ever
+    happening (see the test above), but there is no reason to leave a known duplicate
+    sitting on Drive once a write has already found it."""
+    storage, drive = _drive_storage()
+    drive.files["id-a"] = _File(
+        "id-a", "v1.pdf", drive.root_id, "application/pdf", b"from-A", {APP_PROPERTY_KEY: KEY}
+    )
+    drive.files["id-b"] = _File(
+        "id-b", "v1.pdf", drive.root_id, "application/pdf", b"from-B", {APP_PROPERTY_KEY: KEY}
+    )
+
+    storage.put(KEY, b"versione-pulita", "application/pdf")
+
+    assert list(drive.files.keys()) == ["id-a"]
+    assert storage.get(KEY) == b"versione-pulita"
+
+
+# --- Retry-with-backoff: a 429 or a transient 5xx is retried, bounded; anything else
+# is not.
+
+
+def test_drive_retries_a_transient_failure_and_succeeds() -> None:
+    sleeps: list[float] = []
+    drive = FakeDrive()
+    drive.fail_with = [429, 503]  # two transient failures, then the real handling
+    storage = GDriveStorage(
+        service_account_json=SERVICE_ACCOUNT_JSON,
+        root_folder_id=drive.root_id,
+        http=drive,
+        sign_assertion=lambda claims: "assertion",
+        sleep=sleeps.append,
+    )
+
+    storage.put(KEY, PDF, "application/pdf")
+
+    assert storage.get(KEY) == PDF
+    assert len(sleeps) == 2
+    assert sleeps[1] > sleeps[0]  # backoff increases between attempts
+
+
+def test_drive_gives_up_after_the_retry_bound_and_raises_conflict() -> None:
+    """Not just "eventually raises" -- that would hold even with no retrying at all,
+    since a permanent 503 fails on the very first attempt either way. What is
+    actually being protected is boundedness: with 10 consecutive 503s queued, ten
+    times more than the retry bound, this must still stop and raise rather than
+    consuming the whole queue (or, with an unbounded retry loop, never returning at
+    all)."""
+    drive = FakeDrive()
+    drive.fail_with = [503] * 10  # far more than the retry bound
+    sleeps: list[float] = []
+    storage = GDriveStorage(
+        service_account_json=SERVICE_ACCOUNT_JSON,
+        root_folder_id=drive.root_id,
+        http=drive,
+        sign_assertion=lambda claims: "assertion",
+        sleep=sleeps.append,
+    )
+
+    with pytest.raises(Conflict):
+        storage.put(KEY, PDF, "application/pdf")
+
+    # Bounded: only 3 retries (4 attempts total) were made, so most of the queued
+    # failures were never even consumed.
+    assert len(sleeps) == 3
+    assert len(drive.fail_with) > 0
+
+
+def test_drive_does_not_retry_a_non_transient_client_error() -> None:
+    """A 404 (or any 4xx other than 429) will not fix itself by waiting, so retrying
+    it only delays reporting a real failure -- proven here by making a sleep call
+    itself the test failure, not just by counting attempts afterwards."""
+
+    def _fail_if_called(seconds: float) -> None:
+        raise AssertionError(f"should not have slept {seconds}s for a non-transient error")
+
+    drive = FakeDrive()
+    drive.fail_with = [404]
+    storage = GDriveStorage(
+        service_account_json=SERVICE_ACCOUNT_JSON,
+        root_folder_id=drive.root_id,
+        http=drive,
+        sign_assertion=lambda claims: "assertion",
+        sleep=_fail_if_called,
+    )
+
+    with pytest.raises(Conflict):
+        storage.put(KEY, PDF, "application/pdf")
+
+
+# --- The real transport: `_urllib_call` must not leak a raw exception for a failure
+# that never produced an HTTP response at all. Exercised directly, since every test
+# above goes through the injected fake and would never touch this function.
+
+
+def test_urllib_call_turns_a_connection_failure_into_a_synthetic_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise_connection_refused(request: object, timeout: float) -> None:
+        raise urllib.error.URLError(ConnectionRefusedError("connection refused"))
+
+    monkeypatch.setattr("urllib.request.urlopen", _raise_connection_refused)
+
+    status, payload = _urllib_call("GET", "https://www.googleapis.com/drive/v3/files", {}, None)
+
+    assert status == 599
+    assert b"refused" in payload
+
+
+def test_urllib_call_turns_a_timeout_into_a_synthetic_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise_timeout(request: object, timeout: float) -> None:
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr("urllib.request.urlopen", _raise_timeout)
+
+    status, payload = _urllib_call("GET", "https://www.googleapis.com/drive/v3/files", {}, None)
+
+    assert status == 599
+    assert b"timed out" in payload
+
+
+def test_urllib_call_still_reports_a_real_http_error_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Not a new behaviour, but never directly covered before: a real HTTP error
+    response (as opposed to no response at all) must still surface its own status,
+    not the synthetic network-failure one."""
+
+    def _raise_http_error(request: object, timeout: float) -> None:
+        raise urllib.error.HTTPError(
+            "https://www.googleapis.com/drive/v3/files",
+            403,
+            "Forbidden",
+            None,  # type: ignore[arg-type]
+            io.BytesIO(b'{"error": {"message": "Forbidden"}}'),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", _raise_http_error)
+
+    status, _ = _urllib_call("GET", "https://www.googleapis.com/drive/v3/files", {}, None)
+
+    assert status == 403
 
 
 # --- storage_from_settings: the single place a backend is chosen --------------------

@@ -58,6 +58,13 @@ FOLDER_MIME = "application/vnd.google-apps.folder"
 # scope is what a service account managing a pre-existing, admin-shared root actually
 # needs.
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
+# Operator note, not a code fix: this scope is bearer-broad -- wider than a single
+# Shared-Drive deployment strictly needs, since a leaked access token would grant
+# access to every Shared Drive and folder this service account can see, not only
+# PigroCRM's own root. Keep the blast radius small at the Google Cloud console
+# instead: share only PIGROCRM_GDRIVE_ROOT_FOLDER_ID (and nothing else) with this
+# service account's address, and never reuse the same service account for any other
+# integration.
 # The custom property every file this class writes carries, holding the full storage
 # key. This -- not the folder it happens to sit in -- is what `get`/`delete` search
 # for; see the module docstring.
@@ -68,10 +75,42 @@ TOKEN_REFRESH_MARGIN_SECONDS = 60
 HTTP_TIMEOUT_SECONDS = 30
 _MULTIPART_BOUNDARY = "pigrocrm-boundary-7f3c1a"
 
+# A synthetic status for "no HTTP response was ever received" (DNS failure,
+# connection refused, a timeout) -- the "network connect timeout" code some proxies
+# use for exactly this shape, chosen so `_call`'s retry logic and `_decode`'s error
+# reporting can treat it exactly like any server-issued status, rather than needing a
+# second failure channel only `_urllib_call` knows about.
+NETWORK_ERROR_STATUS = 599
+# 429 (rate limited) and 5xx (transient server-side failure) are worth retrying;
+# anything else -- a 4xx other than 429 in particular -- is a client error that will
+# not go away on its own, so retrying it only delays reporting a failure.
+_RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504, NETWORK_ERROR_STATUS})
+# First attempt plus up to three retries. Exponential: 0.5s, 1s, 2s between them.
+_MAX_HTTP_ATTEMPTS = 4
+_RETRY_BASE_DELAY_SECONDS = 0.5
+
+
+def _retry_delay_seconds(attempt: int) -> float:
+    # `1 << attempt`, not `2**attempt`: typeshed types `int.__pow__` as returning
+    # `Any` (to accommodate a negative exponent producing a float), which would make
+    # this whole expression -- and this function's return value -- `Any` under mypy
+    # strict mode. A left shift has no such escape hatch and stays a plain `int`.
+    return _RETRY_BASE_DELAY_SECONDS * (1 << attempt)
+
+
 # (method, url, headers, body) -> (status, body). Injected in tests; the default is
 # `_urllib_call` below. Nothing above this seam knows what a socket is.
+#
+# Deliberately does not carry response headers: Google's real `Retry-After` header on
+# a 429 cannot be read through this seam, so `_call`'s backoff below is a fixed
+# exponential schedule, not one driven by the server's own hint. Widening this type to
+# `tuple[int, bytes, dict[str, str]]` would fix that properly, but it is an interface
+# every test and the fake transport already depend on; changing it is out of scope for
+# a fix that has to land without breaking the contract the rest of this module was
+# reviewed against.
 HttpCall = Callable[[str, str, dict[str, str], bytes | None], tuple[int, bytes]]
 SignAssertion = Callable[[dict[str, Any]], str]
+SleepFn = Callable[[float], None]
 
 
 def _urllib_call(
@@ -83,6 +122,14 @@ def _urllib_call(
             return int(response.status), response.read()
     except urllib.error.HTTPError as exc:
         return int(exc.code), exc.read()
+    except (urllib.error.URLError, OSError) as exc:
+        # No HTTP response was ever received, so there is no real status code to
+        # report -- `URLError` wraps DNS failure and connection-refused, and a bare
+        # `OSError`/`TimeoutError` covers the rest. `str(exc)` names the failure
+        # reason (and possibly the target host, always a googleapis.com address, never
+        # sensitive) but never the request's headers or body, so no bearer token or
+        # key material can reach it.
+        return NETWORK_ERROR_STATUS, json.dumps({"error": {"message": str(exc)}}).encode()
 
 
 def _escape_drive_query(value: str) -> str:
@@ -112,6 +159,7 @@ class GDriveStorage:
         root_folder_id: str,
         http: HttpCall | None = None,
         sign_assertion: SignAssertion | None = None,
+        sleep: SleepFn | None = None,
     ) -> None:
         self._credentials: dict[str, Any] = json.loads(service_account_json)
         self._root_folder_id = root_folder_id
@@ -120,6 +168,9 @@ class GDriveStorage:
         # escaping, multipart framing, error handling -- without a real RSA key ever
         # existing in this repository.
         self._sign: SignAssertion = sign_assertion or self._sign_with_private_key
+        # Injectable so retry-with-backoff tests don't actually block for seconds at a
+        # time; production gets real `time.sleep`.
+        self._sleep: SleepFn = sleep or time.sleep
         self._token: str | None = None
         self._token_expires_at: float = 0.0
 
@@ -127,6 +178,28 @@ class GDriveStorage:
 
     def _sign_with_private_key(self, claims: dict[str, Any]) -> str:
         return jwt.encode(claims, self._credentials["private_key"], algorithm="RS256")
+
+    def _call(
+        self, method: str, url: str, headers: dict[str, str], body: bytes | None
+    ) -> tuple[int, bytes]:
+        """Every HTTP call this class makes goes through here, not through `self._http`
+        directly, so retry-with-backoff applies uniformly instead of being
+        reimplemented -- or forgotten -- at each call site.
+
+        Retries a `429` or a transient `5xx` (`_RETRYABLE_STATUSES`) with exponential
+        backoff, up to `_MAX_HTTP_ATTEMPTS` attempts total, then returns whatever the
+        last attempt got so the caller's own error handling (`_decode`) reports it.
+        Anything else -- including a network failure normalised to
+        `NETWORK_ERROR_STATUS` by `_urllib_call` -- is retried the same way, since it is
+        just as transient; anything *not* in that set is returned immediately.
+        """
+        status, payload = self._http(method, url, headers, body)
+        for attempt in range(_MAX_HTTP_ATTEMPTS - 1):
+            if status not in _RETRYABLE_STATUSES:
+                break
+            self._sleep(_retry_delay_seconds(attempt))
+            status, payload = self._http(method, url, headers, body)
+        return status, payload
 
     def _access_token(self) -> str:
         if self._token is not None and time.time() < self._token_expires_at:
@@ -144,7 +217,7 @@ class GDriveStorage:
         body = urlencode(
             {"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer", "assertion": assertion}
         ).encode()
-        status, payload = self._http(
+        status, payload = self._call(
             "POST",
             self._credentials.get("token_uri", GOOGLE_TOKEN_URL),
             {"Content-Type": "application/x-www-form-urlencoded"},
@@ -180,7 +253,7 @@ class GDriveStorage:
         headers = {"Authorization": f"Bearer {self._access_token()}"}
         if content_type:
             headers["Content-Type"] = content_type
-        status, payload = self._http(method, url, headers, body)
+        status, payload = self._call(method, url, headers, body)
         return self._decode(status, payload, "richiesta a Google Drive")
 
     @staticmethod
@@ -246,18 +319,23 @@ class GDriveStorage:
 
     # ---- files: identity lives in appProperties, never in the folder path -----
 
-    def _find_file_by_key(self, key: str) -> str | None:
-        """The id of the file holding `key`'s bytes, found by its `appProperties` --
-        never by walking the folder tree (see the module docstring for why that would
-        be ambiguous).
+    def _find_all_file_ids_by_key(self, key: str) -> list[str]:
+        """Every file currently carrying `key` in its `appProperties`, found without
+        walking the folder tree (see the module docstring for why a name-based walk
+        would be ambiguous), sorted low-to-high id.
 
         Not scoped to any folder: the query runs across every Shared Drive this
         service account can see, which is safe because a PigroCRM deployment
         provisions one service account per instance and every file it writes carries
-        this property. Returns the lowest id when more than one file matches, the
-        same convergence rule `_find_folder` uses for the identical create-race on
-        folders -- Drive offers no atomic create-if-absent, so two concurrent
-        `put()`s for a key that does not yet exist can each create one.
+        this property.
+
+        Normally returns at most one id. More than one means a create-race: Drive
+        offers no atomic create-if-absent, so two concurrent `put()`s for a key that
+        does not yet exist can each miss the other and each create a file. `put`
+        converges on the lowest id and reaps the rest (see `put`'s own docstring for
+        why); `delete` cannot make the same simplification -- it must remove every id
+        this returns, or a document the caller was told was deleted could still be
+        read back through the survivor (see `delete`'s docstring).
         """
         escaped_key = _escape_drive_query(key)
         clauses = [
@@ -272,22 +350,44 @@ class GDriveStorage:
             corpora="allDrives",
         )
         files = self._api("GET", url).get("files") or []
-        return str(min((f["id"] for f in files), key=str)) if files else None
+        return sorted((str(f["id"]) for f in files), key=str)
+
+    def _find_file_by_key(self, key: str) -> str | None:
+        """The single, canonical id for `key` -- the lowest, when more than one file
+        matches (see `_find_all_file_ids_by_key`). Used by `get`, for which reading
+        any one coherent, converged-upon file is correct; `delete` uses
+        `_find_all_file_ids_by_key` directly instead, because leaving a second one
+        behind is exactly the bug this class was fixed to not have.
+        """
+        ids = self._find_all_file_ids_by_key(key)
+        return ids[0] if ids else None
 
     # ---- DocumentStorage --------------------------------------------------------
 
     def put(self, key: str, data: bytes, content_type: str) -> None:
         validated = validate_storage_key(key)
-        existing = self._find_file_by_key(validated)
-        if existing is not None:
+        existing_ids = self._find_all_file_ids_by_key(validated)
+        if existing_ids:
             # Media-only update: the file already lives in the right folder under the
-            # right name, only its bytes change.
+            # right name, only its bytes change. When a create-race (module
+            # docstring) has left more than one file carrying this key, the lowest id
+            # is the canonical one -- the same one `get` would already be reading --
+            # and every other id is a duplicate nothing should still be pointing at.
+            # Deleting them here, on the next write, heals the exact situation that
+            # created the bug `delete` was fixed for: it is what stops "leftover
+            # storage" from also becoming "delete doesn't delete" the moment a caller
+            # writes to the key again. `delete` does not depend on `put` ever having
+            # run, though -- it removes every matching id itself, so a key that is
+            # only ever read after a race is still deleted correctly.
+            canonical, *duplicates = existing_ids
             self._api(
                 "PATCH",
-                self._url(f"{DRIVE_UPLOAD_URL}/{existing}", uploadType="media"),
+                self._url(f"{DRIVE_UPLOAD_URL}/{canonical}", uploadType="media"),
                 body=data,
                 content_type=content_type,
             )
+            for duplicate_id in duplicates:
+                self._api("DELETE", self._url(f"{DRIVE_FILES_URL}/{duplicate_id}"))
             return
         *folders, filename = validated.split("/")
         parent = self._ensure_folder_chain(folders)
@@ -318,7 +418,7 @@ class GDriveStorage:
         if file_id is None:
             raise NotFound("document_blob", key)
         url = self._url(f"{DRIVE_FILES_URL}/{file_id}", alt="media")
-        status, payload = self._http(
+        status, payload = self._call(
             "GET", url, {"Authorization": f"Bearer {self._access_token()}"}, None
         )
         if status == 404:
@@ -331,11 +431,23 @@ class GDriveStorage:
         return payload
 
     def delete(self, key: str) -> None:
+        """Removes every file carrying `key`, not only the one a lookup would
+        currently resolve to.
+
+        A create-race (module docstring) can leave two files sharing the same
+        `appProperties` value after concurrent first-writers, and `put` only reaps
+        the extras when a write happens to land on the key afterwards. Deleting just
+        the canonical one and leaving a duplicate behind would mean the *next* `get`
+        resolves to that duplicate and returns content the caller was told was gone
+        -- a document a customer asked to have erased coming back is a correctness
+        failure, not a storage-hygiene one, so this removes all of them. Reproduced
+        directly against a planted duplicate, not only reasoned about -- see
+        test_storage_conformance.py's
+        `test_delete_removes_every_file_left_by_a_create_race`.
+        """
         validated = validate_storage_key(key)
-        file_id = self._find_file_by_key(validated)
-        if file_id is None:
-            return  # idempotent, like LocalFileStorage.delete
-        self._api("DELETE", self._url(f"{DRIVE_FILES_URL}/{file_id}"))
+        for file_id in self._find_all_file_ids_by_key(validated):
+            self._api("DELETE", self._url(f"{DRIVE_FILES_URL}/{file_id}"))
 
     def signed_url(self, key: str, ttl: timedelta) -> str | None:
         """Always `None`, exactly like `LocalFileStorage`.
@@ -371,7 +483,7 @@ class GDriveStorage:
             includeItemsFromAllDrives="true",
         )
         headers = {"Authorization": f"Bearer {self._access_token()}"}
-        status, payload = self._http("GET", url, headers, None)
+        status, payload = self._call("GET", url, headers, None)
         if status >= 400:
             raise RuntimeError(
                 "PIGROCRM_GDRIVE_ROOT_FOLDER_ID non e' raggiungibile dal service "
