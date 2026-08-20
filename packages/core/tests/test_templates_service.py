@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.errors import Conflict, NotFound, PermissionDenied, ValidationFailed
+from pigrocrm.core.templates.renderer import DeclaredVariable
 from pigrocrm.core.templates.repository import TemplateRepository
 from pigrocrm.core.templates.schemas import (
     TemplateCreate,
@@ -215,13 +216,13 @@ def test_preview_renders_compiled_markdown(db_session: Session) -> None:
     service = TemplateService(db_session)
     created = service.create(_create(), ADMIN)
 
-    preview = service.preview(
+    markdown = service.preview(
         created.id,
         {"cliente": {"ragione_sociale": "ACME Srl"}, "importo": "1500"},
         ADMIN,
     )
 
-    assert preview.markdown == "Gentile ACME Srl, offerta di 1500."
+    assert markdown == "Gentile ACME Srl, offerta di 1500."
 
 
 def test_preview_fails_precisely_when_a_required_declared_variable_is_missing(
@@ -254,3 +255,36 @@ def test_preview_missing_template_raises_not_found(db_session: Session) -> None:
 def test_a_select_variable_without_options_is_rejected() -> None:
     with pytest.raises(ValueError):
         TemplateVariable(nome="colore", etichetta="Colore", tipo="select", obbligatoria=False)
+
+
+def test_declared_variables_is_a_public_method_that_drops_options(db_session: Session) -> None:
+    """Task 11's `create_document_from_template` calls
+    `self.templates.declared_variables(template)` directly (plan lines 5110, 5158),
+    against a `Template` ORM row it already has in hand -- so this must be a real
+    method on `TemplateService`, not a module-private helper, and it must build the
+    `DeclaredVariable` the renderer expects: `options` (schemas.py's own addition for
+    the compilation form) is not one of that dataclass's fields, so it is dropped
+    here, not carried through."""
+    service = TemplateService(db_session)
+    created = service.create(
+        _create(
+            variabili_dichiarate=[
+                {
+                    "nome": "colore",
+                    "etichetta": "Colore",
+                    "tipo": "select",
+                    "obbligatoria": True,
+                    "options": ["rosso", "blu"],
+                }
+            ]
+        ),
+        ADMIN,
+    )
+    template = TemplateRepository(db_session).get(created.id)
+    assert template is not None
+
+    declared = service.declared_variables(template)
+
+    assert declared == (
+        DeclaredVariable(nome="colore", etichetta="Colore", tipo="select", obbligatoria=True),
+    )

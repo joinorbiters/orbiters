@@ -137,21 +137,12 @@ class TemplateDescription(BaseModel):
     percorsi_per_ciclo: list[str]
 
 
-class TemplatePreview(BaseModel):
-    """The compiled Markdown `TemplateService.preview` produces -- not a PDF; PDF
-    rendering (`pigrocrm.core.render.pdf`) is not built yet, see `renderer.py`'s own
-    module docstring."""
-
-    markdown: str
-
-
 __all__ = [
     "NOME_MAX_LENGTH",
     "TemplateCreate",
     "TemplateDescription",
     "TemplateListQuery",
     "TemplatePage",
-    "TemplatePreview",
     "TemplateRead",
     "TemplateUpdate",
     "TemplateVariable",

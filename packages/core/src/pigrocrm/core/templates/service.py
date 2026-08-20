@@ -1,15 +1,15 @@
 """`TemplateService`: CRUD over `Template` rows, plus `describe` and `preview`.
 
-No brief exists for this task (`task-8-brief.md` was never written to
-`.superpowers/sdd/2026-08-10-slice-2-documenti-e-template/` -- see the coordinator's
-own note in the launch instructions and this task's report). Mutation permissions,
-the uniqueness-conflict shape and the list/pagination shape are drawn directly from
-the closest sibling in this codebase: `PipelineService` and `FieldDefinitionService`
-both gate their own config-shaped entities (pipeline stages, custom field
-definitions) behind `actor.require_admin`, not `require_write` -- a template is the
-same kind of thing, an org-wide configuration object that shapes every future
-document, not a day-to-day record like a customer or a deal, so it follows the same
-rule here.
+Written before `task-8-brief.md` existed in the plan directory (a coordinator
+omission, since corrected); reconciled against the real brief afterwards -- see
+`task-8-report.md`'s "Riconciliazione col brief" section for exactly what changed
+and what was kept as a deliberate deviation. Mutation permissions, the
+uniqueness-conflict shape and the list/pagination shape are drawn from the closest
+sibling in this codebase: `PipelineService` and `FieldDefinitionService` both gate
+their own config-shaped entities (pipeline stages, custom field definitions) behind
+`actor.require_admin`, not `require_write` -- a template is the same kind of thing,
+an org-wide configuration object that shapes every future document, not a
+day-to-day record like a customer or a deal, so it follows the same rule here.
 
 `describe` and `preview` are the two methods this task exists for:
 
@@ -23,13 +23,13 @@ rule here.
   have no way to know the template also needs, say, `cliente.ragione_sociale` or
   `emittente.partita_iva` supplied by whatever calls `preview`/renders the document.
 - `preview` compiles a template's `corpo_markdown` against caller-supplied values
-  and returns the compiled Markdown (not a PDF -- PDF rendering is
-  `pigrocrm.core.render.pdf`, not built yet). All of the "fail precisely rather than
-  render a document with a hole in it" behaviour already lives in
-  `templates.renderer.render_template`; this method's only job is translating the
-  stored `variabili_dichiarate` (plain dicts, JSONB) into the `DeclaredVariable`
-  tuple that function expects, and turning "no such template" into `NotFound` before
-  ever reaching it.
+  and returns the compiled Markdown itself, as a plain `str` (not a PDF -- PDF
+  rendering is `pigrocrm.core.render.pdf`, not built yet -- and not wrapped in a
+  schema, since there is nothing else to carry alongside it: the "fail precisely
+  rather than render a document with a hole in it" behaviour already lives in
+  `templates.renderer.render_template`'s own `ValidationFailed`, naming the
+  missing/unresolved variable and the template line, which this method lets
+  propagate rather than translating into anything preview-specific).
 """
 
 from typing import Any
@@ -50,7 +50,6 @@ from pigrocrm.core.templates.schemas import (
     TemplateDescription,
     TemplateListQuery,
     TemplatePage,
-    TemplatePreview,
     TemplateRead,
     TemplateUpdate,
     TemplateVariable,
@@ -61,26 +60,6 @@ ENTITY = "template"
 
 def _conflicting_nome(nome: str) -> Conflict:
     return Conflict(ENTITY, "esiste già un template con questo nome", nome=nome)
-
-
-def _declared_variables(template: Template) -> tuple[DeclaredVariable, ...]:
-    """`template.variabili_dichiarate` is JSONB -- plain `dict`s, one per declared
-    variable, validated on the way in by `TemplateVariable` (schemas.py) but stored
-    with no Python type of their own. `render_template` (renderer.py) wants the
-    dataclass it already defines for exactly this shape; only the four fields it
-    actually reads are passed through, `options` (schemas.py's own addition, for the
-    compilation form, not the renderer) is dropped here rather than in storage, so a
-    round trip through `describe` still returns it.
-    """
-    return tuple(
-        DeclaredVariable(
-            nome=v["nome"],
-            etichetta=v["etichetta"],
-            tipo=v["tipo"],
-            obbligatoria=v["obbligatoria"],
-        )
-        for v in template.variabili_dichiarate
-    )
 
 
 class TemplateService:
@@ -198,12 +177,44 @@ class TemplateService:
             percorsi_per_ciclo=[".".join(path) for path in paths.loop_relative],
         )
 
-    def preview(self, template_id: UUID, values: dict[str, Any], actor: Actor) -> TemplatePreview:
+    def declared_variables(self, template: Template) -> tuple[DeclaredVariable, ...]:
+        """`template.variabili_dichiarate` is JSONB -- plain `dict`s, one per declared
+        variable, validated on the way in by `TemplateVariable` (schemas.py) but stored
+        with no Python type of their own. `render_template` (renderer.py) wants the
+        dataclass it already defines for exactly this shape; only the four fields it
+        actually reads are passed through -- `options` (schemas.py's own addition, for
+        the compilation form, not the renderer) is dropped here rather than in storage,
+        so a round trip through `describe` still returns it. This is the intentional
+        `TemplateVariable`/`DeclaredVariable` asymmetry: two types, not one, because
+        the renderer has no use for `options` and the compilation form cannot do
+        without it.
+
+        Public, not a module-level helper: Task 11's `create_document_from_template`
+        calls `self.templates.declared_variables(template)` directly, to build the
+        same `DeclaredVariable` tuple this method's own `preview` uses, against a
+        `Template` it already has in hand rather than one it would otherwise have to
+        re-fetch through this service.
+        """
+        return tuple(
+            DeclaredVariable(
+                nome=v["nome"],
+                etichetta=v["etichetta"],
+                tipo=v["tipo"],
+                obbligatoria=v["obbligatoria"],
+            )
+            for v in template.variabili_dichiarate
+        )
+
+    def preview(self, template_id: UUID, values: dict[str, Any], actor: Actor) -> str:
+        """The compiled Markdown -- not a PDF, not a wrapper: nothing beyond the
+        markdown itself is carried, so a plain `str` is the whole of what there is to
+        return, and `render_template` already raises `ValidationFailed` (naming the
+        missing/unresolved variable and the template line) rather than returning
+        anything partial for this method to surface differently."""
         template = self.repo.get(template_id)
         if template is None:
             raise NotFound(ENTITY, template_id)
-        markdown = render_template(template.corpo_markdown, values, _declared_variables(template))
-        return TemplatePreview(markdown=markdown)
+        return render_template(template.corpo_markdown, values, self.declared_variables(template))
 
     # `list` must stay the last method defined in this class -- see
     # `TemplateRepository.list`'s identical comment for the import-time crash this
