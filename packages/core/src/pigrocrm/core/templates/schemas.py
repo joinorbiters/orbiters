@@ -117,6 +117,11 @@ class TemplateDescription(BaseModel):
     """What `TemplateService.describe` returns: everything an agent needs to know
     about a template *before* asking the user to fill anything in, so the MCP
     `describe_template` tool this is built for is actually worth calling first.
+
+    Deliberately its own type, not a reuse of `Template`'s own column names:
+    `variabili` here (not `variabili_dichiarate`, which stays the model's actual
+    column name) because this object's audience is different -- the frontend's
+    template dialog calls `variablesToFields(description.variabili)` directly.
     """
 
     id: UUID
@@ -124,17 +129,21 @@ class TemplateDescription(BaseModel):
     tipo: str
     # The compilation-form variables -- what a human (or an agent on their behalf) is
     # expected to actually supply values for.
-    variabili_dichiarate: list[TemplateVariable]
-    # Every dotted path the template body references at the top level (parser.
-    # declared_paths's `root`), rendered as "a.b" strings: a superset of
-    # `variabili_dichiarate`'s own names, since it also includes context paths like
-    # `cliente.ragione_sociale` or `emittente.partita_iva` that a caller must supply
-    # even though no compilation-form field exists for them.
-    percorsi_radice: list[str]
-    # Paths referenced only inside an `#each` body (parser.declared_paths's
-    # `loop_relative`): the shape each element of whichever root array the loop
-    # iterates must have, never something a caller supplies at the root itself.
-    percorsi_per_ciclo: list[str]
+    variabili: list[TemplateVariable]
+    # Every path the template body reads at the top level only (parser.
+    # declared_paths's `root`), each as a list of segments: describe answers "what
+    # must the caller supply", and a caller supplies root-level values, never a
+    # loop-relative one -- `{{nome}}` inside an `#each righe` body describes the
+    # shape of each element of `righe`, not something provided directly. That split
+    # belongs to `declared_paths` and stays there; this field never mixes the two
+    # back together. A superset of `variabili`'s own names, since it also includes
+    # context paths like `cliente.ragione_sociale` or `emittente.partita_iva` that a
+    # caller must supply even though no compilation-form field exists for them.
+    percorsi_usati: list[list[str]]
+    # Declared (in `variabili`) but never referenced by any root-level path: a
+    # compilation-form field nobody's document will ever show. An authoring mistake
+    # worth surfacing here, not just a naming footnote.
+    variabili_non_usate: list[str]
 
 
 __all__ = [

@@ -176,9 +176,14 @@ def test_list_search_matches_nome_case_insensitively(db_session: Session) -> Non
     assert [item.nome for item in page.items] == ["Offerta Standard"]
 
 
-def test_describe_reports_the_compilation_form_and_every_path_the_body_needs(
+def test_describe_reports_the_compilation_form_and_the_root_paths_needed(
     db_session: Session,
 ) -> None:
+    # `righe`/`nome`/`prezzo` are loop-relative (inside the `#each` body): describe
+    # answers "what must the caller supply at the root", so only `sconto`, `righe`
+    # itself (the array a caller supplies) and `cliente.nome` -- all root-level --
+    # should appear in `percorsi_usati`; `nome`/`prezzo` describe the shape of each
+    # element of `righe`, never something a caller provides directly.
     body = (
         "{{#if sconto}}Sconto applicato{{/if}}\n"
         "{{#each righe}}- {{nome}}: {{prezzo}}\n{{/each}}\n"
@@ -197,9 +202,33 @@ def test_describe_reports_the_compilation_form_and_every_path_the_body_needs(
 
     description = service.describe(created.id, ADMIN)
 
-    assert description.variabili_dichiarate[0].nome == "sconto"
-    assert description.percorsi_radice == ["sconto", "righe", "cliente.nome"]
-    assert description.percorsi_per_ciclo == ["nome", "prezzo"]
+    assert description.variabili[0].nome == "sconto"
+    assert description.percorsi_usati == [["sconto"], ["righe"], ["cliente", "nome"]]
+    assert description.variabili_non_usate == []
+
+
+def test_describe_flags_a_declared_variable_the_body_never_uses(db_session: Session) -> None:
+    service = TemplateService(db_session)
+    # Default BODY references `cliente.ragione_sociale` and `importo` only, so a
+    # second declared variable the body never mentions must be flagged.
+    created = service.create(
+        _create(
+            variabili_dichiarate=[
+                {
+                    "nome": "importo",
+                    "etichetta": "Importo",
+                    "tipo": "currency",
+                    "obbligatoria": True,
+                },
+                {"nome": "inutile", "etichetta": "Inutile", "tipo": "text", "obbligatoria": False},
+            ]
+        ),
+        ADMIN,
+    )
+
+    description = service.describe(created.id, ADMIN)
+
+    assert description.variabili_non_usate == ["inutile"]
 
 
 def test_describe_missing_template_raises_not_found(db_session: Session) -> None:
