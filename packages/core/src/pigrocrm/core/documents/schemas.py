@@ -103,3 +103,17 @@ class DocumentListQuery(BaseModel):
 class DocumentPage(BaseModel):
     items: list[DocumentRead]
     next_cursor: UUID | None
+
+
+class DocumentFromTemplate(BaseModel):
+    """One call: pick a template, fill its variables, get a document with a PDF."""
+
+    template_id: UUID
+    customer_id: UUID | None = None
+    deal_id: UUID | None = None
+    titolo: SafeStr = Field(max_length=TITOLO_MAX_LENGTH)
+    # The values for the template's declared variables. Free-form by nature -- the
+    # template decides what it wants, and `render_template` rejects a missing required
+    # one by name before anything is written.
+    variabili: dict[str, Any] = {}
+    custom_fields: dict[str, Any] = {}

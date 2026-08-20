@@ -1,7 +1,7 @@
 import hashlib
 import re
 import unicodedata
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID
 
@@ -10,7 +10,9 @@ from sqlalchemy.orm import Session
 
 from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
+from pigrocrm.core.config import Settings, get_settings
 from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.customers.schemas import CustomerRead
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.documents.models import Document, DocumentVersion
 from pigrocrm.core.documents.repository import DocumentRepository
@@ -18,21 +20,39 @@ from pigrocrm.core.documents.schemas import (
     ALLOWED_CONTENT_TYPES,
     DIMENSIONE_MAX,
     DocumentCreate,
+    DocumentFromTemplate,
     DocumentListQuery,
     DocumentPage,
     DocumentRead,
     DocumentUpdate,
     DocumentVersionRead,
+    OfferState,
 )
+from pigrocrm.core.emitter.service import EmitterProfileService
 from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 from pigrocrm.core.fields.schemas import EntityType
 from pigrocrm.core.fields.service import FieldDefinitionService
 from pigrocrm.core.fields.validator import validate_custom_fields
+from pigrocrm.core.render.pdf import build_header, render_pdf
 from pigrocrm.core.storage.base import DocumentStorage
+from pigrocrm.core.templates.models import Template
+from pigrocrm.core.templates.renderer import DeclaredVariable, render_template
+from pigrocrm.core.templates.service import TemplateService
 
 ENTITY: EntityType = "document"
 _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
 _CUSTOMER_ID_FRAGMENT = 8
+
+# The offer lifecycle, as a table rather than a chain of `if`s: the UI reads it to
+# decide which buttons to show, and the MCP tool reads it to tell an agent what it may
+# do next. `accettata` and `rifiutata` are terminal -- an offer that was answered is a
+# fact, and editing that fact is a new offer, not a state change.
+OFFER_TRANSITIONS: dict[str, frozenset[str]] = {
+    "bozza": frozenset({"inviata"}),
+    "inviata": frozenset({"accettata", "rifiutata", "bozza"}),
+    "accettata": frozenset(),
+    "rifiutata": frozenset(),
+}
 
 
 def slugify_folder(raw: str) -> str:
@@ -49,12 +69,17 @@ def slugify_folder(raw: str) -> str:
 
 
 class DocumentService:
-    def __init__(self, session: Session, storage: DocumentStorage) -> None:
+    def __init__(
+        self, session: Session, storage: DocumentStorage, settings: Settings | None = None
+    ) -> None:
         self.session = session
         self.storage = storage
+        self.settings = settings or get_settings()
         self.repo = DocumentRepository(session)
         self.fields = FieldDefinitionService(session)
         self.activities = ActivityService(session)
+        self.templates = TemplateService(session)
+        self.emitter = EmitterProfileService(session)
 
     # ---- owner resolution ---------------------------------------------------
 
@@ -332,6 +357,195 @@ class DocumentService:
         extension = ALLOWED_CONTENT_TYPES[version.content_type]
         filename = f"{slugify_folder(document.titolo)}-v{version.numero}{extension}"
         return self.storage.get(version.storage_key), version.content_type, filename
+
+    # ---- template-driven documents ------------------------------------------
+
+    def _require_template(self, template_id: UUID) -> Template:
+        """`TemplateService` exposes no `_require` of its own -- only `get`, which
+        returns a `TemplateRead` (a detached copy with `variabili_dichiarate` already
+        turned into `TemplateVariable` objects). This needs the live ORM row instead:
+        `declared_variables` reads `template.variabili_dichiarate` as the raw list of
+        dicts JSONB actually stores, and `template.corpo_markdown`/`template.tipo`/
+        `template.nome` feed straight into rendering. Going through
+        `self.templates.repo.get` directly is what `TemplateService.declared_variables`
+        itself documents as the expected call shape for a `Template` already in hand.
+        """
+        template = self.templates.repo.get(template_id)
+        if template is None:
+            raise NotFound("template", template_id)
+        return template
+
+    def _template_scope(
+        self, document: Document, variabili: dict[str, Any], actor: Actor
+    ) -> dict[str, Any]:
+        """What a template can read: the caller's variables, plus `cliente` and
+        `emittente` from the record itself.
+
+        The caller's own keys go in first and the record's go in second, so a caller
+        cannot shadow `cliente` or `emittente` with values of their own -- an offer
+        must state the customer the document is filed under, not the one whoever
+        pressed the button typed.
+        """
+        customer = self._customer_of(document)
+        scope: dict[str, Any] = dict(variabili)
+        scope["emittente"] = self.emitter.as_template_values(actor)["emittente"]
+        scope["cliente"] = (
+            CustomerRead.model_validate(customer).model_dump(mode="json") if customer else {}
+        )
+        scope.setdefault("oggi", date.today().isoformat())
+        return scope
+
+    def _render_to_pdf(
+        self, corpo: str, scope: dict[str, Any], declared: tuple[DeclaredVariable, ...]
+    ) -> tuple[str, bytes]:
+        markdown = render_template(corpo, scope, declared)
+        header = build_header(scope["emittente"])
+        return markdown, render_pdf(markdown, header_typst=header, settings=self.settings)
+
+    def create_from_template(self, data: DocumentFromTemplate, actor: Actor) -> DocumentRead:
+        """The call behind "Claude, prepara una nuova offerta usando il template
+        Consulenza CTO" (spec 7) and behind the UI's Genera button. One transaction:
+        the document, its first version and the timeline entry commit together, and a
+        render failure leaves nothing behind."""
+        actor.require_write("create_document_from_template")
+        template = self._require_template(data.template_id)
+        self._check_owner(data.customer_id, data.deal_id)
+
+        document = self.repo.add(
+            Document(
+                customer_id=data.customer_id,
+                deal_id=data.deal_id,
+                tipo=template.tipo,
+                titolo=data.titolo,
+                stato="bozza" if template.tipo == "offerta" else None,
+                custom_fields=self._validated_custom(data.custom_fields or {}),
+            )
+        )
+        try:
+            scope = self._template_scope(document, data.variabili, actor)
+            markdown, pdf = self._render_to_pdf(
+                template.corpo_markdown, scope, self.templates.declared_variables(template)
+            )
+        except Exception:
+            # "a render failure leaves nothing behind": the `Document` row above was
+            # only flushed, never committed, so a missing required variable or a
+            # broken Markdown/Typst compile must undo it too -- otherwise it sits in
+            # the still-open transaction, invisible to another connection but already
+            # visible to this same session's own later reads (a plain `SELECT`, not a
+            # `COMMIT`, is what a flushed row needs to be seen by).
+            self.session.rollback()
+            raise
+
+        key = self.storage_key_for(document, 1, "application/pdf")
+        version = DocumentVersion(
+            document_id=document.id,
+            numero=1,
+            sorgente_markdown=markdown,
+            template_id=template.id,
+            variabili=data.variabili,
+            storage_key=key,
+            content_type="application/pdf",
+            dimensione=len(pdf),
+            hash_sha256=hashlib.sha256(pdf).hexdigest(),
+            creato_da=actor.id,
+        )
+        # Same ordering `add_version` establishes and the same reason: the version
+        # row is flushed -- and Postgres's own `uq_document_versions_document_numero`
+        # given a chance to reject it -- *before* a byte reaches `storage.put`, so a
+        # losing racer's bytes can never physically overwrite a winner's. The brief's
+        # own sample called `storage.put` first; that ordering was rejected once
+        # already for `add_version` and is not reintroduced here.
+        try:
+            self.repo.add_version(version)
+        except IntegrityError as exc:
+            self.session.rollback()
+            raise Conflict(
+                "document_version",
+                "conflitto di concorrenza sul numero di versione, riprova",
+                document_id=str(document.id),
+            ) from exc
+
+        try:
+            self.storage.put(key, pdf, "application/pdf")
+        except Exception:
+            # The row is flushed but not committed: rolling back here undoes that
+            # insert (and the document's own flushed insert) too, so nothing is left
+            # pointing at bytes that were never written.
+            self.session.rollback()
+            raise
+
+        document.versione_corrente = 1
+        self.activities.record(
+            ENTITY, document.id, "created_from_template", actor, {"template": template.nome}
+        )
+        self.session.commit()
+        return DocumentRead.model_validate(document)
+
+    def regenerate(self, document_id: UUID, numero: int, actor: Actor) -> DocumentVersionRead:
+        """Rebuild an old version as a new one.
+
+        Reads the version's own `template_id` and `variabili` -- which is exactly why
+        both are stored (spec 4.2) -- so a six-month-old offer regenerates identically
+        without the person who wrote it being in the room.
+        """
+        actor.require_write("regenerate_document")
+        document = self._require(document_id)
+        source = self.repo.version(document_id, numero)
+        if source is None:
+            raise NotFound("document_version", f"{document_id}#{numero}")
+        if source.template_id is None or source.variabili is None:
+            raise ValidationFailed(
+                ENTITY,
+                "numero",
+                "questa versione non e' stata generata da un template e non si rigenera",
+                expected="una versione creata da un template",
+            )
+        template = self._require_template(source.template_id)
+        scope = self._template_scope(document, source.variabili, actor)
+        markdown, pdf = self._render_to_pdf(
+            template.corpo_markdown, scope, self.templates.declared_variables(template)
+        )
+        return self.add_version(
+            document_id,
+            pdf,
+            "application/pdf",
+            actor,
+            sorgente_markdown=markdown,
+            template_id=template.id,
+            variabili=source.variabili,
+        )
+
+    def set_offer_state(self, document_id: UUID, stato: OfferState, actor: Actor) -> DocumentRead:
+        """The only writer of `documents.stato`.
+
+        Deliberately not a field on `DocumentUpdate`: `model_dump(exclude_none=True)`
+        drops a `None`, so a nullable typed column on an Update schema has no spelling
+        that means "clear it" -- the A14 defect. A dedicated method with a required,
+        non-nullable literal has no such shape.
+        """
+        actor.require_write("set_offer_state")
+        document = self._require(document_id)
+        if document.tipo != "offerta" or document.stato is None:
+            raise ValidationFailed(
+                ENTITY,
+                "stato",
+                "solo un documento di tipo offerta ha uno stato",
+                expected="un documento di tipo offerta",
+            )
+        allowed = OFFER_TRANSITIONS[document.stato]
+        if stato not in allowed:
+            raise Conflict(
+                ENTITY,
+                f"da '{document.stato}' non si puo' passare a '{stato}'",
+                stato_attuale=document.stato,
+                transizioni_ammesse=sorted(allowed),
+            )
+        previous, document.stato = document.stato, stato
+        self.activities.record(
+            ENTITY, document.id, "state_changed", actor, {"da": previous, "a": stato}
+        )
+        self.session.commit()
+        return DocumentRead.model_validate(document)
 
     def _require(self, document_id: UUID) -> Document:
         document = self.repo.get(document_id)
