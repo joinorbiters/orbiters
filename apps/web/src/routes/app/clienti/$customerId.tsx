@@ -20,6 +20,7 @@ import {
   type RelatedDeal,
   type RelatedPerson,
 } from '@/features/customers/queries'
+import { DocumentsTab } from '@/features/documents/DocumentsTab'
 import { toProblem, type ProblemDetail } from '@/lib/api'
 import { useCanWrite } from '@/lib/auth'
 import { useEntitySchema } from '@/lib/schema'
@@ -159,6 +160,7 @@ export function CustomerDetail() {
         subtitle="Cliente"
         entityType="customer"
         entityId={customerId}
+        documents={<DocumentsTab owner={{ customerId }} />}
         actions={
           canWrite && (
             <>
