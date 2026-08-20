@@ -58,6 +58,12 @@ describe('Timeline', () => {
   })
 
   it('shows the API problem detail, not the empty-state message, when the request fails', async () => {
+    // `api.GET` is one overloaded function covering every GET path in the generated
+    // `paths` type (lib/api-types.ts), and adding new paths (slice 2's documents,
+    // templates, emitter) shifts which overload TS resolves for an unnarrowed mock
+    // return value -- the same fragility `deals/queries.test.tsx`'s own `ok`/`failed`
+    // helpers document. The cast says so honestly rather than fighting the overload
+    // set to make TS re-derive it.
     mockGet.mockReturnValue(
       Promise.resolve({
         error: {
@@ -68,7 +74,7 @@ describe('Timeline', () => {
           code: 'not_found',
         },
         response: new Response(null, { status: 404 }),
-      }),
+      }) as never,
     )
     renderWithClient(<Timeline entityType="customer" entityId="c1" />)
     expect(await screen.findByText('Cliente non trovato')).toBeInTheDocument()

@@ -37,4 +37,13 @@ export const queryKeys = {
   // per-user key is what makes a stale cross-user read impossible by
   // construction, rather than merely unreproduced today.
   tokens: (userId: string) => ['tokens', userId] as const,
+  // `owner` is the discriminated `{customerId} | {dealId}` object, so a customer's
+  // documents and a deal's documents can never share a cache entry, and
+  // `invalidateQueries({queryKey: ['documents']})` still matches both.
+  documents: (owner?: unknown) => ['documents', owner ?? {}] as const,
+  document: (id: string) => ['document', id] as const,
+  documentVersions: (id: string) => ['document-versions', id] as const,
+  templates: () => ['templates'] as const,
+  templateDescription: (id: string) => ['template-description', id] as const,
+  emitter: ['emitter'] as const,
 }

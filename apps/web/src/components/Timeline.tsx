@@ -197,6 +197,12 @@ const TIMELINE_FETCHERS: Record<
         params: { path: { deal_id: entityId }, query: { limit } },
       }),
     ),
+  document: (entityId, limit) =>
+    unwrap(
+      api.GET('/api/documents/{document_id}/timeline', {
+        params: { path: { document_id: entityId }, query: { limit } },
+      }),
+    ),
 }
 
 interface TimelineProps {
