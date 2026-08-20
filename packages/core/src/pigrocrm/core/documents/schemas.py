@@ -1,7 +1,8 @@
+from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from pigrocrm.core.validation import SafeStr
 
@@ -9,6 +10,25 @@ DocumentTipo = Literal["offerta", "contratto", "verbale", "documento"]
 OfferState = Literal["bozza", "inviata", "accettata", "rifiutata"]
 
 TITOLO_MAX_LENGTH = 200
+
+# The content type is chosen from this allowlist, never echoed from the request: the
+# value reaches a `Content-Disposition` header and a browser's own sniffing later, and
+# `text/html` there is a stored XSS with the CRM's own origin behind it.
+ALLOWED_CONTENT_TYPES: dict[str, str] = {
+    "application/pdf": ".pdf",
+    "text/markdown": ".md",
+    "text/plain": ".txt",
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+}
+
+CONTENT_TYPE_MAX_LENGTH = 100
+STORAGE_KEY_MAX_LENGTH = 255
+# Postgres `Integer` tops out at 2**31-1; 100 MB is far below it and is a defensible
+# ceiling for a document nobody wants to email either.
+DIMENSIONE_MAX = 100 * 1024 * 1024
 
 
 class DocumentCreate(BaseModel):
@@ -23,3 +43,63 @@ class DocumentCreate(BaseModel):
     titolo: SafeStr = Field(max_length=TITOLO_MAX_LENGTH)
     stato: OfferState | None = None
     custom_fields: dict[str, Any] = {}
+
+
+class DocumentUpdate(BaseModel):
+    """`stato` is deliberately absent: an offer's state changes only through a
+    dedicated state-transition method, which takes a required non-nullable literal.
+    That keeps this slice clear of the defect where `model_dump(exclude_none=True)`
+    drops a `None`, so a nullable typed column on an Update schema has no spelling
+    that means "clear it"."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    titolo: SafeStr | None = Field(default=None, max_length=TITOLO_MAX_LENGTH)
+    custom_fields: dict[str, Any] | None = None
+
+
+class DocumentRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    customer_id: UUID | None
+    deal_id: UUID | None
+    tipo: str
+    titolo: str
+    stato: str | None
+    versione_corrente: int
+    custom_fields: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+
+
+class DocumentVersionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    document_id: UUID
+    numero: int
+    template_id: UUID | None
+    storage_key: str
+    content_type: str
+    dimensione: int
+    hash_sha256: str
+    creato_da: UUID | None
+    created_at: datetime
+
+
+class DocumentListQuery(BaseModel):
+    customer_id: UUID | None = None
+    deal_id: UUID | None = None
+    tipo: DocumentTipo | None = None
+    stato: OfferState | None = None
+    # Bounded here, not only on a future router: an MCP tool could build this object
+    # directly, with no router-level Query(...) bound sitting between it and this
+    # schema.
+    limit: int = Field(default=50, ge=1, le=200)
+    cursor: UUID | None = None
+
+
+class DocumentPage(BaseModel):
+    items: list[DocumentRead]
+    next_cursor: UUID | None
