@@ -62,7 +62,7 @@ Coefficiente redditività 67%, imposta sostitutiva 5%, INPS 26,07%, ATECO 62.20.
 
 ### 2.3 Cutover
 
-Acme resta in produzione durante lo sviluppo. **Non c'è importer Attio nello slice 1**: importare su un modello dati ancora in movimento significa farlo due volte. L'importer è previsto nello slice 2, a modello stabilizzato.
+Acme resta in produzione durante lo sviluppo. **Non c'è importer Attio in nessuno slice**: al 2026-08-20 il proprietario ha deciso di non usare più Attio, quindi non c'è nulla da importare. Le anagrafiche si inseriscono a mano.
 
 Il clone di riferimento sta in `.reference-acme/` (gitignored).
 
@@ -407,7 +407,7 @@ Riuso della pipeline di Acme, con i test come gate aggiuntivo:
 
 | Slice | Contenuto |
 |---|---|
-| **2** | Documenti e template: storage pluggable (local/GDrive), motore `{{}}` con loop e condizionali, render PDF Pandoc+Typst, versioning, tipo documento, stati offerta, **importer Attio** |
+| **2** | Documenti e template: storage pluggable (local/GDrive), motore `{{}}` con loop e condizionali, render PDF Pandoc+Typst, versioning, tipo documento, stati offerta |
 | **3** | Fatturazione: fatture multi-riga, numerazione progressiva, `FiscalProfile`, FatturaPA FPR12, fatture temporanee |
 | **4** | Time tracking, costi, P&L, preventivo vs consuntivo, calcolo fiscale nel service layer |
 | **5** | Gmail (OAuth, sync conversazioni rilevanti, invio, solleciti) + landing page e design system soft-aesthetic |

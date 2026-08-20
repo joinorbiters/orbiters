@@ -5,7 +5,7 @@
 **Prerequisito:** slice 1 (Core CRM + MCP) in `main`
 
 **Ambito:** il documentale di clienti e deal, il motore di template che produce offerte da Markdown,
-il render PDF, il versioning, gli stati dell'offerta, e l'importer da Attio.
+il render PDF, il versioning e gli stati dell'offerta.
 
 ---
 
@@ -32,7 +32,7 @@ portato così com'è. La macchina che lo riempiva no.
 | Sintassi `[NOME_CLIENTE]` | **Sostituita.** Vedi §3 |
 | Dati dell'intestazione hardcodati (`Humancraft di Ivan Sala`, P.IVA, PEC, sede) | **Sostituiti** da un profilo emittente configurabile. Un CRM per freelance italiani non può avere il nome di un freelance nel sorgente |
 | Storage su Google Drive | **Portato come uno dei due backend.** Vedi §5 |
-| Attio come sistema di record | **Rimosso.** Ne resta solo un importer una tantum (§8) |
+| Attio come sistema di record | **Rimosso, senza importer.** Vedi §8 |
 
 ---
 
@@ -204,16 +204,18 @@ contesto è uno spreco e un rischio. MCP restituisce un URL firmato o un identif
 
 ---
 
-## 8. Importer Attio
+## 8. Nessun importer Attio — decisione del 2026-08-20
 
-Una tantum, da riga di comando, non un sync. Legge l'export di Attio e crea clienti, persone e deal,
-mappando i campi non riconosciuti su campi custom **creati automaticamente** — che è esattamente il
-caso d'uso per cui i campi custom esistono.
+Il piano originale prevedeva un importer una tantum da Attio, a modello dati stabilizzato. **Il
+proprietario ha deciso di non usare più Attio**, quindi non c'è nulla da importare e l'importer è
+rimosso dall'ambito: non è rinviato, non esiste.
 
-È **idempotente**: rieseguirlo non duplica. Un secondo passaggio aggiorna e basta.
-Prima scrive un report di cosa farebbe; scrive per davvero solo con `--apply`.
-
----
+Resta valida la ragione per cui Attio andava via, ed è documentata nella spec dello slice 1: Acme
+leggeva le anagrafiche da Attio tirando a indovinare gli slug dei campi fiscali — `vat_number` o
+`vat` o `piva`, `sdi_code` o `codice_destinatario` o `codice_sdi` — e ogni fattura era un tiro di
+dado sull'anagrafica. In PigroCRM P.IVA, codice fiscale, SDI e PEC sono colonne di prima classe, ed
+è quella la sostituzione di Attio. Le anagrafiche esistenti si inseriscono a mano o, se un giorno
+servisse, con un import CSV generico — che è una funzionalità diversa e non ha nulla di Attio.
 
 ## 9. Interfaccia
 
@@ -246,4 +248,3 @@ sul testo.
 4. Una versione di sei mesi prima si rigenera identica.
 5. Cambiare `LocalFileStorage` con `GDriveStorage` non richiede alcuna modifica al codice dei
    servizi, e i test lo dimostrano girando su entrambi.
-6. L'importer Attio, eseguito due volte, produce lo stesso stato.
