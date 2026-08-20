@@ -8,8 +8,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pigrocrm.core.fields.types import FieldType
 from pigrocrm.core.validation import SafeStr
 
-# Open by design: later slices append "document" and "invoice" with no schema change.
-EntityType = Literal["customer", "person", "deal"]
+# Closed by design: EntityType is a Literal, not an open set, so widening it to add a
+# new entity (as this slice does for "document") is an edit in exactly three places --
+# here, ENTITY_TYPES/CREATE_MODELS in schema_registry.py, and EntityType in
+# apps/web/src/lib/schema.ts -- rather than a schema or migration change. No table in
+# this module changes shape when an entity type is added: the custom-field machinery
+# stays the same regardless of how many entity types exist.
+EntityType = Literal["customer", "person", "deal", "document"]
 
 _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
 
