@@ -133,4 +133,17 @@ export default defineConfig([
       'react-refresh/only-export-components': ['error', { allowExportNames: ['Route'] }],
     },
   },
+  {
+    // `variablesToFields` maps `TemplateDescription.variabili` onto the exact
+    // `FieldDefinition[]` shape `NewFromTemplateDialog` feeds to `DynamicForm` --
+    // coupled to this component by construction the same way
+    // `customerToFormValues`/`personToFormValues`/`dealToFormValues` are coupled to
+    // their own forms above, and tested directly (`NewFromTemplateDialog.test.tsx`)
+    // for the same reason those are: to check the mapping without rendering the
+    // whole dialog.
+    files: ['src/features/documents/NewFromTemplateDialog.tsx'],
+    rules: {
+      'react-refresh/only-export-components': ['error', { allowExportNames: ['variablesToFields'] }],
+    },
+  },
 ])
