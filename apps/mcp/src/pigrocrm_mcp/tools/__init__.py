@@ -8,11 +8,12 @@ from pydantic import WithJsonSchema
 from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.customers.schemas import CustomerListQuery, CustomerUpdate
 from pigrocrm.core.deals.schemas import DealListQuery, DealUpdate
+from pigrocrm.core.documents.schemas import DocumentListQuery
 from pigrocrm.core.fields.schemas import EntityType
 from pigrocrm.core.people.schemas import PersonListQuery, PersonUpdate
 from pigrocrm.core.pipeline.service import PipelineService
 from pigrocrm_mcp.context import McpContext
-from pigrocrm_mcp.tools import customers, deals, people
+from pigrocrm_mcp.tools import customers, deals, documents, people
 
 # `changes` stays a plain `dict[str, Any]` at runtime -- deliberately, not an
 # oversight. Typing it directly as `CustomerUpdate` (etc.) would make the MCP SDK
@@ -85,6 +86,16 @@ OptionalProbabilita = Annotated[
 OptionalMoney = Annotated[
     float | str | None,
     WithJsonSchema({"anyOf": [{"type": "number"}, {"type": "null"}], "default": None}),
+]
+
+# Same runtime-permissive / schema-only-strict split as `BoundedLimit` above: the
+# parameter stays a plain `str` so a wrong value is rejected by `set_offer_state`'s
+# own `Literal` inside the guarded call (rendered as guidance, not a raw SDK
+# rejection), while `list_tools()` shows the real four states an agent may choose
+# from.
+OfferStateArg = Annotated[
+    str,
+    WithJsonSchema({"type": "string", "enum": ["bozza", "inviata", "accettata", "rifiutata"]}),
 ]
 
 
@@ -374,3 +385,93 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
             entity_type, UUID(entity_id), limit=cast(int, limit)
         )
         return {"entries": [entry.model_dump(mode="json") for entry in entries]}
+
+    # ---- documents ---------------------------------------------------------
+    # The download of bytes never goes through MCP (spec 7): a tool returning a
+    # base64 PDF inside a model's own context is waste and risk. Every tool below
+    # returns an identifier -- the bytes are fetched separately, over the REST API,
+    # by whatever already holds the download URL.
+
+    @mcp.tool()
+    @guard
+    def list_documents(
+        customer_id: str | None = None,
+        deal_id: str | None = None,
+        tipo: str | None = None,
+        stato: str | None = None,
+        limit: BoundedLimit = 50,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        """Elenca i documenti di un cliente o di un deal. Passa `next_cursor` come
+        `cursor` per la pagina successiva. Per scaricare i byte usa l'API REST:
+        MCP restituisce identificativi, non file."""
+        return documents.search(
+            context,
+            DocumentListQuery(
+                customer_id=UUID(customer_id) if customer_id else None,
+                deal_id=UUID(deal_id) if deal_id else None,
+                tipo=tipo,  # type: ignore[arg-type]
+                stato=stato,  # type: ignore[arg-type]
+                limit=cast(int, limit),
+                cursor=UUID(cursor) if cursor else None,
+            ),
+        )
+
+    @mcp.tool()
+    @guard
+    def get_document(document_id: str) -> dict[str, Any]:
+        """Legge un documento: tipo, titolo, stato e versione corrente."""
+        return documents.get(context, document_id)
+
+    @mcp.tool()
+    @guard
+    def get_document_versions(document_id: str) -> dict[str, Any]:
+        """Storico delle versioni di un documento, dalla piu' recente. Ogni versione
+        conserva il template e le variabili con cui e' stata generata, quindi si puo'
+        rigenerare identica."""
+        return documents.versions(context, document_id)
+
+    @mcp.tool()
+    @guard
+    def list_templates(include_archived: bool = False) -> dict[str, Any]:
+        """Elenca i template disponibili."""
+        return documents.list_templates(context, include_archived)
+
+    @mcp.tool()
+    @guard
+    def describe_template(template_id: str) -> dict[str, Any]:
+        """Che variabili vuole un template, con etichetta, tipo e obbligatorieta'.
+        Chiamalo **prima** di chiedere qualcosa all'utente: e' come si scopre cosa
+        serve senza indovinarlo."""
+        return documents.describe_template(context, template_id)
+
+    @mcp.tool()
+    @guard
+    def create_document_from_template(
+        template_id: str,
+        titolo: str,
+        customer_id: str | None = None,
+        deal_id: str | None = None,
+        variabili: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Crea un documento da un template e ne genera il PDF. Indica `customer_id`
+        oppure `deal_id`, mai entrambi. Chiama prima `describe_template` per sapere
+        quali variabili servono. Restituisce l'identificativo del documento, non il
+        file: i byte si scaricano dall'API REST."""
+        return documents.create_from_template(
+            context,
+            {
+                "template_id": UUID(template_id),
+                "titolo": titolo,
+                "customer_id": UUID(customer_id) if customer_id else None,
+                "deal_id": UUID(deal_id) if deal_id else None,
+                "variabili": variabili or {},
+            },
+        )
+
+    @mcp.tool()
+    @guard
+    def set_offer_state(document_id: str, stato: OfferStateArg) -> dict[str, Any]:
+        """Cambia lo stato di un'offerta. Transizioni ammesse: bozza -> inviata;
+        inviata -> accettata | rifiutata | bozza. Accettata e rifiutata sono finali."""
+        return documents.set_state(context, document_id, stato)
