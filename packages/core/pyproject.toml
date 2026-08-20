@@ -28,3 +28,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pigrocrm"]
+
+# No `force-include` entry for `render/assets` here, on purpose, despite the task
+# brief's own sample suggesting one: hatchling's default wheel builder already
+# bundles every non-Python file living under `packages` above (confirmed by
+# unzipping a real build -- `pigrocrm/core/render/assets/**`, media PNGs included,
+# was already present with no extra section at all). Adding the brief's suggested
+# `[tool.hatch.build.targets.wheel.force-include]` on top of that duplicate-includes
+# the same files and fails the build outright ("A second file is being added to the
+# wheel archive at the same path") -- confirmed live, not merely redundant.

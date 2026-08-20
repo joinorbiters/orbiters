@@ -450,24 +450,63 @@ def test_u2028_no_longer_manufactures_a_heading_in_typst_context(tmp_path: Path)
 
 
 @requires_real_compiler
-def test_known_limitation_typst_own_ligature_still_alters_repeated_dash_in_markdown(
+def test_the_render_pipeline_closes_the_residual_dash_and_ellipsis_gap(
     tmp_path: Path,
 ) -> None:
-    """Documented in the module docstring, demonstrated here rather than only
-    asserted, the same way test_architecture.py pins its own known gap. Not closed
-    by this module: escape_markdown's escaping never reaches past Pandoc's own Typst
-    *writer*, which re-serialises parsed text on its own rules and does not defend a
-    lone "-" the way it defends "$" or "~". Two of them survive Pandoc's round trip
-    as separate, individually harmless characters and only become adjacent again in
-    Typst's own compiled input, where Typst's lexer -- independent of Pandoc -- merges
-    them into an en dash. escape_typst does not share this problem: see
+    """Was `test_known_limitation_typst_own_ligature_still_alters_repeated_dash_in_
+    markdown`, which pinned the *un*fixed behaviour: `escape_markdown`'s escaping
+    never reaches past Pandoc's own Typst *writer*, which re-serialises parsed text
+    on its own rules and does not defend a lone "-" or "." the way it defends "$" or
+    "~". Two or three of them survive Pandoc's round trip as separate, individually
+    harmless characters and only become adjacent again in Typst's own compiled
+    input, where Typst's lexer -- independent of Pandoc -- merges a run of two-or-
+    three hyphens into an en/em dash and a run of three dots into an ellipsis.
+    `escape_typst` does not share this problem: see
     test_every_ascii_punctuation_character_survives_typst_context_for_real above,
     where an escaped "-" reaches Typst already protected because nothing
-    re-serialises escape_typst's output.
+    re-serialises `escape_typst`'s output.
+
+    This module still cannot close that gap -- the paragraph above, and the module
+    docstring, both remain true: `escape_markdown`'s own output is exactly what it
+    always was, and no escaper change is involved here. What changed is
+    `pigrocrm.core.render.pdf`, which owns the intermediate .typ file Pandoc
+    produces and re-escapes any bare hyphen/dot run still sitting in it before
+    Typst ever compiles it (`_defeat_typst_autotypography`) -- the only point in the
+    pipeline where a bare run and a `\\`-escaped one are still distinguishable byte
+    sequences. Verified here through the real two-stage `render_pdf` pipeline, not
+    the ad-hoc single-stage compile the other tests in this file use, because that
+    is specifically the stage the fix lives in.
     """
-    escaped = escape_markdown("Rossi -- Bianchi")
-    text = _compile_markdown_paragraph_to_pdf_text(escaped, tmp_path)
-    assert "Rossi – Bianchi" in text  # en dash: the residual gap, not the fix
+    from pigrocrm.core.config import Settings
+    from pigrocrm.core.render.pdf import build_header, render_pdf
+
+    escaped = escape_markdown("Rossi -- Bianchi ... Fine --- capo")
+    settings = Settings(jwt_secret="x" * 32)
+    header = build_header(
+        {
+            "ragione_sociale": "Test",
+            "partita_iva": "1",
+            "email": "a@b.it",
+            "telefono": "1",
+            "pec": "a@b.it",
+            "sito_web": "b.it",
+            "indirizzo": "via Test 1",
+            "cap": "00000",
+            "comune": "Roma",
+            "provincia": "RM",
+        }
+    )
+    pdf_bytes = render_pdf(f"{escaped}\n", header_typst=header, settings=settings)
+    pdf_path = tmp_path / "doc.pdf"
+    pdf_path.write_bytes(pdf_bytes)
+    extracted = subprocess.run(
+        ["pdftotext", "-layout", str(pdf_path), "-"], check=True, capture_output=True, text=True
+    ).stdout
+    # Literal, not an en dash / em dash / ellipsis: the residual is closed.
+    assert "Rossi -- Bianchi ... Fine --- capo" in extracted
+    assert "–" not in extracted
+    assert "—" not in extracted
+    assert "…" not in extracted
 
 
 # --- Fix round 1, item 1: the url context. A unit test asserts a string; it cannot
