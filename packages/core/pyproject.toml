@@ -10,7 +10,12 @@ dependencies = [
   "pydantic-settings==2.14.2",
   "email-validator==2.3.0",
   "argon2-cffi==25.1.0",
-  "pyjwt==2.13.0",
+  # The `crypto` extra pulls in `cryptography`, needed for the RS256 assertion a
+  # Google service account signs to obtain an access token (storage/gdrive.py). The
+  # architecture test resolves this entry to the module root `jwt` through
+  # DIST_TO_MODULE_OVERRIDES and strips the extra exactly as it already does for
+  # `psycopg[binary]`, so no test change is needed.
+  "pyjwt[crypto]==2.13.0",
   "uuid-utils==0.17.0",
 ]
 

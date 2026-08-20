@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -27,6 +28,23 @@ class Settings(BaseSettings):
     # Set PIGROCRM_COOKIE_SECURE=false for that one case. Anyone tempted to flip this
     # in production because "it's just a flag" should re-read this paragraph first.
     cookie_secure: bool = True
+
+    # Storage. `local` by default: no external dependency is what makes the product
+    # genuinely self-hostable (spec 5). Switching to `gdrive` moves *new* bytes only
+    # -- the ones already written stay where they are, and moving them is an explicit
+    # migration, not a side effect of an environment variable.
+    storage_backend: Literal["local", "gdrive"] = "local"
+    storage_local_root: str = "./var/documents"
+    # The service account's JSON key, inline. `PIGROCRM_GDRIVE_ROOT_FOLDER_ID` must
+    # name a folder on a Shared Drive (or one shared with the service account): a
+    # service account has no Drive quota of its own and `files.create` otherwise
+    # fails with storageQuotaExceeded. `storage_from_settings` checks this at startup
+    # (`GDriveStorage.verify_root_accessible`) rather than at the first upload.
+    gdrive_service_account_json: str = ""
+    gdrive_root_folder_id: str = ""
+    # Rendering. The image installs Pandoc and Typst at these names (Dockerfile.api).
+    pandoc_binary: str = "pandoc"
+    typst_binary: str = "typst"
 
     @field_validator("jwt_secret")
     @classmethod
