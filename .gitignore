@@ -20,3 +20,6 @@ dist/
 # Env
 .env
 .env.local
+
+# Storage locale dei documenti (LocalFileStorage)
+var/
