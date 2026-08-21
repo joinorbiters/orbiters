@@ -56,10 +56,14 @@ These apply to **every** task. They are not repeated per task. Everything from `
 - **UI language is Italian.** Every visible label, button and message.
 - **TypeScript strict mode**, no `any`, no `@ts-ignore`. `tsconfig.json` has `noUncheckedIndexedAccess` on.
 - **Commit after every task.**
-- **Form state keeps `{native, custom}` as two namespaces, decided once at seed time and never re-derived at submit.** Provenance is structural. A native column clears on `""` and only on `""`; a custom field clears on `null` and only on `null`; an omitted key clears nothing. `0` and `false` are values, never blanks — mirror `is_blank` exactly. **Never sum money as a JS float**: format `Numeric` values as the strings the API sends, and where a sum is unavoidable use the exact-cents helper `centsFromDecimalString` already in `apps/web/src/features/deals/columns.tsx` (`Number("0.29") * 100 === 28.999999999999996`).
-- **`DynamicForm` takes a required, undefaulted `mode: 'create' | 'edit'` prop.** Every new call site answers the question explicitly.
-- **A failed request must never look like an empty result.** A query in `isError` renders `QueryErrorBanner`, never an empty table or an empty list.
-- **`DataTable` is TanStack Table v9** (`@tanstack/react-table 9.0.0`): `tableFeatures({})` + `useTable`, `ColumnDef<DataTableFeatures, T>` with the feature type parameter **first**, and rendering through the table-bound `<table.FlexRender header={…} />` / `<table.FlexRender cell={…} />`. There is no `useReactTable`, no `getCoreRowModel`, and no standalone `flexRender()` in v9.
+- **Form state keeps `{native, custom}` as two namespaces, decided once at seed time and never re-derived at submit.** The split lives in the *feature's* form component (`CustomerForm.tsx`, `DealForm.tsx`), not in `DynamicForm`, which is a controlled flat renderer taking one merged `values` object. Provenance is structural: a native column clears on `""` and only on `""` (`model_dump(exclude_none=True)` keeps an empty string and drops a `None`); a custom field clears on `null` and only on `null`; an omitted key clears nothing; an archived custom key is omitted entirely so the server carries the stored value over. `0` and `false` are values, never blanks — mirror the shipped `isBlank` in `CustomerForm.tsx` exactly, which is itself a mirror of `fields/validator.py::is_blank`.
+- **Never sum money as a JS float.** `Numeric` columns arrive as strings in the generated types; format them with `Intl.NumberFormat('it-IT', { style: 'currency', currency: 'EUR', useGrouping: 'always' })` and, where a sum is unavoidable, add integer cents parsed by splitting the string on `.` — `Number("0.29") * 100` is `28.999999999999996`. `useGrouping: 'always'` is not optional: the default withholds the thousands separator below five integer digits. The shipped exemplar is `apps/web/src/features/deals/columns.tsx`, whose `centsFromDecimalString` is **private to that module** — the codebase's stated precedent is a small per-feature display helper rather than a shared module, so the invoice feature carries its own copy rather than widening that file's public surface and its `columns.test.ts`.
+- **`DynamicForm` takes a required, undefaulted `mode: 'create' | 'edit'` prop.** Every new call site answers the question explicitly. Its props are exactly `{ fields, values, onChange, problem?, mode }`.
+- **A failed request must never look like an empty result.** A query in `isError` renders `QueryErrorBanner` (`apps/web/src/components/QueryErrorBanner.tsx`, props `{ error: unknown }`), never an empty table or an empty list. `DataTable` already does this internally when `isError && data.length === 0`.
+- **`DataTable` is TanStack Table v9** (`@tanstack/react-table 9.0.0`): `tableFeatures({})` + `useTable({ features, columns, data })`, `ColumnDef<DataTableFeatures, T>` with the feature type parameter **first**, `row.getAllCells()`, and rendering through the table-bound `<table.FlexRender header={…} />` / `<table.FlexRender cell={…} />`. There is no `useReactTable`, no `getCoreRowModel`, no `getVisibleCells` and no standalone `flexRender()` in v9. Its props are exactly `{ columns, data, isLoading?, isError?, error?, onRowClick?, emptyMessage? }`.
+- **`unwrap` throws the `ProblemDetail` object itself**, not an `Error` and not a `Response`. A form-level failure goes to `setProblem(toProblem(error))`; a page-level action's failure goes to `toast.error(...)` from `sonner`. `toProblem` is idempotent on an already-normalised problem.
+- **`tsconfig.json` has `noUncheckedIndexedAccess`, `noUnusedLocals` and `noUnusedParameters` on**, and `build` is `vite build && tsc --noEmit`. Indexing an array or a `Record` yields `T | undefined` and must be narrowed.
+- **A new module that exports both a component and a non-component needs its own `react-refresh/only-export-components` override in `apps/web/eslint.config.js`**, with `allowExportNames`. Every shipped form and every detail route already has one; without it `pnpm lint` fails. There is no `pnpm test` script: unit tests run as `pnpm exec vitest run`, end-to-end as `pnpm test:e2e` (which is `bash scripts/e2e.sh`).
 
 ### Pinned versions
 
@@ -125,9 +129,11 @@ Resolved in favour of the shipped code, as instructed. Each was verified by read
 6. **The shipped render toolchain is Pandoc 3.8.2.1 / Typst 0.14.2, not slice 2's plan text.** Slice 2's Global Constraints pin `PANDOC_VERSION=3.1.12.2` and `TYPST_VERSION=0.11.0` "as `the reference copy/Dockerfile` pins them". **Verified:** the shipped `Dockerfile.api` pins `ARG TYPST_VERSION=0.14.2` and `ARG PANDOC_VERSION=3.8.2.1`, with a comment recording that `render/diagnostics.py`'s `_LOCATION_RE` and `render/pdf.py`'s `_defeat_typst_autotypography` were confirmed against 0.14.2 specifically. **Resolution:** this plan's pinned versions are the shipped pair. Task 13's templates are written for Typst 0.14.2.
 7. **The SdI file-name convention cannot be a storage key.** Spec §8.4 asks for `IT{cf_o_piva}_{progressivo}.xml`. **Verified:** `storage/base.py:40`'s `_KEY_RE` is `[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*` — lowercase only, deliberately, because two keys differing only in case name the same file on APFS and NTFS. `IT…` uppercase is refused. **Resolution (Tasks 5, 12):** the SdI name is the **download** file name, in `Content-Disposition` on `GET /api/invoices/{id}/xml`, which is where it matters — the file goes to an intermediary that often validates the name before the content. The storage key stays lowercase and structural: `fatture/{anno}/{numero}/v{n}.xml`, `proforma/{invoice_id}/v{n}.pdf`.
 8. **`issue_invoice` takes the source row's id in the path, and `origine_proforma_id` is set by the method rather than passed to it.** Spec §11 says `issue_invoice` "accetta un `origine_proforma_id` facoltativo" while pinning the endpoint to `POST /api/invoices/{id}/issue`; spec §5 says the conversion **creates a new row** pointing at the proforma. Passing both an `{id}` and an `origine_proforma_id` makes two ways to say the same thing, and the second would need a "duplicate this proforma as a draft" endpoint nobody asked for. **Resolution (Task 10):** one method, `InvoiceService.issue(invoice_id, data, actor)`, where `invoice_id` names either a `bozza` **fattura** (issued in place) or a `confermata` **proforma** (a new `emessa` row is created, its lines copied, `origine_proforma_id` set to the proforma, and the proforma marked `consumata`). One endpoint, one lock, one set of validations, one freezing step — which is the property §11 asked for.
+9. **The MCP ban test needs two declared lists, not one.** Spec §11 says the architecture test grows a clause: "for every public method of `InvoiceService`, either an MCP tool calls it, or the method is in a declared exclusion list — and the list must be **exactly** `issue_invoice`, `annul_invoice`, `mark_transmitted_externally`, `update_fiscal_profile`." Taken literally that is unsatisfiable: `update`, `soft_delete`, `export_xml`, `produce_artifacts`, `download` and `lines` have no MCP tool either, and none of them is one of the four. **Resolution (Task 15):** two declared sets, `MCP_FORBIDDEN_OPERATIONS` — asserted to be exactly those four names — and `MCP_UNEXPOSED_OPERATIONS`, each entry carrying its one-line reason. The test asserts every public method falls in exactly one of three buckets (reached by a tool, forbidden, or declared-unexposed), so adding a method without deciding which it is breaks the build. The spec's substantive requirement is met exactly; conflating "must never be exposed" with "happens not to be exposed" would have made the four-name assertion meaningless within a slice.
+
 10. **The proforma reference comes from one sequence, not a sequence per year.** Spec §5 says the proforma's `riferimento` comes from "una `SEQUENCE` Postgres per anno". A sequence per year means either creating a sequence with runtime DDL inside a request, or pre-creating a hundred of them in a migration. **Resolution (Task 8):** one `proforma_riferimento_seq`, never reset, with the label `PROV-{anno}-{nextval:04d}`. The spec's *reason* for choosing a sequence here is honoured exactly — `nextval()` does not roll back, gaps on a proforma mean nothing, and in exchange the counter serialises nobody — and "per year" was only ever cosmetic, since the number carries no fiscal meaning and the year is already in the label.
 
-9. **The invoice and proforma layouts are repo assets, not rows in the `templates` table.** Spec §10 says "due template nuovi, `fattura` e `proforma`" without saying where they live. **Verified:** `templates` rows are user-editable with no per-row version history, and `render/assets/template-offer.md` shows the shipped precedent for a layout that lives in the package. A fiscal document whose layout can be silently edited between issue and re-render cannot satisfy §14.6's byte-for-byte re-render. **Resolution (Task 13):** `render/assets/template-invoice.md` and `render/assets/template-proforma.md`, read from disk, filled from the frozen `snapshot`. `"fattura"`/`"proforma"` are still added to `DocumentTipo` because `documents.tipo` needs them (§8.4); that they become legal `templates.tipo` values too is harmless.
+11. **The invoice and proforma layouts are repo assets, not rows in the `templates` table.** Spec §10 says "due template nuovi, `fattura` e `proforma`" without saying where they live. **Verified:** `templates` rows are user-editable with no per-row version history, and `render/assets/template-offer.md` shows the shipped precedent for a layout that lives in the package. A fiscal document whose layout can be silently edited between issue and re-render cannot satisfy §14.6's byte-for-byte re-render. **Resolution (Task 13):** `render/assets/template-invoice.md` and `render/assets/template-proforma.md`, read from disk, filled from the frozen `snapshot`. `"fattura"`/`"proforma"` are still added to `DocumentTipo` because `documents.tipo` needs them (§8.4); that they become legal `templates.tipo` values too is harmless.
 
 ---
 
@@ -181,16 +187,19 @@ apps/web/src/
 ├── components/EntityDetailLayout.tsx           # MODIFIED: optional `invoices` tab
 ├── components/AppShell.tsx                     # MODIFIED: NAV gains Fatture
 ├── features/invoices/
-│   ├── queries.ts                              # types, hooks, labels, money formatting
-│   ├── columns.tsx                             # DataTable columns + state badges
+│   ├── queries.ts                              # types, hooks, labels, transitions
+│   ├── format.ts                               # exact-cents money, dates, number label
+│   ├── columns.tsx                             # DataTable columns
+│   ├── InvoiceStateBadge.tsx                   # state + collection badges
 │   ├── InvoiceLinesEditor.tsx                  # the multi-line editor
 │   ├── InvoiceForm.tsx                         # create draft / proforma
 │   ├── InvoiceActions.tsx                      # issue · annul · transmitted · payment
-│   ├── InvoicesTab.tsx                         # the customer/deal detail tab
-│   └── FiscalProfilePanel.tsx                  # settings
-└── routes/app/fatture/{index.tsx,$invoiceId.tsx}
-    routes/app/impostazioni/fiscale.tsx
+│   └── InvoicesTab.tsx                         # the customer/deal detail tab
+├── features/settings/FiscalProfilePanel.tsx    # beside the shipped EmitterPanel
+├── routes/app/fatture/{index.tsx,$invoiceId.tsx}
+└── routes/app/impostazioni/fiscale.tsx
 apps/web/e2e/fatture.spec.ts
+apps/web/eslint.config.js                       # MODIFIED: four only-export-components overrides
 ```
 
 **Why these boundaries:** `totals.py`, `naming.py`, `regime.py` and `fatturapa.py` are pure and have no database, no I/O and no session — which is what lets the arithmetic rules of §6.1 and the hostile-input cases of §14.2 be proven without a container, and what keeps `service.py` a sequence of decisions rather than a place where maths and XML hide. `invoices/pdf.py` is separate from `render/pdf.py` because the latter is the generic Pandoc/Typst runner and must stay ignorant of invoices. `fiscal/` is its own package rather than a file inside `invoices/` because the profile is configuration read by both the invoice service and, later, anything else that needs the regime.
@@ -1185,7 +1194,7 @@ git commit -m "feat(fiscal): RegimeStrategy decides rate, natura and stamp duty 
   - `InvoiceStato = Literal["bozza", "emessa", "annullata", "confermata", "consumata"]`
   - `StatoPagamento = Literal["da_incassare", "incassato"]`
   - `ArtifactKind = Literal["pdf", "xml"]`
-  - `ALLOWED_STATI: dict[str, frozenset[str]]` keyed by `tipo`
+  - `ALLOWED_STATI: dict[str, frozenset[str]]` keyed by `tipo`, and `STATO_TRANSITIONS: dict[str, frozenset[str]]`
   - `SNAPSHOT_VERSIONE: int` (`1`), `MAX_LINES: int` (`200`), `TIPO_DOCUMENTO: str` (`"TD01"`), `DIVISA: str` (`"EUR"`)
   - `class PartySnapshot(BaseModel)`, `class InvoiceSnapshot(BaseModel)`
   - `class InvoiceLineIn(BaseModel)`, `class InvoiceLineRead(BaseModel)`
@@ -1312,10 +1321,13 @@ def test_an_invoice_cannot_be_created_with_more_lines_than_the_bound() -> None:
         InvoiceCreate(customer_id=uuid4(), righe=[line] * (MAX_LINES + 1))
 
 
-def test_update_exposes_only_what_is_mutable_after_emission() -> None:
-    """A14 is sidestepped rather than reproduced: the only clearable native column
-    here is `note_interne`, which is Text and clears with ""."""
-    assert set(InvoiceUpdate.model_fields) == {"note_interne", "custom_fields"}
+def test_update_exposes_only_text_columns_and_custom_fields() -> None:
+    """A14 is sidestepped rather than reproduced: every native column on this schema
+    is text-shaped, so `""` is a real "clear it" spelling. No typed column -- numeric,
+    date or literal -- appears here, which is what removes the A14 shape from this
+    surface instead of hitting it again. `causale` is editable but only while the
+    invoice is a draft, which the service enforces with `ImmutableField`."""
+    assert set(InvoiceUpdate.model_fields) == {"causale", "note_interne", "custom_fields"}
 
 
 def test_the_list_query_limit_is_bounded_in_the_schema_not_only_the_router() -> None:
@@ -1591,11 +1603,18 @@ class InvoiceUpdate(BaseModel):
     Everything typed and clearable is absent, which removes the A14 shape from this
     surface instead of reproducing it: lines are replaced in bulk, `stato_pagamento`
     and `data_incasso` go through `set_payment_state`, and `stato` goes through
-    `issue`/`annul`. `note_interne` is `Text`, so `""` is its own "clear it" spelling.
+    `issue`/`annul`. Both native fields here are text-shaped, so `""` is a real
+    "clear it" spelling for each.
+
+    `causale` is on this schema because a draft has to be correctable before it is
+    issued, and it is frozen afterwards by `InvoiceService.update`, which raises
+    `ImmutableField` -- not by leaving it off the schema, which would have made a
+    draft's own subject line unfixable.
     """
 
     model_config = ConfigDict(extra="forbid")
 
+    causale: SafeStr | None = Field(default=None, max_length=CAUSALE_MAX_LENGTH)
     note_interne: SafeStr | None = None
     custom_fields: dict[str, Any] | None = None
 
@@ -2125,6 +2144,7 @@ git commit -m "feat(invoices): deterministic SdI file name and ProgressivoInvio"
   - `FPR12_NAMESPACE: str`, `FORMATO_TRASMISSIONE: str`, `NSMAP: dict[str | None, str]`
   - `class FatturaPAExporter` with `to_bytes(self, invoice: InvoiceForExport) -> bytes`
   - `normalise_fiscal_id(value: str | None) -> str | None`
+  - `check_party_exportable(party: PartySnapshot, entity: str) -> None` and `check_recipient_routing(party: PartySnapshot) -> None` — module-level, because `InvoiceService.issue` calls them too
   - test helper `packages/core/tests/fpr12/__init__.py::fpr12_schema() -> lxml.etree.XMLSchema`
 
 - [ ] **Step 1: Declare the dependency and vendor the schema**
@@ -2877,6 +2897,58 @@ def normalise_fiscal_id(value: str | None) -> str | None:
     return cleaned if FISCAL_ID_RE.fullmatch(cleaned) else None
 
 
+def check_party_exportable(party: PartySnapshot, entity: str) -> None:
+    """Refuse, naming the field on the record the user can go and fix (spec 14.9).
+
+    A module-level function rather than a method, because it has **two** callers and
+    they must not drift: this exporter, and `InvoiceService.issue`, which runs it
+    *before* consuming a number. Checking only here would be too late -- the export
+    happens after the emission transaction has committed (spec 3), so a customer
+    missing a CAP would already own a register number that can never produce a valid
+    file, and the only remaining remedy would be an annulment.
+
+    the previous system guessed `indirizzo`, `cap`, `comune` and `provincia` out of one free-text
+    field with a regex over Italian street prefixes. They are four real columns on
+    `customers`; nothing is guessed, and a missing one refuses.
+    """
+    if party.nazione != "IT":
+        raise ValidationFailed(
+            entity,
+            "nazione",
+            "questo slice non emette fatture verso l'estero: richiedono un IdPaese "
+            "diverso e CodiceDestinatario XXXXXXX",
+            expected="IT",
+        )
+    for field in ("indirizzo", "cap", "comune", "provincia"):
+        if not (getattr(party, field) or "").strip():
+            raise ValidationFailed(
+                entity,
+                field,
+                "campo obbligatorio per la fattura elettronica",
+                expected="un valore non vuoto",
+            )
+    if not party.ragione_sociale.strip():
+        raise ValidationFailed(
+            entity, "ragione_sociale", "campo obbligatorio", expected="un valore non vuoto"
+        )
+
+
+def check_recipient_routing(party: PartySnapshot) -> None:
+    """A customer must have an SDI code or a PEC, or there is no `CodiceDestinatario`.
+
+    Split from `check_party_exportable` because it applies only to the *recipient*,
+    and shared with `InvoiceService.issue` for the same reason: the previous system emitted an empty
+    `CodiceDestinatario` here, producing an invalid file with no error at all.
+    """
+    if not (party.codice_sdi or "").strip() and not (party.pec or "").strip():
+        raise ValidationFailed(
+            "customer",
+            "codice_sdi",
+            "serve un codice destinatario (SDI) oppure una PEC per emettere la fattura",
+            expected="codice_sdi di 7 caratteri oppure pec",
+        )
+
+
 class FatturaPAExporter:
     """`InvoiceForExport` in, `bytes` out. No database, no profile lookup, no clock."""
 
@@ -2888,8 +2960,8 @@ class FatturaPAExporter:
             )
         emittente = invoice.snapshot.emittente
         cliente = invoice.snapshot.cliente
-        self._check_party(emittente, "emitter_profile")
-        self._check_party(cliente, "customer")
+        check_party_exportable(emittente, "emitter_profile")
+        check_party_exportable(cliente, "customer")
 
         root = etree.Element(f"{{{FPR12_NAMESPACE}}}FatturaElettronica", nsmap=NSMAP)
         root.set("versione", FORMATO_TRASMISSIONE)
@@ -2952,29 +3024,6 @@ class FatturaPAExporter:
         element = etree.SubElement(parent, tag)
         element.text = value
         return element
-
-    def _check_party(self, party: PartySnapshot, entity: str) -> None:
-        """Every refusal names the field on the record the user can go and fix
-        (spec 14.9). the previous system guessed the address parts out of free text with a regex
-        over Italian street prefixes; these are four real columns."""
-        if party.nazione != "IT":
-            raise ValidationFailed(
-                entity,
-                "nazione",
-                "questo slice non emette fatture verso l'estero: "
-                "richiedono un IdPaese diverso e CodiceDestinatario XXXXXXX",
-                expected="IT",
-            )
-        for field in ("indirizzo", "cap", "comune", "provincia"):
-            if not (getattr(party, field) or "").strip():
-                raise ValidationFailed(
-                    entity, field, "campo obbligatorio per la fattura elettronica",
-                    expected="un valore non vuoto",
-                )
-        if not party.ragione_sociale.strip():
-            raise ValidationFailed(
-                entity, "ragione_sociale", "campo obbligatorio", expected="un valore non vuoto"
-            )
 
     def _anagrafica(self, parent: etree._Element, party: PartySnapshot, entity: str) -> None:
         """`Anagrafica/Denominazione`, even for a natural person with only a fiscal
@@ -3336,7 +3385,15 @@ class FatturaPAExporter:
         return value.isoformat()
 
 
-__all__ = ["FPR12_NAMESPACE", "FORMATO_TRASMISSIONE", "NSMAP", "FatturaPAExporter", "normalise_fiscal_id"]
+__all__ = [
+    "FPR12_NAMESPACE",
+    "FORMATO_TRASMISSIONE",
+    "NSMAP",
+    "FatturaPAExporter",
+    "check_party_exportable",
+    "check_recipient_routing",
+    "normalise_fiscal_id",
+]
 ```
 
 - [ ] **Step 6: Run the tests to verify they pass**
@@ -4803,4 +4860,8446 @@ git commit -m "feat(invoices): tables whose constraints carry the fiscal invaria
 ```
 
 ---
-<!-- PART -->
+### Task 9: `InvoiceService` — drafts, proformas and the line editor
+
+**Files:**
+- Create: `packages/core/src/pigrocrm/core/invoices/repository.py`
+- Create: `packages/core/src/pigrocrm/core/invoices/service.py`
+- Test: `packages/core/tests/test_invoice_service.py`
+
+**Interfaces:**
+- Consumes: `Invoice`, `InvoiceLine`, `InvoiceCounter`, `PROFORMA_SEQUENCE_NAME` (Task 8); every schema from Task 4; `line_total`, `build_riepilogo`, `sum_totals`, `ComputedLine` (Task 2); `resolve_regime` (Task 3); `FiscalProfileService` (Task 7); `proforma_riferimento` (Task 5); `ActivityService`, `FieldDefinitionService`, `validate_custom_fields`, `DocumentStorage`, `Settings`.
+- Produces:
+  - `class InvoiceRepository` with, in this order: `get(self, invoice_id: UUID, *, include_deleted: bool = False) -> Invoice | None`, `add(self, invoice: Invoice) -> Invoice`, `lines(self, invoice_id: UUID) -> list[InvoiceLine]`, `clear_lines(self, invoice_id: UUID) -> None`, `add_line(self, line: InvoiceLine) -> InvoiceLine`, `next_proforma_sequence(self) -> int`, `list(self, query: InvoiceListQuery) -> list[Invoice]` — **`list` last**
+  - `class InvoiceService` with, in this order: `create`, `update`, `replace_lines`, `confirm_proforma`, `get`, `lines`, `soft_delete`, `set_payment_state`, `list` — **`list` last**, and `lines` (which returns `list[InvoiceLineRead]`) therefore defined above it
+  - `ENTITY: EntityType = "invoice"`
+  - `InvoiceService.__init__(self, session: Session, storage: DocumentStorage, settings: Settings | None = None) -> None`
+  - `create(self, data: InvoiceCreate, actor: Actor) -> InvoiceRead`
+  - `update(self, invoice_id: UUID, data: InvoiceUpdate, actor: Actor) -> InvoiceRead`
+  - `replace_lines(self, invoice_id: UUID, righe: list[InvoiceLineIn], actor: Actor) -> InvoiceRead`
+  - `confirm_proforma(self, invoice_id: UUID, actor: Actor) -> InvoiceRead`
+  - `get(self, invoice_id: UUID, actor: Actor) -> InvoiceRead`
+  - `lines(self, invoice_id: UUID, actor: Actor) -> list[InvoiceLineRead]`
+  - `soft_delete(self, invoice_id: UUID, actor: Actor) -> None`
+  - `set_payment_state(self, invoice_id: UUID, data: PaymentState, actor: Actor) -> InvoiceRead`
+  - `list(self, query: InvoiceListQuery, actor: Actor) -> InvoicePage`
+  - internal, relied on by Tasks 10–13: `_require(self, invoice_id: UUID) -> Invoice`, `_computed_lines(self, righe: Sequence[InvoiceLineIn], profile: FiscalSnapshot) -> tuple[ComputedLine, ...]`, `_apply_totals(self, invoice: Invoice, computed: Sequence[ComputedLine], profile: FiscalSnapshot) -> None`, `_persist_lines(self, invoice: Invoice, computed: Sequence[ComputedLine]) -> None`
+
+- [ ] **Step 1: Write the failing test**
+
+`packages/core/tests/test_invoice_service.py`:
+
+```python
+"""Drafts and proformas: everything that happens before a number exists.
+
+A draft has no number at all, which is why "a failed creation burned a number" is not
+a scenario in this file -- it is impossible by construction. The number appears only in
+`issue`, which the next task covers.
+"""
+
+from datetime import date
+from decimal import Decimal
+from uuid import UUID, uuid4
+
+import pytest
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.activities.service import ActivityService
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.errors import (
+    Conflict,
+    ImmutableField,
+    NotFound,
+    PermissionDenied,
+    ValidationFailed,
+)
+from pigrocrm.core.fiscal.schemas import FiscalProfileUpsert
+from pigrocrm.core.fiscal.service import FiscalProfileService
+from pigrocrm.core.invoices.models import Invoice
+from pigrocrm.core.invoices.naming import RIFERIMENTO_PROFORMA_RE
+from pigrocrm.core.invoices.schemas import (
+    InvoiceCreate,
+    InvoiceLineIn,
+    InvoiceListQuery,
+    InvoiceUpdate,
+    PaymentState,
+)
+from pigrocrm.core.invoices.service import InvoiceService
+from pigrocrm.core.storage.local import LocalFileStorage
+
+ADMIN = Actor(id=None, type="system", role="admin")
+COLLABORATORE = Actor(id=None, type="user", role="collaboratore")
+READONLY = Actor(id=None, type="user", role="readonly")
+
+
+@pytest.fixture
+def storage(tmp_path) -> LocalFileStorage:  # type: ignore[no-untyped-def]
+    return LocalFileStorage(tmp_path / "documents")
+
+
+@pytest.fixture
+def service(db_session: Session, storage: LocalFileStorage) -> InvoiceService:
+    FiscalProfileService(db_session).upsert(FiscalProfileUpsert(codice_regime="RF19"), ADMIN)
+    return InvoiceService(db_session, storage)
+
+
+@pytest.fixture
+def customer_id(db_session: Session) -> UUID:
+    customer = Customer(
+        ragione_sociale="Acme S.r.l.",
+        partita_iva="12345678901",
+        codice_sdi="ABCDEFG",
+        indirizzo="Corso Italia 5",
+        cap="00100",
+        comune="Roma",
+        provincia="RM",
+        nazione="IT",
+    )
+    db_session.add(customer)
+    db_session.flush()
+    return customer.id
+
+
+def _line(descrizione: str = "Consulenza", prezzo: str = "1000.00", **kw: object) -> InvoiceLineIn:
+    payload: dict[str, object] = {
+        "descrizione": descrizione,
+        "prezzo_unitario": Decimal(prezzo),
+    }
+    payload.update(kw)
+    return InvoiceLineIn(**payload)  # type: ignore[arg-type]
+
+
+# --- creation -----------------------------------------------------------------------
+
+
+def test_a_new_invoice_is_a_draft_with_no_number(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    invoice = service.create(InvoiceCreate(customer_id=customer_id), ADMIN)
+    assert invoice.tipo == "fattura"
+    assert invoice.stato == "bozza"
+    assert invoice.anno is None
+    assert invoice.numero is None
+    assert invoice.riferimento is None
+    assert invoice.tipo_documento == "TD01"
+    assert invoice.divisa == "EUR"
+    assert invoice.totale == Decimal("0.00")
+    assert invoice.stato_pagamento == "da_incassare"
+
+
+def test_a_new_proforma_gets_a_reference_no_fiscal_regex_can_accept(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    proforma = service.create(
+        InvoiceCreate(customer_id=customer_id, tipo="proforma", righe=[_line()]), ADMIN
+    )
+    assert proforma.stato == "bozza"
+    assert proforma.numero is None
+    assert RIFERIMENTO_PROFORMA_RE.fullmatch(proforma.riferimento or "")
+
+
+def test_two_proformas_get_different_references(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    first = service.create(InvoiceCreate(customer_id=customer_id, tipo="proforma"), ADMIN)
+    second = service.create(InvoiceCreate(customer_id=customer_id, tipo="proforma"), ADMIN)
+    assert first.riferimento != second.riferimento
+
+
+def test_creation_computes_and_stores_the_totals(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    """Totals are computed by the service and stored, never recomputed by a client:
+    a total computed in the browser is the structural defect this slice removes."""
+    invoice = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            righe=[
+                _line("Consulenza", "33.333333", quantita=Decimal("3.000000")),
+                _line("Sconto", "-10.00"),
+            ],
+        ),
+        ADMIN,
+    )
+    assert invoice.imponibile == Decimal("90.00")
+    assert invoice.imposta == Decimal("0.00")
+    assert invoice.totale == Decimal("90.00")
+    assert invoice.bollo == Decimal("2.00")
+
+
+def test_the_stamp_duty_is_stored_but_stays_out_of_the_total(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    invoice = service.create(
+        InvoiceCreate(customer_id=customer_id, righe=[_line("Consulenza", "1000.00")]), ADMIN
+    )
+    assert invoice.bollo == Decimal("2.00")
+    assert invoice.totale == Decimal("1000.00")
+
+
+def test_the_regime_decides_the_line_natura(service: InvoiceService, customer_id: UUID) -> None:
+    invoice = service.create(
+        InvoiceCreate(customer_id=customer_id, righe=[_line()]), ADMIN
+    )
+    (riga,) = service.lines(invoice.id, ADMIN)
+    assert riga.numero_linea == 1
+    assert riga.aliquota_iva == Decimal("0.00")
+    assert riga.natura == "N2.2"
+    assert riga.riferimento_normativo is not None
+
+
+def test_a_non_zero_rate_under_the_forfettario_is_refused_by_field_name(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    with pytest.raises(ValidationFailed) as caught:
+        service.create(
+            InvoiceCreate(
+                customer_id=customer_id,
+                righe=[_line(aliquota_iva=Decimal("22.00"))],
+            ),
+            ADMIN,
+        )
+    assert caught.value.details["field"] == "aliquota_iva"
+
+
+def test_an_unknown_customer_is_not_found_rather_than_a_foreign_key_violation(
+    service: InvoiceService,
+) -> None:
+    with pytest.raises(NotFound):
+        service.create(InvoiceCreate(customer_id=uuid4()), ADMIN)
+
+
+def test_an_unknown_deal_is_not_found_even_though_the_column_is_nullable(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    """A nullable FK is skipped only when the caller supplies nothing, never when the
+    caller supplies a value -- the defect `deals.owner_id` shipped with."""
+    with pytest.raises(NotFound):
+        service.create(InvoiceCreate(customer_id=customer_id, deal_id=uuid4()), ADMIN)
+
+
+def test_a_deal_belonging_to_another_customer_is_refused(
+    service: InvoiceService, db_session: Session, customer_id: UUID
+) -> None:
+    other = Customer(ragione_sociale="Altro", nazione="IT")
+    db_session.add(other)
+    db_session.flush()
+    deal = Deal(nome="Progetto", customer_id=other.id)
+    db_session.add(deal)
+    db_session.flush()
+    with pytest.raises(ValidationFailed) as caught:
+        service.create(InvoiceCreate(customer_id=customer_id, deal_id=deal.id), ADMIN)
+    assert caught.value.details["field"] == "deal_id"
+
+
+def test_creation_without_a_fiscal_profile_says_which_configuration_is_missing(
+    db_session: Session, storage: LocalFileStorage, customer_id: UUID
+) -> None:
+    with pytest.raises(NotFound) as caught:
+        InvoiceService(db_session, storage).create(
+            InvoiceCreate(customer_id=customer_id), ADMIN
+        )
+    assert caught.value.details["entity"] == "fiscal_profile"
+
+
+def test_a_readonly_actor_cannot_create(service: InvoiceService, customer_id: UUID) -> None:
+    with pytest.raises(PermissionDenied):
+        service.create(InvoiceCreate(customer_id=customer_id), READONLY)
+
+
+def test_a_collaboratore_may_create_a_draft(service: InvoiceService, customer_id: UUID) -> None:
+    """Drafting is ordinary entity writing; only consuming a register number is not
+    (spec 11)."""
+    assert service.create(InvoiceCreate(customer_id=customer_id), COLLABORATORE).stato == "bozza"
+
+
+def test_creation_records_an_activity(
+    service: InvoiceService, db_session: Session, customer_id: UUID
+) -> None:
+    invoice = service.create(InvoiceCreate(customer_id=customer_id), ADMIN)
+    entries = ActivityService(db_session).timeline("invoice", invoice.id)
+    assert [entry.kind for entry in entries] == ["created"]
+
+
+# --- the line editor ----------------------------------------------------------------
+
+
+def test_replacing_the_lines_renumbers_them_from_one_contiguously(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    """Contiguity is a service invariant -- no single-row CHECK can see the other rows
+    -- and this is where it is maintained: the whole list is renumbered from 1."""
+    invoice = service.create(
+        InvoiceCreate(customer_id=customer_id, righe=[_line("A"), _line("B"), _line("C")]), ADMIN
+    )
+    service.replace_lines(invoice.id, [_line("Solo questa", "50.00")], ADMIN)
+    righe = service.lines(invoice.id, ADMIN)
+    assert [r.numero_linea for r in righe] == [1]
+    assert righe[0].descrizione == "Solo questa"
+
+
+def test_replacing_the_lines_recomputes_the_totals(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    invoice = service.create(
+        InvoiceCreate(customer_id=customer_id, righe=[_line("A", "1000.00")]), ADMIN
+    )
+    updated = service.replace_lines(invoice.id, [_line("A", "10.00")], ADMIN)
+    assert updated.totale == Decimal("10.00")
+    # Below the threshold now, so the duty disappears with the amount.
+    assert updated.bollo == Decimal("0.00")
+
+
+def test_replacing_the_lines_with_an_empty_list_is_allowed_on_a_draft(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    """A draft with no lines is a legitimate intermediate state; only *emission*
+    requires at least one line."""
+    invoice = service.create(
+        InvoiceCreate(customer_id=customer_id, righe=[_line()]), ADMIN
+    )
+    assert service.replace_lines(invoice.id, [], ADMIN).totale == Decimal("0.00")
+    assert service.lines(invoice.id, ADMIN) == []
+
+
+def test_bulk_replacement_is_how_an_optional_numeric_field_gets_cleared(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    """A14 avoided rather than papered over: with `exclude_none=True` there is no
+    spelling that clears `sconto_importo`, so the list is replaced instead of patched."""
+    invoice = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            righe=[_line("A", "100.00", sconto_importo=Decimal("10.00"), unita_misura="ore")],
+        ),
+        ADMIN,
+    )
+    service.replace_lines(invoice.id, [_line("A", "100.00")], ADMIN)
+    (riga,) = service.lines(invoice.id, ADMIN)
+    assert riga.sconto_importo is None
+    assert riga.unita_misura is None
+    assert riga.prezzo_totale == Decimal("100.00")
+
+
+def test_a_percentage_and_a_fixed_discount_compose_in_a_defined_order(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    invoice = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            righe=[
+                _line(
+                    "A",
+                    "100.00",
+                    quantita=Decimal("2.000000"),
+                    sconto_percentuale=Decimal("10.00"),
+                    sconto_importo=Decimal("5.00"),
+                )
+            ],
+        ),
+        ADMIN,
+    )
+    assert invoice.totale == Decimal("175.00")
+
+
+def test_more_lines_than_the_bound_are_refused_by_the_schema(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        InvoiceCreate(customer_id=customer_id, righe=[_line()] * 201)
+
+
+def test_replacing_lines_records_an_activity(
+    service: InvoiceService, db_session: Session, customer_id: UUID
+) -> None:
+    invoice = service.create(InvoiceCreate(customer_id=customer_id), ADMIN)
+    service.replace_lines(invoice.id, [_line(), _line("B")], ADMIN)
+    kinds = [e.kind for e in ActivityService(db_session).timeline("invoice", invoice.id)]
+    assert "lines_replaced" in kinds
+
+
+# --- editing what may be edited -----------------------------------------------------
+
+
+def test_the_causale_and_the_notes_are_editable_on_a_draft(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    invoice = service.create(InvoiceCreate(customer_id=customer_id, causale="Bozza"), ADMIN)
+    updated = service.update(
+        invoice.id, InvoiceUpdate(causale="Consulenza agosto", note_interne="da rileggere"), ADMIN
+    )
+    assert updated.causale == "Consulenza agosto"
+    assert updated.note_interne == "da rileggere"
+
+
+def test_an_empty_string_clears_a_text_column(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    """The only clear-it spelling that exists, and it works because both editable
+    native columns are text-shaped."""
+    invoice = service.create(InvoiceCreate(customer_id=customer_id, causale="Bozza"), ADMIN)
+    assert service.update(invoice.id, InvoiceUpdate(causale=""), ADMIN).causale == ""
+
+
+def test_an_omitted_key_clears_nothing(service: InvoiceService, customer_id: UUID) -> None:
+    invoice = service.create(
+        InvoiceCreate(customer_id=customer_id, causale="Bozza", note_interne="nota"), ADMIN
+    )
+    assert service.update(invoice.id, InvoiceUpdate(causale="Altro"), ADMIN).note_interne == "nota"
+
+
+# --- proforma confirmation ----------------------------------------------------------
+
+
+def test_confirming_a_proforma_moves_it_out_of_draft(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    proforma = service.create(
+        InvoiceCreate(customer_id=customer_id, tipo="proforma", righe=[_line()]), ADMIN
+    )
+    assert service.confirm_proforma(proforma.id, ADMIN).stato == "confermata"
+
+
+def test_confirming_a_proforma_with_no_lines_is_refused(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    proforma = service.create(InvoiceCreate(customer_id=customer_id, tipo="proforma"), ADMIN)
+    with pytest.raises(ValidationFailed) as caught:
+        service.confirm_proforma(proforma.id, ADMIN)
+    assert caught.value.details["field"] == "righe"
+
+
+def test_a_fattura_cannot_be_confirmed(service: InvoiceService, customer_id: UUID) -> None:
+    invoice = service.create(InvoiceCreate(customer_id=customer_id, righe=[_line()]), ADMIN)
+    with pytest.raises(Conflict):
+        service.confirm_proforma(invoice.id, ADMIN)
+
+
+def test_a_confirmed_proforma_can_still_be_edited(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    """A proforma is entirely mutable until it is consumed -- that is what it is for
+    (spec 5): agree the amount before consuming a number."""
+    proforma = service.create(
+        InvoiceCreate(customer_id=customer_id, tipo="proforma", righe=[_line()]), ADMIN
+    )
+    service.confirm_proforma(proforma.id, ADMIN)
+    assert service.replace_lines(proforma.id, [_line("B", "20.00")], ADMIN).totale == Decimal(
+        "20.00"
+    )
+
+
+# --- deletion -----------------------------------------------------------------------
+
+
+def test_a_draft_can_be_soft_deleted_and_disappears_from_the_list(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    invoice = service.create(InvoiceCreate(customer_id=customer_id), ADMIN)
+    service.soft_delete(invoice.id, ADMIN)
+    assert invoice.id not in [item.id for item in service.list(InvoiceListQuery(), ADMIN).items]
+    with pytest.raises(NotFound):
+        service.get(invoice.id, ADMIN)
+
+
+def test_soft_deleting_a_draft_also_removes_its_lines_from_the_reader(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    invoice = service.create(InvoiceCreate(customer_id=customer_id, righe=[_line()]), ADMIN)
+    service.soft_delete(invoice.id, ADMIN)
+    with pytest.raises(NotFound):
+        service.lines(invoice.id, ADMIN)
+
+
+# --- payment ------------------------------------------------------------------------
+
+
+def test_the_payment_state_cannot_be_set_on_a_draft(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    """There is nothing to collect on a document that was never issued."""
+    invoice = service.create(InvoiceCreate(customer_id=customer_id, righe=[_line()]), ADMIN)
+    with pytest.raises(Conflict):
+        service.set_payment_state(
+            invoice.id, PaymentState(stato_pagamento="incassato", data_incasso=date(2026, 9, 1)),
+            ADMIN,
+        )
+
+
+def test_marking_collected_without_a_date_is_refused(
+    service: InvoiceService, db_session: Session, customer_id: UUID
+) -> None:
+    """"Collected with no date" and "a date but not collected" are both nonsense, so
+    a single method takes both and checks their agreement."""
+    invoice = _issued_row(db_session, customer_id)
+    with pytest.raises(ValidationFailed) as caught:
+        service.set_payment_state(invoice.id, PaymentState(stato_pagamento="incassato"), ADMIN)
+    assert caught.value.details["field"] == "data_incasso"
+
+
+def test_going_back_to_uncollected_clears_the_date(
+    service: InvoiceService, db_session: Session, customer_id: UUID
+) -> None:
+    invoice = _issued_row(db_session, customer_id)
+    service.set_payment_state(
+        invoice.id, PaymentState(stato_pagamento="incassato", data_incasso=date(2026, 9, 1)), ADMIN
+    )
+    back = service.set_payment_state(
+        invoice.id, PaymentState(stato_pagamento="da_incassare"), ADMIN
+    )
+    assert back.stato_pagamento == "da_incassare"
+    assert back.data_incasso is None
+
+
+def test_a_collaboratore_may_record_a_payment(
+    service: InvoiceService, db_session: Session, customer_id: UUID
+) -> None:
+    """Spec 11: `set_payment_state` is the one invoice write a collaborator -- and an
+    agent -- may perform, because collecting is a subsequent fact, not part of the
+    document."""
+    invoice = _issued_row(db_session, customer_id)
+    assert (
+        service.set_payment_state(
+            invoice.id,
+            PaymentState(stato_pagamento="incassato", data_incasso=date(2026, 9, 1)),
+            COLLABORATORE,
+        ).stato_pagamento
+        == "incassato"
+    )
+
+
+def _issued_row(db_session: Session, customer_id: UUID) -> Invoice:
+    """An already-issued row inserted directly, so this file's payment tests do not
+    depend on `issue` (next task) being written yet."""
+    invoice = Invoice(
+        customer_id=customer_id,
+        tipo="fattura",
+        stato="emessa",
+        anno=2026,
+        numero=1,
+        data_emissione=date(2026, 8, 20),
+        tipo_documento="TD01",
+        divisa="EUR",
+        imponibile=Decimal("100.00"),
+        imposta=Decimal("0.00"),
+        bollo=Decimal("2.00"),
+        totale=Decimal("100.00"),
+        stato_pagamento="da_incassare",
+        snapshot={"versione": 1},
+        snapshot_versione=1,
+        custom_fields={},
+    )
+    db_session.add(invoice)
+    db_session.flush()
+    return invoice
+
+
+# --- editing what may not be edited -------------------------------------------------
+
+
+def test_the_lines_of_an_issued_invoice_cannot_be_replaced(
+    service: InvoiceService, db_session: Session, customer_id: UUID
+) -> None:
+    invoice = _issued_row(db_session, customer_id)
+    with pytest.raises(ImmutableField) as caught:
+        service.replace_lines(invoice.id, [_line()], ADMIN)
+    assert caught.value.details["field"] == "righe"
+
+
+def test_the_causale_of_an_issued_invoice_cannot_be_changed(
+    service: InvoiceService, db_session: Session, customer_id: UUID
+) -> None:
+    invoice = _issued_row(db_session, customer_id)
+    with pytest.raises(ImmutableField) as caught:
+        service.update(invoice.id, InvoiceUpdate(causale="ripensamento"), ADMIN)
+    assert caught.value.details["field"] == "causale"
+
+
+def test_the_internal_notes_of_an_issued_invoice_can_still_be_changed(
+    service: InvoiceService, db_session: Session, customer_id: UUID
+) -> None:
+    """They appear on no artefact, so they are not part of the document (spec 4)."""
+    invoice = _issued_row(db_session, customer_id)
+    assert (
+        service.update(invoice.id, InvoiceUpdate(note_interne="sollecitato"), ADMIN).note_interne
+        == "sollecitato"
+    )
+
+
+def test_an_issued_invoice_cannot_be_soft_deleted(
+    service: InvoiceService, db_session: Session, customer_id: UUID
+) -> None:
+    invoice = _issued_row(db_session, customer_id)
+    with pytest.raises(Conflict):
+        service.soft_delete(invoice.id, ADMIN)
+
+
+# --- listing ------------------------------------------------------------------------
+
+
+def test_the_list_filters_by_tipo_stato_year_and_payment(
+    service: InvoiceService, db_session: Session, customer_id: UUID
+) -> None:
+    draft = service.create(InvoiceCreate(customer_id=customer_id), ADMIN)
+    proforma = service.create(InvoiceCreate(customer_id=customer_id, tipo="proforma"), ADMIN)
+    issued = _issued_row(db_session, customer_id)
+
+    assert {i.id for i in service.list(InvoiceListQuery(tipo="proforma"), ADMIN).items} == {
+        proforma.id
+    }
+    assert {i.id for i in service.list(InvoiceListQuery(stato="bozza"), ADMIN).items} == {
+        draft.id,
+        proforma.id,
+    }
+    assert {i.id for i in service.list(InvoiceListQuery(anno=2026), ADMIN).items} == {issued.id}
+    assert {
+        i.id for i in service.list(InvoiceListQuery(stato_pagamento="incassato"), ADMIN).items
+    } == set()
+
+
+def test_the_list_paginates_on_the_uuid_v7_cursor(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    for _ in range(3):
+        service.create(InvoiceCreate(customer_id=customer_id), ADMIN)
+    first = service.list(InvoiceListQuery(limit=2), ADMIN)
+    assert len(first.items) == 2
+    assert first.next_cursor is not None
+    second = service.list(InvoiceListQuery(limit=2, cursor=first.next_cursor), ADMIN)
+    assert len(second.items) == 1
+    assert second.next_cursor is None
+
+
+def test_list_is_the_last_method_of_the_service_class() -> None:
+    """`def list` rebinds `list` in the class namespace, so a later method annotated
+    `-> list[...]` fails at import on Python 3.13. `lines` returns
+    `list[InvoiceLineRead]`, so it has to sit above `list`, and this pins the order
+    rather than trusting a comment."""
+    names = [
+        name
+        for name, value in vars(InvoiceService).items()
+        if callable(value) and not name.startswith("__")
+    ]
+    assert names[-1] == "list"
+    assert names.index("lines") < names.index("list")
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `uv run pytest packages/core/tests/test_invoice_service.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'pigrocrm.core.invoices.repository'`
+
+- [ ] **Step 3: Implement the repository**
+
+`packages/core/src/pigrocrm/core/invoices/repository.py`:
+
+```python
+"""Queries only. A repository never commits (project rule): every method reads or
+flushes, and the surrounding `InvoiceService` method is the one transaction."""
+
+from uuid import UUID
+
+from sqlalchemy import delete, select, text
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.invoices.models import PROFORMA_SEQUENCE_NAME, Invoice, InvoiceLine
+from pigrocrm.core.invoices.schemas import InvoiceListQuery
+
+
+class InvoiceRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def get(self, invoice_id: UUID, *, include_deleted: bool = False) -> Invoice | None:
+        invoice = self.session.get(Invoice, invoice_id)
+        if invoice is None:
+            return None
+        if invoice.deleted_at is not None and not include_deleted:
+            return None
+        return invoice
+
+    def add(self, invoice: Invoice) -> Invoice:
+        self.session.add(invoice)
+        self.session.flush()
+        return invoice
+
+    def lines(self, invoice_id: UUID) -> list[InvoiceLine]:
+        stmt = (
+            select(InvoiceLine)
+            .where(InvoiceLine.invoice_id == invoice_id)
+            .order_by(InvoiceLine.numero_linea)
+        )
+        return list(self.session.execute(stmt).scalars())
+
+    def clear_lines(self, invoice_id: UUID) -> None:
+        """A real `DELETE`, then a fresh insert of the whole list.
+
+        Bulk replacement rather than a per-line diff, for the reason spec 11 gives: it
+        is the natural shape of a line editor, and it is what makes clearing an
+        optional numeric column possible at all (A14 -- with `exclude_none=True` there
+        is no spelling that means "set `sconto_importo` back to nothing").
+        """
+        self.session.execute(delete(InvoiceLine).where(InvoiceLine.invoice_id == invoice_id))
+        self.session.flush()
+
+    def add_line(self, line: InvoiceLine) -> InvoiceLine:
+        self.session.add(line)
+        self.session.flush()
+        return line
+
+    def next_proforma_sequence(self) -> int:
+        """`nextval` on the one proforma sequence.
+
+        A `SEQUENCE` is the right tool here and the wrong one for the fiscal number,
+        for the same property: it does not roll back. A gap in a proforma reference
+        means nothing -- a proforma is not a register -- and in exchange this counter
+        serialises nobody, which is exactly what the fiscal counter cannot afford to
+        do and must do anyway.
+        """
+        return int(
+            self.session.execute(
+                text(f"SELECT nextval('{PROFORMA_SEQUENCE_NAME}')")
+            ).scalar_one()
+        )
+
+    # `list` must stay the last method defined in this class -- an unconditional
+    # project rule (`test_module_imports.py`). Defining a method named `list` rebinds
+    # that name in the *class* namespace, so any later method whose own return
+    # annotation is a bare `list[...]` would resolve `list` to this method instead of
+    # the builtin and fail at import time on Python 3.13.
+    def list(self, query: InvoiceListQuery) -> list[Invoice]:
+        stmt = select(Invoice).where(Invoice.deleted_at.is_(None))
+        if query.customer_id:
+            stmt = stmt.where(Invoice.customer_id == query.customer_id)
+        if query.deal_id:
+            stmt = stmt.where(Invoice.deal_id == query.deal_id)
+        if query.tipo:
+            stmt = stmt.where(Invoice.tipo == query.tipo)
+        if query.stato:
+            stmt = stmt.where(Invoice.stato == query.stato)
+        if query.anno:
+            stmt = stmt.where(Invoice.anno == query.anno)
+        if query.stato_pagamento:
+            stmt = stmt.where(Invoice.stato_pagamento == query.stato_pagamento)
+        if query.cursor:
+            stmt = stmt.where(Invoice.id > query.cursor)
+        # Keyset pagination on a UUIDv7 id: ordered by creation, stable under inserts.
+        # No caller-supplied sort -- R9 is open and this adds no half-feature.
+        return list(
+            self.session.execute(stmt.order_by(Invoice.id).limit(query.limit + 1)).scalars()
+        )
+```
+
+- [ ] **Step 4: Implement the service**
+
+`packages/core/src/pigrocrm/core/invoices/service.py`:
+
+```python
+"""The only writer of `invoices` and `invoice_lines`.
+
+This task covers everything that happens before a number exists. A draft and a
+proforma are ordinary mutable rows; the number, the freezing and the artefacts belong
+to `issue`, `annul` and the artefact methods added by the following tasks.
+"""
+
+from collections.abc import Sequence
+from datetime import UTC, date, datetime
+from decimal import Decimal
+from typing import Any
+from uuid import UUID
+
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.activities.service import ActivityService
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.config import Settings, get_settings
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.errors import Conflict, ImmutableField, NotFound, ValidationFailed
+from pigrocrm.core.fields.schemas import EntityType
+from pigrocrm.core.fields.service import FieldDefinitionService
+from pigrocrm.core.fields.validator import validate_custom_fields
+from pigrocrm.core.fiscal.regime import RegimeStrategy, resolve_regime
+from pigrocrm.core.fiscal.schemas import FiscalSnapshot
+from pigrocrm.core.fiscal.service import FiscalProfileService
+from pigrocrm.core.invoices.models import Invoice, InvoiceLine
+from pigrocrm.core.invoices.naming import proforma_riferimento
+from pigrocrm.core.invoices.repository import InvoiceRepository
+from pigrocrm.core.invoices.schemas import (
+    DIVISA,
+    TIPO_DOCUMENTO,
+    InvoiceCreate,
+    InvoiceLineIn,
+    InvoiceLineRead,
+    InvoiceListQuery,
+    InvoicePage,
+    InvoiceRead,
+    InvoiceUpdate,
+    PaymentState,
+)
+from pigrocrm.core.invoices.totals import ComputedLine, build_riepilogo, line_total, sum_totals
+from pigrocrm.core.storage.base import DocumentStorage
+
+ENTITY: EntityType = "invoice"
+ZERO = Decimal("0.00")
+
+# What stays writable once a `fattura` has left the `bozza` state (spec 4). Everything
+# else on the row is frozen, and an attempt raises `ImmutableField` naming the field.
+# `stato_pagamento`/`data_incasso` are absent because they have their own method, which
+# is what makes their agreement checkable; `stato` is absent for the same reason.
+MUTABLE_AFTER_ISSUE: frozenset[str] = frozenset({"note_interne", "custom_fields"})
+
+
+class InvoiceService:
+    def __init__(
+        self, session: Session, storage: DocumentStorage, settings: Settings | None = None
+    ) -> None:
+        self.session = session
+        self.storage = storage
+        self.settings = settings or get_settings()
+        self.repo = InvoiceRepository(session)
+        self.fields = FieldDefinitionService(session)
+        self.activities = ActivityService(session)
+        self.fiscal = FiscalProfileService(session)
+
+    # ---- shared helpers -------------------------------------------------------
+
+    def _check_owner(self, customer_id: UUID, deal_id: UUID | None) -> None:
+        """A syntactically valid but unknown UUID becomes this project's own
+        `NotFound` instead of a raw `ForeignKeyViolation` reaching the caller from
+        `flush()`. The nullable `deal_id` is checked too whenever a value is supplied
+        -- skipping a nullable FK is the defect `deals.owner_id` shipped with."""
+        if self.session.get(Customer, customer_id) is None:
+            raise NotFound("customer", customer_id)
+        if deal_id is None:
+            return
+        deal = self.session.get(Deal, deal_id)
+        if deal is None:
+            raise NotFound("deal", deal_id)
+        if deal.customer_id != customer_id:
+            raise ValidationFailed(
+                ENTITY,
+                "deal_id",
+                "il deal appartiene a un altro cliente",
+                expected=f"un deal del cliente {customer_id}",
+            )
+
+    def _regime(self) -> tuple[RegimeStrategy, FiscalSnapshot]:
+        """The strategy and the parameters, read together so a caller cannot pair a
+        profile with the wrong strategy. Raises `NotFound("fiscal_profile", ...)` when
+        nothing is configured, which tells the user which screen to go to."""
+        profile = self.fiscal.snapshot()
+        return resolve_regime(profile.codice_regime), profile
+
+    def _computed_lines(
+        self, righe: Sequence[InvoiceLineIn], profile: FiscalSnapshot
+    ) -> tuple[ComputedLine, ...]:
+        """Caller input plus the regime's answer, renumbered from 1.
+
+        Renumbering here is what maintains contiguity: the unique constraint on
+        `(invoice_id, numero_linea)` and the `>= 1` check are the database's half, and
+        no single-row `CHECK` can see the other rows.
+        """
+        strategy = resolve_regime(profile.codice_regime)
+        computed: list[ComputedLine] = []
+        for index, riga in enumerate(righe, start=1):
+            aliquota, natura, riferimento = strategy.resolve_line_vat(riga.aliquota_iva, profile)
+            computed.append(
+                ComputedLine(
+                    numero_linea=index,
+                    descrizione=riga.descrizione,
+                    quantita=riga.quantita,
+                    unita_misura=riga.unita_misura,
+                    prezzo_unitario=riga.prezzo_unitario,
+                    sconto_percentuale=riga.sconto_percentuale,
+                    sconto_importo=riga.sconto_importo,
+                    prezzo_totale=line_total(
+                        quantita=riga.quantita,
+                        prezzo_unitario=riga.prezzo_unitario,
+                        sconto_percentuale=riga.sconto_percentuale,
+                        sconto_importo=riga.sconto_importo,
+                    ),
+                    aliquota_iva=aliquota,
+                    natura=natura,
+                    riferimento_normativo=riferimento,
+                )
+            )
+        return tuple(computed)
+
+    def _apply_totals(
+        self, invoice: Invoice, computed: Sequence[ComputedLine], profile: FiscalSnapshot
+    ) -> None:
+        """Compute and **store**. Never recomputed by a client: a total computed in
+        the browser is the structural defect inherited from the previous system, and on an invoice it
+        costs more."""
+        strategy = resolve_regime(profile.codice_regime)
+        riepilogo = build_riepilogo(computed)
+        imponibile, imposta, totale = sum_totals(riepilogo)
+        invoice.imponibile = imponibile
+        invoice.imposta = imposta
+        invoice.totale = totale
+        # The stamp duty is stored but does not enter the total: `DatiBollo` declares
+        # that the issuer settled it virtually (spec 7.2).
+        invoice.bollo = strategy.bollo(riepilogo, profile)
+
+    def _persist_lines(self, invoice: Invoice, computed: Sequence[ComputedLine]) -> None:
+        self.repo.clear_lines(invoice.id)
+        for riga in computed:
+            self.repo.add_line(
+                InvoiceLine(
+                    invoice_id=invoice.id,
+                    numero_linea=riga.numero_linea,
+                    descrizione=riga.descrizione,
+                    quantita=riga.quantita,
+                    unita_misura=riga.unita_misura,
+                    prezzo_unitario=riga.prezzo_unitario,
+                    sconto_percentuale=riga.sconto_percentuale,
+                    sconto_importo=riga.sconto_importo,
+                    prezzo_totale=riga.prezzo_totale,
+                    aliquota_iva=riga.aliquota_iva,
+                    natura=riga.natura,
+                    riferimento_normativo=riga.riferimento_normativo,
+                )
+            )
+
+    def _validated_custom(self, values: dict[str, Any]) -> dict[str, Any]:
+        return validate_custom_fields(ENTITY, self.fields.specs_for(ENTITY), values)
+
+    def _update_custom_fields(self, invoice: Invoice, provided: dict[str, Any]) -> dict[str, Any]:
+        """Validates only the keys the caller is touching, never the merge with what is
+        stored -- identical in shape to `CustomerService._update_custom_fields`, and for
+        the same reason: re-validating the merge would let archiving a field block every
+        future custom-field update on rows that still hold it."""
+        active_by_key = {spec.key: spec for spec in self.fields.specs_for(ENTITY)}
+        to_remove: set[str] = set()
+        for key, value in provided.items():
+            if value is not None:
+                continue
+            spec = active_by_key.get(key)
+            if spec is not None and spec.required:
+                raise ValidationFailed(
+                    ENTITY, key, "campo obbligatorio", expected="un valore non vuoto"
+                )
+            to_remove.add(key)
+        to_set = {key: value for key, value in provided.items() if value is not None}
+        touched = [spec for spec in active_by_key.values() if spec.key in to_set]
+        merged = {k: v for k, v in invoice.custom_fields.items() if k not in to_remove}
+        merged.update(validate_custom_fields(ENTITY, touched, to_set))
+        return merged
+
+    def _is_editable(self, invoice: Invoice) -> bool:
+        """A `fattura` is editable only as a `bozza`; a `proforma` is editable until it
+        is `consumata`. That asymmetry is the point of a proforma (spec 5): agree the
+        amount, correct it as many times as needed, without touching the register."""
+        if invoice.tipo == "proforma":
+            return invoice.stato in ("bozza", "confermata")
+        return invoice.stato == "bozza"
+
+    def _require_editable(self, invoice: Invoice, field: str) -> None:
+        if not self._is_editable(invoice):
+            raise ImmutableField(
+                ENTITY,
+                field,
+                f"una fattura in stato '{invoice.stato}' e' un documento fiscale: "
+                "si corregge con un annullamento e una nuova emissione, non con una modifica",
+            )
+
+    # ---- writes ---------------------------------------------------------------
+
+    def create(self, data: InvoiceCreate, actor: Actor) -> InvoiceRead:
+        """A draft or a proforma. Neither has a number, which is why a failed creation
+        cannot burn one -- not as a matter of care, but because there is nothing to
+        burn until `issue` runs."""
+        actor.require_write("create_invoice")
+        self._check_owner(data.customer_id, data.deal_id)
+        _, profile = self._regime()
+
+        invoice = Invoice(
+            customer_id=data.customer_id,
+            deal_id=data.deal_id,
+            tipo=data.tipo,
+            stato="bozza",
+            tipo_documento=TIPO_DOCUMENTO,
+            divisa=DIVISA,
+            causale=data.causale,
+            note_interne=data.note_interne,
+            imponibile=ZERO,
+            imposta=ZERO,
+            bollo=ZERO,
+            totale=ZERO,
+            stato_pagamento="da_incassare",
+            custom_fields=self._validated_custom(data.custom_fields or {}),
+        )
+        if data.tipo == "proforma":
+            invoice.riferimento = proforma_riferimento(
+                date.today().year, self.repo.next_proforma_sequence()
+            )
+        computed = self._computed_lines(data.righe, profile)
+        self._apply_totals(invoice, computed, profile)
+        self.repo.add(invoice)
+        self._persist_lines(invoice, computed)
+        self.activities.record(
+            ENTITY,
+            invoice.id,
+            "created",
+            actor,
+            {"tipo": invoice.tipo, "righe": len(computed), "totale": str(invoice.totale)},
+        )
+        self.session.commit()
+        return InvoiceRead.model_validate(invoice)
+
+    def update(self, invoice_id: UUID, data: InvoiceUpdate, actor: Actor) -> InvoiceRead:
+        actor.require_write("update_invoice")
+        invoice = self._require(invoice_id)
+        changes = data.model_dump(exclude_none=True, exclude={"custom_fields"})
+        frozen = [key for key in changes if key not in MUTABLE_AFTER_ISSUE]
+        if frozen and not self._is_editable(invoice):
+            raise ImmutableField(
+                ENTITY,
+                sorted(frozen)[0],
+                f"campo congelato su un documento in stato '{invoice.stato}'",
+            )
+        if data.custom_fields is not None:
+            changes["custom_fields"] = self._update_custom_fields(invoice, data.custom_fields)
+        for key, value in changes.items():
+            setattr(invoice, key, value)
+        self.activities.record(ENTITY, invoice.id, "updated", actor, {"changed": sorted(changes)})
+        self.session.commit()
+        return InvoiceRead.model_validate(invoice)
+
+    def replace_lines(
+        self, invoice_id: UUID, righe: list[InvoiceLineIn], actor: Actor
+    ) -> InvoiceRead:
+        """The whole list, never a partial patch.
+
+        Two reasons, both from spec 11: it is the natural shape of a line editor, and
+        it is the only way an optional numeric or date column can be cleared at all
+        while `exclude_none=True` is the update contract (A14). Replacing the list
+        sidesteps that defect instead of pretending it is closed.
+        """
+        actor.require_write("replace_invoice_lines")
+        invoice = self._require(invoice_id)
+        self._require_editable(invoice, "righe")
+        _, profile = self._regime()
+        computed = self._computed_lines(righe, profile)
+        self._apply_totals(invoice, computed, profile)
+        self._persist_lines(invoice, computed)
+        self.activities.record(
+            ENTITY,
+            invoice.id,
+            "lines_replaced",
+            actor,
+            {"righe": len(computed), "totale": str(invoice.totale)},
+        )
+        self.session.commit()
+        return InvoiceRead.model_validate(invoice)
+
+    def confirm_proforma(self, invoice_id: UUID, actor: Actor) -> InvoiceRead:
+        """`bozza` -> `confermata` on a proforma: the amount is agreed and the document
+        is ready to be sent, still without touching the register."""
+        actor.require_write("confirm_proforma")
+        invoice = self._require(invoice_id)
+        if invoice.tipo != "proforma":
+            raise Conflict(
+                ENTITY, "solo una proforma si conferma", tipo=invoice.tipo, stato=invoice.stato
+            )
+        if invoice.stato != "bozza":
+            raise Conflict(
+                ENTITY,
+                f"da '{invoice.stato}' non si puo' passare a 'confermata'",
+                stato_attuale=invoice.stato,
+            )
+        if not self.repo.lines(invoice.id):
+            raise ValidationFailed(
+                ENTITY, "righe", "una proforma senza righe non si conferma",
+                expected="almeno una riga",
+            )
+        invoice.stato = "confermata"
+        self.activities.record(ENTITY, invoice.id, "confirmed", actor)
+        self.session.commit()
+        return InvoiceRead.model_validate(invoice)
+
+    def soft_delete(self, invoice_id: UUID, actor: Actor) -> None:
+        """Only what never consumed a number, and never a `consumata` proforma.
+
+        Checked here **and** by `ck_invoices_no_delete_once_consumed`, which is what
+        makes the rule true for a psql session too. Without the gap-free register the
+        numbering guarantee of spec 3 would be worth nothing: a number that can be
+        deleted is a gap with extra steps.
+        """
+        actor.require_write("delete_invoice")
+        invoice = self._require(invoice_id)
+        if invoice.numero is not None or invoice.stato == "consumata":
+            raise Conflict(
+                ENTITY,
+                "un documento che ha consumato un numero non si elimina: "
+                "si annulla, conservando il numero",
+                stato=invoice.stato,
+                numero=invoice.numero,
+            )
+        invoice.deleted_at = datetime.now(UTC)
+        self.activities.record(ENTITY, invoice.id, "deleted", actor)
+        try:
+            self.session.commit()
+        except IntegrityError as exc:
+            # The pre-check above cannot cover a row that was issued concurrently: the
+            # CHECK is the real authority, and the rollback is mandatory or the
+            # caller's session is unusable on its next statement.
+            self.session.rollback()
+            raise Conflict(
+                ENTITY, "il documento e' stato emesso nel frattempo e non si elimina piu'"
+            ) from exc
+
+    def set_payment_state(
+        self, invoice_id: UUID, data: PaymentState, actor: Actor
+    ) -> InvoiceRead:
+        """Collection is a subsequent fact, not part of the document (spec 4), so this
+        is the one invoice write a collaborator -- and an agent -- may perform."""
+        actor.require_write("set_payment_state")
+        invoice = self._require(invoice_id)
+        if invoice.stato != "emessa":
+            raise Conflict(
+                ENTITY,
+                "solo una fattura emessa ha un incasso da registrare",
+                stato=invoice.stato,
+            )
+        if data.stato_pagamento == "incassato" and data.data_incasso is None:
+            raise ValidationFailed(
+                ENTITY,
+                "data_incasso",
+                "un incasso senza data non e' un incasso",
+                expected="la data in cui il pagamento e' arrivato",
+            )
+        invoice.stato_pagamento = data.stato_pagamento
+        # Cleared rather than left dangling: the table's own
+        # `ck_invoices_incasso_requires_state` would refuse the inconsistent pair
+        # anyway, and a stale date on an uncollected invoice is a lie either way.
+        invoice.data_incasso = (
+            data.data_incasso if data.stato_pagamento == "incassato" else None
+        )
+        self.activities.record(
+            ENTITY,
+            invoice.id,
+            "payment_state_changed",
+            actor,
+            {"stato_pagamento": invoice.stato_pagamento},
+        )
+        self.session.commit()
+        return InvoiceRead.model_validate(invoice)
+
+    # ---- reads ---------------------------------------------------------------
+
+    def get(self, invoice_id: UUID, actor: Actor) -> InvoiceRead:
+        return InvoiceRead.model_validate(self._require(invoice_id))
+
+    def lines(self, invoice_id: UUID, actor: Actor) -> list[InvoiceLineRead]:
+        self._require(invoice_id)
+        return [InvoiceLineRead.model_validate(r) for r in self.repo.lines(invoice_id)]
+
+    def _require(self, invoice_id: UUID) -> Invoice:
+        invoice = self.repo.get(invoice_id)
+        if invoice is None:
+            raise NotFound(ENTITY, invoice_id)
+        return invoice
+
+    # `list` must stay the last method defined in this class -- an unconditional
+    # project rule (`test_module_imports.py`). `lines` above returns
+    # `list[InvoiceLineRead]`, so it must be defined before this point or its
+    # annotation resolves `list` to this method and fails at import on Python 3.13.
+    def list(self, query: InvoiceListQuery, actor: Actor) -> InvoicePage:
+        rows = self.repo.list(query)
+        has_more = len(rows) > query.limit
+        items = rows[: query.limit]
+        return InvoicePage(
+            items=[InvoiceRead.model_validate(i) for i in items],
+            next_cursor=items[-1].id if has_more and items else None,
+        )
+```
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `uv run pytest packages/core/tests/test_invoice_service.py packages/core/tests/test_module_imports.py -v`
+Expected: PASS
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/invoices/repository.py packages/core/src/pigrocrm/core/invoices/service.py packages/core/tests/test_invoice_service.py
+git commit -m "feat(invoices): drafts, proformas and a bulk line editor"
+```
+
+---
+### Task 10: Emission — gap-free numbering under real concurrency
+
+**Files:**
+- Modify: `packages/core/src/pigrocrm/core/invoices/repository.py` (two methods, inserted **above** `list`)
+- Modify: `packages/core/src/pigrocrm/core/invoices/service.py` (add `issue` and its helpers)
+- Test: `packages/core/tests/test_invoice_issue.py`
+- Test: `packages/core/tests/test_invoice_numbering_concurrency.py`
+
+**Interfaces:**
+- Consumes: everything Task 9 produced; `EmitterProfileService.get` (slice 2); `check_party_exportable`, `check_recipient_routing` (Task 6); `InvoiceSnapshot`, `PartySnapshot`, `InvoiceIssue`, `SNAPSHOT_VERSIONE` (Task 4).
+- Produces:
+  - `InvoiceRepository.lock_counter(self, anno: int) -> InvoiceCounter`
+  - `InvoiceRepository.last_issued_date(self, anno: int) -> date | None`
+  - `InvoiceService.issue(self, invoice_id: UUID, data: InvoiceIssue, actor: Actor) -> InvoiceRead`
+  - `InvoiceService._build_snapshot(self, invoice: Invoice, profile: FiscalSnapshot, actor: Actor) -> InvoiceSnapshot`
+  - `InvoiceService._check_issue_date(self, data_emissione: date, anno_corrente: int) -> None`
+  - `InvoiceService._party_from_customer(self, customer: Customer) -> PartySnapshot`
+  - `InvoiceService._party_from_emitter(self, actor: Actor) -> PartySnapshot`
+
+- [ ] **Step 1: Write the failing test for the single-threaded rules**
+
+`packages/core/tests/test_invoice_issue.py`:
+
+```python
+"""Emission: the one irreversible creation in the product.
+
+Everything here runs on the shared savepoint-backed `db_session`, which is fine for
+the rules. The *race* is a separate file, because a single connection with a savepoint
+cannot produce concurrency and a test that pretends otherwise proves nothing.
+"""
+
+from datetime import date, timedelta
+from decimal import Decimal
+from uuid import UUID
+
+import pytest
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.activities.service import ActivityService
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.emitter.schemas import EmitterProfileUpsert
+from pigrocrm.core.emitter.service import EmitterProfileService
+from pigrocrm.core.errors import Conflict, NotFound, PermissionDenied, ValidationFailed
+from pigrocrm.core.fiscal.schemas import FiscalProfileUpsert
+from pigrocrm.core.fiscal.service import FiscalProfileService
+from pigrocrm.core.invoices.schemas import (
+    SNAPSHOT_VERSIONE,
+    InvoiceCreate,
+    InvoiceIssue,
+    InvoiceLineIn,
+)
+from pigrocrm.core.invoices.service import InvoiceService
+from pigrocrm.core.storage.local import LocalFileStorage
+
+ADMIN = Actor(id=None, type="system", role="admin")
+COLLABORATORE = Actor(id=None, type="user", role="collaboratore")
+TODAY = date.today()
+
+
+@pytest.fixture
+def service(db_session: Session, tmp_path) -> InvoiceService:  # type: ignore[no-untyped-def]
+    FiscalProfileService(db_session).upsert(FiscalProfileUpsert(codice_regime="RF19"), ADMIN)
+    EmitterProfileService(db_session).upsert(
+        EmitterProfileUpsert(
+            ragione_sociale="Humancraft di Ivan Sala",
+            partita_iva="14518240966",
+            codice_fiscale="HMCRFT00A01H501K",
+            indirizzo="Via Vittorio Veneto 12",
+            cap="20124",
+            comune="Milano",
+            provincia="MI",
+            nazione="IT",
+            email="someone@example.com",
+        ),
+        ADMIN,
+    )
+    return InvoiceService(db_session, LocalFileStorage(tmp_path / "documents"))
+
+
+def _customer(db_session: Session, **overrides: object) -> UUID:
+    payload: dict[str, object] = {
+        "ragione_sociale": "Acme S.r.l.",
+        "partita_iva": "12345678901",
+        "codice_sdi": "ABCDEFG",
+        "indirizzo": "Corso Italia 5",
+        "cap": "00100",
+        "comune": "Roma",
+        "provincia": "RM",
+        "nazione": "IT",
+    }
+    payload.update(overrides)
+    customer = Customer(**payload)  # type: ignore[arg-type]
+    db_session.add(customer)
+    db_session.flush()
+    return customer.id
+
+
+def _draft(service: InvoiceService, customer_id: UUID, prezzo: str = "1000.00") -> UUID:
+    return service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal(prezzo))],
+        ),
+        ADMIN,
+    ).id
+
+
+# --- the number ---------------------------------------------------------------------
+
+
+def test_the_first_invoice_of_the_year_is_number_one(
+    service: InvoiceService, db_session: Session
+) -> None:
+    invoice = service.issue(_draft(service, _customer(db_session)), InvoiceIssue(), ADMIN)
+    assert invoice.stato == "emessa"
+    assert invoice.anno == TODAY.year
+    assert invoice.numero == 1
+    assert invoice.data_emissione == TODAY
+
+
+def test_numbers_are_consecutive(service: InvoiceService, db_session: Session) -> None:
+    customer_id = _customer(db_session)
+    numbers = [
+        service.issue(_draft(service, customer_id), InvoiceIssue(), ADMIN).numero
+        for _ in range(3)
+    ]
+    assert numbers == [1, 2, 3]
+
+
+def test_the_counter_row_is_created_on_first_use_and_then_incremented(
+    service: InvoiceService, db_session: Session
+) -> None:
+    customer_id = _customer(db_session)
+    service.issue(_draft(service, customer_id), InvoiceIssue(), ADMIN)
+    service.issue(_draft(service, customer_id), InvoiceIssue(), ADMIN)
+    stored = db_session.execute(
+        text("SELECT ultimo_numero FROM invoice_counters WHERE anno = :anno"),
+        {"anno": TODAY.year},
+    ).scalar_one()
+    assert stored == 2
+
+
+def test_a_failed_emission_consumes_no_number(
+    service: InvoiceService, db_session: Session
+) -> None:
+    """The property a `SEQUENCE` cannot give: `nextval()` is non-transactional and
+    does not roll back, so every aborted transaction would leave a permanent gap."""
+    customer_id = _customer(db_session)
+    service.issue(_draft(service, customer_id), InvoiceIssue(), ADMIN)
+
+    broken = service.create(InvoiceCreate(customer_id=customer_id), ADMIN)  # no lines
+    with pytest.raises(ValidationFailed):
+        service.issue(broken.id, InvoiceIssue(), ADMIN)
+
+    assert service.issue(_draft(service, customer_id), InvoiceIssue(), ADMIN).numero == 2
+
+
+def test_a_draft_that_failed_to_issue_is_still_a_draft(
+    service: InvoiceService, db_session: Session
+) -> None:
+    customer_id = _customer(db_session)
+    broken = service.create(InvoiceCreate(customer_id=customer_id), ADMIN)
+    with pytest.raises(ValidationFailed):
+        service.issue(broken.id, InvoiceIssue(), ADMIN)
+    again = service.get(broken.id, ADMIN)
+    assert again.stato == "bozza"
+    assert again.numero is None
+
+
+# --- the date -----------------------------------------------------------------------
+
+
+def test_the_issue_date_is_a_date_in_the_issuer_s_own_calendar(
+    service: InvoiceService, db_session: Session
+) -> None:
+    """Never a UTC projection of an instant: `toISOString()` on 31 December at
+    23:30 CET yields 1 January, i.e. the wrong fiscal year on an immutable
+    document. `date.today()` is the local civil date, and `anno` is derived from it,
+    so the year in the number and the year on the document cannot disagree."""
+    invoice = service.issue(_draft(service, _customer(db_session)), InvoiceIssue(), ADMIN)
+    assert invoice.data_emissione == TODAY
+    assert invoice.anno == invoice.data_emissione.year
+
+
+def test_back_dating_inside_the_current_year_is_allowed(
+    service: InvoiceService, db_session: Session
+) -> None:
+    earlier = date(TODAY.year, 1, 2)
+    invoice = service.issue(
+        _draft(service, _customer(db_session)), InvoiceIssue(data_emissione=earlier), ADMIN
+    )
+    assert invoice.data_emissione == earlier
+    assert invoice.anno == TODAY.year
+
+
+def test_a_future_date_is_refused(service: InvoiceService, db_session: Session) -> None:
+    with pytest.raises(ValidationFailed) as caught:
+        service.issue(
+            _draft(service, _customer(db_session)),
+            InvoiceIssue(data_emissione=TODAY + timedelta(days=1)),
+            ADMIN,
+        )
+    assert caught.value.details["field"] == "data_emissione"
+
+
+def test_a_date_before_the_first_of_january_is_refused(
+    service: InvoiceService, db_session: Session
+) -> None:
+    """A closed year is closed. It is also the reason the fiscal profile is not
+    historicised: no emission ever needs a previous period's parameters."""
+    with pytest.raises(ValidationFailed) as caught:
+        service.issue(
+            _draft(service, _customer(db_session)),
+            InvoiceIssue(data_emissione=date(TODAY.year - 1, 12, 31)),
+            ADMIN,
+        )
+    assert caught.value.details["field"] == "data_emissione"
+
+
+def test_the_register_must_stay_chronologically_monotonic(
+    service: InvoiceService, db_session: Session
+) -> None:
+    """Read inside the locked transaction, where "the date of the previous number" is
+    a safe thing to read."""
+    customer_id = _customer(db_session)
+    service.issue(
+        _draft(service, customer_id), InvoiceIssue(data_emissione=date(TODAY.year, 6, 1)), ADMIN
+    )
+    with pytest.raises(ValidationFailed) as caught:
+        service.issue(
+            _draft(service, customer_id),
+            InvoiceIssue(data_emissione=date(TODAY.year, 5, 31)),
+            ADMIN,
+        )
+    assert caught.value.details["field"] == "data_emissione"
+
+
+def test_the_same_date_as_the_previous_invoice_is_allowed(
+    service: InvoiceService, db_session: Session
+) -> None:
+    customer_id = _customer(db_session)
+    same = date(TODAY.year, 6, 1)
+    service.issue(_draft(service, customer_id), InvoiceIssue(data_emissione=same), ADMIN)
+    assert (
+        service.issue(
+            _draft(service, customer_id), InvoiceIssue(data_emissione=same), ADMIN
+        ).numero
+        == 2
+    )
+
+
+def test_the_due_date_comes_from_the_profile(
+    service: InvoiceService, db_session: Session
+) -> None:
+    invoice = service.issue(_draft(service, _customer(db_session)), InvoiceIssue(), ADMIN)
+    assert invoice.data_scadenza == invoice.data_emissione + timedelta(days=30)
+
+
+# --- the refusals, each naming the field (criterion 9) ------------------------------
+
+
+def test_an_invoice_with_no_lines_is_refused(
+    service: InvoiceService, db_session: Session
+) -> None:
+    empty = service.create(InvoiceCreate(customer_id=_customer(db_session)), ADMIN)
+    with pytest.raises(ValidationFailed) as caught:
+        service.issue(empty.id, InvoiceIssue(), ADMIN)
+    assert caught.value.details["field"] == "righe"
+
+
+def test_a_total_of_zero_is_refused(service: InvoiceService, db_session: Session) -> None:
+    """A TD01 at zero or below is not an invoice."""
+    with pytest.raises(ValidationFailed) as caught:
+        service.issue(_draft(service, _customer(db_session), prezzo="0.00"), InvoiceIssue(), ADMIN)
+    assert caught.value.details["field"] == "totale"
+
+
+def test_a_negative_total_is_refused(service: InvoiceService, db_session: Session) -> None:
+    with pytest.raises(ValidationFailed) as caught:
+        service.issue(
+            _draft(service, _customer(db_session), prezzo="-10.00"), InvoiceIssue(), ADMIN
+        )
+    assert caught.value.details["field"] == "totale"
+
+
+def test_a_customer_with_neither_sdi_nor_pec_is_refused_before_the_number_is_taken(
+    service: InvoiceService, db_session: Session
+) -> None:
+    customer_id = _customer(db_session, codice_sdi=None, pec=None)
+    with pytest.raises(ValidationFailed) as caught:
+        service.issue(_draft(service, customer_id), InvoiceIssue(), ADMIN)
+    assert caught.value.details["entity"] == "customer"
+    assert caught.value.details["field"] == "codice_sdi"
+    # And nothing was consumed: the counter row does not even exist yet.
+    assert (
+        db_session.execute(
+            text("SELECT count(*) FROM invoice_counters WHERE anno = :anno"),
+            {"anno": TODAY.year},
+        ).scalar_one()
+        == 1
+    )
+    assert (
+        db_session.execute(
+            text("SELECT ultimo_numero FROM invoice_counters WHERE anno = :anno"),
+            {"anno": TODAY.year},
+        ).scalar_one()
+        == 0
+    )
+
+
+@pytest.mark.parametrize("field", ["cap", "comune", "indirizzo", "provincia"])
+def test_a_missing_address_part_is_refused_by_name(
+    service: InvoiceService, db_session: Session, field: str
+) -> None:
+    customer_id = _customer(db_session, **{field: None})
+    with pytest.raises(ValidationFailed) as caught:
+        service.issue(_draft(service, customer_id), InvoiceIssue(), ADMIN)
+    assert caught.value.details["field"] == field
+
+
+def test_a_foreign_customer_is_refused_by_name(
+    service: InvoiceService, db_session: Session
+) -> None:
+    """R12: `customers.partita_iva` accepts only 11 digits, so a foreign VAT number
+    cannot even be stored. The slice declares foreign customers out of scope and says
+    so, rather than issuing something the SdI will reject."""
+    customer_id = _customer(db_session, nazione="DE")
+    with pytest.raises(ValidationFailed) as caught:
+        service.issue(_draft(service, customer_id), InvoiceIssue(), ADMIN)
+    assert caught.value.details["field"] == "nazione"
+
+
+def test_issuing_requires_admin_not_merely_write(
+    service: InvoiceService, db_session: Session
+) -> None:
+    """Spec 11: `collaboratore` is "writing entities, excluding configuration", and
+    consuming a number of the fiscal register sits closer to configuration."""
+    with pytest.raises(PermissionDenied) as caught:
+        service.issue(_draft(service, _customer(db_session)), InvoiceIssue(), COLLABORATORE)
+    assert caught.value.details["required_roles"] == ["admin"]
+
+
+# --- the freeze ---------------------------------------------------------------------
+
+
+def test_the_snapshot_freezes_both_parties_and_the_fiscal_parameters(
+    service: InvoiceService, db_session: Session
+) -> None:
+    invoice_id = _draft(service, _customer(db_session))
+    issued = service.issue(invoice_id, InvoiceIssue(), ADMIN)
+    assert issued.snapshot_versione == SNAPSHOT_VERSIONE
+    stored = db_session.execute(
+        text("SELECT snapshot FROM invoices WHERE id = :id"), {"id": invoice_id}
+    ).scalar_one()
+    assert stored["versione"] == SNAPSHOT_VERSIONE
+    assert stored["cliente"]["ragione_sociale"] == "Acme S.r.l."
+    assert stored["emittente"]["ragione_sociale"] == "Humancraft di Ivan Sala"
+    assert stored["fiscale"]["codice_regime"] == "RF19"
+
+
+def test_a_customer_who_moves_does_not_rewrite_an_issued_invoice(
+    service: InvoiceService, db_session: Session
+) -> None:
+    """Spec 8.3, the whole point of the snapshot."""
+    customer_id = _customer(db_session)
+    invoice_id = _draft(service, customer_id)
+    service.issue(invoice_id, InvoiceIssue(), ADMIN)
+    db_session.execute(
+        text("UPDATE customers SET comune = 'Torino' WHERE id = :id"), {"id": customer_id}
+    )
+    stored = db_session.execute(
+        text("SELECT snapshot FROM invoices WHERE id = :id"), {"id": invoice_id}
+    ).scalar_one()
+    assert stored["cliente"]["comune"] == "Roma"
+
+
+def test_issuing_records_an_activity_naming_the_number(
+    service: InvoiceService, db_session: Session
+) -> None:
+    invoice = service.issue(_draft(service, _customer(db_session)), InvoiceIssue(), ADMIN)
+    entries = ActivityService(db_session).timeline("invoice", invoice.id)
+    issued = [entry for entry in entries if entry.kind == "issued"]
+    assert issued and issued[0].payload["numero"] == 1
+
+
+# --- issuing from a proforma --------------------------------------------------------
+
+
+def test_issuing_a_confirmed_proforma_creates_a_new_row_and_consumes_the_proforma(
+    service: InvoiceService, db_session: Session
+) -> None:
+    """Spec 5: not a state change in place. Two rows -- one always mutable, one always
+    frozen -- so "immutable after emission" is a property of something that was never
+    mutable, rather than one verifiable only by reconstructing the history."""
+    customer_id = _customer(db_session)
+    proforma = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            tipo="proforma",
+            causale="Consulenza agosto",
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("500.00"))],
+        ),
+        ADMIN,
+    )
+    service.confirm_proforma(proforma.id, ADMIN)
+
+    issued = service.issue(proforma.id, InvoiceIssue(), ADMIN)
+    assert issued.id != proforma.id
+    assert issued.tipo == "fattura"
+    assert issued.stato == "emessa"
+    assert issued.numero == 1
+    assert issued.origine_proforma_id == proforma.id
+    assert issued.causale == "Consulenza agosto"
+    assert [r.descrizione for r in service.lines(issued.id, ADMIN)] == ["Consulenza"]
+    assert issued.totale == Decimal("500.00")
+
+    consumed = service.get(proforma.id, ADMIN)
+    assert consumed.stato == "consumata"
+    assert consumed.numero is None
+    assert [r.descrizione for r in service.lines(proforma.id, ADMIN)] == ["Consulenza"]
+
+
+def test_an_unconfirmed_proforma_cannot_be_issued(
+    service: InvoiceService, db_session: Session
+) -> None:
+    proforma = service.create(
+        InvoiceCreate(
+            customer_id=_customer(db_session),
+            tipo="proforma",
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("500.00"))],
+        ),
+        ADMIN,
+    )
+    with pytest.raises(Conflict):
+        service.issue(proforma.id, InvoiceIssue(), ADMIN)
+
+
+def test_a_consumed_proforma_cannot_be_issued_twice(
+    service: InvoiceService, db_session: Session
+) -> None:
+    customer_id = _customer(db_session)
+    proforma = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            tipo="proforma",
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("500.00"))],
+        ),
+        ADMIN,
+    )
+    service.confirm_proforma(proforma.id, ADMIN)
+    service.issue(proforma.id, InvoiceIssue(), ADMIN)
+    with pytest.raises(Conflict):
+        service.issue(proforma.id, InvoiceIssue(), ADMIN)
+
+
+def test_an_already_issued_invoice_cannot_be_issued_again(
+    service: InvoiceService, db_session: Session
+) -> None:
+    invoice_id = _draft(service, _customer(db_session))
+    service.issue(invoice_id, InvoiceIssue(), ADMIN)
+    with pytest.raises(Conflict):
+        service.issue(invoice_id, InvoiceIssue(), ADMIN)
+
+
+def test_a_missing_invoice_is_not_found(service: InvoiceService) -> None:
+    from uuid import uuid4
+
+    with pytest.raises(NotFound):
+        service.issue(uuid4(), InvoiceIssue(), ADMIN)
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `uv run pytest packages/core/tests/test_invoice_issue.py -v`
+Expected: FAIL with `AttributeError: 'InvoiceService' object has no attribute 'issue'`
+
+- [ ] **Step 3: Add the two repository methods, above `list`**
+
+In `packages/core/src/pigrocrm/core/invoices/repository.py`, insert these **before** `def list` (the `list`-last rule is unconditional, and `lines` above already returns a `list[...]`):
+
+```python
+    def lock_counter(self, anno: int) -> InvoiceCounter:
+        """The year's counter row, locked for the rest of this transaction.
+
+        Two statements, in this order and for these reasons:
+
+        1. `INSERT ... ON CONFLICT (anno) DO NOTHING` -- two concurrent
+           first-invoices-of-the-year: one inserts, the other does nothing, both carry
+           on. Without `ON CONFLICT` the loser would take a `UniqueViolation` and have
+           to be retried by the caller.
+        2. `SELECT ... FOR UPDATE` -- from here on every other emission for the same
+           year waits. This is deliberately **the first row lock the emission
+           transaction takes**, and no later statement in that transaction takes a lock
+           a concurrent emission could already hold, so two emissions cannot deadlock
+           against each other.
+
+        Not a `SEQUENCE`, and that is the whole design: `nextval()` is
+        non-transactional by design and does not roll back, so a sequence guarantees
+        uniqueness while prohibiting exactly the property required here -- the absence
+        of gaps. Every aborted transaction would leave a permanent hole in the
+        register.
+
+        The `SELECT` is `.one()`, not `.first()`: after step 1 the row must exist, and
+        a `None` here would mean the insert silently did nothing for a reason worth
+        crashing over rather than working around.
+        """
+        self.session.execute(
+            text(
+                "INSERT INTO invoice_counters (anno, ultimo_numero) "
+                "VALUES (:anno, 0) ON CONFLICT (anno) DO NOTHING"
+            ),
+            {"anno": anno},
+        )
+        stmt = select(InvoiceCounter).where(InvoiceCounter.anno == anno).with_for_update()
+        return self.session.execute(stmt).scalars().one()
+
+    def last_issued_date(self, anno: int) -> date | None:
+        """The `data_emissione` of the highest-numbered invoice of `anno`.
+
+        Safe to read only *after* `lock_counter` has run, which is the one place it is
+        called from: without the lock, a concurrent emission could commit a later
+        number between this read and the write that depends on it. Includes
+        `annullata` rows on purpose -- an annulled invoice keeps its number and its
+        place in the chronological order, which is what makes the register monotonic
+        rather than merely gap-free.
+        """
+        stmt = (
+            select(Invoice.data_emissione)
+            .where(Invoice.anno == anno, Invoice.numero.is_not(None))
+            .order_by(Invoice.numero.desc())
+            .limit(1)
+        )
+        return self.session.execute(stmt).scalars().first()
+```
+
+and extend that module's imports:
+
+```python
+from datetime import date
+
+from pigrocrm.core.invoices.models import (
+    PROFORMA_SEQUENCE_NAME,
+    Invoice,
+    InvoiceCounter,
+    InvoiceLine,
+)
+```
+
+- [ ] **Step 4: Implement `issue`**
+
+In `packages/core/src/pigrocrm/core/invoices/service.py`, add these imports:
+
+```python
+from datetime import timedelta
+
+from pigrocrm.core.emitter.service import EmitterProfileService
+from pigrocrm.core.invoices.fatturapa import check_party_exportable, check_recipient_routing
+from pigrocrm.core.invoices.schemas import (
+    SNAPSHOT_VERSIONE,
+    InvoiceIssue,
+    InvoiceSnapshot,
+    PartySnapshot,
+)
+```
+
+add to `__init__`:
+
+```python
+        self.emitter = EmitterProfileService(session)
+```
+
+and add the following methods **above** `get` (so `lines` and `list` keep their required positions):
+
+```python
+    def _party_from_customer(self, customer: Customer) -> PartySnapshot:
+        return PartySnapshot(
+            ragione_sociale=customer.ragione_sociale,
+            partita_iva=customer.partita_iva,
+            codice_fiscale=customer.codice_fiscale,
+            codice_sdi=customer.codice_sdi,
+            pec=customer.pec,
+            indirizzo=customer.indirizzo or "",
+            cap=customer.cap or "",
+            comune=customer.comune or "",
+            provincia=customer.provincia or "",
+            nazione=customer.nazione,
+            email=customer.email,
+            telefono=customer.telefono,
+            sito_web=customer.sito_web,
+        )
+
+    def _party_from_emitter(self, actor: Actor) -> PartySnapshot:
+        """The issuer's identity from `emitter_profile` (slice 2).
+
+        `emitter_profile.regime_fiscale` is deliberately not read here: it is a
+        human-readable caption for the PDF header, `String(200)` of free text, and the
+        machine value the SdI validates is `fiscal_profile.codice_regime`. Two columns,
+        two jobs; conflating them is how a caption ends up inside `RegimeFiscale`.
+        """
+        profile = self.emitter.get(actor)
+        return PartySnapshot(
+            ragione_sociale=profile.ragione_sociale,
+            partita_iva=profile.partita_iva,
+            codice_fiscale=profile.codice_fiscale,
+            codice_sdi=profile.codice_sdi,
+            pec=profile.pec,
+            indirizzo=profile.indirizzo or "",
+            cap=profile.cap or "",
+            comune=profile.comune or "",
+            provincia=profile.provincia or "",
+            nazione=profile.nazione,
+            email=profile.email,
+            telefono=profile.telefono,
+            sito_web=profile.sito_web,
+        )
+
+    def _build_snapshot(self, invoice: Invoice, profile: FiscalSnapshot, actor: Actor) -> InvoiceSnapshot:
+        customer = self.session.get(Customer, invoice.customer_id)
+        if customer is None:  # pragma: no cover - the FK makes this unreachable
+            raise NotFound("customer", invoice.customer_id)
+        return InvoiceSnapshot(
+            versione=SNAPSHOT_VERSIONE,
+            emittente=self._party_from_emitter(actor),
+            cliente=self._party_from_customer(customer),
+            fiscale=profile,
+        )
+
+    def _check_issue_date(self, data_emissione: date, anno_corrente: int) -> None:
+        """Two limits, both from spec 6.2.
+
+        `data_emissione` is a `date` in the issuer's own calendar, never the UTC
+        projection of an instant: `toISOString()` on 31 December at 23:30 CET yields
+        1 January, which puts an immutable document in the wrong fiscal year. That is
+        the defect this whole method exists around, and `date.today()` is the fix --
+        there is no instant here to mis-project.
+        """
+        if data_emissione > date.today():
+            raise ValidationFailed(
+                ENTITY,
+                "data_emissione",
+                "una fattura non si emette con data futura",
+                expected=f"una data non successiva a {date.today().isoformat()}",
+            )
+        if data_emissione < date(anno_corrente, 1, 1):
+            raise ValidationFailed(
+                ENTITY,
+                "data_emissione",
+                "un anno chiuso e' chiuso: non si inserisce nel registro di un anno "
+                "precedente dopo che ne e' iniziato uno nuovo",
+                expected=f"una data dal {anno_corrente}-01-01 in poi",
+            )
+
+    def issue(self, invoice_id: UUID, data: InvoiceIssue, actor: Actor) -> InvoiceRead:
+        """Consume a register number. **One transaction, in this exact order.**
+
+        `invoice_id` names either a `bozza` **fattura**, issued in place, or a
+        `confermata` **proforma**, in which case a *new* `emessa` row is created with
+        the proforma's lines copied and `origine_proforma_id` pointing back at it, and
+        the proforma is marked `consumata` (spec 5). One method, because emitting from
+        scratch and from a proforma share the lock, the validations, the freezing and
+        the numbering, and splitting them would mean two paths to keep aligned on
+        exactly the part that must not diverge.
+
+        Ordering, and why each step is where it is:
+
+        1. resolve the source row and the issue date, and check the date against
+           "not in the future, not before 1 January of the current year". No lock yet:
+           these are pure checks on the caller's own input;
+        2. `lock_counter(anno)` -- the **first** row lock this transaction takes;
+        3. every fiscal validation, the totals, and the chronological-monotonicity
+           check. All of it after the lock, so "the date of the previous number" is a
+           safe thing to read, and all of it *before* the counter is touched, so a
+           refusal never even reaches the increment;
+        4. increment the counter, write the row with `(anno, numero)`, write the
+           frozen `snapshot`, write the activity;
+        5. `COMMIT`.
+
+        **The number does not exist before the commit.** If any step fails, the
+        rollback returns `ultimo_numero` to its previous value and nothing was
+        consumed -- the property a `SEQUENCE` does not have.
+
+        The PDF and the XML are produced **after** this commit, in a second
+        transaction, from the snapshot. Holding a row lock for the duration of a Typst
+        subprocess would serialise every emission on PDF compile time, and an invoice
+        is a legal fact independent of its printout: if the render fails, the invoice
+        exists with its number and its artefacts regenerate deterministically. That is
+        the one documented exception to "one service method = one transaction", and
+        spec 3 mandates it.
+        """
+        actor.require_admin("issue_invoice")
+        source = self._require(invoice_id)
+        data_emissione = data.data_emissione or date.today()
+        anno = data_emissione.year
+        self._check_issue_date(data_emissione, date.today().year)
+
+        from_proforma = source.tipo == "proforma"
+        if from_proforma:
+            if source.stato != "confermata":
+                raise Conflict(
+                    ENTITY,
+                    "solo una proforma confermata si converte in fattura",
+                    stato_attuale=source.stato,
+                    stato_richiesto="confermata",
+                )
+        elif source.stato != "bozza":
+            raise Conflict(
+                ENTITY,
+                f"una fattura in stato '{source.stato}' e' gia' stata emessa: "
+                "una correzione e' un annullamento e una nuova fattura",
+                stato_attuale=source.stato,
+            )
+
+        # Step 2. From here on, every other emission for this year waits.
+        counter = self.repo.lock_counter(anno)
+
+        # Step 3. Validations and totals, after the lock and before the increment.
+        _, profile = self._regime()
+        snapshot = self._build_snapshot(source, profile, actor)
+        check_party_exportable(snapshot.emittente, "emitter_profile")
+        check_party_exportable(snapshot.cliente, "customer")
+        check_recipient_routing(snapshot.cliente)
+
+        righe = self.repo.lines(source.id)
+        if not righe:
+            raise ValidationFailed(
+                ENTITY, "righe", "una fattura senza righe non si emette",
+                expected="almeno una riga",
+            )
+        computed = tuple(
+            ComputedLine(
+                numero_linea=r.numero_linea,
+                descrizione=r.descrizione,
+                quantita=r.quantita,
+                unita_misura=r.unita_misura,
+                prezzo_unitario=r.prezzo_unitario,
+                sconto_percentuale=r.sconto_percentuale,
+                sconto_importo=r.sconto_importo,
+                prezzo_totale=r.prezzo_totale,
+                aliquota_iva=r.aliquota_iva,
+                natura=r.natura,
+                riferimento_normativo=r.riferimento_normativo,
+            )
+            for r in righe
+        )
+        riepilogo = build_riepilogo(computed)
+        imponibile, imposta, totale = sum_totals(riepilogo)
+        if totale <= ZERO:
+            raise ValidationFailed(
+                ENTITY,
+                "totale",
+                "una TD01 a zero o negativa non e' una fattura",
+                expected="un totale maggiore di zero",
+            )
+
+        previous = self.repo.last_issued_date(anno)
+        if previous is not None and data_emissione < previous:
+            raise ValidationFailed(
+                ENTITY,
+                "data_emissione",
+                "il registro deve restare cronologicamente monotono rispetto al numero: "
+                f"l'ultima fattura del {anno} porta la data {previous.isoformat()}",
+                expected=f"una data dal {previous.isoformat()} in poi",
+            )
+
+        # Step 4. Increment, write, freeze.
+        counter.ultimo_numero += 1
+        numero = counter.ultimo_numero
+
+        target = source
+        if from_proforma:
+            target = self.repo.add(
+                Invoice(
+                    customer_id=source.customer_id,
+                    deal_id=source.deal_id,
+                    tipo="fattura",
+                    stato="bozza",
+                    tipo_documento=TIPO_DOCUMENTO,
+                    divisa=DIVISA,
+                    causale=source.causale,
+                    note_interne=source.note_interne,
+                    imponibile=ZERO,
+                    imposta=ZERO,
+                    bollo=ZERO,
+                    totale=ZERO,
+                    stato_pagamento="da_incassare",
+                    origine_proforma_id=source.id,
+                    custom_fields=dict(source.custom_fields),
+                )
+            )
+            self._persist_lines(target, computed)
+            source.stato = "consumata"
+
+        strategy = resolve_regime(profile.codice_regime)
+        target.stato = "emessa"
+        target.anno = anno
+        target.numero = numero
+        target.data_emissione = data_emissione
+        target.data_scadenza = data_emissione + timedelta(days=profile.giorni_scadenza)
+        target.imponibile = imponibile
+        target.imposta = imposta
+        target.totale = totale
+        target.bollo = strategy.bollo(riepilogo, profile)
+        target.snapshot = snapshot.model_dump(mode="json")
+        target.snapshot_versione = SNAPSHOT_VERSIONE
+
+        self.activities.record(
+            ENTITY,
+            target.id,
+            "issued",
+            actor,
+            {
+                "anno": anno,
+                "numero": numero,
+                "totale": str(target.totale),
+                "origine_proforma_id": str(source.id) if from_proforma else None,
+            },
+        )
+        try:
+            self.session.commit()
+        except IntegrityError as exc:
+            # The partial unique index `uq_invoices_anno_numero` is the net under the
+            # row lock, not the mechanism (spec 3). Reaching it means something wrote
+            # a number without taking the lock -- an importer, a direct INSERT, a
+            # second service -- and this is what makes that failure observable instead
+            # of a silent duplicate. The rollback is mandatory or the caller's session
+            # is unusable on its next statement.
+            self.session.rollback()
+            raise Conflict(
+                ENTITY,
+                "un altro processo ha scritto lo stesso numero senza passare dal "
+                "contatore: riprova e verifica il registro",
+                anno=anno,
+                numero=numero,
+            ) from exc
+        return InvoiceRead.model_validate(target)
+```
+
+- [ ] **Step 5: Run the single-threaded tests to verify they pass**
+
+Run: `uv run pytest packages/core/tests/test_invoice_issue.py packages/core/tests/test_module_imports.py -v`
+Expected: PASS
+
+- [ ] **Step 6: Write the concurrency test**
+
+`packages/core/tests/test_invoice_numbering_concurrency.py`:
+
+```python
+"""Spec 14.3, run for real.
+
+The shared `db_session` fixture binds one connection and wraps every test in a
+savepoint that is rolled back, which is exactly right for the other suites and
+useless here: a single connection cannot contend with itself, so a "concurrency" test
+written on it would pass no matter what the code did. Every session below is opened
+from `db_engine` and commits for real, and the fixture cleans up after itself.
+"""
+
+import threading
+from datetime import date
+from decimal import Decimal
+from uuid import UUID
+
+import pytest
+from sqlalchemy import Engine, text
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.activities.service import ActivityService
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.db import session_factory
+from pigrocrm.core.emitter.schemas import EmitterProfileUpsert
+from pigrocrm.core.emitter.service import EmitterProfileService
+from pigrocrm.core.fiscal.schemas import FiscalProfileUpsert
+from pigrocrm.core.fiscal.service import FiscalProfileService
+from pigrocrm.core.invoices.schemas import InvoiceCreate, InvoiceIssue, InvoiceLineIn
+from pigrocrm.core.invoices.service import InvoiceService
+from pigrocrm.core.storage.local import LocalFileStorage
+
+ADMIN = Actor(id=None, type="system", role="admin")
+EMISSIONS = 20
+FAILURES = 10
+ANNO = date.today().year
+
+
+@pytest.fixture
+def world(db_engine: Engine, tmp_path):  # type: ignore[no-untyped-def]
+    """A committed customer, emitter profile and fiscal profile, plus a teardown that
+    physically removes everything this test wrote.
+
+    Physical `DELETE`s, not a soft delete: `ck_invoices_no_delete_once_consumed`
+    refuses `deleted_at` on a numbered row, which is the point of the constraint, and
+    a test must not be the reason it gets weakened.
+    """
+    factory = session_factory(db_engine)
+    with factory() as setup:
+        customer = Customer(
+            ragione_sociale="Acme S.r.l.",
+            partita_iva="12345678901",
+            codice_sdi="ABCDEFG",
+            indirizzo="Corso Italia 5",
+            cap="00100",
+            comune="Roma",
+            provincia="RM",
+            nazione="IT",
+        )
+        setup.add(customer)
+        setup.flush()
+        customer_id = customer.id
+        FiscalProfileService(setup).upsert(FiscalProfileUpsert(codice_regime="RF19"), ADMIN)
+        EmitterProfileService(setup).upsert(
+            EmitterProfileUpsert(
+                ragione_sociale="Humancraft di Ivan Sala",
+                partita_iva="14518240966",
+                codice_fiscale="HMCRFT00A01H501K",
+                indirizzo="Via Vittorio Veneto 12",
+                cap="20124",
+                comune="Milano",
+                provincia="MI",
+                nazione="IT",
+                email="someone@example.com",
+            ),
+            ADMIN,
+        )
+        setup.commit()
+    try:
+        yield factory, customer_id, tmp_path
+    finally:
+        with factory() as cleanup:
+            cleanup.execute(text("DELETE FROM invoice_lines"))
+            cleanup.execute(text("DELETE FROM activities WHERE entity_type = 'invoice'"))
+            cleanup.execute(text("UPDATE invoices SET origine_proforma_id = NULL"))
+            cleanup.execute(text("DELETE FROM invoices"))
+            cleanup.execute(text("DELETE FROM invoice_counters"))
+            cleanup.execute(text("DELETE FROM fiscal_profile"))
+            cleanup.execute(text("DELETE FROM emitter_profile"))
+            cleanup.execute(
+                text("DELETE FROM customers WHERE id = :id"), {"id": customer_id}
+            )
+            cleanup.commit()
+
+
+def _make_draft(factory, storage_root, customer_id: UUID) -> UUID:  # type: ignore[no-untyped-def]
+    with factory() as session:
+        return (
+            InvoiceService(session, LocalFileStorage(storage_root))
+            .create(
+                InvoiceCreate(
+                    customer_id=customer_id,
+                    righe=[
+                        InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("100.00"))
+                    ],
+                ),
+                ADMIN,
+            )
+            .id
+        )
+
+
+def test_twenty_concurrent_emissions_produce_one_to_twenty_with_no_gap(world) -> None:  # type: ignore[no-untyped-def]
+    """Spec 14.3, first half. Twenty threads, each on its own session and its own
+    transaction, all issuing at once: twenty invoices, numbers 1 to 20, no duplicate
+    and no gap, verified with a `SELECT` against the database rather than against what
+    the service returned."""
+    factory, customer_id, tmp_path = world
+    drafts = [_make_draft(factory, tmp_path / "documents", customer_id) for _ in range(EMISSIONS)]
+    start = threading.Barrier(EMISSIONS)
+    results: list[int] = []
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+
+    def emit(draft_id: UUID) -> None:
+        try:
+            start.wait(timeout=30)
+            with factory() as session:
+                issued = InvoiceService(session, LocalFileStorage(tmp_path / "documents")).issue(
+                    draft_id, InvoiceIssue(), ADMIN
+                )
+            with lock:
+                results.append(issued.numero or 0)
+        except BaseException as exc:  # noqa: BLE001 - reported, not swallowed
+            with lock:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=emit, args=(d,)) for d in drafts]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+
+    assert errors == [], f"emissioni fallite: {errors}"
+    assert sorted(results) == list(range(1, EMISSIONS + 1))
+
+    with factory() as check:
+        rows = check.execute(
+            text("SELECT numero FROM invoices WHERE anno = :anno ORDER BY numero"),
+            {"anno": ANNO},
+        ).scalars().all()
+        counter = check.execute(
+            text("SELECT ultimo_numero FROM invoice_counters WHERE anno = :anno"),
+            {"anno": ANNO},
+        ).scalar_one()
+    assert list(rows) == list(range(1, EMISSIONS + 1))
+    assert counter == EMISSIONS
+
+
+def test_a_failure_between_the_counter_update_and_the_commit_consumes_nothing(
+    world, monkeypatch: pytest.MonkeyPatch
+) -> None:  # type: ignore[no-untyped-def]
+    """Spec 14.3, second half -- the property a `SEQUENCE` cannot provide.
+
+    The error is injected **after** the counter has been incremented in the
+    transaction and **before** the commit, which is the only window where a
+    sequence-based design would already have burnt the number. `ActivityService.record`
+    is the last statement `issue` runs before committing, so patching it puts the
+    failure exactly there without inventing a seam in production code for a test to
+    pull.
+    """
+    factory, customer_id, tmp_path = world
+    storage_root = tmp_path / "documents"
+
+    # Phase 1: twenty successful emissions, so there is a real register to protect.
+    for _ in range(EMISSIONS):
+        with factory() as session:
+            InvoiceService(session, LocalFileStorage(storage_root)).issue(
+                _make_draft(factory, storage_root, customer_id), InvoiceIssue(), ADMIN
+            )
+
+    # Phase 2: ten emissions that die between the UPDATE and the COMMIT.
+    original = ActivityService.record
+
+    def explode(self, entity_type, entity_id, kind, actor, payload=None):  # type: ignore[no-untyped-def]
+        if kind == "issued":
+            raise RuntimeError("iniezione fra l'UPDATE del contatore e il COMMIT")
+        return original(self, entity_type, entity_id, kind, actor, payload)
+
+    monkeypatch.setattr(ActivityService, "record", explode)
+    for _ in range(FAILURES):
+        draft_id = _make_draft(factory, storage_root, customer_id)
+        with factory() as session:
+            with pytest.raises(RuntimeError):
+                InvoiceService(session, LocalFileStorage(storage_root)).issue(
+                    draft_id, InvoiceIssue(), ADMIN
+                )
+    monkeypatch.undo()
+
+    with factory() as check:
+        counter = check.execute(
+            text("SELECT ultimo_numero FROM invoice_counters WHERE anno = :anno"),
+            {"anno": ANNO},
+        ).scalar_one()
+        rows = check.execute(
+            text("SELECT numero FROM invoices WHERE anno = :anno ORDER BY numero"),
+            {"anno": ANNO},
+        ).scalars().all()
+    assert counter == EMISSIONS, "un'emissione fallita ha bruciato un numero"
+    assert list(rows) == list(range(1, EMISSIONS + 1))
+
+    # Phase 3: the next successful emission takes 21, not 31.
+    with factory() as session:
+        issued = InvoiceService(session, LocalFileStorage(storage_root)).issue(
+            _make_draft(factory, storage_root, customer_id), InvoiceIssue(), ADMIN
+        )
+    assert issued.numero == EMISSIONS + 1
+
+
+def test_two_first_invoices_of_a_year_do_not_collide_on_the_counter_insert(
+    world,
+) -> None:  # type: ignore[no-untyped-def]
+    """`INSERT ... ON CONFLICT (anno) DO NOTHING` before the `SELECT ... FOR UPDATE`:
+    two concurrent first-invoices-of-the-year both proceed, one having inserted the
+    row and the other having done nothing. Without `ON CONFLICT` the loser would take
+    a `UniqueViolation` the caller would have to retry."""
+    factory, customer_id, tmp_path = world
+    drafts = [_make_draft(factory, tmp_path / "documents", customer_id) for _ in range(2)]
+    start = threading.Barrier(2)
+    numbers: list[int] = []
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+
+    def emit(draft_id: UUID) -> None:
+        try:
+            start.wait(timeout=30)
+            with factory() as session:
+                issued = InvoiceService(session, LocalFileStorage(tmp_path / "documents")).issue(
+                    draft_id, InvoiceIssue(), ADMIN
+                )
+            with lock:
+                numbers.append(issued.numero or 0)
+        except BaseException as exc:  # noqa: BLE001
+            with lock:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=emit, args=(d,)) for d in drafts]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+
+    assert errors == []
+    assert sorted(numbers) == [1, 2]
+```
+
+- [ ] **Step 7: Run the concurrency test to verify it fails, then passes**
+
+Run: `uv run pytest packages/core/tests/test_invoice_numbering_concurrency.py -v`
+Expected: PASS once `lock_counter` is in place. To prove the test has teeth before trusting it, temporarily replace `lock_counter`'s body with a plain `SELECT` (no `.with_for_update()`), re-run, and watch `test_twenty_concurrent_emissions_produce_one_to_twenty_with_no_gap` fail with duplicate numbers or an `IntegrityError` on `uq_invoices_anno_numero`. Restore the `FOR UPDATE` before committing. A concurrency test that has never been seen to fail is a concurrency test nobody has verified.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/invoices/repository.py packages/core/src/pigrocrm/core/invoices/service.py packages/core/tests/test_invoice_issue.py packages/core/tests/test_invoice_numbering_concurrency.py
+git commit -m "feat(invoices): gap-free per-year numbering under a row lock"
+```
+
+---
+
+### Task 11: Immutability, annulment and external transmission
+
+**Files:**
+- Modify: `packages/core/src/pigrocrm/core/invoices/service.py` (add `annul` and `mark_transmitted_externally`)
+- Test: `packages/core/tests/test_invoice_immutability.py`
+
+**Interfaces:**
+- Consumes: Task 10's `issue`; `InvoiceAnnul`, `InvoiceTransmitted` (Task 4).
+- Produces:
+  - `InvoiceService.annul(self, invoice_id: UUID, data: InvoiceAnnul, actor: Actor) -> InvoiceRead`
+  - `InvoiceService.mark_transmitted_externally(self, invoice_id: UUID, data: InvoiceTransmitted, actor: Actor) -> InvoiceRead`
+
+- [ ] **Step 1: Write the failing test**
+
+`packages/core/tests/test_invoice_immutability.py`:
+
+```python
+"""Spec 4: an issued invoice is a fiscal document, not a CRM row with an extra state.
+
+A correction is a new document, and which route is available is not the user's choice
+-- it depends on a verifiable fact: whether the file has left for the intermediary.
+"""
+
+from datetime import date, timedelta
+from decimal import Decimal
+from uuid import UUID
+
+import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.activities.service import ActivityService
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.emitter.schemas import EmitterProfileUpsert
+from pigrocrm.core.emitter.service import EmitterProfileService
+from pigrocrm.core.errors import Conflict, ImmutableField, PermissionDenied, ValidationFailed
+from pigrocrm.core.fiscal.schemas import FiscalProfileUpsert
+from pigrocrm.core.fiscal.service import FiscalProfileService
+from pigrocrm.core.invoices.schemas import (
+    InvoiceAnnul,
+    InvoiceCreate,
+    InvoiceIssue,
+    InvoiceLineIn,
+    InvoiceTransmitted,
+    InvoiceUpdate,
+    PaymentState,
+)
+from pigrocrm.core.invoices.service import InvoiceService
+from pigrocrm.core.storage.local import LocalFileStorage
+
+ADMIN = Actor(id=None, type="system", role="admin")
+COLLABORATORE = Actor(id=None, type="user", role="collaboratore")
+TODAY = date.today()
+
+
+@pytest.fixture
+def service(db_session: Session, tmp_path) -> InvoiceService:  # type: ignore[no-untyped-def]
+    FiscalProfileService(db_session).upsert(FiscalProfileUpsert(codice_regime="RF19"), ADMIN)
+    EmitterProfileService(db_session).upsert(
+        EmitterProfileUpsert(
+            ragione_sociale="Humancraft di Ivan Sala",
+            partita_iva="14518240966",
+            codice_fiscale="HMCRFT00A01H501K",
+            indirizzo="Via Vittorio Veneto 12",
+            cap="20124",
+            comune="Milano",
+            provincia="MI",
+            nazione="IT",
+            email="someone@example.com",
+        ),
+        ADMIN,
+    )
+    return InvoiceService(db_session, LocalFileStorage(tmp_path / "documents"))
+
+
+@pytest.fixture
+def customer_id(db_session: Session) -> UUID:
+    customer = Customer(
+        ragione_sociale="Acme S.r.l.",
+        partita_iva="12345678901",
+        codice_sdi="ABCDEFG",
+        indirizzo="Corso Italia 5",
+        cap="00100",
+        comune="Roma",
+        provincia="RM",
+        nazione="IT",
+    )
+    db_session.add(customer)
+    db_session.flush()
+    return customer.id
+
+
+def _issue(service: InvoiceService, customer_id: UUID) -> UUID:
+    draft = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            causale="Consulenza",
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("1000.00"))],
+        ),
+        ADMIN,
+    )
+    return service.issue(draft.id, InvoiceIssue(), ADMIN).id
+
+
+# --- annulment: the correction route for an invoice that never left ------------------
+
+
+def test_annulling_keeps_the_number_and_the_row_readable(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    """The equivalent of a struck-through page in a paper register, and what preserves
+    the gap-free property of spec 3: without it, "no gaps" would be worth nothing."""
+    invoice_id = _issue(service, customer_id)
+    annulled = service.annul(invoice_id, InvoiceAnnul(motivo="importo errato"), ADMIN)
+    assert annulled.stato == "annullata"
+    assert annulled.numero == 1
+    assert annulled.annullata_il == TODAY
+    assert annulled.motivo_annullamento == "importo errato"
+    assert annulled.totale == Decimal("1000.00")
+    assert len(service.lines(invoice_id, ADMIN)) == 1
+
+
+def test_a_corrected_invoice_takes_the_next_number_not_the_annulled_one(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    first = _issue(service, customer_id)
+    service.annul(first, InvoiceAnnul(motivo="importo errato"), ADMIN)
+    assert service.get(_issue(service, customer_id), ADMIN).numero == 2
+
+
+def test_an_annulment_needs_a_reason(service: InvoiceService, customer_id: UUID) -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        InvoiceAnnul(motivo="")
+
+
+def test_a_draft_cannot_be_annulled(service: InvoiceService, customer_id: UUID) -> None:
+    """It has no number to preserve, so it is deleted, not struck through."""
+    draft = service.create(InvoiceCreate(customer_id=customer_id), ADMIN)
+    with pytest.raises(Conflict):
+        service.annul(draft.id, InvoiceAnnul(motivo="ripensamento"), ADMIN)
+
+
+def test_annulling_twice_is_refused(service: InvoiceService, customer_id: UUID) -> None:
+    invoice_id = _issue(service, customer_id)
+    service.annul(invoice_id, InvoiceAnnul(motivo="importo errato"), ADMIN)
+    with pytest.raises(Conflict):
+        service.annul(invoice_id, InvoiceAnnul(motivo="ancora"), ADMIN)
+
+
+def test_annulling_requires_admin(service: InvoiceService, customer_id: UUID) -> None:
+    invoice_id = _issue(service, customer_id)
+    with pytest.raises(PermissionDenied):
+        service.annul(invoice_id, InvoiceAnnul(motivo="importo errato"), COLLABORATORE)
+
+
+def test_annulling_records_an_activity_with_the_reason(
+    service: InvoiceService, db_session: Session, customer_id: UUID
+) -> None:
+    invoice_id = _issue(service, customer_id)
+    service.annul(invoice_id, InvoiceAnnul(motivo="importo errato"), ADMIN)
+    entries = ActivityService(db_session).timeline("invoice", invoice_id)
+    annulled = [entry for entry in entries if entry.kind == "annulled"]
+    assert annulled and annulled[0].payload["motivo"] == "importo errato"
+
+
+# --- transmission: the fact that decides which correction route exists --------------
+
+
+def test_marking_transmitted_is_a_one_way_door(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    """Spec 4: settable once, then frozen. This column is the reason annulment is safe
+    rather than optimistic -- without it the system could not tell an invoice that
+    never left from one already deposited with the Agenzia delle Entrate."""
+    invoice_id = _issue(service, customer_id)
+    marked = service.mark_transmitted_externally(
+        invoice_id, InvoiceTransmitted(data=TODAY), ADMIN
+    )
+    assert marked.trasmessa_esternamente_il == TODAY
+    with pytest.raises(ImmutableField) as caught:
+        service.mark_transmitted_externally(
+            invoice_id, InvoiceTransmitted(data=TODAY), ADMIN
+        )
+    assert caught.value.details["field"] == "trasmessa_esternamente_il"
+
+
+def test_a_transmitted_invoice_cannot_be_annulled(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    """From here the correction needs a credit note, which this slice does not produce
+    -- so it happens outside PigroCRM and the application says so, instead of offering
+    a button that pretends to solve it."""
+    invoice_id = _issue(service, customer_id)
+    service.mark_transmitted_externally(invoice_id, InvoiceTransmitted(data=TODAY), ADMIN)
+    with pytest.raises(Conflict) as caught:
+        service.annul(invoice_id, InvoiceAnnul(motivo="importo errato"), ADMIN)
+    assert "nota di credito" in caught.value.message
+
+
+def test_a_future_transmission_date_is_refused(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    invoice_id = _issue(service, customer_id)
+    with pytest.raises(ValidationFailed) as caught:
+        service.mark_transmitted_externally(
+            invoice_id, InvoiceTransmitted(data=TODAY + timedelta(days=1)), ADMIN
+        )
+    assert caught.value.details["field"] == "trasmessa_esternamente_il"
+
+
+def test_a_transmission_date_before_the_issue_date_is_refused(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    draft = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("100.00"))],
+        ),
+        ADMIN,
+    )
+    issued = service.issue(draft.id, InvoiceIssue(data_emissione=TODAY), ADMIN)
+    with pytest.raises(ValidationFailed):
+        service.mark_transmitted_externally(
+            issued.id, InvoiceTransmitted(data=TODAY - timedelta(days=1)), ADMIN
+        )
+
+
+def test_a_draft_cannot_be_marked_transmitted(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    draft = service.create(InvoiceCreate(customer_id=customer_id), ADMIN)
+    with pytest.raises(Conflict):
+        service.mark_transmitted_externally(draft.id, InvoiceTransmitted(data=TODAY), ADMIN)
+
+
+def test_marking_transmitted_requires_admin(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    invoice_id = _issue(service, customer_id)
+    with pytest.raises(PermissionDenied):
+        service.mark_transmitted_externally(
+            invoice_id, InvoiceTransmitted(data=TODAY), COLLABORATORE
+        )
+
+
+# --- what stays mutable, and what the database refuses ------------------------------
+
+
+def test_collection_stays_mutable_on_an_annulled_invoice_is_refused_but_on_an_issued_one_is_not(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    """Collection is a subsequent fact on a live invoice; on a struck-through one
+    there is nothing to collect."""
+    live = _issue(service, customer_id)
+    assert (
+        service.set_payment_state(
+            live, PaymentState(stato_pagamento="incassato", data_incasso=TODAY), ADMIN
+        ).stato_pagamento
+        == "incassato"
+    )
+    annulled = _issue(service, customer_id)
+    service.annul(annulled, InvoiceAnnul(motivo="importo errato"), ADMIN)
+    with pytest.raises(Conflict):
+        service.set_payment_state(
+            annulled, PaymentState(stato_pagamento="incassato", data_incasso=TODAY), ADMIN
+        )
+
+
+def test_the_internal_notes_and_custom_fields_stay_mutable_forever(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    """They appear on no artefact, so they are not part of the document."""
+    invoice_id = _issue(service, customer_id)
+    service.annul(invoice_id, InvoiceAnnul(motivo="importo errato"), ADMIN)
+    assert (
+        service.update(invoice_id, InvoiceUpdate(note_interne="sostituita da 2/2026"), ADMIN)
+        .note_interne
+        == "sostituita da 2/2026"
+    )
+
+
+def test_the_soft_delete_of_an_issued_invoice_fails_in_raw_sql_too(
+    service: InvoiceService, db_session: Session, customer_id: UUID
+) -> None:
+    """Spec 14.4 is explicit that the database must enforce this, not the service:
+    an invariant only the service defends is one a psql session walks past."""
+    invoice_id = _issue(service, customer_id)
+    with pytest.raises(IntegrityError):
+        db_session.execute(
+            text("UPDATE invoices SET deleted_at = now() WHERE id = :id"), {"id": invoice_id}
+        )
+    db_session.rollback()
+
+
+def test_an_annulled_invoice_still_cannot_be_soft_deleted(
+    service: InvoiceService, db_session: Session, customer_id: UUID
+) -> None:
+    invoice_id = _issue(service, customer_id)
+    service.annul(invoice_id, InvoiceAnnul(motivo="importo errato"), ADMIN)
+    with pytest.raises(IntegrityError):
+        db_session.execute(
+            text("UPDATE invoices SET deleted_at = now() WHERE id = :id"), {"id": invoice_id}
+        )
+    db_session.rollback()
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `uv run pytest packages/core/tests/test_invoice_immutability.py -v`
+Expected: FAIL with `AttributeError: 'InvoiceService' object has no attribute 'annul'`
+
+- [ ] **Step 3: Implement**
+
+In `packages/core/src/pigrocrm/core/invoices/service.py`, add these two methods immediately after `issue` (still above `get`):
+
+```python
+    def annul(self, invoice_id: UUID, data: InvoiceAnnul, actor: Actor) -> InvoiceRead:
+        """Strike the page through; keep the number.
+
+        The number **stays consumed** and the row stays readable: that is what
+        preserves the gap-free property of spec 3, which would otherwise be worth
+        nothing -- a number that can disappear is a gap with extra steps.
+
+        Refused once the file has been handed to the intermediary. From that point the
+        correction requires a credit note (`TD04`), which this slice does not produce
+        for a structural reason rather than as a deferral: a credit note corrects an
+        invoice **already accepted by the SdI**, and nothing here is transmitted. So
+        the application says where the correction has to happen, instead of offering a
+        button that pretends to solve it.
+        """
+        actor.require_admin("annul_invoice")
+        invoice = self._require(invoice_id)
+        if invoice.stato != "emessa":
+            raise Conflict(
+                ENTITY,
+                "si annulla solo una fattura emessa: una bozza si elimina, "
+                "una fattura gia' annullata non si annulla due volte",
+                stato_attuale=invoice.stato,
+            )
+        if invoice.trasmessa_esternamente_il is not None:
+            raise Conflict(
+                ENTITY,
+                "la fattura e' stata consegnata all'intermediario il "
+                f"{invoice.trasmessa_esternamente_il.isoformat()}: da questo punto la "
+                "correzione richiede una nota di credito, che PigroCRM non emette. "
+                "Va fatta dal tuo intermediario o dal portale dell'Agenzia delle Entrate.",
+                trasmessa_esternamente_il=invoice.trasmessa_esternamente_il.isoformat(),
+            )
+        invoice.stato = "annullata"
+        invoice.annullata_il = date.today()
+        invoice.motivo_annullamento = data.motivo
+        self.activities.record(
+            ENTITY,
+            invoice.id,
+            "annulled",
+            actor,
+            {"numero": invoice.numero, "anno": invoice.anno, "motivo": data.motivo},
+        )
+        self.session.commit()
+        return InvoiceRead.model_validate(invoice)
+
+    def mark_transmitted_externally(
+        self, invoice_id: UUID, data: InvoiceTransmitted, actor: Actor
+    ) -> InvoiceRead:
+        """Record that the XML has been handed to the intermediary. Settable **once**.
+
+        This is the column that makes annulment safe rather than optimistic: without
+        it the system could not distinguish an invoice that never left -- annullable --
+        from one already deposited with the Agenzia delle Entrate, and would treat the
+        two the same. Freezing it after the first write is what stops that distinction
+        from being editable away.
+        """
+        actor.require_admin("mark_transmitted_externally")
+        invoice = self._require(invoice_id)
+        if invoice.stato != "emessa":
+            raise Conflict(
+                ENTITY,
+                "solo una fattura emessa si consegna a un intermediario",
+                stato_attuale=invoice.stato,
+            )
+        if invoice.trasmessa_esternamente_il is not None:
+            raise ImmutableField(
+                ENTITY,
+                "trasmessa_esternamente_il",
+                "la consegna si registra una volta sola: e' il fatto su cui si decide "
+                "se un annullamento e' ancora possibile",
+            )
+        if data.data > date.today():
+            raise ValidationFailed(
+                ENTITY,
+                "trasmessa_esternamente_il",
+                "una consegna non si registra con data futura",
+                expected=f"una data non successiva a {date.today().isoformat()}",
+            )
+        if invoice.data_emissione is not None and data.data < invoice.data_emissione:
+            raise ValidationFailed(
+                ENTITY,
+                "trasmessa_esternamente_il",
+                "la consegna non puo' precedere l'emissione "
+                f"({invoice.data_emissione.isoformat()})",
+                expected=f"una data dal {invoice.data_emissione.isoformat()} in poi",
+            )
+        invoice.trasmessa_esternamente_il = data.data
+        self.activities.record(
+            ENTITY, invoice.id, "transmitted_externally", actor, {"data": data.data.isoformat()}
+        )
+        self.session.commit()
+        return InvoiceRead.model_validate(invoice)
+```
+
+and extend the schema import in that module:
+
+```python
+from pigrocrm.core.invoices.schemas import (
+    DIVISA,
+    SNAPSHOT_VERSIONE,
+    TIPO_DOCUMENTO,
+    InvoiceAnnul,
+    InvoiceCreate,
+    InvoiceIssue,
+    InvoiceLineIn,
+    InvoiceLineRead,
+    InvoiceListQuery,
+    InvoicePage,
+    InvoiceRead,
+    InvoiceSnapshot,
+    InvoiceTransmitted,
+    InvoiceUpdate,
+    PartySnapshot,
+    PaymentState,
+)
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `uv run pytest packages/core/tests/test_invoice_immutability.py packages/core/tests/test_invoice_issue.py -v`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/invoices/service.py packages/core/tests/test_invoice_immutability.py
+git commit -m "feat(invoices): annul-then-reissue, and transmission as a one-way door"
+```
+
+---
+### Task 12: The XML artefact — one document stream, one hash, byte-identical forever
+
+**Files:**
+- Modify: `packages/core/src/pigrocrm/core/documents/service.py` (`storage_key_for` and `add_version` take a prefix)
+- Modify: `packages/core/src/pigrocrm/core/invoices/service.py` (add the artefact methods)
+- Test: `packages/core/tests/test_invoice_artifacts_xml.py`
+- Test: `packages/core/tests/test_documents_service.py` (append two cases for the prefix)
+
+**Interfaces:**
+- Consumes: `DocumentService` (slice 2); `FatturaPAExporter`, `normalise_fiscal_id` (Task 6); `sdi_filename`, `invoice_storage_prefix`, `proforma_storage_prefix`, `numero_completo` (Task 5); `InvoiceForExport`, `InvoiceArtifact`, `ArtifactKind` (Task 4).
+- Produces:
+  - `DocumentService.storage_key_for(self, document: Document, numero: int, content_type: str, *, prefix: str | None = None) -> str`
+  - `DocumentService.add_version(..., storage_prefix: str | None = None) -> DocumentVersionRead` (new keyword-only parameter, appended; every existing call site keeps working)
+  - `InvoiceService.export_xml(self, invoice_id: UUID, actor: Actor) -> InvoiceArtifact`
+  - `InvoiceService.download(self, invoice_id: UUID, kind: ArtifactKind, actor: Actor) -> tuple[bytes, str, str]`
+  - `InvoiceService._for_export(self, invoice: Invoice) -> InvoiceForExport`
+  - `InvoiceService._artifact_document(self, invoice: Invoice, tipo: str, titolo: str, actor: Actor) -> Document`
+
+- [ ] **Step 1: Write the failing test for the storage prefix**
+
+Append to `packages/core/tests/test_documents_service.py`:
+
+```python
+def test_a_storage_prefix_overrides_the_customer_folder(
+    db_session: Session, tmp_path: Path
+) -> None:
+    """Slice 3 needs `fatture/{anno}/{numero}/v1.xml`, not the customer-slug folder:
+    a file pulled out of context has to stay identifiable as a fiscal artefact, which
+    is one of the four independent mechanisms keeping a proforma from being mistaken
+    for an invoice. The default path is untouched -- the parameter is keyword-only and
+    defaults to None, so every existing caller behaves exactly as before."""
+    service = _service(db_session, tmp_path)
+    customer = _customer(db_session)
+    document = service.create(
+        DocumentCreate(customer_id=customer.id, tipo="fattura", titolo="Fattura 2026/1"), ADMIN
+    )
+    version = service.add_version(
+        document.id,
+        b"<?xml version='1.0'?><a/>",
+        "application/xml",
+        ADMIN,
+        storage_prefix="fatture/2026/1",
+    )
+    assert version.storage_key == "fatture/2026/1/v1.xml"
+
+
+def test_without_a_prefix_the_customer_folder_is_still_used(
+    db_session: Session, tmp_path: Path
+) -> None:
+    service = _service(db_session, tmp_path)
+    customer = _customer(db_session)
+    document = service.create(
+        DocumentCreate(customer_id=customer.id, tipo="documento", titolo="Nota"), ADMIN
+    )
+    version = service.add_version(document.id, b"ciao", "text/plain", ADMIN)
+    assert version.storage_key.endswith(f"/{document.id}/v1.txt")
+```
+
+Reuse whatever `_service` / `_customer` / `ADMIN` helpers that file already defines; if their names differ, use the ones actually there rather than adding duplicates.
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `uv run pytest packages/core/tests/test_documents_service.py -k storage_prefix -v`
+Expected: FAIL with `TypeError: add_version() got an unexpected keyword argument 'storage_prefix'`
+
+- [ ] **Step 3: Add the prefix to `DocumentService`**
+
+In `packages/core/src/pigrocrm/core/documents/service.py`, replace `storage_key_for`'s signature and add the early return, keeping the existing docstring and appending the new paragraph:
+
+```python
+    def storage_key_for(
+        self, document: Document, numero: int, content_type: str, *, prefix: str | None = None
+    ) -> str:
+        """`{cliente-slug}-{id[:8]}/{document_id}/v{numero}{ext}`, or
+        `{prefix}/v{numero}{ext}` when a caller supplies its own prefix.
+
+        [existing docstring paragraphs unchanged]
+
+        The `prefix` override exists for the fiscal artefacts of slice 3, which need
+        `fatture/{anno}/{numero}/` and `proforma/{id}/` rather than a customer folder:
+        the bytes live under a prefix that keeps a file identifiable when it is pulled
+        out of its context, which is one of the four independent mechanisms that stop a
+        proforma from being read as an invoice. Keyword-only and defaulting to `None`,
+        so every existing caller is unaffected; the value still passes through
+        `storage.put`'s own `validate_storage_key` gate, which is what actually refuses
+        an unsafe key -- this method's job is to produce a sensible one.
+        """
+        if prefix is not None:
+            return f"{prefix}/v{numero}{ALLOWED_CONTENT_TYPES[content_type]}"
+        customer = self._customer_of(document)
+        folder = (
+            f"{slugify_folder(customer.ragione_sociale)}-{str(customer.id)[:_CUSTOMER_ID_FRAGMENT]}"
+            if customer
+            else "senza-cliente"
+        )
+        return f"{folder}/{document.id}/v{numero}{ALLOWED_CONTENT_TYPES[content_type]}"
+```
+
+In `add_version`, add the keyword-only parameter after `variabili`:
+
+```python
+        variabili: dict[str, Any] | None = None,
+        storage_prefix: str | None = None,
+```
+
+and change the `storage_key=` argument of the `DocumentVersion(...)` construction to:
+
+```python
+            storage_key=self.storage_key_for(document, numero, content_type, prefix=storage_prefix),
+```
+
+- [ ] **Step 4: Write the failing test for the XML artefact**
+
+`packages/core/tests/test_invoice_artifacts_xml.py`:
+
+```python
+"""The XML as a stored artefact: one `documents` row, one hash, byte-identical forever.
+
+Two `documents` rows per issued invoice, not one (spec 8.4): a `document_versions`
+chain is a linear history of one logical file with one `hash_sha256` used for
+deduplication and integrity, so putting the PDF and the XML in the same chain would
+make "version 3" ambiguous and the two hashes incomparable.
+"""
+
+import hashlib
+from datetime import date
+from decimal import Decimal
+from uuid import UUID
+
+import pytest
+from lxml import etree
+from fpr12 import assert_valid
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.documents.service import DocumentService
+from pigrocrm.core.emitter.schemas import EmitterProfileUpsert
+from pigrocrm.core.emitter.service import EmitterProfileService
+from pigrocrm.core.errors import Conflict, NotFound
+from pigrocrm.core.fiscal.schemas import FiscalProfileUpsert
+from pigrocrm.core.fiscal.service import FiscalProfileService
+from pigrocrm.core.invoices.schemas import InvoiceCreate, InvoiceIssue, InvoiceLineIn
+from pigrocrm.core.invoices.service import InvoiceService
+from pigrocrm.core.storage.local import LocalFileStorage
+
+ADMIN = Actor(id=None, type="system", role="admin")
+
+
+@pytest.fixture
+def storage(tmp_path) -> LocalFileStorage:  # type: ignore[no-untyped-def]
+    return LocalFileStorage(tmp_path / "documents")
+
+
+@pytest.fixture
+def service(db_session: Session, storage: LocalFileStorage) -> InvoiceService:
+    FiscalProfileService(db_session).upsert(FiscalProfileUpsert(codice_regime="RF19"), ADMIN)
+    EmitterProfileService(db_session).upsert(
+        EmitterProfileUpsert(
+            ragione_sociale="Humancraft di Ivan Sala",
+            partita_iva="14518240966",
+            codice_fiscale="HMCRFT00A01H501K",
+            indirizzo="Via Vittorio Veneto 12",
+            cap="20124",
+            comune="Milano",
+            provincia="MI",
+            nazione="IT",
+            email="someone@example.com",
+        ),
+        ADMIN,
+    )
+    return InvoiceService(db_session, storage)
+
+
+@pytest.fixture
+def customer_id(db_session: Session) -> UUID:
+    customer = Customer(
+        ragione_sociale="Acme S.r.l.",
+        partita_iva="12345678901",
+        codice_sdi="ABCDEFG",
+        indirizzo="Corso Italia 5",
+        cap="00100",
+        comune="Roma",
+        provincia="RM",
+        nazione="IT",
+    )
+    db_session.add(customer)
+    db_session.flush()
+    return customer.id
+
+
+def _issue(service: InvoiceService, customer_id: UUID) -> UUID:
+    draft = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            causale="Consulenza",
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("1000.00"))],
+        ),
+        ADMIN,
+    )
+    return service.issue(draft.id, InvoiceIssue(), ADMIN).id
+
+
+def test_the_first_export_writes_a_document_a_version_and_the_hash(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    invoice_id = _issue(service, customer_id)
+    artifact = service.export_xml(invoice_id, ADMIN)
+    invoice = service.get(invoice_id, ADMIN)
+
+    assert artifact.kind == "xml"
+    assert artifact.version_numero == 1
+    assert artifact.content_type == "application/xml"
+    assert invoice.xml_document_id == artifact.document_id
+    assert invoice.xml_hash_sha256 == artifact.hash_sha256
+
+
+def test_the_stored_bytes_validate_against_the_official_schema(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    invoice_id = _issue(service, customer_id)
+    service.export_xml(invoice_id, ADMIN)
+    data, content_type, filename = service.download(invoice_id, "xml", ADMIN)
+    assert_valid(data)
+    assert content_type == "application/xml"
+    assert filename.startswith("IT")
+    assert filename.endswith(".xml")
+
+
+def test_the_download_name_follows_the_sdi_convention_using_the_frozen_emitter_id(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    """The name comes from the snapshot, not from the live profile: the file goes to an
+    intermediary that often validates the name before the content, and it must not
+    change because the issuer edited their profile afterwards."""
+    invoice_id = _issue(service, customer_id)
+    service.export_xml(invoice_id, ADMIN)
+    _, _, before = service.download(invoice_id, "xml", ADMIN)
+    EmitterProfileService(service.session).upsert(
+        EmitterProfileUpsert(
+            ragione_sociale="Altro Nome",
+            partita_iva="14518240966",
+            codice_fiscale="RSSMRA80A01H501U",
+            indirizzo="Via Nuova 1",
+            cap="20125",
+            comune="Milano",
+            provincia="MI",
+            nazione="IT",
+        ),
+        ADMIN,
+    )
+    _, _, after = service.download(invoice_id, "xml", ADMIN)
+    assert before == after
+    assert before.startswith("ITHMCRFT00A01H501K_")
+
+
+def test_the_bytes_live_under_the_fiscal_prefix(
+    service: InvoiceService, db_session: Session, customer_id: UUID
+) -> None:
+    invoice_id = _issue(service, customer_id)
+    artifact = service.export_xml(invoice_id, ADMIN)
+    key = db_session.execute(
+        text(
+            "SELECT storage_key FROM document_versions "
+            "WHERE document_id = :id AND numero = :numero"
+        ),
+        {"id": artifact.document_id, "numero": artifact.version_numero},
+    ).scalar_one()
+    invoice = service.get(invoice_id, ADMIN)
+    assert key == f"fatture/{invoice.anno}/{invoice.numero}/v1.xml"
+
+
+def test_the_xml_gets_its_own_documents_row_typed_fattura_xml(
+    service: InvoiceService, db_session: Session, customer_id: UUID
+) -> None:
+    invoice_id = _issue(service, customer_id)
+    artifact = service.export_xml(invoice_id, ADMIN)
+    tipo, stato = db_session.execute(
+        text("SELECT tipo, stato FROM documents WHERE id = :id"), {"id": artifact.document_id}
+    ).one()
+    assert tipo == "fattura_xml"
+    # `documents.stato` stays NULL for all three invoice artefact types: the
+    # authoritative state is the invoice's. Duplicating a state machine in two tables
+    # produces two truths.
+    assert stato is None
+
+
+def test_re_exporting_returns_the_same_artifact_without_writing_a_second_version(
+    service: InvoiceService, db_session: Session, customer_id: UUID
+) -> None:
+    invoice_id = _issue(service, customer_id)
+    first = service.export_xml(invoice_id, ADMIN)
+    second = service.export_xml(invoice_id, ADMIN)
+    assert second == first
+    versions = db_session.execute(
+        text("SELECT count(*) FROM document_versions WHERE document_id = :id"),
+        {"id": first.document_id},
+    ).scalar_one()
+    assert versions == 1
+
+
+def test_a_regenerated_export_is_byte_identical_to_the_original(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    """Criterion 6 for the XML half: with the emitter and fiscal profiles changed in
+    the meantime, the bytes still match, because the exporter reads the snapshot and
+    nothing else."""
+    invoice_id = _issue(service, customer_id)
+    service.export_xml(invoice_id, ADMIN)
+    original, _, _ = service.download(invoice_id, "xml", ADMIN)
+
+    FiscalProfileService(service.session).upsert(
+        FiscalProfileUpsert(
+            codice_regime="RF01",
+            aliquota_iva_default=Decimal("22.00"),
+            natura_default=None,
+            riferimento_normativo=None,
+            giorni_scadenza=60,
+        ),
+        ADMIN,
+    )
+    EmitterProfileService(service.session).upsert(
+        EmitterProfileUpsert(
+            ragione_sociale="Altro Nome",
+            partita_iva="14518240966",
+            codice_fiscale="HMCRFT00A01H501K",
+            indirizzo="Via Nuova 1",
+            cap="20125",
+            comune="Torino",
+            provincia="TO",
+            nazione="IT",
+        ),
+        ADMIN,
+    )
+
+    service.export_xml(invoice_id, ADMIN)
+    again, _, _ = service.download(invoice_id, "xml", ADMIN)
+    assert again == original
+    assert hashlib.sha256(again).hexdigest() == service.get(invoice_id, ADMIN).xml_hash_sha256
+
+
+def test_a_lost_file_is_repaired_as_a_new_identical_version(
+    service: InvoiceService, storage: LocalFileStorage, db_session: Session, customer_id: UUID
+) -> None:
+    """Spec 4: a new version whose content is byte-for-byte the previous one is a
+    repair, not a modification. The stored bytes are deleted behind the service's back
+    and the export puts them back."""
+    invoice_id = _issue(service, customer_id)
+    artifact = service.export_xml(invoice_id, ADMIN)
+    key = db_session.execute(
+        text("SELECT storage_key FROM document_versions WHERE document_id = :id"),
+        {"id": artifact.document_id},
+    ).scalar_one()
+    storage.delete(key)
+
+    repaired = service.export_xml(invoice_id, ADMIN)
+    assert repaired.version_numero == 2
+    assert repaired.hash_sha256 == artifact.hash_sha256
+    data, _, _ = service.download(invoice_id, "xml", ADMIN)
+    assert hashlib.sha256(data).hexdigest() == artifact.hash_sha256
+
+
+def test_a_divergent_export_is_an_error_to_report_not_a_version_to_save(
+    service: InvoiceService, db_session: Session, customer_id: UUID
+) -> None:
+    """Spec 4, said exactly: "a divergence is an error to report, not a version to
+    save". The snapshot is tampered with directly, which is the only way to make the
+    generator produce different bytes for the same invoice -- and precisely the kind of
+    out-of-band edit this check exists to catch."""
+    invoice_id = _issue(service, customer_id)
+    service.export_xml(invoice_id, ADMIN)
+    db_session.execute(
+        text(
+            "UPDATE invoices SET snapshot = jsonb_set(snapshot, "
+            "'{cliente,ragione_sociale}', '\"Altro Cliente\"') WHERE id = :id"
+        ),
+        {"id": invoice_id},
+    )
+    db_session.expire_all()
+    with pytest.raises(Conflict) as caught:
+        service.export_xml(invoice_id, ADMIN)
+    assert "xml_hash_sha256" in str(caught.value.details)
+
+
+def test_a_proforma_produces_no_xml(service: InvoiceService, customer_id: UUID) -> None:
+    """Mechanism 2 of the four: the exporter refuses on the basis of the row's own
+    **state**, never on a flag passed by the caller."""
+    proforma = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            tipo="proforma",
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("100.00"))],
+        ),
+        ADMIN,
+    )
+    with pytest.raises(Conflict) as caught:
+        service.export_xml(proforma.id, ADMIN)
+    assert caught.value.details["entity"] == "invoice"
+
+
+def test_a_draft_produces_no_xml(service: InvoiceService, customer_id: UUID) -> None:
+    draft = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("100.00"))],
+        ),
+        ADMIN,
+    )
+    with pytest.raises(Conflict):
+        service.export_xml(draft.id, ADMIN)
+
+
+def test_an_annulled_invoice_still_exports_its_xml(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    """An annulled invoice consumed a number and remains a document of record; being
+    unable to produce its file would make the register unauditable."""
+    from pigrocrm.core.invoices.schemas import InvoiceAnnul
+
+    invoice_id = _issue(service, customer_id)
+    service.export_xml(invoice_id, ADMIN)
+    service.annul(invoice_id, InvoiceAnnul(motivo="importo errato"), ADMIN)
+    assert service.export_xml(invoice_id, ADMIN).kind == "xml"
+
+
+def test_downloading_an_xml_that_was_never_exported_is_not_found(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    invoice_id = _issue(service, customer_id)
+    with pytest.raises(NotFound):
+        service.download(invoice_id, "xml", ADMIN)
+
+
+def test_the_hostile_customer_name_survives_the_whole_round_trip(
+    service: InvoiceService, db_session: Session
+) -> None:
+    """Criterion 2, end to end through storage rather than in memory."""
+    hostile = 'Rossi & C. <IdCodice>999</IdCodice> "#$@\\ ]]>'
+    customer = Customer(
+        ragione_sociale=hostile,
+        partita_iva="12345678901",
+        codice_sdi="ABCDEFG",
+        indirizzo="Corso Italia 5",
+        cap="00100",
+        comune="Roma",
+        provincia="RM",
+        nazione="IT",
+    )
+    db_session.add(customer)
+    db_session.flush()
+    invoice_id = _issue(service, customer.id)
+    service.export_xml(invoice_id, ADMIN)
+    data, _, _ = service.download(invoice_id, "xml", ADMIN)
+    assert_valid(data)
+    root = etree.fromstring(data)
+    ns = "{http://ivaservizi.agenziaentrate.gov.it/docs/xsd/fatture/v1.2}"
+    assert hostile in [element.text for element in root.iter(f"{ns}Denominazione")]
+    assert len(list(root.iter(f"{ns}IdCodice"))) == 3
+```
+
+- [ ] **Step 5: Run it to verify it fails**
+
+Run: `uv run pytest packages/core/tests/test_invoice_artifacts_xml.py -v`
+Expected: FAIL with `AttributeError: 'InvoiceService' object has no attribute 'export_xml'`
+
+- [ ] **Step 6: Implement the artefact methods**
+
+In `packages/core/src/pigrocrm/core/invoices/service.py`, add these imports:
+
+```python
+import hashlib
+
+from pigrocrm.core.documents.models import Document
+from pigrocrm.core.documents.schemas import DocumentCreate
+from pigrocrm.core.documents.service import DocumentService
+from pigrocrm.core.invoices.fatturapa import (
+    FatturaPAExporter,
+    check_party_exportable,
+    check_recipient_routing,
+    normalise_fiscal_id,
+)
+from pigrocrm.core.invoices.naming import (
+    invoice_storage_prefix,
+    numero_completo,
+    proforma_riferimento,
+    proforma_storage_prefix,
+    sdi_filename,
+)
+from pigrocrm.core.invoices.schemas import ArtifactKind, InvoiceArtifact, InvoiceForExport
+```
+
+add to `__init__`:
+
+```python
+        self.documents = DocumentService(session, storage, self.settings)
+```
+
+and add these methods immediately after `mark_transmitted_externally` (still above `get`):
+
+```python
+    def _for_export(self, invoice: Invoice) -> InvoiceForExport:
+        """The frozen view the exporter and the PDF read. Never the live profiles.
+
+        `InvoiceSnapshot.model_validate` on the stored JSONB is deliberate: the model
+        is `extra="forbid"` and `versione` has no default, so a payload written by a
+        different version of this code is a loud failure rather than one silently read
+        with a field dropped. This is a fiscal document; guessing is the failure mode
+        the version column exists to prevent.
+        """
+        if invoice.snapshot is None or invoice.anno is None or invoice.numero is None:
+            raise Conflict(
+                ENTITY,
+                "un documento senza numero e senza congelamento non si esporta",
+                stato=invoice.stato,
+            )
+        if invoice.data_emissione is None:  # pragma: no cover - the CHECKs make this unreachable
+            raise Conflict(ENTITY, "manca la data di emissione", stato=invoice.stato)
+        return InvoiceForExport(
+            anno=invoice.anno,
+            numero=invoice.numero,
+            data_emissione=invoice.data_emissione,
+            data_scadenza=invoice.data_scadenza,
+            tipo_documento=invoice.tipo_documento,
+            divisa=invoice.divisa,
+            imponibile=invoice.imponibile,
+            imposta=invoice.imposta,
+            bollo=invoice.bollo,
+            totale=invoice.totale,
+            causale=invoice.causale,
+            snapshot=InvoiceSnapshot.model_validate(invoice.snapshot),
+            righe=tuple(
+                InvoiceLineRead.model_validate(r) for r in self.repo.lines(invoice.id)
+            ),
+        )
+
+    def _artifact_document(
+        self, invoice: Invoice, tipo: str, titolo: str, actor: Actor
+    ) -> Document:
+        """The `documents` row for one artefact stream, created on first use.
+
+        Two rows per issued invoice, not one (spec 8.4): a `document_versions` chain is
+        a linear history of *one* logical file with one `hash_sha256` used for
+        deduplication and integrity, so mixing the PDF and the XML would make
+        "version 3" ambiguous and the two hashes incomparable. Two streams, two hashes,
+        two integrity checks -- and re-rendering the PDF never touches the XML.
+
+        `documents.stato` is left `NULL` for all three invoice artefact types: the
+        authoritative state is `invoices.stato`, and duplicating a state machine across
+        two tables produces two truths.
+        """
+        existing_id = (
+            invoice.xml_document_id if tipo == "fattura_xml" else invoice.pdf_document_id
+        )
+        if existing_id is not None:
+            document = self.documents.repo.get(existing_id)
+            if document is not None:
+                return document
+        created = self.documents.create(
+            DocumentCreate(customer_id=invoice.customer_id, tipo=tipo, titolo=titolo),  # type: ignore[arg-type]
+            actor,
+        )
+        document = self.documents.repo.get(created.id)
+        if document is None:  # pragma: no cover - just created in this transaction
+            raise NotFound("document", created.id)
+        if tipo == "fattura_xml":
+            invoice.xml_document_id = document.id
+        else:
+            invoice.pdf_document_id = document.id
+        return document
+
+    def _artifact_prefix(self, invoice: Invoice) -> str:
+        if invoice.tipo == "proforma":
+            return proforma_storage_prefix(invoice.id)
+        if invoice.anno is None or invoice.numero is None:  # pragma: no cover
+            raise Conflict(ENTITY, "un documento senza numero non ha un prefisso fiscale")
+        return invoice_storage_prefix(invoice.anno, invoice.numero)
+
+    def _xml_filename(self, export: InvoiceForExport) -> str:
+        """`IT{cf_o_piva}_{progressivo}.xml`, from the **frozen** emitter identity.
+
+        Fiscal code first, then VAT number: the same order `IdTrasmittente` uses, and
+        for the same reason -- the SdI accepts either, and this is what the working
+        generator sent. Reading the snapshot rather than the live profile is what keeps
+        the name stable after the issuer edits their own data.
+        """
+        emittente = export.snapshot.emittente
+        id_fiscale = normalise_fiscal_id(emittente.codice_fiscale) or normalise_fiscal_id(
+            emittente.partita_iva
+        )
+        if id_fiscale is None:
+            raise ValidationFailed(
+                "emitter_profile",
+                "codice_fiscale",
+                "il nome del file XML richiede un codice fiscale o una partita IVA "
+                "validi dell'emittente",
+                expected="11 cifre oppure 16 caratteri",
+            )
+        return sdi_filename(id_fiscale, export.anno, export.numero)
+
+    def _store_artifact(
+        self,
+        invoice: Invoice,
+        *,
+        kind: ArtifactKind,
+        tipo: str,
+        titolo: str,
+        content_type: str,
+        filename: str,
+        data: bytes,
+        expected_hash: str | None,
+        actor: Actor,
+    ) -> InvoiceArtifact:
+        """Write the bytes, or prove the bytes already there are the same bytes.
+
+        Three outcomes, and they are spec 4's three:
+
+        * no previous hash -- the first successful production, the only moment with
+          nothing to compare against. Write version 1 and record the hash;
+        * the hash matches and the stored bytes still hash to it -- nothing to do.
+          Return the existing version rather than writing an identical one, so a
+          download does not grow the history;
+        * the hash matches but the bytes are gone or corrupt -- a **repair**: write a
+          new version with identical content. Spec 4 allows exactly this and calls it a
+          repair, not a modification;
+        * the hash differs -- an error to report, never a version to save.
+        """
+        digest = hashlib.sha256(data).hexdigest()
+        if expected_hash is not None and digest != expected_hash:
+            raise Conflict(
+                ENTITY,
+                f"il {kind} rigenerato non coincide con quello originale: e' una "
+                "divergenza da segnalare, non una nuova versione da salvare",
+                atteso=expected_hash,
+                ottenuto=digest,
+                campo="xml_hash_sha256" if kind == "xml" else "hash_sha256",
+            )
+
+        document = self._artifact_document(invoice, tipo, titolo, actor)
+        current = (
+            self.documents.repo.version(document.id, document.versione_corrente)
+            if document.versione_corrente
+            else None
+        )
+        if current is not None and current.hash_sha256 == digest:
+            try:
+                stored_ok = hashlib.sha256(self.storage.get(current.storage_key)).hexdigest() == digest
+            except Exception:
+                stored_ok = False
+            if stored_ok:
+                return InvoiceArtifact(
+                    kind=kind,
+                    document_id=document.id,
+                    version_numero=current.numero,
+                    filename=filename,
+                    content_type=content_type,
+                    hash_sha256=digest,
+                )
+
+        version = self.documents.add_version(
+            document.id,
+            data,
+            content_type,
+            actor,
+            storage_prefix=self._artifact_prefix(invoice),
+        )
+        return InvoiceArtifact(
+            kind=kind,
+            document_id=document.id,
+            version_numero=version.numero,
+            filename=filename,
+            content_type=content_type,
+            hash_sha256=digest,
+        )
+
+    def export_xml(self, invoice_id: UUID, actor: Actor) -> InvoiceArtifact:
+        """Produce -- or verify -- the FatturaPA file.
+
+        Refuses a proforma and a draft on the basis of the row's own **state**, never a
+        flag the caller passed: that is the second of the four independent mechanisms
+        that stop a proforma from being mistaken for an invoice, and the only one that
+        cannot be bypassed by a caller who believes otherwise.
+
+        `xml_hash_sha256` is written by the **first** successful export -- the one
+        moment with no previous value to compare against -- and from then on every
+        export compares and does not rewrite. Until then the column is `NULL` and the
+        export is freely repeatable, which is exactly what makes the out-of-transaction
+        render of spec 3 harmless.
+        """
+        actor.require_write("export_invoice_xml")
+        invoice = self._require(invoice_id)
+        if invoice.tipo != "fattura":
+            raise Conflict(
+                ENTITY,
+                "una proforma non produce un file FatturaPA: non e' un documento fiscale",
+                tipo=invoice.tipo,
+                stato=invoice.stato,
+            )
+        if invoice.stato == "bozza":
+            raise Conflict(
+                ENTITY,
+                "una bozza non ha ancora un numero e non produce un file FatturaPA",
+                stato=invoice.stato,
+            )
+
+        export = self._for_export(invoice)
+        # Re-checked here even though `issue` already checked: the snapshot could have
+        # been edited out of band, and the two callers of these functions are the whole
+        # reason they are module-level rather than methods.
+        check_party_exportable(export.snapshot.emittente, "emitter_profile")
+        check_party_exportable(export.snapshot.cliente, "customer")
+        check_recipient_routing(export.snapshot.cliente)
+
+        data = FatturaPAExporter().to_bytes(export)
+        artifact = self._store_artifact(
+            invoice,
+            kind="xml",
+            tipo="fattura_xml",
+            titolo=f"Fattura {numero_completo(export.anno, export.numero)} (XML)",
+            content_type="application/xml",
+            filename=self._xml_filename(export),
+            data=data,
+            expected_hash=invoice.xml_hash_sha256,
+            actor=actor,
+        )
+        if invoice.xml_hash_sha256 is None:
+            invoice.xml_hash_sha256 = artifact.hash_sha256
+        self.session.commit()
+        return artifact
+
+    def download(
+        self, invoice_id: UUID, kind: ArtifactKind, actor: Actor
+    ) -> tuple[bytes, str, str]:
+        """`(bytes, content_type, filename)`.
+
+        The download always goes through the API, which is the only place authorisation
+        exists on either storage backend (slice 2 §5). The XML's name is the SdI
+        convention; the PDF's is a plain, slug-safe name, because nothing downstream
+        validates it.
+        """
+        invoice = self._require(invoice_id)
+        document_id = invoice.xml_document_id if kind == "xml" else invoice.pdf_document_id
+        if document_id is None:
+            raise NotFound("invoice_artifact", f"{invoice_id}#{kind}")
+        document = self.documents.repo.get(document_id)
+        if document is None or not document.versione_corrente:
+            raise NotFound("invoice_artifact", f"{invoice_id}#{kind}")
+        version = self.documents.repo.version(document.id, document.versione_corrente)
+        if version is None:  # pragma: no cover - versione_corrente points at a real row
+            raise NotFound("invoice_artifact", f"{invoice_id}#{kind}")
+        if kind == "xml":
+            filename = self._xml_filename(self._for_export(invoice))
+        elif invoice.tipo == "proforma":
+            filename = f"proforma-{(invoice.riferimento or str(invoice.id)).lower()}.pdf"
+        else:
+            filename = f"fattura-{invoice.anno}-{invoice.numero}.pdf"
+        return self.storage.get(version.storage_key), version.content_type, filename
+```
+
+- [ ] **Step 7: Run the tests to verify they pass**
+
+Run: `uv run pytest packages/core/tests/test_invoice_artifacts_xml.py packages/core/tests/test_documents_service.py packages/core/tests/test_documents_from_template.py -v`
+Expected: PASS — the two `documents` tests are in the run because `storage_key_for` and `add_version` changed, and nothing about their existing behaviour may move.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/documents/service.py packages/core/src/pigrocrm/core/invoices/service.py packages/core/tests/test_invoice_artifacts_xml.py packages/core/tests/test_documents_service.py
+git commit -m "feat(invoices): the FatturaPA file as a versioned, hash-verified artefact"
+```
+
+---
+### Task 13: The PDF — two templates, and artefacts produced after the commit
+
+**Files:**
+- Create: `packages/core/src/pigrocrm/core/render/assets/template-invoice.md`
+- Create: `packages/core/src/pigrocrm/core/render/assets/template-proforma.md`
+- Create: `packages/core/src/pigrocrm/core/invoices/pdf.py`
+- Modify: `packages/core/src/pigrocrm/core/invoices/service.py` (add `render_pdf`, `produce_artifacts`, and the post-commit call in `issue`)
+- Test: `packages/core/tests/test_invoice_pdf.py`
+
+**Interfaces:**
+- Consumes: `render_pdf`, `build_header` from `pigrocrm.core.render.pdf` (slice 2); `render_template` from `pigrocrm.core.templates.renderer`; `InvoiceForExport`, `InvoiceArtifact` (Task 4); `build_riepilogo`, `format_amount_2`, `format_amount_8`, `format_rate` (Task 2); `numero_completo`, `proforma_riferimento` (Task 5).
+- Produces:
+  - `pigrocrm.core.invoices.pdf.INVOICE_TEMPLATE: Path`, `PROFORMA_TEMPLATE: Path`, `PROFORMA_DECLARATION: str`
+  - `pigrocrm.core.invoices.pdf.build_scope(export: InvoiceForExport, *, riferimento: str | None) -> dict[str, Any]`
+  - `pigrocrm.core.invoices.pdf.render_invoice_pdf(export: InvoiceForExport, *, riferimento: str | None, settings: Settings) -> tuple[str, bytes]`
+  - `InvoiceService.render_pdf(self, invoice_id: UUID, actor: Actor) -> InvoiceArtifact`
+  - `InvoiceService.produce_artifacts(self, invoice_id: UUID, actor: Actor) -> list[InvoiceArtifact]`
+
+- [ ] **Step 1: Write the two templates**
+
+`packages/core/src/pigrocrm/core/render/assets/template-invoice.md`:
+
+```markdown
+```{=typst}
+#let muted = rgb("#465362")
+#let divider = rgb("#E2E2E2")
+
+#text(size: 9pt, fill: muted)[{{fattura.etichetta}}] | #text(size: 9pt, fill: muted)[Numero: {{fattura.numero}}] | #text(size: 9pt, fill: muted)[Data: {{fattura.data}}]
+
+#v(10pt)
+
+#text(size: 9pt, weight: "bold", fill: muted)[Committente]
+#stack(
+  spacing: 2pt,
+  [#text(size: 9pt)[{{cliente.ragione_sociale}}]],
+  [#text(size: 9pt)[P.IVA: {{cliente.partita_iva}} | CF: {{cliente.codice_fiscale}}]],
+  [#text(size: 9pt)[{{cliente.indirizzo}}, {{cliente.cap}} {{cliente.comune}} ({{cliente.provincia}}) {{cliente.nazione}}]],
+  [#text(size: 9pt)[PEC: {{cliente.pec}} | Codice destinatario: {{cliente.codice_destinatario}}]],
+)
+
+#v(14pt)
+#text(size: 9pt, weight: "bold", fill: muted)[Dettaglio]
+#table(
+  columns: (0.46fr, 0.1fr, 0.14fr, 0.1fr, 0.2fr),
+  align: (left, right, right, center, right),
+  inset: (x: 4pt, y: 6pt),
+  stroke: none,
+  table.header(
+    [#text(size: 8pt, weight: "bold", fill: muted)[DESCRIZIONE]],
+    [#text(size: 8pt, weight: "bold", fill: muted)[QTA]],
+    [#text(size: 8pt, weight: "bold", fill: muted)[PREZZO]],
+    [#text(size: 8pt, weight: "bold", fill: muted)[%IVA]],
+    [#text(size: 8pt, weight: "bold", fill: muted)[TOTALE]],
+  ),
+  {{#each righe}}[#text(size: 9pt)[{{descrizione}}]], [#text(size: 9pt)[{{quantita}}]], [#text(size: 9pt)[{{prezzo_unitario}}]], [#text(size: 9pt)[{{aliquota_iva}}]], [#text(size: 9pt)[{{prezzo_totale}}]],{{/each}}
+)
+
+#v(10pt)
+#align(right)[
+  #table(
+    columns: (auto, auto),
+    align: (left, right),
+    inset: (x: 4pt, y: 4pt),
+    stroke: none,
+    [#text(size: 9pt, fill: muted)[Imponibile]], [#text(size: 9pt)[{{fattura.imponibile}}]],
+    [#text(size: 9pt, fill: muted)[Imposta]], [#text(size: 9pt)[{{fattura.imposta}}]],
+    [#text(size: 10pt, weight: "bold")[Totale documento]], [#text(size: 10pt, weight: "bold")[{{fattura.totale}}]],
+  )
+]
+
+#v(14pt)
+#text(size: 9pt, weight: "bold", fill: muted)[Modalita pagamento]
+#table(
+  columns: (0.2fr, 0.44fr, 0.16fr, 0.2fr),
+  align: (left, left, center, right),
+  inset: (x: 4pt, y: 6pt),
+  stroke: none,
+  table.header(
+    [#text(size: 8pt, weight: "bold", fill: muted)[MODALITA]],
+    [#text(size: 8pt, weight: "bold", fill: muted)[IBAN]],
+    [#text(size: 8pt, weight: "bold", fill: muted)[SCADENZA]],
+    [#text(size: 8pt, weight: "bold", fill: muted)[IMPORTO]],
+  ),
+  [#text(size: 9pt)[{{fiscale.modalita_pagamento}}]],
+  [#text(size: 9pt)[{{fiscale.iban}}]],
+  [#text(size: 9pt)[{{fattura.data_scadenza}}]],
+  [#text(size: 9pt)[{{fattura.totale}}]],
+)
+
+#v(14pt)
+#line(length: 100%, stroke: 0.6pt + divider)
+#v(10pt)
+
+#text(size: 8pt, fill: muted)[{{fiscale.riferimento_normativo}}]
+
+#text(size: 8pt, fill: muted)[{{fattura.dichiarazione_bollo}}]
+```
+```
+
+`packages/core/src/pigrocrm/core/render/assets/template-proforma.md`: identical to the file above, with one block inserted immediately after the `#let divider` line:
+
+```markdown
+#align(center)[
+  #block(
+    fill: rgb("#F9DC5C"),
+    inset: 8pt,
+    radius: 4pt,
+    width: 100%,
+  )[
+    #align(center)[#text(size: 11pt, weight: "bold")[FATTURA PROFORMA - NON COSTITUISCE FATTURA]]
+  ]
+]
+
+#v(12pt)
+```
+
+The declaration goes **in the body**, not as a watermark: a watermark is a thing a print can lose, and this is the third of the four independent mechanisms that stop a proforma from being paid as an invoice. Everything else in the proforma template is byte-identical to the invoice one, including `{{fattura.numero}}`, which for a proforma is filled with its `riferimento` (`PROV-2026-0007`) — a string no fiscal-number pattern accepts.
+
+- [ ] **Step 2: Write the failing test**
+
+`packages/core/tests/test_invoice_pdf.py`:
+
+```python
+"""The PDF, through the real Pandoc/Typst pipeline of slice 2.
+
+These are real compiles reading real bytes back, not string assertions: the escaping
+lesson of slice 2 was learned against the actual Typst compiler, and this slice has
+two compilers to satisfy rather than one.
+"""
+
+import subprocess
+from datetime import date
+from decimal import Decimal
+from pathlib import Path
+from uuid import UUID
+
+import pytest
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.config import get_settings
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.emitter.schemas import EmitterProfileUpsert
+from pigrocrm.core.emitter.service import EmitterProfileService
+from pigrocrm.core.errors import Conflict
+from pigrocrm.core.fiscal.schemas import FiscalProfileUpsert
+from pigrocrm.core.fiscal.service import FiscalProfileService
+from pigrocrm.core.invoices.pdf import PROFORMA_DECLARATION
+from pigrocrm.core.invoices.schemas import InvoiceCreate, InvoiceIssue, InvoiceLineIn
+from pigrocrm.core.invoices.service import InvoiceService
+from pigrocrm.core.storage.local import LocalFileStorage
+
+ADMIN = Actor(id=None, type="system", role="admin")
+HOSTILE = 'Rossi & C. <IdCodice>999</IdCodice> "#$@\\ ]]>'
+
+
+def _pdf_text(data: bytes, tmp_path: Path) -> str:
+    """The PDF's own extracted text, the way `test_render_pdf.py` already does it: an
+    assertion on a string this module produced would prove nothing about what a reader
+    sees."""
+    target = tmp_path / "out.pdf"
+    target.write_bytes(data)
+    result = subprocess.run(
+        ["pdftotext", "-layout", str(target), "-"],
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    return result.stdout.decode("utf-8", errors="replace")
+
+
+@pytest.fixture
+def storage(tmp_path) -> LocalFileStorage:  # type: ignore[no-untyped-def]
+    return LocalFileStorage(tmp_path / "documents")
+
+
+@pytest.fixture
+def service(db_session: Session, storage: LocalFileStorage) -> InvoiceService:
+    FiscalProfileService(db_session).upsert(
+        FiscalProfileUpsert(codice_regime="RF19", iban="IT60X0542811101000000123456"), ADMIN
+    )
+    EmitterProfileService(db_session).upsert(
+        EmitterProfileUpsert(
+            ragione_sociale="Humancraft di Ivan Sala",
+            partita_iva="14518240966",
+            codice_fiscale="HMCRFT00A01H501K",
+            indirizzo="Via Vittorio Veneto 12",
+            cap="20124",
+            comune="Milano",
+            provincia="MI",
+            nazione="IT",
+            email="someone@example.com",
+            regime_fiscale="Regime forfettario ex L. 190/2014",
+        ),
+        ADMIN,
+    )
+    return InvoiceService(db_session, storage, get_settings())
+
+
+def _customer(db_session: Session, **overrides: object) -> UUID:
+    payload: dict[str, object] = {
+        "ragione_sociale": "Acme S.r.l.",
+        "partita_iva": "12345678901",
+        "codice_sdi": "ABCDEFG",
+        "indirizzo": "Corso Italia 5",
+        "cap": "00100",
+        "comune": "Roma",
+        "provincia": "RM",
+        "nazione": "IT",
+    }
+    payload.update(overrides)
+    customer = Customer(**payload)  # type: ignore[arg-type]
+    db_session.add(customer)
+    db_session.flush()
+    return customer.id
+
+
+def _issue(service: InvoiceService, customer_id: UUID) -> UUID:
+    draft = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            causale="Consulenza",
+            righe=[
+                InvoiceLineIn(
+                    descrizione="Consulenza tecnica",
+                    quantita=Decimal("3.000000"),
+                    unita_misura="ore",
+                    prezzo_unitario=Decimal("500.000000"),
+                )
+            ],
+        ),
+        ADMIN,
+    )
+    return service.issue(draft.id, InvoiceIssue(), ADMIN).id
+
+
+def test_issuing_produces_both_artefacts(service: InvoiceService, db_session: Session) -> None:
+    """The render happens after the commit, in a second transaction, from the
+    snapshot -- but by the time the call returns, both artefacts exist."""
+    invoice_id = _issue(service, _customer(db_session))
+    invoice = service.get(invoice_id, ADMIN)
+    assert invoice.pdf_document_id is not None
+    assert invoice.xml_document_id is not None
+    assert invoice.xml_hash_sha256 is not None
+
+
+def test_the_pdf_shows_the_number_the_customer_and_the_lines(
+    service: InvoiceService, db_session: Session, tmp_path: Path
+) -> None:
+    invoice_id = _issue(service, _customer(db_session))
+    data, content_type, filename = service.download(invoice_id, "pdf", ADMIN)
+    assert content_type == "application/pdf"
+    assert filename.endswith(".pdf")
+    body = _pdf_text(data, tmp_path)
+    invoice = service.get(invoice_id, ADMIN)
+    assert f"{invoice.anno}/{invoice.numero}" in body
+    assert "Acme S.r.l." in body
+    assert "Consulenza tecnica" in body
+    assert "1.500,00" in body or "1500.00" in body
+
+
+def test_the_pdf_carries_the_regime_declaration_from_the_profile(
+    service: InvoiceService, db_session: Session, tmp_path: Path
+) -> None:
+    """In the previous system this was a fixed string in the source of a public repository."""
+    invoice_id = _issue(service, _customer(db_session))
+    data, _, _ = service.download(invoice_id, "pdf", ADMIN)
+    assert "forfettario" in _pdf_text(data, tmp_path)
+
+
+def test_a_hostile_customer_name_appears_in_the_pdf_as_text(
+    service: InvoiceService, db_session: Session, tmp_path: Path
+) -> None:
+    """Criterion 2's second half: the same hostile value that must not corrupt the XML
+    must also compile, and read back, as text. Two compilers, one assertion each."""
+    invoice_id = _issue(service, _customer(db_session, ragione_sociale=HOSTILE))
+    data, _, _ = service.download(invoice_id, "pdf", ADMIN)
+    body = _pdf_text(data, tmp_path)
+    assert "Rossi & C." in body
+    assert "IdCodice" in body
+
+
+def test_a_proforma_pdf_declares_itself_in_the_body(
+    service: InvoiceService, db_session: Session, tmp_path: Path
+) -> None:
+    """Mechanism 3 of the four: the declaration is in the document body, not a
+    watermark a print can lose."""
+    proforma = service.create(
+        InvoiceCreate(
+            customer_id=_customer(db_session),
+            tipo="proforma",
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("500.00"))],
+        ),
+        ADMIN,
+    )
+    service.render_pdf(proforma.id, ADMIN)
+    data, _, filename = service.download(proforma.id, "pdf", ADMIN)
+    assert PROFORMA_DECLARATION in _pdf_text(data, tmp_path)
+    assert filename.startswith("proforma-")
+
+
+def test_a_proforma_pdf_shows_its_reference_where_a_number_would_be(
+    service: InvoiceService, db_session: Session, tmp_path: Path
+) -> None:
+    proforma = service.create(
+        InvoiceCreate(
+            customer_id=_customer(db_session),
+            tipo="proforma",
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("500.00"))],
+        ),
+        ADMIN,
+    )
+    service.render_pdf(proforma.id, ADMIN)
+    data, _, _ = service.download(proforma.id, "pdf", ADMIN)
+    body = _pdf_text(data, tmp_path)
+    reference = service.get(proforma.id, ADMIN).riferimento or ""
+    assert reference in body
+
+
+def test_a_proforma_pdf_lives_under_its_own_storage_prefix(
+    service: InvoiceService, db_session: Session
+) -> None:
+    """Mechanism 4: the bytes live under a different prefix, so a file pulled out of
+    context stays identifiable."""
+    proforma = service.create(
+        InvoiceCreate(
+            customer_id=_customer(db_session),
+            tipo="proforma",
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("500.00"))],
+        ),
+        ADMIN,
+    )
+    artifact = service.render_pdf(proforma.id, ADMIN)
+    key = db_session.execute(
+        text("SELECT storage_key FROM document_versions WHERE document_id = :id"),
+        {"id": artifact.document_id},
+    ).scalar_one()
+    assert key == f"proforma/{proforma.id}/v1.pdf"
+
+
+def test_a_proforma_gets_a_proforma_typed_documents_row(
+    service: InvoiceService, db_session: Session
+) -> None:
+    proforma = service.create(
+        InvoiceCreate(
+            customer_id=_customer(db_session),
+            tipo="proforma",
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("500.00"))],
+        ),
+        ADMIN,
+    )
+    artifact = service.render_pdf(proforma.id, ADMIN)
+    tipo = db_session.execute(
+        text("SELECT tipo FROM documents WHERE id = :id"), {"id": artifact.document_id}
+    ).scalar_one()
+    assert tipo == "proforma"
+
+
+def test_re_rendering_is_byte_identical_and_writes_no_second_version(
+    service: InvoiceService, db_session: Session
+) -> None:
+    """Criterion 6 for the PDF half. `PDF_CREATION_TIMESTAMP` is already pinned in
+    `render/pdf.py`, which is what makes byte-for-byte reproduction possible at all --
+    Typst otherwise stamps the compile's wall-clock time into the container."""
+    invoice_id = _issue(service, _customer(db_session))
+    first = service.render_pdf(invoice_id, ADMIN)
+    original, _, _ = service.download(invoice_id, "pdf", ADMIN)
+
+    EmitterProfileService(db_session).upsert(
+        EmitterProfileUpsert(
+            ragione_sociale="Altro Nome",
+            partita_iva="14518240966",
+            codice_fiscale="HMCRFT00A01H501K",
+            indirizzo="Via Nuova 1",
+            cap="20125",
+            comune="Torino",
+            provincia="TO",
+            nazione="IT",
+        ),
+        ADMIN,
+    )
+    FiscalProfileService(db_session).upsert(
+        FiscalProfileUpsert(
+            codice_regime="RF01",
+            aliquota_iva_default=Decimal("22.00"),
+            natura_default=None,
+            riferimento_normativo=None,
+        ),
+        ADMIN,
+    )
+
+    second = service.render_pdf(invoice_id, ADMIN)
+    again, _, _ = service.download(invoice_id, "pdf", ADMIN)
+    assert again == original
+    assert second == first
+    versions = db_session.execute(
+        text("SELECT count(*) FROM document_versions WHERE document_id = :id"),
+        {"id": first.document_id},
+    ).scalar_one()
+    assert versions == 1
+
+
+def test_a_render_failure_leaves_the_invoice_with_its_number(
+    service: InvoiceService, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Spec 3: an invoice is a legal fact independent of its printout. If the render
+    fails, the invoice exists with its number and the artefacts regenerate later."""
+    import pigrocrm.core.invoices.pdf as invoice_pdf
+
+    monkeypatch.setattr(
+        invoice_pdf, "render_pdf", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("typst giu'"))
+    )
+    invoice_id = _issue(service, _customer(db_session))
+    invoice = service.get(invoice_id, ADMIN)
+    assert invoice.numero == 1
+    assert invoice.stato == "emessa"
+    assert invoice.pdf_document_id is None
+    entries = db_session.execute(
+        text("SELECT kind FROM activities WHERE entity_id = :id"), {"id": invoice_id}
+    ).scalars().all()
+    assert "artifacts_failed" in entries
+
+
+def test_the_artefacts_regenerate_after_a_failed_render(
+    service: InvoiceService, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pigrocrm.core.invoices.pdf as invoice_pdf
+
+    monkeypatch.setattr(
+        invoice_pdf, "render_pdf", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("typst giu'"))
+    )
+    invoice_id = _issue(service, _customer(db_session))
+    monkeypatch.undo()
+    artefacts = service.produce_artifacts(invoice_id, ADMIN)
+    assert {a.kind for a in artefacts} == {"pdf", "xml"}
+
+
+def test_a_draft_has_no_pdf(service: InvoiceService, db_session: Session) -> None:
+    draft = service.create(
+        InvoiceCreate(
+            customer_id=_customer(db_session),
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("100.00"))],
+        ),
+        ADMIN,
+    )
+    with pytest.raises(Conflict):
+        service.render_pdf(draft.id, ADMIN)
+```
+
+- [ ] **Step 3: Run it to verify it fails**
+
+Run: `uv run pytest packages/core/tests/test_invoice_pdf.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'pigrocrm.core.invoices.pdf'`
+
+- [ ] **Step 4: Implement the scope builder and the renderer**
+
+`packages/core/src/pigrocrm/core/invoices/pdf.py`:
+
+```python
+"""From a frozen `InvoiceForExport` to PDF bytes, through slice 2's pipeline unchanged.
+
+Separate from `render/pdf.py` on purpose: that module is the generic Pandoc/Typst
+runner and the only place in the codebase that spawns a process, and it must stay
+ignorant of invoices. This module knows about invoices and nothing about subprocesses.
+
+Every value in the scope is a **string already formatted for display**, produced by
+`totals.py`'s formatters. Amounts are never handed to the template as `Decimal` for the
+template to format, and never re-parsed from text: the previous system applied a percentage to a
+total it had read back out of a formatted string, and that is the class of defect this
+separation removes.
+"""
+
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+
+from pigrocrm.core.config import Settings
+from pigrocrm.core.invoices.naming import numero_completo
+from pigrocrm.core.invoices.schemas import InvoiceForExport
+from pigrocrm.core.invoices.totals import format_amount_2, format_amount_8, format_rate
+from pigrocrm.core.render.pdf import ASSETS_DIR, build_header, render_pdf
+from pigrocrm.core.templates.renderer import render_template
+
+INVOICE_TEMPLATE = ASSETS_DIR / "template-invoice.md"
+PROFORMA_TEMPLATE = ASSETS_DIR / "template-proforma.md"
+
+# In the body of the document, not a watermark: a watermark is a thing a print can
+# lose, and this is one of four independent mechanisms keeping a proforma from being
+# paid as an invoice. Asserted verbatim by the tests, so it is a constant rather than
+# a string typed twice.
+PROFORMA_DECLARATION = "FATTURA PROFORMA - NON COSTITUISCE FATTURA"
+
+CODICE_DESTINATARIO_FALLBACK = "0000000"
+_EMPTY = ""
+
+
+def build_scope(export: InvoiceForExport, *, riferimento: str | None) -> dict[str, Any]:
+    """What the template can read.
+
+    Built entirely from the snapshot and the stored totals. The live `emitter_profile`
+    and `fiscal_profile` are not consulted, which is what makes a re-render a year
+    later produce the same bytes (criterion 6) rather than a document that quietly
+    reflects whatever the configuration says today.
+    """
+    snapshot = export.snapshot
+    cliente = snapshot.cliente
+    fiscale = snapshot.fiscale
+    codice_destinatario = (cliente.codice_sdi or "").strip() or (
+        CODICE_DESTINATARIO_FALLBACK if (cliente.pec or "").strip() else _EMPTY
+    )
+    bollo = (
+        f"Imposta di bollo di {format_amount_2(export.bollo)} EUR assolta in modo "
+        "virtuale a carico dell'emittente."
+        if export.bollo > Decimal("0.00")
+        else _EMPTY
+    )
+    return {
+        "emittente": snapshot.emittente.model_dump(mode="json"),
+        "cliente": {
+            **cliente.model_dump(mode="json"),
+            "codice_destinatario": codice_destinatario,
+        },
+        "fiscale": fiscale.model_dump(mode="json"),
+        "fattura": {
+            "etichetta": "Fattura" if riferimento is None else "Fattura proforma",
+            "numero": riferimento
+            if riferimento is not None
+            else numero_completo(export.anno, export.numero),
+            "data": export.data_emissione.isoformat(),
+            "data_scadenza": (
+                export.data_scadenza.isoformat() if export.data_scadenza else _EMPTY
+            ),
+            "causale": export.causale or _EMPTY,
+            "imponibile": format_amount_2(export.imponibile),
+            "imposta": format_amount_2(export.imposta),
+            "bollo": format_amount_2(export.bollo),
+            "totale": format_amount_2(export.totale),
+            "dichiarazione_bollo": bollo,
+        },
+        "righe": [
+            {
+                "numero_linea": str(riga.numero_linea),
+                "descrizione": riga.descrizione,
+                "quantita": format_amount_8(riga.quantita),
+                "unita_misura": riga.unita_misura or _EMPTY,
+                "prezzo_unitario": format_amount_2(riga.prezzo_unitario),
+                "aliquota_iva": format_rate(riga.aliquota_iva),
+                "prezzo_totale": format_amount_2(riga.prezzo_totale),
+            }
+            for riga in export.righe
+        ],
+    }
+
+
+def render_invoice_pdf(
+    export: InvoiceForExport, *, riferimento: str | None, settings: Settings
+) -> tuple[str, bytes]:
+    """`(compiled_markdown, pdf_bytes)`.
+
+    `riferimento is None` picks the fiscal template; a reference string picks the
+    proforma one, which carries `PROFORMA_DECLARATION` in its body. The choice is made
+    from the row's own data, never from a caller's flag.
+
+    The page header and footer come from `build_header`, exactly as slice 2's offer
+    render does, so the issuer's identity, logo and contacts are laid out once and in
+    one place rather than repeated in every body template.
+    """
+    template = INVOICE_TEMPLATE if riferimento is None else PROFORMA_TEMPLATE
+    scope = build_scope(export, riferimento=riferimento)
+    markdown = render_template(template.read_text(encoding="utf-8"), scope)
+    header = build_header(scope["emittente"])
+    return markdown, render_pdf(markdown, header_typst=header, settings=settings)
+```
+
+- [ ] **Step 5: Add the service methods and hook them to `issue`**
+
+In `packages/core/src/pigrocrm/core/invoices/service.py`, add:
+
+```python
+from pigrocrm.core.invoices import pdf as invoice_pdf
+```
+
+then add these two methods immediately after `export_xml` (still above `get`):
+
+```python
+    def render_pdf(self, invoice_id: UUID, actor: Actor) -> InvoiceArtifact:
+        """Produce -- or verify -- the PDF.
+
+        The same three-way outcome as `export_xml`, compared against the previous
+        `document_versions.hash_sha256` of the PDF stream rather than against
+        `invoices.xml_hash_sha256`: two streams, two hashes, two independent integrity
+        checks, and re-rendering the PDF never touches the XML.
+        """
+        actor.require_write("render_invoice_pdf")
+        invoice = self._require(invoice_id)
+        if invoice.stato == "bozza":
+            raise Conflict(
+                ENTITY,
+                "una bozza non ha un PDF: confermala (proforma) o emettila (fattura)",
+                stato=invoice.stato,
+            )
+        if invoice.tipo == "proforma":
+            export = self._proforma_for_export(invoice)
+            riferimento = invoice.riferimento
+            titolo = f"Proforma {invoice.riferimento}"
+            tipo = "proforma"
+        else:
+            export = self._for_export(invoice)
+            riferimento = None
+            titolo = f"Fattura {numero_completo(export.anno, export.numero)}"
+            tipo = "fattura"
+
+        _, data = invoice_pdf.render_invoice_pdf(
+            export, riferimento=riferimento, settings=self.settings
+        )
+        document_id = invoice.pdf_document_id
+        previous = None
+        if document_id is not None:
+            document = self.documents.repo.get(document_id)
+            if document is not None and document.versione_corrente:
+                version = self.documents.repo.version(document.id, document.versione_corrente)
+                previous = version.hash_sha256 if version is not None else None
+
+        artifact = self._store_artifact(
+            invoice,
+            kind="pdf",
+            tipo=tipo,
+            titolo=titolo,
+            content_type="application/pdf",
+            filename=(
+                f"proforma-{(invoice.riferimento or str(invoice.id)).lower()}.pdf"
+                if invoice.tipo == "proforma"
+                else f"fattura-{invoice.anno}-{invoice.numero}.pdf"
+            ),
+            data=data,
+            expected_hash=previous,
+            actor=actor,
+        )
+        self.session.commit()
+        return artifact
+
+    def produce_artifacts(self, invoice_id: UUID, actor: Actor) -> list[InvoiceArtifact]:
+        """Both artefacts of an issued invoice, or just the PDF of a proforma.
+
+        Idempotent by construction: each producer either writes the first version,
+        returns the existing one when the bytes still match, repairs a lost file with
+        an identical version, or reports a divergence. Calling it again after a
+        successful run therefore changes nothing.
+        """
+        invoice = self._require(invoice_id)
+        artefacts = [self.render_pdf(invoice_id, actor)]
+        if invoice.tipo == "fattura" and invoice.stato != "bozza":
+            artefacts.append(self.export_xml(invoice_id, actor))
+        return artefacts
+
+    def _proforma_for_export(self, invoice: Invoice) -> InvoiceForExport:
+        """A proforma has no number, no issue date and no snapshot, so it cannot use
+        `_for_export`; it is rendered from the live rows instead.
+
+        That asymmetry is correct rather than convenient: a proforma is *meant* to be
+        re-rendered differently after an edit, because editing it is what it is for.
+        Byte-for-byte reproducibility is a promise about fiscal documents, and this is
+        deliberately not one -- which is also why the `anno`/`numero` pair here is a
+        placeholder the schema will accept (`InvoiceForExport` requires both): neither
+        value reaches the proforma template, whose number field is filled from
+        `riferimento`, and neither is ever written to a row.
+        """
+        _, profile = self._regime()
+        snapshot = self._build_snapshot(invoice, profile, Actor.system())
+        return InvoiceForExport(
+            anno=date.today().year,
+            numero=1,
+            data_emissione=date.today(),
+            data_scadenza=date.today() + timedelta(days=profile.giorni_scadenza),
+            tipo_documento=invoice.tipo_documento,
+            divisa=invoice.divisa,
+            imponibile=invoice.imponibile,
+            imposta=invoice.imposta,
+            bollo=invoice.bollo,
+            totale=invoice.totale,
+            causale=invoice.causale,
+            snapshot=snapshot,
+            righe=tuple(InvoiceLineRead.model_validate(r) for r in self.repo.lines(invoice.id)),
+        )
+```
+
+Finally, in `issue`, replace the closing `return InvoiceRead.model_validate(target)` with:
+
+```python
+        # Spec 3: the render happens **after** the commit, in a second transaction,
+        # reading the snapshot. Holding the counter's row lock for the duration of a
+        # Typst subprocess would serialise every emission on PDF compile time, and an
+        # invoice is a legal fact independent of its printout. This is the one
+        # documented exception to "one service method = one transaction".
+        #
+        # A failure here is recorded and swallowed rather than propagated: the invoice
+        # exists with its number, and `produce_artifacts` regenerates deterministically
+        # from the snapshot whenever it is called again. Re-raising would tell the
+        # caller the emission failed when it did not, which is the more dangerous lie.
+        try:
+            self.produce_artifacts(target.id, actor)
+        except Exception as exc:  # noqa: BLE001 - recorded, never hidden
+            self.session.rollback()
+            self.activities.record(
+                ENTITY,
+                target.id,
+                "artifacts_failed",
+                actor,
+                {"errore": type(exc).__name__, "messaggio": str(exc)[:200]},
+            )
+            self.session.commit()
+        return InvoiceRead.model_validate(self._require(target.id))
+```
+
+- [ ] **Step 6: Run the tests to verify they pass**
+
+Run: `uv run pytest packages/core/tests/test_invoice_pdf.py -v`
+Expected: PASS. These tests need Pandoc, Typst and `pdftotext` on the PATH — the same prerequisites `packages/core/tests/test_render_pdf.py` already has, so if that file passes locally these will too.
+
+Run: `uv run pytest packages/core/tests -v`
+Expected: PASS across the whole core suite.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/render/assets/template-invoice.md packages/core/src/pigrocrm/core/render/assets/template-proforma.md packages/core/src/pigrocrm/core/invoices/pdf.py packages/core/src/pigrocrm/core/invoices/service.py packages/core/tests/test_invoice_pdf.py
+git commit -m "feat(invoices): fiscal and proforma PDFs, rendered after the commit"
+```
+
+---
+
+# Phase 3 — The two adapters
+
+### Task 14: The REST surface
+
+**Files:**
+- Create: `apps/api/src/pigrocrm_api/routers/invoices.py`
+- Create: `apps/api/src/pigrocrm_api/routers/fiscal_profile.py`
+- Modify: `apps/api/src/pigrocrm_api/main.py`
+- Test: `apps/api/tests/test_invoices_api.py`
+
+**Interfaces:**
+- Consumes: `InvoiceService`, `FiscalProfileService`, every invoice schema; `ActorDep`, `SessionDep`, `SettingsDep`, `StorageDep`, `PROBLEM_RESPONSES`.
+- Produces these endpoints:
+  - `GET /api/invoices` → `InvoicePage`
+  - `POST /api/invoices` → `InvoiceRead`, 201
+  - `GET /api/invoices/{invoice_id}` → `InvoiceRead`
+  - `PATCH /api/invoices/{invoice_id}` → `InvoiceRead`
+  - `DELETE /api/invoices/{invoice_id}` → 204
+  - `GET /api/invoices/{invoice_id}/lines` → `list[InvoiceLineRead]`
+  - `PUT /api/invoices/{invoice_id}/lines` → `InvoiceRead`
+  - `POST /api/invoices/{invoice_id}/confirm` → `InvoiceRead`
+  - `POST /api/invoices/{invoice_id}/issue` → `InvoiceRead`
+  - `POST /api/invoices/{invoice_id}/annul` → `InvoiceRead`
+  - `POST /api/invoices/{invoice_id}/transmitted` → `InvoiceRead`
+  - `PATCH /api/invoices/{invoice_id}/payment` → `InvoiceRead`
+  - `POST /api/invoices/{invoice_id}/artifacts` → `list[InvoiceArtifact]`
+  - `GET /api/invoices/{invoice_id}/pdf` and `/xml` → `Response` (bytes)
+  - `GET /api/invoices/{invoice_id}/timeline` → `list[ActivityRead]`
+  - `GET /api/fiscal-profile` → `FiscalProfileRead`; `PUT /api/fiscal-profile` → `FiscalProfileRead`
+  - `class InvoiceLinesBody(BaseModel)` with `righe: list[InvoiceLineIn] = Field(default_factory=list, max_length=MAX_LINES)`
+
+- [ ] **Step 1: Write the failing test**
+
+`apps/api/tests/test_invoices_api.py`:
+
+```python
+"""The HTTP surface. Role enforcement lives in the services (`actor.require_admin`),
+so these tests assert the status codes and the problem documents that come out of it,
+not a router-level dependency that does not exist in this codebase.
+"""
+
+from datetime import date
+from decimal import Decimal
+from typing import Any
+
+import pytest
+from fastapi.testclient import TestClient
+
+TODAY = date.today().isoformat()
+
+
+@pytest.fixture
+def fiscal_profile(admin_client: TestClient) -> dict[str, Any]:
+    response = admin_client.put("/api/fiscal-profile", json={"codice_regime": "RF19"})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+@pytest.fixture
+def emitter(admin_client: TestClient) -> dict[str, Any]:
+    response = admin_client.put(
+        "/api/emitter",
+        json={
+            "ragione_sociale": "Humancraft di Ivan Sala",
+            "partita_iva": "14518240966",
+            "codice_fiscale": "HMCRFT00A01H501K",
+            "indirizzo": "Via Vittorio Veneto 12",
+            "cap": "20124",
+            "comune": "Milano",
+            "provincia": "MI",
+            "nazione": "IT",
+            "email": "someone@example.com",
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+@pytest.fixture
+def customer(admin_client: TestClient) -> dict[str, Any]:
+    response = admin_client.post(
+        "/api/customers",
+        json={
+            "ragione_sociale": "Acme S.r.l.",
+            "partita_iva": "12345678901",
+            "codice_sdi": "ABCDEFG",
+            "indirizzo": "Corso Italia 5",
+            "cap": "00100",
+            "comune": "Roma",
+            "provincia": "RM",
+            "nazione": "IT",
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def _draft(client: TestClient, customer_id: str, prezzo: str = "1000.00") -> dict[str, Any]:
+    response = client.post(
+        "/api/invoices",
+        json={
+            "customer_id": customer_id,
+            "causale": "Consulenza",
+            "righe": [{"descrizione": "Consulenza", "prezzo_unitario": prezzo}],
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_the_fiscal_profile_round_trips(
+    admin_client: TestClient, fiscal_profile: dict[str, Any]
+) -> None:
+    assert fiscal_profile["codice_regime"] == "RF19"
+    assert fiscal_profile["soglia_bollo"] == "77.47"
+    assert admin_client.get("/api/fiscal-profile").json()["codice_regime"] == "RF19"
+
+
+def test_reading_a_missing_fiscal_profile_is_a_problem_document(
+    admin_client: TestClient,
+) -> None:
+    response = admin_client.get("/api/fiscal-profile")
+    if response.status_code == 404:
+        assert response.headers["content-type"].startswith("application/problem+json")
+        assert response.json()["code"] == "not_found"
+
+
+def test_only_an_admin_may_write_the_fiscal_profile(collaboratore_client: TestClient) -> None:
+    response = collaboratore_client.put("/api/fiscal-profile", json={"codice_regime": "RF19"})
+    assert response.status_code == 403
+    assert response.json()["code"] == "permission_denied"
+
+
+def test_creating_a_draft_returns_201_with_no_number(
+    admin_client: TestClient, customer: dict[str, Any], fiscal_profile: dict[str, Any]
+) -> None:
+    draft = _draft(admin_client, customer["id"])
+    assert draft["stato"] == "bozza"
+    assert draft["numero"] is None
+    assert draft["totale"] == "1000.00"
+
+
+def test_replacing_the_lines_recomputes_the_total(
+    admin_client: TestClient, customer: dict[str, Any], fiscal_profile: dict[str, Any]
+) -> None:
+    draft = _draft(admin_client, customer["id"])
+    response = admin_client.put(
+        f"/api/invoices/{draft['id']}/lines",
+        json={"righe": [{"descrizione": "Altro", "prezzo_unitario": "250.00"}]},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["totale"] == "250.00"
+    lines = admin_client.get(f"/api/invoices/{draft['id']}/lines").json()
+    assert [line["numero_linea"] for line in lines] == [1]
+
+
+def test_issuing_assigns_a_number_and_produces_both_artefacts(
+    admin_client: TestClient,
+    customer: dict[str, Any],
+    fiscal_profile: dict[str, Any],
+    emitter: dict[str, Any],
+) -> None:
+    draft = _draft(admin_client, customer["id"])
+    response = admin_client.post(f"/api/invoices/{draft['id']}/issue", json={})
+    assert response.status_code == 200, response.text
+    issued = response.json()
+    assert issued["stato"] == "emessa"
+    assert issued["numero"] == 1
+    assert issued["anno"] == date.today().year
+
+    pdf = admin_client.get(f"/api/invoices/{issued['id']}/pdf")
+    assert pdf.status_code == 200
+    assert pdf.headers["content-type"] == "application/pdf"
+    assert "attachment; filename*=UTF-8''" in pdf.headers["content-disposition"]
+    assert pdf.headers["x-content-type-options"] == "nosniff"
+
+    xml = admin_client.get(f"/api/invoices/{issued['id']}/xml")
+    assert xml.status_code == 200
+    assert xml.headers["content-type"] == "application/xml"
+    assert b"FatturaElettronica" in xml.content
+    assert "IT" in xml.headers["content-disposition"]
+
+
+def test_a_collaboratore_cannot_issue(
+    collaboratore_client: TestClient,
+    admin_client: TestClient,
+    customer: dict[str, Any],
+    fiscal_profile: dict[str, Any],
+    emitter: dict[str, Any],
+) -> None:
+    draft = _draft(admin_client, customer["id"])
+    response = collaboratore_client.post(f"/api/invoices/{draft['id']}/issue", json={})
+    assert response.status_code == 403
+    assert response.json()["code"] == "permission_denied"
+
+
+def test_a_collaboratore_may_record_a_payment(
+    collaboratore_client: TestClient,
+    admin_client: TestClient,
+    customer: dict[str, Any],
+    fiscal_profile: dict[str, Any],
+    emitter: dict[str, Any],
+) -> None:
+    draft = _draft(admin_client, customer["id"])
+    issued = admin_client.post(f"/api/invoices/{draft['id']}/issue", json={}).json()
+    response = collaboratore_client.patch(
+        f"/api/invoices/{issued['id']}/payment",
+        json={"stato_pagamento": "incassato", "data_incasso": TODAY},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["stato_pagamento"] == "incassato"
+
+
+def test_deleting_an_issued_invoice_is_a_409(
+    admin_client: TestClient,
+    customer: dict[str, Any],
+    fiscal_profile: dict[str, Any],
+    emitter: dict[str, Any],
+) -> None:
+    """Criterion 4: `DELETE` is refused by the API."""
+    draft = _draft(admin_client, customer["id"])
+    issued = admin_client.post(f"/api/invoices/{draft['id']}/issue", json={}).json()
+    response = admin_client.delete(f"/api/invoices/{issued['id']}")
+    assert response.status_code == 409
+    assert response.json()["code"] == "conflict"
+
+
+def test_deleting_a_draft_is_204(
+    admin_client: TestClient, customer: dict[str, Any], fiscal_profile: dict[str, Any]
+) -> None:
+    draft = _draft(admin_client, customer["id"])
+    assert admin_client.delete(f"/api/invoices/{draft['id']}").status_code == 204
+
+
+def test_annul_then_reissue_is_the_correction_route(
+    admin_client: TestClient,
+    customer: dict[str, Any],
+    fiscal_profile: dict[str, Any],
+    emitter: dict[str, Any],
+) -> None:
+    first = admin_client.post(
+        f"/api/invoices/{_draft(admin_client, customer['id'])['id']}/issue", json={}
+    ).json()
+    annulled = admin_client.post(
+        f"/api/invoices/{first['id']}/annul", json={"motivo": "importo errato"}
+    )
+    assert annulled.status_code == 200, annulled.text
+    assert annulled.json()["stato"] == "annullata"
+    assert annulled.json()["numero"] == 1
+
+    second = admin_client.post(
+        f"/api/invoices/{_draft(admin_client, customer['id'])['id']}/issue", json={}
+    ).json()
+    assert second["numero"] == 2
+
+
+def test_a_transmitted_invoice_refuses_annulment_and_says_where_to_go(
+    admin_client: TestClient,
+    customer: dict[str, Any],
+    fiscal_profile: dict[str, Any],
+    emitter: dict[str, Any],
+) -> None:
+    issued = admin_client.post(
+        f"/api/invoices/{_draft(admin_client, customer['id'])['id']}/issue", json={}
+    ).json()
+    assert (
+        admin_client.post(
+            f"/api/invoices/{issued['id']}/transmitted", json={"data": TODAY}
+        ).status_code
+        == 200
+    )
+    response = admin_client.post(
+        f"/api/invoices/{issued['id']}/annul", json={"motivo": "importo errato"}
+    )
+    assert response.status_code == 409
+    assert "nota di credito" in response.json()["detail"]
+
+
+def test_a_proforma_refuses_to_produce_xml(
+    admin_client: TestClient, customer: dict[str, Any], fiscal_profile: dict[str, Any], emitter: dict[str, Any]
+) -> None:
+    proforma = admin_client.post(
+        "/api/invoices",
+        json={
+            "customer_id": customer["id"],
+            "tipo": "proforma",
+            "righe": [{"descrizione": "Consulenza", "prezzo_unitario": "500.00"}],
+        },
+    ).json()
+    admin_client.post(f"/api/invoices/{proforma['id']}/confirm", json={})
+    admin_client.post(f"/api/invoices/{proforma['id']}/artifacts", json={})
+    response = admin_client.get(f"/api/invoices/{proforma['id']}/xml")
+    assert response.status_code in (404, 409)
+    assert response.json()["code"] in ("not_found", "conflict")
+
+
+def test_converting_a_confirmed_proforma_creates_a_new_numbered_row(
+    admin_client: TestClient, customer: dict[str, Any], fiscal_profile: dict[str, Any], emitter: dict[str, Any]
+) -> None:
+    proforma = admin_client.post(
+        "/api/invoices",
+        json={
+            "customer_id": customer["id"],
+            "tipo": "proforma",
+            "righe": [{"descrizione": "Consulenza", "prezzo_unitario": "500.00"}],
+        },
+    ).json()
+    admin_client.post(f"/api/invoices/{proforma['id']}/confirm", json={})
+    issued = admin_client.post(f"/api/invoices/{proforma['id']}/issue", json={}).json()
+    assert issued["id"] != proforma["id"]
+    assert issued["origine_proforma_id"] == proforma["id"]
+    assert admin_client.get(f"/api/invoices/{proforma['id']}").json()["stato"] == "consumata"
+
+
+def test_a_refusal_names_the_field_in_the_problem_document(
+    admin_client: TestClient, fiscal_profile: dict[str, Any], emitter: dict[str, Any]
+) -> None:
+    """Criterion 9: an RFC 9457 problem document with `entity` and `field` populated,
+    which is what `fieldErrorFrom` in the web client reads."""
+    customer = admin_client.post(
+        "/api/customers",
+        json={"ragione_sociale": "Senza recapito", "nazione": "IT", "cap": "00100", "comune": "Roma", "provincia": "RM", "indirizzo": "Via Roma 1"},
+    ).json()
+    draft = _draft(admin_client, customer["id"])
+    response = admin_client.post(f"/api/invoices/{draft['id']}/issue", json={})
+    assert response.status_code == 422
+    body = response.json()
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert body["entity"] == "customer"
+    assert body["field"] == "codice_sdi"
+    assert body["expected"]
+
+
+def test_the_list_filters_and_paginates(
+    admin_client: TestClient, customer: dict[str, Any], fiscal_profile: dict[str, Any]
+) -> None:
+    for _ in range(3):
+        _draft(admin_client, customer["id"])
+    page = admin_client.get("/api/invoices", params={"limit": 2}).json()
+    assert len(page["items"]) == 2
+    assert page["next_cursor"]
+    filtered = admin_client.get("/api/invoices", params={"tipo": "proforma"}).json()
+    assert filtered["items"] == []
+
+
+def test_the_list_limit_is_bounded_at_the_http_layer(admin_client: TestClient) -> None:
+    assert admin_client.get("/api/invoices", params={"limit": 201}).status_code == 422
+
+
+def test_the_timeline_of_an_invoice_is_readable(
+    admin_client: TestClient, customer: dict[str, Any], fiscal_profile: dict[str, Any], emitter: dict[str, Any]
+) -> None:
+    issued = admin_client.post(
+        f"/api/invoices/{_draft(admin_client, customer['id'])['id']}/issue", json={}
+    ).json()
+    entries = admin_client.get(f"/api/invoices/{issued['id']}/timeline").json()
+    assert {entry["kind"] for entry in entries} >= {"created", "issued"}
+    assert {entry["actor_type"] for entry in entries} == {"user"}
+
+
+def test_the_openapi_document_declares_invoice_as_an_entity_type(
+    admin_client: TestClient,
+) -> None:
+    """The generated TypeScript client reads this; a contract change must break `tsc`."""
+    schema = admin_client.get("/openapi.json").json()
+    assert "/api/invoices" in schema["paths"]
+    assert "InvoiceRead" in schema["components"]["schemas"]
+    assert "FiscalProfileRead" in schema["components"]["schemas"]
+```
+
+Use whatever `admin_client` / `collaboratore_client` fixtures `apps/api/tests/conftest.py` already provides; if the collaborator fixture has a different name there, use the real one rather than adding a second.
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `uv run pytest apps/api/tests/test_invoices_api.py -v`
+Expected: FAIL — every request 404s, because neither router is registered yet.
+
+- [ ] **Step 3: Implement the fiscal-profile router**
+
+`apps/api/src/pigrocrm_api/routers/fiscal_profile.py`:
+
+```python
+from fastapi import APIRouter
+
+from pigrocrm.core.fiscal.schemas import FiscalProfileRead, FiscalProfileUpsert
+from pigrocrm.core.fiscal.service import FiscalProfileService
+from pigrocrm_api.deps import ActorDep, SessionDep
+from pigrocrm_api.errors import PROBLEM_RESPONSES
+
+router = APIRouter(prefix="/api/fiscal-profile", tags=["fiscal-profile"], responses=PROBLEM_RESPONSES)
+
+
+@router.get("", response_model=FiscalProfileRead)
+def get(session: SessionDep, actor: ActorDep) -> FiscalProfileRead:
+    return FiscalProfileService(session).get(actor)
+
+
+@router.put("", response_model=FiscalProfileRead)
+def upsert(
+    data: FiscalProfileUpsert, session: SessionDep, actor: ActorDep
+) -> FiscalProfileRead:
+    """Admin only, enforced by the service (`actor.require_admin`), not by a router
+    dependency: there is no role dependency in this codebase, and adding one here would
+    put the same rule in two places."""
+    return FiscalProfileService(session).upsert(data, actor)
+```
+
+- [ ] **Step 4: Implement the invoices router**
+
+`apps/api/src/pigrocrm_api/routers/invoices.py`:
+
+```python
+from typing import Annotated
+from urllib.parse import quote
+from uuid import UUID
+
+from fastapi import APIRouter, Query, status
+from fastapi.responses import Response
+from pydantic import BaseModel, Field
+
+from pigrocrm.core.activities.schemas import ActivityRead
+from pigrocrm.core.activities.service import ActivityService
+from pigrocrm.core.invoices.schemas import (
+    MAX_LINES,
+    ArtifactKind,
+    InvoiceAnnul,
+    InvoiceArtifact,
+    InvoiceCreate,
+    InvoiceIssue,
+    InvoiceLineIn,
+    InvoiceLineRead,
+    InvoiceListQuery,
+    InvoicePage,
+    InvoiceRead,
+    InvoiceStato,
+    InvoiceTipo,
+    InvoiceTransmitted,
+    InvoiceUpdate,
+    PaymentState,
+    StatoPagamento,
+)
+from pigrocrm.core.invoices.service import InvoiceService
+from pigrocrm_api.deps import ActorDep, SessionDep, SettingsDep, StorageDep
+from pigrocrm_api.errors import PROBLEM_RESPONSES
+
+router = APIRouter(prefix="/api/invoices", tags=["invoices"], responses=PROBLEM_RESPONSES)
+
+ANNO_MIN = 2000
+ANNO_MAX = 2999
+
+
+class InvoiceLinesBody(BaseModel):
+    """The whole list, never a partial patch.
+
+    A body object rather than a bare array so the endpoint can grow a sibling field
+    later without becoming a different shape, and so the `max_length` bound lives in
+    one place the OpenAPI document also shows.
+    """
+
+    righe: list[InvoiceLineIn] = Field(default_factory=list, max_length=MAX_LINES)
+
+
+def _service(session: SessionDep, storage: StorageDep, settings: SettingsDep) -> InvoiceService:
+    return InvoiceService(session, storage, settings)
+
+
+@router.get("", response_model=InvoicePage)
+def list_invoices(
+    session: SessionDep,
+    storage: StorageDep,
+    settings: SettingsDep,
+    actor: ActorDep,
+    customer_id: Annotated[UUID | None, Query()] = None,
+    deal_id: Annotated[UUID | None, Query()] = None,
+    tipo: Annotated[InvoiceTipo | None, Query()] = None,
+    stato: Annotated[InvoiceStato | None, Query()] = None,
+    anno: Annotated[int | None, Query(ge=ANNO_MIN, le=ANNO_MAX)] = None,
+    stato_pagamento: Annotated[StatoPagamento | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    cursor: Annotated[UUID | None, Query()] = None,
+) -> InvoicePage:
+    query = InvoiceListQuery(
+        customer_id=customer_id,
+        deal_id=deal_id,
+        tipo=tipo,
+        stato=stato,
+        anno=anno,
+        stato_pagamento=stato_pagamento,
+        limit=limit,
+        cursor=cursor,
+    )
+    return _service(session, storage, settings).list(query, actor)
+
+
+@router.post("", response_model=InvoiceRead, status_code=status.HTTP_201_CREATED)
+def create(
+    data: InvoiceCreate,
+    session: SessionDep,
+    storage: StorageDep,
+    settings: SettingsDep,
+    actor: ActorDep,
+) -> InvoiceRead:
+    return _service(session, storage, settings).create(data, actor)
+
+
+@router.get("/{invoice_id}", response_model=InvoiceRead)
+def get(
+    invoice_id: UUID,
+    session: SessionDep,
+    storage: StorageDep,
+    settings: SettingsDep,
+    actor: ActorDep,
+) -> InvoiceRead:
+    return _service(session, storage, settings).get(invoice_id, actor)
+
+
+@router.patch("/{invoice_id}", response_model=InvoiceRead)
+def update(
+    invoice_id: UUID,
+    data: InvoiceUpdate,
+    session: SessionDep,
+    storage: StorageDep,
+    settings: SettingsDep,
+    actor: ActorDep,
+) -> InvoiceRead:
+    return _service(session, storage, settings).update(invoice_id, data, actor)
+
+
+@router.delete("/{invoice_id}", status_code=status.HTTP_204_NO_CONTENT)
+def soft_delete(
+    invoice_id: UUID,
+    session: SessionDep,
+    storage: StorageDep,
+    settings: SettingsDep,
+    actor: ActorDep,
+) -> None:
+    """Refused with 409 once a number has been consumed. There is no physical delete
+    anywhere, and the `CHECK` on the table refuses the soft one for a numbered row even
+    in raw SQL."""
+    _service(session, storage, settings).soft_delete(invoice_id, actor)
+
+
+@router.get("/{invoice_id}/lines", response_model=list[InvoiceLineRead])
+def lines(
+    invoice_id: UUID,
+    session: SessionDep,
+    storage: StorageDep,
+    settings: SettingsDep,
+    actor: ActorDep,
+) -> list[InvoiceLineRead]:
+    return _service(session, storage, settings).lines(invoice_id, actor)
+
+
+@router.put("/{invoice_id}/lines", response_model=InvoiceRead)
+def replace_lines(
+    invoice_id: UUID,
+    body: InvoiceLinesBody,
+    session: SessionDep,
+    storage: StorageDep,
+    settings: SettingsDep,
+    actor: ActorDep,
+) -> InvoiceRead:
+    """`PUT`, not `PATCH`: the whole list is replaced. It is the natural shape of a line
+    editor, and it is what makes clearing an optional numeric column possible at all
+    (A14)."""
+    return _service(session, storage, settings).replace_lines(invoice_id, body.righe, actor)
+
+
+@router.post("/{invoice_id}/confirm", response_model=InvoiceRead)
+def confirm(
+    invoice_id: UUID,
+    session: SessionDep,
+    storage: StorageDep,
+    settings: SettingsDep,
+    actor: ActorDep,
+) -> InvoiceRead:
+    return _service(session, storage, settings).confirm_proforma(invoice_id, actor)
+
+
+@router.post("/{invoice_id}/issue", response_model=InvoiceRead)
+def issue(
+    invoice_id: UUID,
+    data: InvoiceIssue,
+    session: SessionDep,
+    storage: StorageDep,
+    settings: SettingsDep,
+    actor: ActorDep,
+) -> InvoiceRead:
+    """Admin only, enforced by the service. `{invoice_id}` is the *source* row: a
+    `bozza` fattura is issued in place, and a `confermata` proforma produces a new
+    numbered row linked back to it."""
+    return _service(session, storage, settings).issue(invoice_id, data, actor)
+
+
+@router.post("/{invoice_id}/annul", response_model=InvoiceRead)
+def annul(
+    invoice_id: UUID,
+    data: InvoiceAnnul,
+    session: SessionDep,
+    storage: StorageDep,
+    settings: SettingsDep,
+    actor: ActorDep,
+) -> InvoiceRead:
+    return _service(session, storage, settings).annul(invoice_id, data, actor)
+
+
+@router.post("/{invoice_id}/transmitted", response_model=InvoiceRead)
+def transmitted(
+    invoice_id: UUID,
+    data: InvoiceTransmitted,
+    session: SessionDep,
+    storage: StorageDep,
+    settings: SettingsDep,
+    actor: ActorDep,
+) -> InvoiceRead:
+    return _service(session, storage, settings).mark_transmitted_externally(
+        invoice_id, data, actor
+    )
+
+
+@router.patch("/{invoice_id}/payment", response_model=InvoiceRead)
+def payment(
+    invoice_id: UUID,
+    data: PaymentState,
+    session: SessionDep,
+    storage: StorageDep,
+    settings: SettingsDep,
+    actor: ActorDep,
+) -> InvoiceRead:
+    return _service(session, storage, settings).set_payment_state(invoice_id, data, actor)
+
+
+@router.post("/{invoice_id}/artifacts", response_model=list[InvoiceArtifact])
+def artifacts(
+    invoice_id: UUID,
+    session: SessionDep,
+    storage: StorageDep,
+    settings: SettingsDep,
+    actor: ActorDep,
+) -> list[InvoiceArtifact]:
+    """Regenerate -- or verify -- the PDF and the XML. Idempotent: an unchanged
+    artefact is returned rather than rewritten, a lost file is repaired with an
+    identical version, and a divergence is a 409."""
+    return _service(session, storage, settings).produce_artifacts(invoice_id, actor)
+
+
+def _download(
+    service: InvoiceService, invoice_id: UUID, kind: ArtifactKind, actor: ActorDep
+) -> Response:
+    data, content_type, filename = service.download(invoice_id, kind, actor)
+    return Response(
+        content=data,
+        media_type=content_type,
+        headers={
+            # RFC 5987, percent-encoded rather than interpolated: the XML name is built
+            # from a fiscal identifier and the PDF name from integers, so nothing
+            # dangerous should reach here -- encoding it anyway means a future change
+            # cannot turn a name into a response header.
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename, safe='')}",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.get("/{invoice_id}/pdf")
+def download_pdf(
+    invoice_id: UUID,
+    session: SessionDep,
+    storage: StorageDep,
+    settings: SettingsDep,
+    actor: ActorDep,
+) -> Response:
+    return _download(_service(session, storage, settings), invoice_id, "pdf", actor)
+
+
+@router.get("/{invoice_id}/xml")
+def download_xml(
+    invoice_id: UUID,
+    session: SessionDep,
+    storage: StorageDep,
+    settings: SettingsDep,
+    actor: ActorDep,
+) -> Response:
+    """The download always goes through the API: it is the only place authorisation
+    exists, on both storage backends."""
+    return _download(_service(session, storage, settings), invoice_id, "xml", actor)
+
+
+@router.get("/{invoice_id}/timeline", response_model=list[ActivityRead])
+def timeline(
+    invoice_id: UUID,
+    session: SessionDep,
+    actor: ActorDep,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> list[ActivityRead]:
+    return ActivityService(session).timeline("invoice", invoice_id, limit)
+```
+
+- [ ] **Step 5: Register both routers**
+
+In `apps/api/src/pigrocrm_api/main.py`, add the two imports alongside the existing router imports and append them to the same registration loop the other routers already go through — the loop is what attaches `PROBLEM_RESPONSES` and the exception handler, so a router registered outside it would document its errors wrongly:
+
+```python
+from pigrocrm_api.routers import (
+    auth,
+    customers,
+    deals,
+    documents,
+    emitter,
+    fields,
+    fiscal_profile,
+    invoices,
+    people,
+    pipeline,
+    schema,
+    templates,
+    tokens,
+    users,
+)
+```
+
+and add `invoices.router` and `fiscal_profile.router` to the sequence that file iterates over.
+
+- [ ] **Step 6: Run the tests to verify they pass**
+
+Run: `uv run pytest apps/api/tests -v`
+Expected: PASS, including `test_input_bounds_sweep.py` — it walks every route in the OpenAPI document, so two new routers put every new bound under it automatically.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add apps/api/src/pigrocrm_api/routers/invoices.py apps/api/src/pigrocrm_api/routers/fiscal_profile.py apps/api/src/pigrocrm_api/main.py apps/api/tests/test_invoices_api.py
+git commit -m "feat(api): invoice and fiscal-profile endpoints"
+```
+
+---
+### Task 15: The MCP surface — an agent may prepare, never emit
+
+**Files:**
+- Create: `apps/mcp/src/pigrocrm_mcp/tools/invoices.py`
+- Modify: `apps/mcp/src/pigrocrm_mcp/tools/__init__.py`
+- Test: `apps/mcp/tests/test_mcp_invoices.py`
+- Test: `apps/mcp/tests/test_mcp_invoice_ban.py`
+
+**Interfaces:**
+- Consumes: `InvoiceService`, `FiscalProfileService`, `InvoiceCreate`, `InvoiceLineIn`, `InvoiceListQuery`, `PaymentState`; `McpContext`; `BoundedLimit` from `tools/__init__.py`.
+- Produces, from `tools/invoices.py`:
+  - `MCP_FORBIDDEN_OPERATIONS: frozenset[str]` — exactly `{"issue_invoice", "annul_invoice", "mark_transmitted_externally", "update_fiscal_profile"}`
+  - `MCP_UNEXPOSED_OPERATIONS: dict[str, str]` — method name to the reason it has no tool
+  - `SERVICE_METHOD_TO_OPERATION: dict[str, str]`
+  - `search(context, query) -> dict[str, Any]`, `get(context, invoice_id) -> dict[str, Any]`, `create_proforma(context, data) -> dict[str, Any]`, `replace_proforma_lines(context, invoice_id, righe) -> dict[str, Any]`, `render_proforma_pdf(context, invoice_id) -> dict[str, Any]`, `xml_url(context, invoice_id) -> dict[str, Any]`, `set_payment_state(context, invoice_id, stato_pagamento, data_incasso) -> dict[str, Any]`, `describe_fiscal_profile(context) -> dict[str, Any]`
+- Also produces, from `tools/__init__.py`: the registered tools `list_invoices`, `get_invoice`, `create_proforma`, `replace_proforma_lines`, `render_proforma_pdf`, `get_invoice_xml_url`, `set_invoice_payment_state`, `describe_fiscal_profile`, plus `InvoiceTipoArg`, `StatoPagamentoArg`, `InvoiceLinesArg` annotated aliases.
+
+- [ ] **Step 1: Write the failing ban test**
+
+`apps/mcp/tests/test_mcp_invoice_ban.py`:
+
+```python
+"""Spec 14.7: the ban is in the build, not in a code review.
+
+Three reasons the four operations below have no tool, none of them generic distrust of
+agents:
+
+1. emission is the only irreversible creation in the product. Every other mistake
+   reachable through MCP undoes: a soft delete restores, a state goes back, a field is
+   rewritten. Consuming a register number does not undo -- at best it is documented;
+2. the guarantee has to be structural, because permissions are not enough. R10 is open
+   -- a PAT has no scope and inherits the owner's full role -- so "MCP does not emit"
+   is not enforceable with an authorisation check, since an administrative token would
+   pass it. Not registering the tool is the only mechanism that holds while R10 is
+   open;
+3. it costs one click. The agent does all the work: reads the deal, composes the
+   lines, produces a readable proforma. A human presses a button.
+"""
+
+import ast
+import inspect
+from pathlib import Path
+
+from pigrocrm.core.fiscal.service import FiscalProfileService
+from pigrocrm.core.invoices.service import InvoiceService
+from pigrocrm_mcp.tools.invoices import (
+    MCP_FORBIDDEN_OPERATIONS,
+    MCP_UNEXPOSED_OPERATIONS,
+    SERVICE_METHOD_TO_OPERATION,
+)
+
+MCP_SRC = Path(inspect.getfile(FiscalProfileService)).parents[4] / "apps" / "mcp" / "src"
+
+FORBIDDEN_SERVICE_METHODS = {
+    "InvoiceService.issue",
+    "InvoiceService.annul",
+    "InvoiceService.mark_transmitted_externally",
+    "FiscalProfileService.upsert",
+}
+
+
+def _public_methods(cls: type) -> set[str]:
+    return {
+        name
+        for name, value in vars(cls).items()
+        if callable(value) and not name.startswith("_")
+    }
+
+
+def test_the_exclusion_list_is_exactly_those_four_names() -> None:
+    """Adding a tool for one of the four breaks the build; removing a name from the
+    list without adding the tool breaks it too. Whoever reads the list learns that the
+    absence was a decision and not an oversight."""
+    assert MCP_FORBIDDEN_OPERATIONS == frozenset(
+        {
+            "issue_invoice",
+            "annul_invoice",
+            "mark_transmitted_externally",
+            "update_fiscal_profile",
+        }
+    )
+
+
+def test_every_public_service_method_is_classified_exactly_once() -> None:
+    """Three buckets: reached by a tool, forbidden, or declared-unexposed with a
+    reason. A new method that nobody classified fails here rather than quietly
+    joining whichever bucket happens to be the default."""
+    methods = _public_methods(InvoiceService) | _public_methods(FiscalProfileService)
+    unclassified = methods - set(SERVICE_METHOD_TO_OPERATION) - set(MCP_UNEXPOSED_OPERATIONS)
+    assert unclassified == set(), (
+        "questi metodi pubblici non sono classificati: aggiungili a "
+        f"SERVICE_METHOD_TO_OPERATION o a MCP_UNEXPOSED_OPERATIONS con la ragione: {unclassified}"
+    )
+    both = set(SERVICE_METHOD_TO_OPERATION) & set(MCP_UNEXPOSED_OPERATIONS)
+    assert both == set(), f"classificati due volte: {both}"
+
+
+def test_every_unexposed_method_carries_a_reason() -> None:
+    assert all(reason.strip() for reason in MCP_UNEXPOSED_OPERATIONS.values())
+
+
+def test_no_mcp_source_file_calls_a_forbidden_service_method() -> None:
+    """Walked as an AST over every file under `apps/mcp/src`, not grepped: a rename
+    that reintroduces the call under a different local alias still shows up as an
+    attribute access with the forbidden name."""
+    offenders: list[str] = []
+    for path in MCP_SRC.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not isinstance(func, ast.Attribute):
+                continue
+            for qualified in FORBIDDEN_SERVICE_METHODS:
+                if func.attr == qualified.split(".", 1)[1]:
+                    offenders.append(f"{path.name}:{node.lineno} chiama {func.attr}")
+    assert offenders == [], (
+        "l'MCP non emette e non annulla: la difesa e' strutturale perche' R10 e' "
+        f"aperto e un PAT amministrativo passerebbe un controllo di permessi. {offenders}"
+    )
+
+
+def test_no_registered_tool_is_named_after_a_forbidden_operation() -> None:
+    from mcp.server import MCPServer
+
+    from pigrocrm_mcp.server import build_server
+
+    server: MCPServer = build_server(session_provider=lambda: None)  # type: ignore[arg-type]
+    names = {tool.name for tool in server.list_tools_sync()}
+    assert names & MCP_FORBIDDEN_OPERATIONS == set()
+
+
+def test_the_tools_an_agent_does_get_are_the_declared_ones() -> None:
+    from mcp.server import MCPServer
+
+    from pigrocrm_mcp.server import build_server
+
+    server: MCPServer = build_server(session_provider=lambda: None)  # type: ignore[arg-type]
+    names = {tool.name for tool in server.list_tools_sync()}
+    assert {
+        "list_invoices",
+        "get_invoice",
+        "create_proforma",
+        "replace_proforma_lines",
+        "render_proforma_pdf",
+        "get_invoice_xml_url",
+        "set_invoice_payment_state",
+        "describe_fiscal_profile",
+    } <= names
+```
+
+`build_server` and the way `apps/mcp/tests/test_mcp_tools.py` already enumerates registered tools are the authority for the last two cases: use that file's existing helper rather than the `build_server(...)`/`list_tools_sync()` shape sketched here if it differs, and keep the assertions identical.
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `uv run pytest apps/mcp/tests/test_mcp_invoice_ban.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'pigrocrm_mcp.tools.invoices'`
+
+- [ ] **Step 3: Write the thin call module**
+
+`apps/mcp/src/pigrocrm_mcp/tools/invoices.py`:
+
+```python
+"""Thin calls into `InvoiceService`, plus the declaration of what MCP deliberately
+cannot reach.
+
+An agent may **prepare**. It may not emit. See `apps/mcp/tests/test_mcp_invoice_ban.py`
+for the three reasons, and note that the mechanism is the absence of a tool rather than
+an authorisation check: R10 is open, so a PAT inherits the owner's full role and an
+administrative token would pass any check written here.
+"""
+
+from datetime import date
+from typing import Any
+from uuid import UUID
+
+from pigrocrm.core.errors import Conflict
+from pigrocrm.core.fiscal.service import FiscalProfileService
+from pigrocrm.core.invoices.schemas import (
+    InvoiceCreate,
+    InvoiceLineIn,
+    InvoiceListQuery,
+    PaymentState,
+)
+from pigrocrm.core.invoices.service import InvoiceService
+from pigrocrm_mcp.context import McpContext
+
+# Operations that must **never** be reachable from MCP. Asserted to be exactly these
+# four names by the ban test: adding a tool for one of them breaks the build, and
+# removing a name without adding the tool breaks it too.
+MCP_FORBIDDEN_OPERATIONS: frozenset[str] = frozenset(
+    {
+        "issue_invoice",
+        "annul_invoice",
+        "mark_transmitted_externally",
+        "update_fiscal_profile",
+    }
+)
+
+# Public service methods with no tool that are **not** forbidden -- they simply have no
+# audience on the agentic surface. Each carries its reason, so the distinction between
+# "must never be exposed" and "happens not to be exposed" stays visible.
+MCP_UNEXPOSED_OPERATIONS: dict[str, str] = {
+    "update": "note interne e campi custom: nessun agente ha motivo di scriverli, e "
+    "la causale e' congelata dopo l'emissione",
+    "soft_delete": "la spec dello slice 1 ha gia' deciso che l'MCP non espone delete "
+    "distruttivi",
+    "confirm_proforma": "e' la conferma umana che precede l'emissione: l'agente "
+    "prepara, la persona conferma",
+    "export_xml": "l'XML esiste solo per una fattura emessa, e l'MCP non emette; "
+    "get_invoice_xml_url restituisce l'URL di uno gia' prodotto",
+    "produce_artifacts": "rigenerazione di artefatti fiscali: appartiene alla persona "
+    "che ha emesso",
+    "download": "l'MCP non restituisce mai byte, solo identificativi e URL "
+    "(spec slice 2 §7)",
+    "lines": "get_invoice restituisce gia' la fattura; le righe si leggono dall'API",
+    "render_pdf": "esposto come render_proforma_pdf, che rifiuta una fattura",
+    "snapshot": "lettura interna del profilo fiscale, senza actor e senza audience",
+    "get": "esposto come get_invoice / describe_fiscal_profile",
+}
+
+# Which operation name each public service method belongs to, for the operations that
+# *are* exposed or forbidden. `get` appears in MCP_UNEXPOSED_OPERATIONS because both
+# services define one and the tools call the domain-specific wrappers below.
+SERVICE_METHOD_TO_OPERATION: dict[str, str] = {
+    "list": "list_invoices",
+    "create": "create_proforma",
+    "replace_lines": "replace_proforma_lines",
+    "set_payment_state": "set_invoice_payment_state",
+    "describe": "describe_fiscal_profile",
+    "issue": "issue_invoice",
+    "annul": "annul_invoice",
+    "mark_transmitted_externally": "mark_transmitted_externally",
+    "upsert": "update_fiscal_profile",
+}
+
+
+def _invoices(context: McpContext) -> InvoiceService:
+    return InvoiceService(context.session, context.storage)
+
+
+def search(context: McpContext, query: InvoiceListQuery) -> dict[str, Any]:
+    page = _invoices(context).list(query, context.actor)
+    return {
+        "items": [item.model_dump(mode="json") for item in page.items],
+        "next_cursor": str(page.next_cursor) if page.next_cursor else None,
+    }
+
+
+def get(context: McpContext, invoice_id: str) -> dict[str, Any]:
+    service = _invoices(context)
+    invoice = service.get(UUID(invoice_id), context.actor)
+    return {
+        **invoice.model_dump(mode="json"),
+        "righe": [
+            line.model_dump(mode="json")
+            for line in service.lines(UUID(invoice_id), context.actor)
+        ],
+    }
+
+
+def create_proforma(context: McpContext, data: dict[str, Any]) -> dict[str, Any]:
+    """`tipo` is forced to `proforma` here rather than taken from the caller: this is
+    the only creation an agent performs, and letting it choose would put a draft
+    invoice -- one button away from a consumed number -- on the agentic surface."""
+    payload = {**data, "tipo": "proforma"}
+    return _invoices(context).create(InvoiceCreate(**payload), context.actor).model_dump(
+        mode="json"
+    )
+
+
+def _require_proforma(service: InvoiceService, invoice_id: UUID, context: McpContext) -> None:
+    invoice = service.get(invoice_id, context.actor)
+    if invoice.tipo != "proforma":
+        raise Conflict(
+            "invoice",
+            "da MCP si modificano solo le proforma: una fattura la prepara e la emette "
+            "una persona",
+            tipo=invoice.tipo,
+            stato=invoice.stato,
+        )
+
+
+def replace_proforma_lines(
+    context: McpContext, invoice_id: str, righe: list[dict[str, Any]]
+) -> dict[str, Any]:
+    service = _invoices(context)
+    identifier = UUID(invoice_id)
+    _require_proforma(service, identifier, context)
+    return service.replace_lines(
+        identifier, [InvoiceLineIn(**riga) for riga in righe], context.actor
+    ).model_dump(mode="json")
+
+
+def render_proforma_pdf(context: McpContext, invoice_id: str) -> dict[str, Any]:
+    service = _invoices(context)
+    identifier = UUID(invoice_id)
+    _require_proforma(service, identifier, context)
+    artifact = service.render_pdf(identifier, context.actor)
+    return {
+        **artifact.model_dump(mode="json"),
+        # An identifier and a URL, never the bytes: a base64 PDF inside a model's own
+        # context is waste and risk (slice 2 §7).
+        "download_url": f"/api/invoices/{invoice_id}/pdf",
+    }
+
+
+def xml_url(context: McpContext, invoice_id: str) -> dict[str, Any]:
+    """The URL of an already-produced XML. Never the bytes, and never a production:
+    producing one requires an issued invoice, and MCP does not issue."""
+    invoice = _invoices(context).get(UUID(invoice_id), context.actor)
+    if invoice.xml_document_id is None:
+        raise Conflict(
+            "invoice",
+            "questa fattura non ha ancora un file XML: va prodotto dall'applicazione",
+            stato=invoice.stato,
+        )
+    return {
+        "invoice_id": invoice_id,
+        "numero": f"{invoice.anno}/{invoice.numero}",
+        "download_url": f"/api/invoices/{invoice_id}/xml",
+        "hash_sha256": invoice.xml_hash_sha256,
+    }
+
+
+def set_payment_state(
+    context: McpContext, invoice_id: str, stato_pagamento: str, data_incasso: str | None
+) -> dict[str, Any]:
+    return (
+        _invoices(context)
+        .set_payment_state(
+            UUID(invoice_id),
+            PaymentState(
+                stato_pagamento=stato_pagamento,  # type: ignore[arg-type]
+                data_incasso=date.fromisoformat(data_incasso) if data_incasso else None,
+            ),
+            context.actor,
+        )
+        .model_dump(mode="json")
+    )
+
+
+def describe_fiscal_profile(context: McpContext) -> dict[str, Any]:
+    return FiscalProfileService(context.session).describe(context.actor)
+```
+
+- [ ] **Step 4: Register the tools**
+
+In `apps/mcp/src/pigrocrm_mcp/tools/__init__.py`, add `invoices` to the module import, add the three annotated aliases next to the existing ones, and register the eight tools at the end of `register_entity_tools`:
+
+```python
+from pigrocrm_mcp.tools import customers, deals, documents, invoices, people
+```
+
+```python
+# Same runtime-permissive / schema-only-strict split as `OfferStateArg`: the parameter
+# stays a plain `str` so a wrong value is rejected by the schema's own `Literal` inside
+# the guarded call and rendered as guidance, while `list_tools()` shows the real
+# choices. R2 is open, and this is the technique that keeps a raw pydantic dump out of
+# an agent's context.
+InvoiceTipoArg = Annotated[
+    str | None,
+    WithJsonSchema(
+        {"anyOf": [{"type": "string", "enum": ["fattura", "proforma"]}, {"type": "null"}], "default": None}
+    ),
+]
+InvoiceStatoArg = Annotated[
+    str | None,
+    WithJsonSchema(
+        {
+            "anyOf": [
+                {
+                    "type": "string",
+                    "enum": ["bozza", "emessa", "annullata", "confermata", "consumata"],
+                },
+                {"type": "null"},
+            ],
+            "default": None,
+        }
+    ),
+]
+StatoPagamentoArg = Annotated[
+    str,
+    WithJsonSchema({"type": "string", "enum": ["da_incassare", "incassato"]}),
+]
+InvoiceLinesArg = Annotated[
+    list[dict[str, Any]],
+    WithJsonSchema(
+        {
+            "type": "array",
+            "maxItems": 200,
+            "items": InvoiceLineIn.model_json_schema(),
+        }
+    ),
+]
+```
+
+with `from pigrocrm.core.invoices.schemas import InvoiceLineIn, InvoiceListQuery` added to that module's imports, and then:
+
+```python
+    # ---- invoices ----------------------------------------------------------
+    # An agent may prepare. It may not emit. `issue_invoice`, `annul_invoice`,
+    # `mark_transmitted_externally` and `update_fiscal_profile` are deliberately
+    # absent, and `apps/mcp/tests/test_mcp_invoice_ban.py` is what keeps them absent:
+    # the guarantee is structural because R10 (a PAT has no scope and inherits the
+    # owner's full role) means an authorisation check would be passed by an
+    # administrative token.
+
+    @mcp.tool()
+    @guard
+    def list_invoices(
+        customer_id: str | None = None,
+        deal_id: str | None = None,
+        tipo: InvoiceTipoArg = None,
+        stato: InvoiceStatoArg = None,
+        anno: int | str | None = None,
+        limit: BoundedLimit = 50,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        """Elenca fatture e proforma. Passa `next_cursor` come `cursor` per la pagina
+        successiva. Per scaricare i byte usa l'API REST: MCP restituisce
+        identificativi."""
+        return invoices.search(
+            context,
+            InvoiceListQuery(
+                customer_id=UUID(customer_id) if customer_id else None,
+                deal_id=UUID(deal_id) if deal_id else None,
+                tipo=tipo,  # type: ignore[arg-type]
+                stato=stato,  # type: ignore[arg-type]
+                anno=cast(int, anno) if anno is not None else None,
+                limit=cast(int, limit),
+                cursor=UUID(cursor) if cursor else None,
+            ),
+        )
+
+    @mcp.tool()
+    @guard
+    def get_invoice(invoice_id: str) -> dict[str, Any]:
+        """Legge una fattura o una proforma con le sue righe, i totali e lo stato."""
+        return invoices.get(context, invoice_id)
+
+    @mcp.tool()
+    @guard
+    def describe_fiscal_profile() -> dict[str, Any]:
+        """I parametri fiscali in vigore: regime, aliquota di default, natura, bollo,
+        condizioni di pagamento e giorni di scadenza. Chiamalo **prima** di comporre
+        una proforma, per sapere che aliquota le righe possono portare."""
+        return invoices.describe_fiscal_profile(context)
+
+    @mcp.tool()
+    @guard
+    def create_proforma(
+        customer_id: str,
+        righe: InvoiceLinesArg,
+        deal_id: str | None = None,
+        causale: str | None = None,
+    ) -> dict[str, Any]:
+        """Crea una proforma: ha la forma di una fattura, si manda al cliente e non
+        tocca il registro fiscale. Non consuma un numero. L'emissione la fa una
+        persona dall'applicazione: non esiste un tool per emettere."""
+        return invoices.create_proforma(
+            context,
+            {
+                "customer_id": UUID(customer_id),
+                "deal_id": UUID(deal_id) if deal_id else None,
+                "causale": causale,
+                "righe": righe,
+            },
+        )
+
+    @mcp.tool()
+    @guard
+    def replace_proforma_lines(invoice_id: str, righe: InvoiceLinesArg) -> dict[str, Any]:
+        """Sostituisce **tutte** le righe di una proforma e ricalcola i totali. Non e'
+        una modifica parziale: l'elenco che passi diventa l'elenco completo."""
+        return invoices.replace_proforma_lines(context, invoice_id, righe)
+
+    @mcp.tool()
+    @guard
+    def render_proforma_pdf(invoice_id: str) -> dict[str, Any]:
+        """Genera il PDF di una proforma e restituisce l'URL da cui scaricarlo. Il PDF
+        porta nel corpo la dichiarazione FATTURA PROFORMA - NON COSTITUISCE FATTURA."""
+        return invoices.render_proforma_pdf(context, invoice_id)
+
+    @mcp.tool()
+    @guard
+    def get_invoice_xml_url(invoice_id: str) -> dict[str, Any]:
+        """L'URL del file FatturaPA di una fattura gia' emessa. Restituisce un URL, mai
+        i byte."""
+        return invoices.xml_url(context, invoice_id)
+
+    @mcp.tool()
+    @guard
+    def set_invoice_payment_state(
+        invoice_id: str, stato_pagamento: StatoPagamentoArg, data_incasso: IsoDateStr = None
+    ) -> dict[str, Any]:
+        """Registra l'incasso di una fattura emessa. `data_incasso` in formato
+        YYYY-MM-DD ed e' obbligatoria quando lo stato e' `incassato`."""
+        return invoices.set_payment_state(context, invoice_id, stato_pagamento, data_incasso)
+```
+
+- [ ] **Step 5: Write the behavioural MCP test**
+
+`apps/mcp/tests/test_mcp_invoices.py`:
+
+```python
+"""What an agent can actually do: read, prepare a proforma, render it, record a
+payment -- and find no tool at all when it tries to issue.
+"""
+
+from decimal import Decimal
+from typing import Any
+
+import pytest
+
+from pigrocrm.core.errors import Conflict
+from pigrocrm.core.invoices.schemas import InvoiceListQuery
+from pigrocrm_mcp.tools import invoices
+
+
+def test_an_agent_can_prepare_a_proforma_with_three_lines(mcp_context) -> None:  # type: ignore[no-untyped-def]
+    customer_id = _customer(mcp_context)
+    created = invoices.create_proforma(
+        mcp_context,
+        {
+            "customer_id": customer_id,
+            "causale": "Consulenza agosto",
+            "righe": [
+                {"descrizione": "Analisi", "prezzo_unitario": "500.00"},
+                {"descrizione": "Sviluppo", "prezzo_unitario": "1500.00"},
+                {"descrizione": "Sconto", "prezzo_unitario": "-200.00"},
+            ],
+        },
+    )
+    assert created["tipo"] == "proforma"
+    assert created["numero"] is None
+    assert created["riferimento"].startswith("PROV-")
+    assert created["totale"] == "1800.00"
+
+
+def test_an_agent_cannot_create_a_fattura_even_by_asking(mcp_context) -> None:  # type: ignore[no-untyped-def]
+    """`tipo` is forced, not taken from the caller: a draft invoice is one button away
+    from a consumed number, so it is not on the agentic surface."""
+    created = invoices.create_proforma(
+        mcp_context,
+        {"customer_id": _customer(mcp_context), "tipo": "fattura", "righe": []},
+    )
+    assert created["tipo"] == "proforma"
+
+
+def test_an_agent_cannot_edit_the_lines_of_a_fattura(mcp_context) -> None:  # type: ignore[no-untyped-def]
+    invoice_id = _draft_invoice(mcp_context)
+    with pytest.raises(Conflict):
+        invoices.replace_proforma_lines(
+            mcp_context, invoice_id, [{"descrizione": "X", "prezzo_unitario": "1.00"}]
+        )
+
+
+def test_rendering_a_proforma_returns_a_url_and_never_bytes(mcp_context) -> None:  # type: ignore[no-untyped-def]
+    created = invoices.create_proforma(
+        mcp_context,
+        {
+            "customer_id": _customer(mcp_context),
+            "righe": [{"descrizione": "Analisi", "prezzo_unitario": "500.00"}],
+        },
+    )
+    result = invoices.render_proforma_pdf(mcp_context, created["id"])
+    assert result["download_url"] == f"/api/invoices/{created['id']}/pdf"
+    assert not any(isinstance(value, bytes) for value in result.values())
+
+
+def test_the_xml_url_of_an_unissued_invoice_is_a_conflict_not_a_produced_file(
+    mcp_context,
+) -> None:  # type: ignore[no-untyped-def]
+    with pytest.raises(Conflict):
+        invoices.xml_url(mcp_context, _draft_invoice(mcp_context))
+
+
+def test_describe_fiscal_profile_tells_an_agent_what_rate_a_line_may_carry(
+    mcp_context,
+) -> None:  # type: ignore[no-untyped-def]
+    described = invoices.describe_fiscal_profile(mcp_context)
+    assert described["codice_regime"] == "RF19"
+    assert described["aliquota_iva_default"] == "0.00"
+    assert "id" not in described
+
+
+def test_listing_returns_identifiers_and_a_cursor(mcp_context) -> None:  # type: ignore[no-untyped-def]
+    _draft_invoice(mcp_context)
+    page = invoices.search(mcp_context, InvoiceListQuery(limit=1))
+    assert len(page["items"]) == 1
+    assert "next_cursor" in page
+```
+
+Build `_customer`, `_draft_invoice` and the `mcp_context` fixture on top of whatever `apps/mcp/tests/conftest.py` already provides — `test_mcp_documents.py` is the closest precedent and already sets up a context with a session, a storage backend and an actor; reuse its fixture rather than adding a parallel one, and seed the fiscal and emitter profiles the same way `test_mcp_documents.py` seeds the emitter profile.
+
+- [ ] **Step 6: Run everything**
+
+Run: `uv run pytest apps/mcp/tests -v`
+Expected: PASS
+
+Run: `uv run pytest packages/core/tests/test_architecture.py apps/mcp/tests/test_mcp_invoice_ban.py -v`
+Expected: PASS
+
+To prove the ban test has teeth, temporarily add a `@mcp.tool()` named `issue_invoice` that calls `invoices` and re-run: `test_the_exclusion_list_is_exactly_those_four_names` still passes but `test_no_registered_tool_is_named_after_a_forbidden_operation` and `test_no_mcp_source_file_calls_a_forbidden_service_method` both fail. Remove it before committing.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add apps/mcp/src/pigrocrm_mcp/tools/invoices.py apps/mcp/src/pigrocrm_mcp/tools/__init__.py apps/mcp/tests/test_mcp_invoices.py apps/mcp/tests/test_mcp_invoice_ban.py
+git commit -m "feat(mcp): an agent may prepare a proforma, and cannot emit at all"
+```
+
+---
+
+# Phase 4 — The web app
+
+### Task 16: The invoice data layer
+
+**Files:**
+- Modify: `apps/web/src/lib/query.ts`
+- Create: `apps/web/src/features/invoices/queries.ts`
+- Create: `apps/web/src/features/invoices/format.ts`
+- Test: `apps/web/src/features/invoices/queries.test.tsx`
+- Test: `apps/web/src/features/invoices/format.test.ts`
+
+**Interfaces:**
+- Consumes: `api`, `unwrap`, `toProblem` from `@/lib/api`; `queryKeys` from `@/lib/query`; the regenerated `components['schemas']` types.
+- Produces, from `queries.ts`:
+  - types `Invoice`, `InvoiceLine`, `InvoicePage`, `InvoiceArtifact`, `FiscalProfile`, `InvoiceOwner`
+  - `INVOICE_STATE_LABELS: Record<InvoiceStato, string>`, `PAYMENT_STATE_LABELS: Record<StatoPagamento, string>`, `INVOICE_TYPE_LABELS: Record<InvoiceTipo, string>`
+  - `useInvoices(params)`, `useInvoice(invoiceId)`, `useInvoiceLines(invoiceId)`, `useInvoiceTimeline(invoiceId)`, `useFiscalProfile()`
+  - `useCreateInvoice()`, `useReplaceLines(invoiceId)`, `useConfirmProforma(invoiceId)`, `useIssueInvoice(invoiceId)`, `useAnnulInvoice(invoiceId)`, `useMarkTransmitted(invoiceId)`, `useSetPaymentState(invoiceId)`, `useProduceArtifacts(invoiceId)`, `useUpdateInvoice(invoiceId)`, `useDeleteInvoice()`, `useSaveFiscalProfile()`
+  - `downloadInvoiceArtifact(invoiceId: string, kind: 'pdf' | 'xml'): Promise<void>`
+- Produces, from `format.ts`: `formatMoney(value: string | null): string`, `formatQuantity(value: string | null): string`, `formatRate(value: string | null): string`, `formatDate(value: string | null): string`, `formatInvoiceNumber(invoice: Pick<Invoice, 'anno' | 'numero' | 'riferimento'>): string`, `sumLineTotals(lines: Pick<InvoiceLine, 'prezzo_totale'>[]): string`
+
+- [ ] **Step 1: Regenerate the API types**
+
+```bash
+uv run uvicorn pigrocrm_api.main:app --port 8000 &
+cd apps/web && pnpm generate:api && cd ../..
+kill %1
+```
+
+`apps/web/src/lib/api-types.ts` must now contain `InvoiceRead`, `InvoiceLineRead`, `InvoicePage`, `InvoiceArtifact`, `FiscalProfileRead` and the `/api/invoices*` paths. If it does not, the routers are not registered — go back to Task 14 rather than hand-writing a type.
+
+- [ ] **Step 2: Write the failing formatting test**
+
+`apps/web/src/features/invoices/format.test.ts`:
+
+```ts
+import { describe, expect, it } from 'vitest'
+import { formatDate, formatInvoiceNumber, formatMoney, formatQuantity, formatRate, sumLineTotals } from './format'
+
+describe('formatMoney', () => {
+  it('always shows the thousands separator', () => {
+    // `useGrouping: 'always'` is not optional: the default withholds the separator
+    // below five integer digits, so 1.500,00 EUR would print as 1500,00 EUR.
+    expect(formatMoney('1500.00')).toContain('1.500,00')
+  })
+
+  it('renders a null as an em dash, not as zero', () => {
+    expect(formatMoney(null)).toBe('—')
+  })
+
+  it('keeps a negative line readable', () => {
+    expect(formatMoney('-200.00')).toContain('200,00')
+  })
+})
+
+describe('sumLineTotals', () => {
+  it('adds integer cents, never JS floats', () => {
+    // Number('0.29') * 100 is 28.999999999999996. On an invoice that is a wrong total.
+    expect(sumLineTotals([{ prezzo_totale: '0.29' }, { prezzo_totale: '0.01' }])).toBe('0.30')
+  })
+
+  it('handles a negative discount line', () => {
+    expect(sumLineTotals([{ prezzo_totale: '1000.00' }, { prezzo_totale: '-200.00' }])).toBe('800.00')
+  })
+
+  it('is zero for no lines', () => {
+    expect(sumLineTotals([])).toBe('0.00')
+  })
+})
+
+describe('formatQuantity and formatRate', () => {
+  it('shows a quantity with its six decimals trimmed to what matters', () => {
+    expect(formatQuantity('3.000000')).toBe('3')
+    expect(formatQuantity('3.500000')).toBe('3,5')
+  })
+
+  it('shows a rate as a percentage', () => {
+    expect(formatRate('0.00')).toBe('0%')
+    expect(formatRate('22.00')).toBe('22%')
+  })
+})
+
+describe('formatInvoiceNumber', () => {
+  it('is year slash number for an issued invoice', () => {
+    expect(formatInvoiceNumber({ anno: 2026, numero: 7, riferimento: null })).toBe('2026/7')
+  })
+
+  it('is the reference for a proforma', () => {
+    expect(formatInvoiceNumber({ anno: null, numero: null, riferimento: 'PROV-2026-0007' })).toBe(
+      'PROV-2026-0007',
+    )
+  })
+
+  it('is an em dash for a draft with neither', () => {
+    expect(formatInvoiceNumber({ anno: null, numero: null, riferimento: null })).toBe('—')
+  })
+})
+
+describe('formatDate', () => {
+  it('renders an ISO date in Italian without touching the timezone', () => {
+    // Parsed field by field, never `new Date('2026-01-01')`, which is UTC midnight and
+    // renders as 31 December west of Greenwich -- the same class of defect as
+    // `toISOString()` on the backend.
+    expect(formatDate('2026-01-01')).toBe('1/1/2026')
+  })
+
+  it('renders a null as an em dash', () => {
+    expect(formatDate(null)).toBe('—')
+  })
+})
+```
+
+- [ ] **Step 3: Run it to verify it fails**
+
+Run: `cd apps/web && pnpm exec vitest run src/features/invoices/format.test.ts`
+Expected: FAIL — the module does not exist.
+
+- [ ] **Step 4: Implement the formatters**
+
+`apps/web/src/features/invoices/format.ts`:
+
+```ts
+import type { Invoice, InvoiceLine } from './queries'
+
+const EMPTY = '—'
+
+// `useGrouping: 'always'` is mandatory: the default withholds the thousands separator
+// below five integer digits, so 1500.00 would print as "1500,00 €". Typing it needs
+// "ES2023.Intl" in tsconfig's `lib`, which is already there.
+const euro = new Intl.NumberFormat('it-IT', {
+  style: 'currency',
+  currency: 'EUR',
+  useGrouping: 'always',
+})
+const quantity = new Intl.NumberFormat('it-IT', { maximumFractionDigits: 6 })
+const italianDate = new Intl.DateTimeFormat('it-IT')
+
+/**
+ * Integer cents parsed out of the decimal string the API sends.
+ *
+ * A local copy rather than an import from `features/deals/columns.tsx`, where the
+ * same helper is private: the codebase's precedent is a small per-feature display
+ * helper, and exporting that one would widen a module's public surface and its test.
+ */
+function centsFromDecimalString(value: string): number {
+  const negative = value.startsWith('-')
+  const unsigned = negative ? value.slice(1) : value
+  const [wholePart, fractionPart = ''] = unsigned.split('.')
+  const cents = Number(wholePart || '0') * 100 + Number((fractionPart + '00').slice(0, 2))
+  return negative ? -cents : cents
+}
+
+export function formatMoney(value: string | null): string {
+  return value === null ? EMPTY : euro.format(centsFromDecimalString(value) / 100)
+}
+
+export function formatQuantity(value: string | null): string {
+  return value === null ? EMPTY : quantity.format(Number(value))
+}
+
+export function formatRate(value: string | null): string {
+  return value === null ? EMPTY : `${quantity.format(Number(value))}%`
+}
+
+/**
+ * An ISO date, parsed field by field.
+ *
+ * Never `new Date('2026-01-01')`: that is UTC midnight, which renders as 31 December
+ * anywhere west of Greenwich. It is the same defect as `toISOString()` on the backend,
+ * in the other direction, and on an invoice it shows the wrong fiscal year.
+ */
+export function formatDate(value: string | null): string {
+  if (value === null) return EMPTY
+  const [year, month, day] = value.split('-').map(Number)
+  if (year === undefined || month === undefined || day === undefined) return value
+  return italianDate.format(new Date(year, month - 1, day))
+}
+
+/**
+ * The label a human reads. Two integers joined by a slash is presentation, not
+ * business logic -- and a proforma's reference deliberately cannot be produced by this
+ * function from a number, because it never has one.
+ */
+export function formatInvoiceNumber(
+  invoice: Pick<Invoice, 'anno' | 'numero' | 'riferimento'>,
+): string {
+  if (invoice.anno !== null && invoice.numero !== null) return `${invoice.anno}/${invoice.numero}`
+  return invoice.riferimento ?? EMPTY
+}
+
+/**
+ * The sum of the line totals, for the editor's live preview only.
+ *
+ * The authoritative totals are the ones the API stored; this exists so the editor can
+ * show a running figure before saving, and it adds integer cents because
+ * `Number('0.29') * 100` is `28.999999999999996`.
+ */
+export function sumLineTotals(lines: Pick<InvoiceLine, 'prezzo_totale'>[]): string {
+  const cents = lines.reduce((sum, line) => sum + centsFromDecimalString(line.prezzo_totale), 0)
+  const negative = cents < 0
+  const absolute = Math.abs(cents)
+  return `${negative ? '-' : ''}${Math.floor(absolute / 100)}.${String(absolute % 100).padStart(2, '0')}`
+}
+```
+
+- [ ] **Step 5: Add the query keys**
+
+In `apps/web/src/lib/query.ts`, add to the `queryKeys` object, keeping the established convention that a list key takes `(params?: unknown)` so calling it with no argument is an invalidation wildcard:
+
+```ts
+  invoices: (params?: unknown) => ['invoices', params ?? {}] as const,
+  invoice: (id: string) => ['invoice', id] as const,
+  invoiceLines: (id: string) => ['invoice-lines', id] as const,
+  fiscalProfile: ['fiscal-profile'] as const,
+```
+
+- [ ] **Step 6: Write the failing hooks test**
+
+`apps/web/src/features/invoices/queries.test.tsx`:
+
+```tsx
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { renderHook, waitFor } from '@testing-library/react'
+import type { ReactNode } from 'react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useInvoice, useInvoices } from './queries'
+
+function wrapper({ children }: { children: ReactNode }) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return <QueryClientProvider client={client}>{children}</QueryClientProvider>
+}
+
+beforeEach(() => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/invoices?')) {
+        return new Response(JSON.stringify({ items: [], next_cursor: null }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify({ id: 'x' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }),
+  )
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+describe('useInvoice', () => {
+  it('does not fire a request for an empty id', async () => {
+    // B1: `useCustomer('')` once produced a 307 to the *list* endpoint with an
+    // absolute URL, bypassing even the Vite proxy. The guard is on the hook, and this
+    // is the test the original fix never got.
+    const { result } = renderHook(() => useInvoice(''), { wrapper })
+    await waitFor(() => expect(result.current.fetchStatus).toBe('idle'))
+    expect(result.current.isPending).toBe(true)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('fires for a real id', async () => {
+    const { result } = renderHook(() => useInvoice('0192f0aa-0000-7000-8000-000000000001'), {
+      wrapper,
+    })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(fetch).toHaveBeenCalled()
+  })
+})
+
+describe('useInvoices', () => {
+  it('passes the filters through as query parameters', async () => {
+    const { result } = renderHook(() => useInvoices({ tipo: 'proforma', anno: 2026 }), { wrapper })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    const called = String((fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0])
+    expect(called).toContain('tipo=proforma')
+    expect(called).toContain('anno=2026')
+  })
+})
+```
+
+- [ ] **Step 7: Implement the hooks**
+
+`apps/web/src/features/invoices/queries.ts`:
+
+```ts
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { api, toProblem, unwrap } from '@/lib/api'
+import type { components } from '@/lib/api-types'
+import { queryKeys } from '@/lib/query'
+
+export type Invoice = components['schemas']['InvoiceRead']
+export type InvoiceLine = components['schemas']['InvoiceLineRead']
+export type InvoiceLineInput = components['schemas']['InvoiceLineIn']
+export type InvoicePage = components['schemas']['InvoicePage']
+export type InvoiceArtifact = components['schemas']['InvoiceArtifact']
+export type FiscalProfile = components['schemas']['FiscalProfileRead']
+export type Activity = components['schemas']['ActivityRead']
+
+export type InvoiceTipo = 'fattura' | 'proforma'
+export type InvoiceStato = 'bozza' | 'emessa' | 'annullata' | 'confermata' | 'consumata'
+export type StatoPagamento = 'da_incassare' | 'incassato'
+
+export interface InvoiceFilters {
+  customer_id?: string
+  deal_id?: string
+  tipo?: InvoiceTipo
+  stato?: InvoiceStato
+  anno?: number
+  stato_pagamento?: StatoPagamento
+  limit?: number
+  cursor?: string
+}
+
+export const INVOICE_TYPE_LABELS: Record<InvoiceTipo, string> = {
+  fattura: 'Fattura',
+  proforma: 'Proforma',
+}
+
+export const INVOICE_STATE_LABELS: Record<InvoiceStato, string> = {
+  bozza: 'Bozza',
+  emessa: 'Emessa',
+  annullata: 'Annullata',
+  confermata: 'Confermata',
+  consumata: 'Consumata',
+}
+
+export const PAYMENT_STATE_LABELS: Record<StatoPagamento, string> = {
+  da_incassare: 'Da incassare',
+  incassato: 'Incassato',
+}
+
+/**
+ * Which buttons a row can offer, mirroring `STATO_TRANSITIONS` in
+ * `packages/core/.../invoices/schemas.py`.
+ *
+ * A mirror for rendering only: the server validates every transition and its 409
+ * message is what gets shown. This is the same convention `OFFER_TRANSITIONS` in
+ * `features/documents/queries.ts` already established.
+ */
+export const INVOICE_TRANSITIONS: Record<InvoiceStato, InvoiceStato[]> = {
+  bozza: ['emessa', 'confermata'],
+  confermata: ['consumata', 'bozza'],
+  emessa: ['annullata'],
+  annullata: [],
+  consumata: [],
+}
+
+export function useInvoices(filters: InvoiceFilters = {}) {
+  return useQuery({
+    queryKey: queryKeys.invoices(filters),
+    queryFn: () => unwrap(api.GET('/api/invoices', { params: { query: filters } })),
+  })
+}
+
+export function useInvoice(invoiceId: string) {
+  return useQuery({
+    // B1: an empty id must not produce a request at all. `useCustomer('')` once
+    // redirected to the list endpoint with an absolute URL, bypassing the Vite proxy.
+    enabled: invoiceId !== '',
+    queryKey: queryKeys.invoice(invoiceId),
+    queryFn: () =>
+      unwrap(
+        api.GET('/api/invoices/{invoice_id}', { params: { path: { invoice_id: invoiceId } } }),
+      ),
+  })
+}
+
+export function useInvoiceLines(invoiceId: string) {
+  return useQuery({
+    enabled: invoiceId !== '',
+    queryKey: queryKeys.invoiceLines(invoiceId),
+    queryFn: () =>
+      unwrap(
+        api.GET('/api/invoices/{invoice_id}/lines', {
+          params: { path: { invoice_id: invoiceId } },
+        }),
+      ),
+  })
+}
+
+export function useInvoiceTimeline(invoiceId: string) {
+  return useQuery({
+    enabled: invoiceId !== '',
+    queryKey: queryKeys.timeline('invoice', invoiceId),
+    queryFn: () =>
+      unwrap(
+        api.GET('/api/invoices/{invoice_id}/timeline', {
+          params: { path: { invoice_id: invoiceId } },
+        }),
+      ),
+  })
+}
+
+export function useFiscalProfile() {
+  return useQuery({
+    queryKey: queryKeys.fiscalProfile,
+    queryFn: async (): Promise<FiscalProfile | null> => {
+      // A 404 here means "not configured yet", which is a legitimate state and not an
+      // error -- the same treatment `useEmitter` in features/settings/queries.ts gives
+      // its own singleton row.
+      const { data, error, response } = await api.GET('/api/fiscal-profile')
+      if (response.status === 404) return null
+      if (error !== undefined) throw toProblem(error, response.status)
+      return data ?? null
+    },
+  })
+}
+
+function useInvoiceInvalidation() {
+  const queryClient = useQueryClient()
+  return (invoiceId?: string) => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.invoices() })
+    if (invoiceId !== undefined) {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.invoice(invoiceId) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.invoiceLines(invoiceId) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.timeline('invoice', invoiceId) })
+    }
+  }
+}
+
+export function useCreateInvoice() {
+  const invalidate = useInvoiceInvalidation()
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      unwrap(api.POST('/api/invoices', { body: body as never })),
+    onSuccess: (invoice) => invalidate(invoice.id),
+  })
+}
+
+export function useUpdateInvoice(invoiceId: string) {
+  const invalidate = useInvoiceInvalidation()
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      unwrap(
+        api.PATCH('/api/invoices/{invoice_id}', {
+          params: { path: { invoice_id: invoiceId } },
+          body: body as never,
+        }),
+      ),
+    onSuccess: () => invalidate(invoiceId),
+  })
+}
+
+export function useReplaceLines(invoiceId: string) {
+  const invalidate = useInvoiceInvalidation()
+  return useMutation({
+    mutationFn: (righe: InvoiceLineInput[]) =>
+      unwrap(
+        api.PUT('/api/invoices/{invoice_id}/lines', {
+          params: { path: { invoice_id: invoiceId } },
+          body: { righe },
+        }),
+      ),
+    onSuccess: () => invalidate(invoiceId),
+  })
+}
+
+export function useConfirmProforma(invoiceId: string) {
+  const invalidate = useInvoiceInvalidation()
+  return useMutation({
+    mutationFn: () =>
+      unwrap(
+        api.POST('/api/invoices/{invoice_id}/confirm', {
+          params: { path: { invoice_id: invoiceId } },
+        }),
+      ),
+    onSuccess: () => invalidate(invoiceId),
+  })
+}
+
+export function useIssueInvoice(invoiceId: string) {
+  const invalidate = useInvoiceInvalidation()
+  return useMutation({
+    mutationFn: (body: { data_emissione?: string | null }) =>
+      unwrap(
+        api.POST('/api/invoices/{invoice_id}/issue', {
+          params: { path: { invoice_id: invoiceId } },
+          body,
+        }),
+      ),
+    onSuccess: (issued) => {
+      // The issued row may be a *different* row when the source was a proforma, so
+      // both are invalidated: the proforma is now `consumata`.
+      invalidate(invoiceId)
+      invalidate(issued.id)
+    },
+  })
+}
+
+export function useAnnulInvoice(invoiceId: string) {
+  const invalidate = useInvoiceInvalidation()
+  return useMutation({
+    mutationFn: (motivo: string) =>
+      unwrap(
+        api.POST('/api/invoices/{invoice_id}/annul', {
+          params: { path: { invoice_id: invoiceId } },
+          body: { motivo },
+        }),
+      ),
+    onSuccess: () => invalidate(invoiceId),
+  })
+}
+
+export function useMarkTransmitted(invoiceId: string) {
+  const invalidate = useInvoiceInvalidation()
+  return useMutation({
+    mutationFn: (data: string) =>
+      unwrap(
+        api.POST('/api/invoices/{invoice_id}/transmitted', {
+          params: { path: { invoice_id: invoiceId } },
+          body: { data },
+        }),
+      ),
+    onSuccess: () => invalidate(invoiceId),
+  })
+}
+
+export function useSetPaymentState(invoiceId: string) {
+  const invalidate = useInvoiceInvalidation()
+  return useMutation({
+    mutationFn: (body: { stato_pagamento: StatoPagamento; data_incasso?: string | null }) =>
+      unwrap(
+        api.PATCH('/api/invoices/{invoice_id}/payment', {
+          params: { path: { invoice_id: invoiceId } },
+          body,
+        }),
+      ),
+    onSuccess: () => invalidate(invoiceId),
+  })
+}
+
+export function useProduceArtifacts(invoiceId: string) {
+  const invalidate = useInvoiceInvalidation()
+  return useMutation({
+    mutationFn: () =>
+      unwrap(
+        api.POST('/api/invoices/{invoice_id}/artifacts', {
+          params: { path: { invoice_id: invoiceId } },
+        }),
+      ),
+    onSuccess: () => invalidate(invoiceId),
+  })
+}
+
+export function useDeleteInvoice() {
+  const invalidate = useInvoiceInvalidation()
+  return useMutation({
+    mutationFn: (invoiceId: string) =>
+      unwrap(
+        api.DELETE('/api/invoices/{invoice_id}', {
+          params: { path: { invoice_id: invoiceId } },
+        }),
+      ),
+    onSuccess: () => invalidate(),
+  })
+}
+
+export function useSaveFiscalProfile() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      unwrap(api.PUT('/api/fiscal-profile', { body: body as never })),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.fiscalProfile })
+    },
+  })
+}
+
+/**
+ * A blob download, the one documented exception to "no `fetch` inside components"
+ * already established by `downloadDocument` in `features/documents/queries.ts`:
+ * `openapi-fetch` cannot express a binary response, and the server's own
+ * `Content-Disposition` is what names the file -- which for the XML is the SdI's
+ * convention and matters to whoever receives it.
+ */
+export async function downloadInvoiceArtifact(
+  invoiceId: string,
+  kind: 'pdf' | 'xml',
+): Promise<void> {
+  const response = await fetch(`/api/invoices/${invoiceId}/${kind}`, { credentials: 'include' })
+  if (!response.ok) {
+    const payload: unknown = await response.json().catch(() => null)
+    throw toProblem(payload, response.status)
+  }
+  const url = URL.createObjectURL(await response.blob())
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = ''
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
+}
+```
+
+- [ ] **Step 8: Run the tests and the compiler**
+
+Run: `cd apps/web && pnpm exec vitest run src/features/invoices && pnpm exec tsc --noEmit && pnpm lint`
+Expected: PASS and clean.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add apps/web/src/lib/query.ts apps/web/src/lib/api-types.ts apps/web/src/features/invoices/
+git commit -m "feat(web): invoice query hooks and exact-cents money formatting"
+```
+
+---
+### Task 17: The Fatture list
+
+**Files:**
+- Create: `apps/web/src/features/invoices/columns.tsx`
+- Create: `apps/web/src/features/invoices/InvoiceStateBadge.tsx`
+- Create: `apps/web/src/routes/app/fatture/index.tsx`
+- Modify: `apps/web/src/components/AppShell.tsx`
+- Modify: `apps/web/src/components/AppShell.test.tsx`
+- Modify: `apps/web/eslint.config.js`
+- Test: `apps/web/src/features/invoices/columns.test.ts`
+
+**Interfaces:**
+- Consumes: `DataTable`, `DataTableFeatures`; `useInvoices`, `Invoice`, `INVOICE_STATE_LABELS`, `PAYMENT_STATE_LABELS`, `INVOICE_TYPE_LABELS`; `formatMoney`, `formatDate`, `formatInvoiceNumber`.
+- Produces:
+  - `buildInvoiceColumns(): ColumnDef<DataTableFeatures, Invoice>[]`
+  - `InvoiceStateBadge({ invoice }: { invoice: Pick<Invoice, 'stato' | 'stato_pagamento' | 'tipo'> })`
+  - route `/app/fatture/` rendering `InvoicesPage`
+  - `NAV` in `AppShell.tsx` gains `{ to: '/app/fatture', label: 'Fatture', icon: Receipt }`
+
+- [ ] **Step 1: Write the failing test**
+
+`apps/web/src/features/invoices/columns.test.ts`:
+
+```ts
+import { describe, expect, it } from 'vitest'
+import { buildInvoiceColumns } from './columns'
+import type { Invoice } from './queries'
+
+const ISSUED = {
+  anno: 2026,
+  numero: 7,
+  riferimento: null,
+  tipo: 'fattura',
+  stato: 'emessa',
+  stato_pagamento: 'da_incassare',
+  data_emissione: '2026-08-20',
+  totale: '1500.00',
+} as unknown as Invoice
+
+const PROFORMA = {
+  anno: null,
+  numero: null,
+  riferimento: 'PROV-2026-0007',
+  tipo: 'proforma',
+  stato: 'confermata',
+  stato_pagamento: 'da_incassare',
+  data_emissione: null,
+  totale: '500.00',
+} as unknown as Invoice
+
+function accessor(id: string, row: Invoice): unknown {
+  const column = buildInvoiceColumns().find((candidate) => candidate.id === id)
+  if (column === undefined || !('accessorFn' in column) || column.accessorFn === undefined) {
+    throw new Error(`nessuna colonna con id ${id}`)
+  }
+  return column.accessorFn(row, 0)
+}
+
+describe('buildInvoiceColumns', () => {
+  it('shows the fiscal number for an invoice and the reference for a proforma', () => {
+    expect(accessor('numero', ISSUED)).toBe('2026/7')
+    expect(accessor('numero', PROFORMA)).toBe('PROV-2026-0007')
+  })
+
+  it('formats the total as grouped euros', () => {
+    expect(String(accessor('totale', ISSUED))).toContain('1.500,00')
+  })
+
+  it('shows an em dash where a proforma has no issue date', () => {
+    expect(accessor('data_emissione', PROFORMA)).toBe('—')
+  })
+
+  it('does not offer a payment column value for a proforma', () => {
+    // A proforma is never collected: showing "Da incassare" next to something nobody
+    // owes is the kind of small lie a fiscal list should not tell.
+    expect(accessor('stato_pagamento', PROFORMA)).toBe('—')
+    expect(accessor('stato_pagamento', ISSUED)).toBe('Da incassare')
+  })
+})
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `cd apps/web && pnpm exec vitest run src/features/invoices/columns.test.ts`
+Expected: FAIL — the module does not exist.
+
+- [ ] **Step 3: Implement the badge**
+
+`apps/web/src/features/invoices/InvoiceStateBadge.tsx`:
+
+```tsx
+import { Badge } from '@/components/ui/badge'
+import {
+  INVOICE_STATE_LABELS,
+  PAYMENT_STATE_LABELS,
+  type Invoice,
+  type InvoiceStato,
+  type StatoPagamento,
+} from './queries'
+
+const VARIANT: Record<InvoiceStato, 'default' | 'secondary' | 'destructive' | 'outline'> = {
+  bozza: 'outline',
+  confermata: 'secondary',
+  consumata: 'secondary',
+  emessa: 'default',
+  annullata: 'destructive',
+}
+
+/**
+ * The state, and the collection state when there is one to show.
+ *
+ * `annullata` is the one destructive-coloured state in the product: a struck-through
+ * page in a fiscal register is not a neutral fact, and the colour is what stops it
+ * from reading like an ordinary status in a list of twenty rows.
+ */
+export function InvoiceStateBadge({
+  invoice,
+}: {
+  invoice: Pick<Invoice, 'stato' | 'stato_pagamento' | 'tipo'>
+}) {
+  const stato = invoice.stato as InvoiceStato
+  const pagamento = invoice.stato_pagamento as StatoPagamento
+  return (
+    <span className="flex flex-wrap items-center gap-1.5">
+      <Badge variant={VARIANT[stato]}>{INVOICE_STATE_LABELS[stato]}</Badge>
+      {invoice.tipo === 'fattura' && stato === 'emessa' && (
+        <Badge variant={pagamento === 'incassato' ? 'secondary' : 'outline'}>
+          {PAYMENT_STATE_LABELS[pagamento]}
+        </Badge>
+      )}
+    </span>
+  )
+}
+```
+
+- [ ] **Step 4: Implement the columns**
+
+`apps/web/src/features/invoices/columns.tsx`:
+
+```tsx
+import type { ColumnDef } from '@tanstack/react-table'
+import type { DataTableFeatures } from '@/components/DataTable'
+import { formatDate, formatInvoiceNumber, formatMoney } from './format'
+import {
+  INVOICE_STATE_LABELS,
+  INVOICE_TYPE_LABELS,
+  PAYMENT_STATE_LABELS,
+  type Invoice,
+  type InvoiceStato,
+  type InvoiceTipo,
+  type StatoPagamento,
+} from './queries'
+
+const EMPTY = '—'
+
+/**
+ * No custom-field columns, unlike `buildCustomerColumns`/`buildDealColumns`.
+ *
+ * Deliberate: `invoice` is a real entity type with custom fields (they are on
+ * `InvoiceRead`), but a fiscal list is read to find a document by number, date and
+ * amount, and widening it with arbitrary columns is how it stops being scannable.
+ * Custom fields are rendered on the detail page instead, which is where they were
+ * defined to be read.
+ */
+export function buildInvoiceColumns(): ColumnDef<DataTableFeatures, Invoice>[] {
+  return [
+    { header: 'Numero', id: 'numero', accessorFn: (row) => formatInvoiceNumber(row) },
+    {
+      header: 'Tipo',
+      id: 'tipo',
+      accessorFn: (row) => INVOICE_TYPE_LABELS[row.tipo as InvoiceTipo] ?? row.tipo,
+    },
+    {
+      header: 'Stato',
+      id: 'stato',
+      accessorFn: (row) => INVOICE_STATE_LABELS[row.stato as InvoiceStato] ?? row.stato,
+    },
+    { header: 'Data', id: 'data_emissione', accessorFn: (row) => formatDate(row.data_emissione) },
+    { header: 'Totale', id: 'totale', accessorFn: (row) => formatMoney(row.totale) },
+    {
+      header: 'Incasso',
+      id: 'stato_pagamento',
+      accessorFn: (row) =>
+        row.tipo === 'proforma' || row.stato !== 'emessa'
+          ? EMPTY
+          : (PAYMENT_STATE_LABELS[row.stato_pagamento as StatoPagamento] ?? row.stato_pagamento),
+    },
+  ]
+}
+```
+
+- [ ] **Step 5: Implement the route**
+
+`apps/web/src/routes/app/fatture/index.tsx`:
+
+```tsx
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { Plus } from 'lucide-react'
+import { useState } from 'react'
+import { toast } from 'sonner'
+import { DataTable } from '@/components/DataTable'
+import { Button } from '@/components/ui/button'
+import { InvoiceForm } from '@/features/invoices/InvoiceForm'
+import { buildInvoiceColumns } from '@/features/invoices/columns'
+import {
+  INVOICE_STATE_LABELS,
+  INVOICE_TYPE_LABELS,
+  useCreateInvoice,
+  useInvoices,
+  type InvoiceStato,
+  type InvoiceTipo,
+} from '@/features/invoices/queries'
+import { toProblem, type ProblemDetail } from '@/lib/api'
+import { useCanWrite } from '@/lib/auth'
+
+const TIPI: InvoiceTipo[] = ['fattura', 'proforma']
+const STATI: InvoiceStato[] = ['bozza', 'confermata', 'emessa', 'annullata', 'consumata']
+
+function InvoicesPage() {
+  const navigate = useNavigate()
+  const canWrite = useCanWrite()
+  const [tipo, setTipo] = useState<InvoiceTipo | undefined>(undefined)
+  const [stato, setStato] = useState<InvoiceStato | undefined>(undefined)
+  const [open, setOpen] = useState(false)
+  const [problem, setProblem] = useState<ProblemDetail | null>(null)
+
+  const invoices = useInvoices({ tipo, stato })
+  const create = useCreateInvoice()
+
+  return (
+    <div className="p-8">
+      <header className="mb-6 flex items-center justify-between">
+        <h1 className="text-2xl font-semibold tracking-tight">Fatture</h1>
+        {canWrite && (
+          <Button
+            onClick={() => {
+              setProblem(null)
+              setOpen(true)
+            }}
+          >
+            <Plus className="mr-2 size-4" />
+            Nuovo documento
+          </Button>
+        )}
+      </header>
+
+      <div className="mb-4 flex flex-wrap gap-2">
+        <Button
+          size="sm"
+          variant={tipo === undefined && stato === undefined ? 'default' : 'secondary'}
+          onClick={() => {
+            setTipo(undefined)
+            setStato(undefined)
+          }}
+        >
+          Tutti
+        </Button>
+        {TIPI.map((candidate) => (
+          <Button
+            key={candidate}
+            size="sm"
+            variant={tipo === candidate ? 'default' : 'secondary'}
+            onClick={() => setTipo(tipo === candidate ? undefined : candidate)}
+          >
+            {INVOICE_TYPE_LABELS[candidate]}
+          </Button>
+        ))}
+        {STATI.map((candidate) => (
+          <Button
+            key={candidate}
+            size="sm"
+            variant={stato === candidate ? 'default' : 'secondary'}
+            onClick={() => setStato(stato === candidate ? undefined : candidate)}
+          >
+            {INVOICE_STATE_LABELS[candidate]}
+          </Button>
+        ))}
+      </div>
+
+      <DataTable
+        columns={buildInvoiceColumns()}
+        data={invoices.data?.items ?? []}
+        isLoading={invoices.isLoading}
+        isError={invoices.isError}
+        error={invoices.error}
+        onRowClick={(row) =>
+          void navigate({ to: '/app/fatture/$invoiceId', params: { invoiceId: row.id } })
+        }
+        emptyMessage="Nessun documento. Creane uno per iniziare."
+      />
+
+      <InvoiceForm
+        title="Nuovo documento"
+        open={open}
+        onOpenChange={setOpen}
+        problem={problem}
+        busy={create.isPending}
+        onSubmit={(values) => {
+          setProblem(null)
+          create.mutate(values, {
+            onSuccess: (created) => {
+              setOpen(false)
+              toast.success(
+                created.tipo === 'proforma' ? 'Proforma creata' : 'Bozza di fattura creata',
+              )
+              void navigate({
+                to: '/app/fatture/$invoiceId',
+                params: { invoiceId: created.id },
+              })
+            },
+            onError: (error) => setProblem(toProblem(error)),
+          })
+        }}
+      />
+    </div>
+  )
+}
+
+export const Route = createFileRoute('/app/fatture/')({ component: InvoicesPage })
+```
+
+- [ ] **Step 6: Add the nav entry**
+
+In `apps/web/src/components/AppShell.tsx`, add `Receipt` to the `lucide-react` import and the entry to `NAV`, between Deal and Token:
+
+```tsx
+const NAV = [
+  { to: '/app', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/app/clienti', label: 'Clienti', icon: Building2 },
+  { to: '/app/persone', label: 'Persone', icon: Users },
+  { to: '/app/deal', label: 'Deal', icon: Handshake },
+  { to: '/app/fatture', label: 'Fatture', icon: Receipt },
+  { to: '/app/token', label: 'Token', icon: KeyRound },
+] as const
+```
+
+In `apps/web/src/components/AppShell.test.tsx`, update whichever assertion enumerates the nav labels so it includes `Fatture` — that test exists precisely so a nav change is a deliberate edit rather than a surprise.
+
+- [ ] **Step 7: Add the eslint override**
+
+In `apps/web/eslint.config.js`, add a block alongside the existing per-file overrides:
+
+```js
+  {
+    files: ['src/routes/app/fatture/index.tsx', 'src/routes/app/fatture/$invoiceId.tsx'],
+    rules: {
+      'react-refresh/only-export-components': ['warn', { allowExportNames: ['Route'] }],
+    },
+  },
+```
+
+- [ ] **Step 8: Run the tests and the compiler**
+
+Run: `cd apps/web && pnpm exec vitest run && pnpm exec tsc --noEmit && pnpm lint`
+Expected: PASS and clean. `tsc` will fail until Task 18 creates `InvoiceForm`; write that file's skeleton now only if you are executing Tasks 17 and 18 out of order — otherwise run this step after Task 18 and keep the commit below.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add apps/web/src/features/invoices/columns.tsx apps/web/src/features/invoices/InvoiceStateBadge.tsx apps/web/src/routes/app/fatture/index.tsx apps/web/src/components/AppShell.tsx apps/web/src/components/AppShell.test.tsx apps/web/eslint.config.js apps/web/src/features/invoices/columns.test.ts
+git commit -m "feat(web): the Fatture list, with state and collection badges"
+```
+
+---
+
+### Task 18: The line editor and the create form
+
+**Files:**
+- Create: `apps/web/src/features/invoices/InvoiceLinesEditor.tsx`
+- Create: `apps/web/src/features/invoices/InvoiceForm.tsx`
+- Modify: `apps/web/eslint.config.js`
+- Test: `apps/web/src/features/invoices/InvoiceLinesEditor.test.tsx`
+
+**Interfaces:**
+- Consumes: `useReplaceLines`, `InvoiceLine`, `InvoiceLineInput`, `Invoice`; `formatMoney`, `sumLineTotals`; `useCreateInvoice`; `DynamicForm` is **not** used here (see below).
+- Produces:
+  - `InvoiceLinesEditor({ invoice, lines, readOnly }: { invoice: Invoice; lines: InvoiceLine[]; readOnly: boolean })`
+  - `InvoiceForm({ open, onOpenChange, problem, busy, onSubmit, title }: InvoiceFormProps)`
+  - `emptyLine(): DraftLine` and `type DraftLine` from `InvoiceLinesEditor.tsx`
+
+- [ ] **Step 1: Write the failing test**
+
+`apps/web/src/features/invoices/InvoiceLinesEditor.test.tsx`:
+
+```tsx
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import type { ReactNode } from 'react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { InvoiceLinesEditor } from './InvoiceLinesEditor'
+import type { Invoice, InvoiceLine } from './queries'
+
+function wrap(children: ReactNode) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(<QueryClientProvider client={client}>{children}</QueryClientProvider>)
+}
+
+const DRAFT = { id: 'inv-1', tipo: 'fattura', stato: 'bozza' } as unknown as Invoice
+
+const LINE: InvoiceLine = {
+  id: 'line-1',
+  invoice_id: 'inv-1',
+  numero_linea: 1,
+  descrizione: 'Consulenza',
+  quantita: '3.000000',
+  unita_misura: 'ore',
+  prezzo_unitario: '500.000000',
+  sconto_percentuale: null,
+  sconto_importo: null,
+  prezzo_totale: '1500.00',
+  aliquota_iva: '0.00',
+  natura: 'N2.2',
+  riferimento_normativo: 'art. 1',
+}
+
+beforeEach(() => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(
+      async () =>
+        new Response(JSON.stringify({ id: 'inv-1', totale: '1500.00' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    ),
+  )
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+describe('InvoiceLinesEditor', () => {
+  it('shows the stored line total, never a recomputed one', () => {
+    // The authoritative total is the API's. The running figure below the table is
+    // explicitly labelled as a preview so nobody reads it as the document's total.
+    wrap(<InvoiceLinesEditor invoice={DRAFT} lines={[LINE]} readOnly={false} />)
+    expect(screen.getByDisplayValue('Consulenza')).toBeInTheDocument()
+    expect(screen.getByText(/1\.500,00/)).toBeInTheDocument()
+  })
+
+  it('adds and removes rows', async () => {
+    const user = userEvent.setup()
+    wrap(<InvoiceLinesEditor invoice={DRAFT} lines={[LINE]} readOnly={false} />)
+    await user.click(screen.getByRole('button', { name: /aggiungi riga/i }))
+    expect(screen.getAllByLabelText(/descrizione/i)).toHaveLength(2)
+    await user.click(screen.getAllByRole('button', { name: /rimuovi riga/i })[1] as HTMLElement)
+    expect(screen.getAllByLabelText(/descrizione/i)).toHaveLength(1)
+  })
+
+  it('treats a zero discount as a value, not a blank', async () => {
+    // `0` and `false` are values, never blanks -- mirroring `is_blank`. A zero
+    // percentage discount must survive the round trip as `0`, not vanish.
+    const user = userEvent.setup()
+    wrap(<InvoiceLinesEditor invoice={DRAFT} lines={[LINE]} readOnly={false} />)
+    const discount = screen.getByLabelText(/sconto %/i)
+    await user.clear(discount)
+    await user.type(discount, '0')
+    await user.click(screen.getByRole('button', { name: /salva righe/i }))
+    const body = JSON.parse(
+      String((fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[1] && (((fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[1]) as RequestInit).body),
+    ) as { righe: { sconto_percentuale: string | null }[] }
+    expect(body.righe[0]?.sconto_percentuale).toBe('0')
+  })
+
+  it('sends an emptied optional field as null so the bulk replace clears it', async () => {
+    const user = userEvent.setup()
+    wrap(<InvoiceLinesEditor invoice={DRAFT} lines={[LINE]} readOnly={false} />)
+    await user.clear(screen.getByLabelText(/unità/i))
+    await user.click(screen.getByRole('button', { name: /salva righe/i }))
+    const body = JSON.parse(
+      String((((fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[1]) as RequestInit).body),
+    ) as { righe: { unita_misura: string | null }[] }
+    expect(body.righe[0]?.unita_misura).toBeNull()
+  })
+
+  it('is read-only for an issued invoice, with no save button at all', () => {
+    const issued = { ...DRAFT, stato: 'emessa' } as unknown as Invoice
+    wrap(<InvoiceLinesEditor invoice={issued} lines={[LINE]} readOnly />)
+    expect(screen.queryByRole('button', { name: /salva righe/i })).not.toBeInTheDocument()
+    expect(screen.getByText('Consulenza')).toBeInTheDocument()
+  })
+
+  it('does not offer a VAT rate field, because the regime decides it', () => {
+    // Accepting a rate here would put the table constraint
+    // `(aliquota_iva = 0) = (natura IS NOT NULL)` within reach of a form.
+    wrap(<InvoiceLinesEditor invoice={DRAFT} lines={[LINE]} readOnly={false} />)
+    expect(screen.queryByLabelText(/aliquota/i)).not.toBeInTheDocument()
+  })
+})
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `cd apps/web && pnpm exec vitest run src/features/invoices/InvoiceLinesEditor.test.tsx`
+Expected: FAIL — the module does not exist.
+
+- [ ] **Step 3: Implement the editor**
+
+`apps/web/src/features/invoices/InvoiceLinesEditor.tsx`:
+
+```tsx
+import { Plus, Trash2 } from 'lucide-react'
+import { useState } from 'react'
+import { toast } from 'sonner'
+import { QueryErrorBanner } from '@/components/QueryErrorBanner'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { toProblem, type ProblemDetail } from '@/lib/api'
+import { formatMoney, formatQuantity, formatRate, sumLineTotals } from './format'
+import { useReplaceLines, type Invoice, type InvoiceLine, type InvoiceLineInput } from './queries'
+
+/** A row being edited. Every field is a string, because that is what an `<input>` has
+ * and what a `Numeric` column arrives as -- parsing to a JS number in between is the
+ * one thing that must not happen to money. */
+export interface DraftLine {
+  descrizione: string
+  quantita: string
+  unita_misura: string
+  prezzo_unitario: string
+  sconto_percentuale: string
+  sconto_importo: string
+}
+
+export function emptyLine(): DraftLine {
+  return {
+    descrizione: '',
+    quantita: '1',
+    unita_misura: '',
+    prezzo_unitario: '',
+    sconto_percentuale: '',
+    sconto_importo: '',
+  }
+}
+
+function toDraft(line: InvoiceLine): DraftLine {
+  return {
+    descrizione: line.descrizione,
+    quantita: line.quantita,
+    unita_misura: line.unita_misura ?? '',
+    prezzo_unitario: line.prezzo_unitario,
+    sconto_percentuale: line.sconto_percentuale ?? '',
+    sconto_importo: line.sconto_importo ?? '',
+  }
+}
+
+/**
+ * An empty string means "no value" and is sent as `null`; anything else is sent as
+ * typed.
+ *
+ * `'0'` therefore survives as `'0'`, which is the whole point: `0` and `false` are
+ * values, never blanks. The bulk replacement is also what makes clearing possible at
+ * all -- with `exclude_none=True` there is no partial-update spelling that empties
+ * `sconto_importo` (A14).
+ */
+function optional(value: string): string | null {
+  return value.trim() === '' ? null : value
+}
+
+function toPayload(line: DraftLine): InvoiceLineInput {
+  return {
+    descrizione: line.descrizione,
+    quantita: line.quantita.trim() === '' ? '1' : line.quantita,
+    unita_misura: optional(line.unita_misura),
+    prezzo_unitario: line.prezzo_unitario.trim() === '' ? '0' : line.prezzo_unitario,
+    sconto_percentuale: optional(line.sconto_percentuale),
+    sconto_importo: optional(line.sconto_importo),
+    // `aliquota_iva` is deliberately never sent: the `RegimeStrategy` on the server
+    // decides the rate, the Natura and the normative reference together, because the
+    // SdI validates the three as a set.
+  } as InvoiceLineInput
+}
+
+export function InvoiceLinesEditor({
+  invoice,
+  lines,
+  readOnly,
+}: {
+  invoice: Invoice
+  lines: InvoiceLine[]
+  readOnly: boolean
+}) {
+  const [draft, setDraft] = useState<DraftLine[]>(lines.map(toDraft))
+  const [problem, setProblem] = useState<ProblemDetail | null>(null)
+  const replace = useReplaceLines(invoice.id)
+
+  function update(index: number, field: keyof DraftLine, value: string) {
+    setDraft((previous) =>
+      previous.map((line, position) =>
+        position === index ? { ...line, [field]: value } : line,
+      ),
+    )
+  }
+
+  if (readOnly) {
+    return (
+      <div className="rounded-md border bg-card">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b text-left text-xs text-muted-foreground">
+              <th className="px-3 py-2">#</th>
+              <th className="px-3 py-2">Descrizione</th>
+              <th className="px-3 py-2 text-right">Qtà</th>
+              <th className="px-3 py-2 text-right">Prezzo</th>
+              <th className="px-3 py-2 text-center">IVA</th>
+              <th className="px-3 py-2 text-right">Totale</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lines.map((line) => (
+              <tr key={line.id} className="border-b last:border-0">
+                <td className="px-3 py-2 text-muted-foreground">{line.numero_linea}</td>
+                <td className="px-3 py-2">{line.descrizione}</td>
+                <td className="px-3 py-2 text-right">
+                  {formatQuantity(line.quantita)} {line.unita_misura ?? ''}
+                </td>
+                <td className="px-3 py-2 text-right">{formatMoney(line.prezzo_unitario)}</td>
+                <td className="px-3 py-2 text-center">{formatRate(line.aliquota_iva)}</td>
+                <td className="px-3 py-2 text-right">{formatMoney(line.prezzo_totale)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      {problem && <QueryErrorBanner error={problem} />}
+      <div className="space-y-2">
+        {draft.map((line, index) => (
+          <div key={index} className="grid gap-2 rounded-md border bg-card p-3 sm:grid-cols-12">
+            <label className="sm:col-span-5 text-xs text-muted-foreground">
+              Descrizione
+              <Input
+                value={line.descrizione}
+                onChange={(event) => update(index, 'descrizione', event.target.value)}
+              />
+            </label>
+            <label className="sm:col-span-2 text-xs text-muted-foreground">
+              Quantità
+              <Input
+                inputMode="decimal"
+                value={line.quantita}
+                onChange={(event) => update(index, 'quantita', event.target.value)}
+              />
+            </label>
+            <label className="sm:col-span-1 text-xs text-muted-foreground">
+              Unità
+              <Input
+                value={line.unita_misura}
+                onChange={(event) => update(index, 'unita_misura', event.target.value)}
+              />
+            </label>
+            <label className="sm:col-span-2 text-xs text-muted-foreground">
+              Prezzo unitario
+              <Input
+                inputMode="decimal"
+                value={line.prezzo_unitario}
+                onChange={(event) => update(index, 'prezzo_unitario', event.target.value)}
+              />
+            </label>
+            <label className="sm:col-span-1 text-xs text-muted-foreground">
+              Sconto %
+              <Input
+                inputMode="decimal"
+                value={line.sconto_percentuale}
+                onChange={(event) => update(index, 'sconto_percentuale', event.target.value)}
+              />
+            </label>
+            <div className="flex items-end sm:col-span-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Rimuovi riga"
+                onClick={() =>
+                  setDraft((previous) => previous.filter((_, position) => position !== index))
+                }
+              >
+                <Trash2 className="size-4" />
+              </Button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => setDraft((previous) => [...previous, emptyLine()])}
+        >
+          <Plus className="mr-2 size-4" />
+          Aggiungi riga
+        </Button>
+        <p className="text-sm text-muted-foreground">
+          Anteprima totale righe: {formatMoney(sumLineTotals(lines))}
+        </p>
+        <Button
+          disabled={replace.isPending}
+          onClick={() => {
+            setProblem(null)
+            replace.mutate(draft.map(toPayload), {
+              onSuccess: () => toast.success('Righe salvate'),
+              onError: (error) => setProblem(toProblem(error)),
+            })
+          }}
+        >
+          {replace.isPending ? 'Salvataggio…' : 'Salva righe'}
+        </Button>
+      </div>
+    </div>
+  )
+}
+```
+
+- [ ] **Step 4: Implement the create form**
+
+`apps/web/src/features/invoices/InvoiceForm.tsx`:
+
+```tsx
+import { useState } from 'react'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { DynamicForm } from '@/components/DynamicForm'
+import type { ProblemDetail } from '@/lib/api'
+import type { FieldDefinition } from '@/lib/schema'
+import { emptyLine, type DraftLine } from './InvoiceLinesEditor'
+
+const NATIVE_FIELDS: FieldDefinition[] = [
+  { key: 'customer_id', label: 'Cliente (id)', type: 'text', required: true, options: [] },
+  { key: 'deal_id', label: 'Deal (id)', type: 'text', required: false, options: [] },
+  {
+    key: 'tipo',
+    label: 'Tipo',
+    type: 'select',
+    required: true,
+    options: ['fattura', 'proforma'],
+  },
+  { key: 'causale', label: 'Causale', type: 'text', required: false, options: [] },
+  { key: 'note_interne', label: 'Note interne', type: 'textarea', required: false, options: [] },
+]
+
+const NATIVE_FIELD_KEYS = NATIVE_FIELDS.map((field) => field.key)
+
+export interface InvoiceFormProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  problem?: ProblemDetail | null
+  busy?: boolean
+  onSubmit: (values: Record<string, unknown>) => void
+  title: string
+  /** Pre-selected customer, when the form is opened from a customer's own tab. */
+  customerId?: string
+}
+
+const DEFAULTS: Record<string, unknown> = { tipo: 'fattura' }
+
+/** Mirrors `is_blank` in `packages/core/.../fields/validator.py`, and the shipped
+ * `isBlank` in `CustomerForm.tsx`: `0` and `false` are values, never blanks. */
+function isBlank(value: unknown): boolean {
+  if (value === null || value === undefined) return true
+  if (typeof value === 'string') return value.trim() === ''
+  if (Array.isArray(value)) return value.length === 0
+  return false
+}
+
+export function InvoiceForm({
+  open,
+  onOpenChange,
+  problem,
+  busy,
+  onSubmit,
+  title,
+  customerId,
+}: InvoiceFormProps) {
+  const seed = customerId === undefined ? DEFAULTS : { ...DEFAULTS, customer_id: customerId }
+  const [values, setValues] = useState<Record<string, unknown>>(seed)
+  const [lines, setLines] = useState<DraftLine[]>([emptyLine()])
+  const [wasOpen, setWasOpen] = useState(open)
+  // Render-time reset rather than a `useEffect`, the same shape `CustomerForm` uses:
+  // an effect would let one frame render with the previous document's values.
+  if (open !== wasOpen) {
+    setWasOpen(open)
+    if (open) {
+      setValues(seed)
+      setLines([emptyLine()])
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+        </DialogHeader>
+
+        <DynamicForm
+          fields={NATIVE_FIELDS}
+          values={values}
+          onChange={(key, value) => setValues((previous) => ({ ...previous, [key]: value }))}
+          problem={problem}
+          mode="create"
+        />
+
+        <div className="space-y-2">
+          <p className="text-sm font-medium">Prima riga</p>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <label className="text-xs text-muted-foreground">
+              Descrizione
+              <input
+                className="mt-1 w-full rounded-md border px-3 py-2 text-sm"
+                value={lines[0]?.descrizione ?? ''}
+                onChange={(event) =>
+                  setLines(([first = emptyLine()]) => [
+                    { ...first, descrizione: event.target.value },
+                  ])
+                }
+              />
+            </label>
+            <label className="text-xs text-muted-foreground">
+              Quantità
+              <input
+                className="mt-1 w-full rounded-md border px-3 py-2 text-sm"
+                inputMode="decimal"
+                value={lines[0]?.quantita ?? '1'}
+                onChange={(event) =>
+                  setLines(([first = emptyLine()]) => [{ ...first, quantita: event.target.value }])
+                }
+              />
+            </label>
+            <label className="text-xs text-muted-foreground">
+              Prezzo unitario
+              <input
+                className="mt-1 w-full rounded-md border px-3 py-2 text-sm"
+                inputMode="decimal"
+                value={lines[0]?.prezzo_unitario ?? ''}
+                onChange={(event) =>
+                  setLines(([first = emptyLine()]) => [
+                    { ...first, prezzo_unitario: event.target.value },
+                  ])
+                }
+              />
+            </label>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Le altre righe si aggiungono nella scheda del documento.
+          </p>
+        </div>
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            Annulla
+          </Button>
+          <Button
+            disabled={busy}
+            onClick={() => {
+              const native: Record<string, unknown> = {}
+              for (const key of NATIVE_FIELD_KEYS) {
+                const value = values[key]
+                if (!isBlank(value)) native[key] = value
+              }
+              const first = lines[0]
+              const righe =
+                first === undefined || isBlank(first.descrizione)
+                  ? []
+                  : [
+                      {
+                        descrizione: first.descrizione,
+                        quantita: isBlank(first.quantita) ? '1' : first.quantita,
+                        prezzo_unitario: isBlank(first.prezzo_unitario)
+                          ? '0'
+                          : first.prezzo_unitario,
+                      },
+                    ]
+              onSubmit({ ...native, righe })
+            }}
+          >
+            {busy ? 'Salvataggio…' : 'Crea'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+```
+
+- [ ] **Step 5: Add the eslint override**
+
+In `apps/web/eslint.config.js`, add:
+
+```js
+  {
+    files: ['src/features/invoices/InvoiceLinesEditor.tsx'],
+    rules: {
+      'react-refresh/only-export-components': ['warn', { allowExportNames: ['emptyLine'] }],
+    },
+  },
+```
+
+- [ ] **Step 6: Run the tests and the compiler**
+
+Run: `cd apps/web && pnpm exec vitest run src/features/invoices && pnpm exec tsc --noEmit && pnpm lint`
+Expected: PASS and clean.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add apps/web/src/features/invoices/InvoiceLinesEditor.tsx apps/web/src/features/invoices/InvoiceForm.tsx apps/web/src/features/invoices/InvoiceLinesEditor.test.tsx apps/web/eslint.config.js
+git commit -m "feat(web): a bulk line editor and the create dialog"
+```
+
+---
+### Task 19: The invoice detail page and its actions
+
+**Files:**
+- Create: `apps/web/src/features/invoices/InvoiceActions.tsx`
+- Create: `apps/web/src/features/invoices/InvoicesTab.tsx`
+- Create: `apps/web/src/routes/app/fatture/$invoiceId.tsx`
+- Create: `apps/web/src/routes/app/fatture/$invoiceId.test.tsx`
+- Modify: `apps/web/src/components/EntityDetailLayout.tsx`
+- Modify: `apps/web/src/routes/app/clienti/$customerId.tsx`
+- Modify: `apps/web/src/routes/app/deal/$dealId.tsx`
+- Test: `apps/web/src/features/invoices/InvoiceActions.test.tsx`
+
+**Interfaces:**
+- Consumes: every hook from Task 16; `InvoiceLinesEditor`, `InvoiceForm` (Task 18); `InvoiceStateBadge` (Task 17); `EntityDetailLayout`, `QueryErrorBanner`, `DataTable`.
+- Produces:
+  - `InvoiceActions({ invoice }: { invoice: Invoice })`
+  - `InvoicesTab({ owner }: { owner: { customerId: string } | { dealId: string } })`
+  - route `/app/fatture/$invoiceId` exporting both `Route` and `InvoiceDetail`
+  - `EntityDetailLayout` gains an optional `invoices?: ReactNode` prop and a "Fatture" tab
+
+- [ ] **Step 1: Write the failing test**
+
+`apps/web/src/features/invoices/InvoiceActions.test.tsx`:
+
+```tsx
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import type { ReactNode } from 'react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { InvoiceActions } from './InvoiceActions'
+import type { Invoice } from './queries'
+
+function wrap(children: ReactNode) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(<QueryClientProvider client={client}>{children}</QueryClientProvider>)
+}
+
+const BASE = {
+  id: 'inv-1',
+  tipo: 'fattura',
+  stato: 'bozza',
+  stato_pagamento: 'da_incassare',
+  anno: null,
+  numero: null,
+  riferimento: null,
+  trasmessa_esternamente_il: null,
+  xml_document_id: null,
+  pdf_document_id: null,
+  data_incasso: null,
+  motivo_annullamento: null,
+} as unknown as Invoice
+
+function invoice(overrides: Partial<Invoice>): Invoice {
+  return { ...BASE, ...overrides } as Invoice
+}
+
+beforeEach(() => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(
+      async () =>
+        new Response(JSON.stringify({ ...BASE, stato: 'emessa', anno: 2026, numero: 1 }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    ),
+  )
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+describe('InvoiceActions', () => {
+  it('offers Emetti on a draft and nothing about annulment', () => {
+    wrap(<InvoiceActions invoice={invoice({ stato: 'bozza' })} />)
+    expect(screen.getByRole('button', { name: /emetti/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /annulla fattura/i })).not.toBeInTheDocument()
+  })
+
+  it('asks for confirmation before consuming a number', async () => {
+    // Emission is the only irreversible creation in the product. One click is the
+    // price of keeping it away from the agentic surface; a confirmation is the price
+    // of it being irreversible.
+    const user = userEvent.setup()
+    wrap(<InvoiceActions invoice={invoice({ stato: 'bozza' })} />)
+    await user.click(screen.getByRole('button', { name: /emetti/i }))
+    expect(screen.getByText(/consuma un numero del registro/i)).toBeInTheDocument()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('offers annulment on an issued invoice and requires a reason', async () => {
+    const user = userEvent.setup()
+    wrap(<InvoiceActions invoice={invoice({ stato: 'emessa', anno: 2026, numero: 1 })} />)
+    await user.click(screen.getByRole('button', { name: /annulla fattura/i }))
+    const confirm = screen.getByRole('button', { name: /conferma annullamento/i })
+    expect(confirm).toBeDisabled()
+    await user.type(screen.getByLabelText(/motivo/i), 'importo errato')
+    expect(confirm).toBeEnabled()
+  })
+
+  it('replaces annulment with an explanation once the file has been handed over', () => {
+    // Spec 4.1: the application says where the correction has to happen, instead of
+    // offering a button that pretends to solve it.
+    wrap(
+      <InvoiceActions
+        invoice={invoice({
+          stato: 'emessa',
+          anno: 2026,
+          numero: 1,
+          trasmessa_esternamente_il: '2026-08-21',
+        })}
+      />,
+    )
+    expect(screen.queryByRole('button', { name: /annulla fattura/i })).not.toBeInTheDocument()
+    expect(screen.getByText(/nota di credito/i)).toBeInTheDocument()
+  })
+
+  it('offers Converti in fattura on a confirmed proforma', () => {
+    wrap(<InvoiceActions invoice={invoice({ tipo: 'proforma', stato: 'confermata' })} />)
+    expect(screen.getByRole('button', { name: /converti in fattura/i })).toBeInTheDocument()
+  })
+
+  it('offers no XML download for a proforma', () => {
+    wrap(<InvoiceActions invoice={invoice({ tipo: 'proforma', stato: 'confermata' })} />)
+    expect(screen.queryByRole('button', { name: /xml/i })).not.toBeInTheDocument()
+  })
+
+  it('offers the XML download only once one exists', () => {
+    wrap(<InvoiceActions invoice={invoice({ stato: 'emessa', anno: 2026, numero: 1 })} />)
+    expect(screen.queryByRole('button', { name: /scarica xml/i })).not.toBeInTheDocument()
+    wrap(
+      <InvoiceActions
+        invoice={invoice({ stato: 'emessa', anno: 2026, numero: 1, xml_document_id: 'doc-1' })}
+      />,
+    )
+    expect(screen.getByRole('button', { name: /scarica xml/i })).toBeInTheDocument()
+  })
+
+  it('offers the payment toggle only on an issued invoice', () => {
+    wrap(<InvoiceActions invoice={invoice({ stato: 'bozza' })} />)
+    expect(screen.queryByRole('button', { name: /incassata/i })).not.toBeInTheDocument()
+    wrap(<InvoiceActions invoice={invoice({ stato: 'emessa', anno: 2026, numero: 1 })} />)
+    expect(screen.getByRole('button', { name: /incassata/i })).toBeInTheDocument()
+  })
+})
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `cd apps/web && pnpm exec vitest run src/features/invoices/InvoiceActions.test.tsx`
+Expected: FAIL — the module does not exist.
+
+- [ ] **Step 3: Implement the actions**
+
+`apps/web/src/features/invoices/InvoiceActions.tsx`:
+
+```tsx
+import { useState } from 'react'
+import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { toProblem, type ProblemDetail } from '@/lib/api'
+import { useIsAdmin } from '@/lib/auth'
+import { formatDate, formatInvoiceNumber } from './format'
+import {
+  downloadInvoiceArtifact,
+  useAnnulInvoice,
+  useConfirmProforma,
+  useIssueInvoice,
+  useMarkTransmitted,
+  useProduceArtifacts,
+  useSetPaymentState,
+  type Invoice,
+} from './queries'
+
+const BANNER = 'rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive'
+
+export function InvoiceActions({ invoice }: { invoice: Invoice }) {
+  const isAdmin = useIsAdmin()
+  const [problem, setProblem] = useState<ProblemDetail | null>(null)
+  const [confirmingIssue, setConfirmingIssue] = useState(false)
+  const [annulling, setAnnulling] = useState(false)
+  const [motivo, setMotivo] = useState('')
+  const [transmittedOn, setTransmittedOn] = useState('')
+
+  const issue = useIssueInvoice(invoice.id)
+  const annul = useAnnulInvoice(invoice.id)
+  const transmit = useMarkTransmitted(invoice.id)
+  const confirm = useConfirmProforma(invoice.id)
+  const payment = useSetPaymentState(invoice.id)
+  const artifacts = useProduceArtifacts(invoice.id)
+
+  const isProforma = invoice.tipo === 'proforma'
+  const issued = invoice.stato === 'emessa'
+  const transmitted = invoice.trasmessa_esternamente_il !== null
+
+  function fail(error: unknown) {
+    setProblem(toProblem(error))
+  }
+
+  return (
+    <div className="space-y-3">
+      {problem && (
+        <p role="alert" className={BANNER}>
+          {problem.detail}
+        </p>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2">
+        {invoice.pdf_document_id !== null && (
+          <Button
+            variant="secondary"
+            onClick={() => void downloadInvoiceArtifact(invoice.id, 'pdf').catch(fail)}
+          >
+            Scarica PDF
+          </Button>
+        )}
+        {!isProforma && invoice.xml_document_id !== null && (
+          <Button
+            variant="secondary"
+            onClick={() => void downloadInvoiceArtifact(invoice.id, 'xml').catch(fail)}
+          >
+            Scarica XML
+          </Button>
+        )}
+        {invoice.stato !== 'bozza' && (
+          <Button
+            variant="ghost"
+            disabled={artifacts.isPending}
+            onClick={() => {
+              setProblem(null)
+              artifacts.mutate(undefined, {
+                onSuccess: () => toast.success('Allegati rigenerati'),
+                onError: fail,
+              })
+            }}
+          >
+            {artifacts.isPending ? 'Rigenerazione…' : 'Rigenera PDF e XML'}
+          </Button>
+        )}
+
+        {isProforma && invoice.stato === 'bozza' && (
+          <Button
+            disabled={confirm.isPending}
+            onClick={() => {
+              setProblem(null)
+              confirm.mutate(undefined, {
+                onSuccess: () => toast.success('Proforma confermata'),
+                onError: fail,
+              })
+            }}
+          >
+            Conferma proforma
+          </Button>
+        )}
+
+        {isAdmin && !confirmingIssue && (invoice.stato === 'bozza' || (isProforma && invoice.stato === 'confermata')) && (
+          <Button onClick={() => setConfirmingIssue(true)}>
+            {isProforma ? 'Converti in fattura' : 'Emetti'}
+          </Button>
+        )}
+
+        {isAdmin && issued && !transmitted && !annulling && (
+          <Button variant="destructive" onClick={() => setAnnulling(true)}>
+            Annulla fattura
+          </Button>
+        )}
+
+        {issued && (
+          <Button
+            variant={invoice.stato_pagamento === 'incassato' ? 'secondary' : 'default'}
+            disabled={payment.isPending}
+            onClick={() => {
+              setProblem(null)
+              const collecting = invoice.stato_pagamento !== 'incassato'
+              payment.mutate(
+                collecting
+                  ? {
+                      stato_pagamento: 'incassato',
+                      data_incasso: new Date().toISOString().slice(0, 10),
+                    }
+                  : { stato_pagamento: 'da_incassare', data_incasso: null },
+                {
+                  onSuccess: () =>
+                    toast.success(collecting ? 'Segnata incassata' : 'Segnata da incassare'),
+                  onError: fail,
+                },
+              )
+            }}
+          >
+            {invoice.stato_pagamento === 'incassato' ? 'Segna da incassare' : 'Segna incassata'}
+          </Button>
+        )}
+      </div>
+
+      {confirmingIssue && (
+        <div className="space-y-2 rounded-lg border border-primary/40 bg-primary/5 p-3">
+          <p className="text-sm">
+            L&apos;emissione <strong>consuma un numero del registro</strong> e non si annulla: si
+            corregge solo con un annullamento e una nuova fattura. Vuoi procedere?
+          </p>
+          <div className="flex gap-2">
+            <Button
+              disabled={issue.isPending}
+              onClick={() => {
+                setProblem(null)
+                issue.mutate(
+                  {},
+                  {
+                    onSuccess: (result) => {
+                      setConfirmingIssue(false)
+                      toast.success(`Fattura ${formatInvoiceNumber(result)} emessa`)
+                    },
+                    onError: fail,
+                  },
+                )
+              }}
+            >
+              {issue.isPending ? 'Emissione…' : 'Conferma emissione'}
+            </Button>
+            <Button variant="ghost" onClick={() => setConfirmingIssue(false)}>
+              Annulla
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {annulling && (
+        <div className="space-y-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3">
+          <p className="text-sm">
+            Il numero {formatInvoiceNumber(invoice)} resta consumato: la riga resta leggibile, come
+            una pagina barrata su un registro cartaceo.
+          </p>
+          <label className="block text-xs text-muted-foreground">
+            Motivo
+            <Input value={motivo} onChange={(event) => setMotivo(event.target.value)} />
+          </label>
+          <div className="flex gap-2">
+            <Button
+              variant="destructive"
+              disabled={motivo.trim() === '' || annul.isPending}
+              onClick={() => {
+                setProblem(null)
+                annul.mutate(motivo, {
+                  onSuccess: () => {
+                    setAnnulling(false)
+                    toast.success('Fattura annullata')
+                  },
+                  onError: fail,
+                })
+              }}
+            >
+              Conferma annullamento
+            </Button>
+            <Button variant="ghost" onClick={() => setAnnulling(false)}>
+              Annulla
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {issued && transmitted && (
+        <p className="rounded-lg border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+          Consegnata all&apos;intermediario il {formatDate(invoice.trasmessa_esternamente_il)}. Da
+          questo punto una correzione richiede una <strong>nota di credito</strong>, che PigroCRM non
+          emette: va fatta dal tuo intermediario o dal portale dell&apos;Agenzia delle Entrate.
+        </p>
+      )}
+
+      {isAdmin && issued && !transmitted && (
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="text-xs text-muted-foreground">
+            Consegnata all&apos;intermediario il
+            <Input
+              type="date"
+              value={transmittedOn}
+              onChange={(event) => setTransmittedOn(event.target.value)}
+            />
+          </label>
+          <Button
+            variant="secondary"
+            disabled={transmittedOn === '' || transmit.isPending}
+            onClick={() => {
+              setProblem(null)
+              transmit.mutate(transmittedOn, {
+                onSuccess: () => toast.success('Consegna registrata'),
+                onError: fail,
+              })
+            }}
+          >
+            Registra consegna
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            Si registra una volta sola: da quel momento l&apos;annullamento non è più possibile.
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+```
+
+- [ ] **Step 4: Implement the detail route**
+
+`apps/web/src/routes/app/fatture/$invoiceId.tsx`:
+
+```tsx
+import { createFileRoute, useParams } from '@tanstack/react-router'
+import { EntityDetailLayout } from '@/components/EntityDetailLayout'
+import { QueryErrorBanner } from '@/components/QueryErrorBanner'
+import { InvoiceActions } from '@/features/invoices/InvoiceActions'
+import { InvoiceLinesEditor } from '@/features/invoices/InvoiceLinesEditor'
+import { InvoiceStateBadge } from '@/features/invoices/InvoiceStateBadge'
+import { formatDate, formatInvoiceNumber, formatMoney } from '@/features/invoices/format'
+import {
+  INVOICE_TYPE_LABELS,
+  useInvoice,
+  useInvoiceLines,
+  type InvoiceTipo,
+} from '@/features/invoices/queries'
+import { toProblem } from '@/lib/api'
+
+export function InvoiceDetail() {
+  const { invoiceId } = useParams({ from: '/app/fatture/$invoiceId' })
+  const invoice = useInvoice(invoiceId)
+  const lines = useInvoiceLines(invoiceId)
+
+  if (invoice.isError) {
+    if (toProblem(invoice.error).status === 404) {
+      return <p className="p-8">Documento non trovato.</p>
+    }
+    return (
+      <div className="p-8">
+        <QueryErrorBanner error={invoice.error} />
+      </div>
+    )
+  }
+  if (!invoice.data) return <div className="p-8 text-muted-foreground">Caricamento…</div>
+
+  const record = invoice.data
+  const editable =
+    record.tipo === 'proforma'
+      ? record.stato === 'bozza' || record.stato === 'confermata'
+      : record.stato === 'bozza'
+
+  return (
+    <EntityDetailLayout
+      title={`${INVOICE_TYPE_LABELS[record.tipo as InvoiceTipo] ?? record.tipo} ${formatInvoiceNumber(record)}`}
+      subtitle={record.causale ?? undefined}
+      entityType="invoice"
+      entityId={record.id}
+      actions={<InvoiceStateBadge invoice={record} />}
+      overview={
+        <div className="space-y-6">
+          <InvoiceActions invoice={record} />
+
+          <dl className="grid gap-4 sm:grid-cols-4">
+            <div>
+              <dt className="text-xs text-muted-foreground">Data</dt>
+              <dd className="text-sm">{formatDate(record.data_emissione)}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Scadenza</dt>
+              <dd className="text-sm">{formatDate(record.data_scadenza)}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Imponibile</dt>
+              <dd className="text-sm">{formatMoney(record.imponibile)}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Imposta</dt>
+              <dd className="text-sm">{formatMoney(record.imposta)}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Bollo</dt>
+              <dd className="text-sm">{formatMoney(record.bollo)}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Totale</dt>
+              <dd className="text-sm font-semibold">{formatMoney(record.totale)}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Incasso</dt>
+              <dd className="text-sm">{formatDate(record.data_incasso)}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Note interne</dt>
+              <dd className="text-sm">{record.note_interne ?? '—'}</dd>
+            </div>
+          </dl>
+
+          {record.motivo_annullamento !== null && (
+            <p className="rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm">
+              Annullata il {formatDate(record.annullata_il)}: {record.motivo_annullamento}
+            </p>
+          )}
+
+          <section className="space-y-2">
+            <h2 className="text-sm font-medium">Righe</h2>
+            {lines.isError && <QueryErrorBanner error={lines.error} />}
+            {lines.data && (
+              <InvoiceLinesEditor invoice={record} lines={lines.data} readOnly={!editable} />
+            )}
+          </section>
+        </div>
+      }
+    />
+  )
+}
+
+export const Route = createFileRoute('/app/fatture/$invoiceId')({ component: InvoiceDetail })
+```
+
+`apps/web/src/routes/app/fatture/$invoiceId.test.tsx` follows the shape of the shipped `app/clienti/$customerId.test.tsx` exactly: render `InvoiceDetail` with a stubbed `fetch`, and assert that a 404 renders `Documento non trovato.` while a 503 renders the `role="alert"` banner. That split is the one thing a detail route must get right — a failed request must never look like an absent record.
+
+- [ ] **Step 5: Add the Fatture tab**
+
+In `apps/web/src/components/EntityDetailLayout.tsx`, add the prop and the tab pair:
+
+```ts
+  /** The Fatture tab's contents. Optional because a Person has no invoices. */
+  invoices?: ReactNode
+```
+
+```tsx
+    {documents && <TabsTrigger value="documenti">Documenti</TabsTrigger>}
+    {invoices && <TabsTrigger value="fatture">Fatture</TabsTrigger>}
+```
+
+```tsx
+    {invoices && (
+      <TabsContent value="fatture" className="mt-6">
+        {invoices}
+      </TabsContent>
+    )}
+```
+
+Create `apps/web/src/features/invoices/InvoicesTab.tsx`:
+
+```tsx
+import { useNavigate } from '@tanstack/react-router'
+import { Plus } from 'lucide-react'
+import { useState } from 'react'
+import { toast } from 'sonner'
+import { DataTable } from '@/components/DataTable'
+import { Button } from '@/components/ui/button'
+import { InvoiceForm } from './InvoiceForm'
+import { buildInvoiceColumns } from './columns'
+import { useCreateInvoice, useInvoices } from './queries'
+import { toProblem, type ProblemDetail } from '@/lib/api'
+import { useCanWrite } from '@/lib/auth'
+
+export type InvoiceOwner = { customerId: string } | { dealId: string }
+
+export function InvoicesTab({ owner }: { owner: InvoiceOwner }) {
+  const navigate = useNavigate()
+  const canWrite = useCanWrite()
+  const [open, setOpen] = useState(false)
+  const [problem, setProblem] = useState<ProblemDetail | null>(null)
+
+  const filters =
+    'customerId' in owner ? { customer_id: owner.customerId } : { deal_id: owner.dealId }
+  const invoices = useInvoices(filters)
+  const create = useCreateInvoice()
+
+  return (
+    <div className="space-y-4">
+      {canWrite && (
+        <Button
+          size="sm"
+          onClick={() => {
+            setProblem(null)
+            setOpen(true)
+          }}
+        >
+          <Plus className="mr-2 size-4" />
+          Nuovo documento
+        </Button>
+      )}
+
+      <DataTable
+        columns={buildInvoiceColumns()}
+        data={invoices.data?.items ?? []}
+        isLoading={invoices.isLoading}
+        isError={invoices.isError}
+        error={invoices.error}
+        onRowClick={(row) =>
+          void navigate({ to: '/app/fatture/$invoiceId', params: { invoiceId: row.id } })
+        }
+        emptyMessage="Nessuna fattura."
+      />
+
+      <InvoiceForm
+        title="Nuovo documento"
+        open={open}
+        onOpenChange={setOpen}
+        problem={problem}
+        busy={create.isPending}
+        customerId={'customerId' in owner ? owner.customerId : undefined}
+        onSubmit={(values) => {
+          setProblem(null)
+          const body = 'dealId' in owner ? { ...values, deal_id: owner.dealId } : values
+          create.mutate(body, {
+            onSuccess: (created) => {
+              setOpen(false)
+              toast.success('Documento creato')
+              void navigate({
+                to: '/app/fatture/$invoiceId',
+                params: { invoiceId: created.id },
+              })
+            },
+            onError: (error) => setProblem(toProblem(error)),
+          })
+        }}
+      />
+    </div>
+  )
+}
+```
+
+Then in `apps/web/src/routes/app/clienti/$customerId.tsx` and `apps/web/src/routes/app/deal/$dealId.tsx`, add the prop to the existing `<EntityDetailLayout …>` call:
+
+```tsx
+      invoices={<InvoicesTab owner={{ customerId: record.id }} />}
+```
+
+and, in the deal route:
+
+```tsx
+      invoices={<InvoicesTab owner={{ dealId: record.id }} />}
+```
+
+A Person deliberately gets no Fatture tab, exactly as it gets no Documenti tab: an invoice belongs to a customer.
+
+- [ ] **Step 6: Add the eslint override**
+
+`apps/web/eslint.config.js` gains:
+
+```js
+  {
+    files: ['src/features/invoices/InvoicesTab.tsx'],
+    rules: {
+      'react-refresh/only-export-components': ['warn', { allowExportNames: ['InvoiceOwner'] }],
+    },
+  },
+```
+
+- [ ] **Step 7: Run the tests and the compiler**
+
+Run: `cd apps/web && pnpm exec vitest run && pnpm exec tsc --noEmit && pnpm lint`
+Expected: PASS and clean.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add apps/web/src/features/invoices/InvoiceActions.tsx apps/web/src/features/invoices/InvoicesTab.tsx apps/web/src/routes/app/fatture/ apps/web/src/components/EntityDetailLayout.tsx apps/web/src/routes/app/clienti/\$customerId.tsx apps/web/src/routes/app/deal/\$dealId.tsx apps/web/eslint.config.js apps/web/src/features/invoices/InvoiceActions.test.tsx
+git commit -m "feat(web): the invoice detail page, issue with confirmation, annul with a reason"
+```
+
+---
+
+### Task 20: The fiscal profile settings panel
+
+**Files:**
+- Create: `apps/web/src/features/settings/FiscalProfilePanel.tsx`
+- Create: `apps/web/src/routes/app/impostazioni/fiscale.tsx`
+- Modify: `apps/web/src/routes/app/impostazioni.tsx` (the settings nav)
+- Modify: `apps/web/eslint.config.js`
+- Test: `apps/web/src/features/settings/FiscalProfilePanel.test.tsx`
+
+**Interfaces:**
+- Consumes: `useFiscalProfile`, `useSaveFiscalProfile` (Task 16); `DynamicForm`; `QueryErrorBanner`.
+- Produces:
+  - `FiscalProfilePanel()`
+  - `fiscalProfileToFormValues(profile: FiscalProfile): Record<string, unknown>`
+  - route `/app/impostazioni/fiscale`
+
+- [ ] **Step 1: Write the failing test**
+
+`apps/web/src/features/settings/FiscalProfilePanel.test.tsx`:
+
+```tsx
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import type { ReactNode } from 'react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { FiscalProfilePanel } from './FiscalProfilePanel'
+
+function wrap(children: ReactNode) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(<QueryClientProvider client={client}>{children}</QueryClientProvider>)
+}
+
+const PROFILE = {
+  id: 'fp-1',
+  codice_regime: 'RF19',
+  aliquota_iva_default: '0.00',
+  natura_default: 'N2.2',
+  riferimento_normativo: 'Operazione non soggetta a IVA…',
+  applica_bollo: true,
+  soglia_bollo: '77.47',
+  importo_bollo: '2.00',
+  condizioni_pagamento: 'TP02',
+  modalita_pagamento: 'MP05',
+  giorni_scadenza: 30,
+  iban: null,
+  created_at: '2026-08-20T10:00:00Z',
+  updated_at: '2026-08-20T10:00:00Z',
+}
+
+beforeEach(() => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(
+      async () =>
+        new Response(JSON.stringify(PROFILE), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    ),
+  )
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+describe('FiscalProfilePanel', () => {
+  it('shows the stored values, including a zero rate as zero and not as blank', async () => {
+    wrap(<FiscalProfilePanel />)
+    await waitFor(() => expect(screen.getByDisplayValue('RF19')).toBeInTheDocument())
+    // `0` is a value, never a blank: a forfettario rate of 0.00 must render as 0.00.
+    expect(screen.getByDisplayValue('0.00')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('77.47')).toBeInTheDocument()
+  })
+
+  it('sends the whole profile on save, because it is one row with required fields', async () => {
+    const user = userEvent.setup()
+    wrap(<FiscalProfilePanel />)
+    await waitFor(() => expect(screen.getByDisplayValue('RF19')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /salva/i }))
+    const request = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.at(-1)
+    const body = JSON.parse(String((request?.[1] as RequestInit).body)) as Record<string, unknown>
+    expect(body.codice_regime).toBe('RF19')
+    expect(body.applica_bollo).toBe(true)
+    expect(body.giorni_scadenza).toBe(30)
+  })
+
+  it('says the profile is missing rather than showing an empty form as if it were saved', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('null', { status: 404, headers: { 'content-type': 'application/json' } })),
+    )
+    wrap(<FiscalProfilePanel />)
+    await waitFor(() =>
+      expect(screen.getByText(/non è ancora configurato/i)).toBeInTheDocument(),
+    )
+  })
+})
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `cd apps/web && pnpm exec vitest run src/features/settings/FiscalProfilePanel.test.tsx`
+Expected: FAIL — the module does not exist.
+
+- [ ] **Step 3: Implement the panel**
+
+`apps/web/src/features/settings/FiscalProfilePanel.tsx`:
+
+```tsx
+import { useState } from 'react'
+import { toast } from 'sonner'
+import { DynamicForm } from '@/components/DynamicForm'
+import { QueryErrorBanner } from '@/components/QueryErrorBanner'
+import { Button } from '@/components/ui/button'
+import { useFiscalProfile, useSaveFiscalProfile, type FiscalProfile } from '@/features/invoices/queries'
+import { toProblem, type ProblemDetail } from '@/lib/api'
+import type { FieldDefinition } from '@/lib/schema'
+
+const FIELDS: FieldDefinition[] = [
+  {
+    key: 'codice_regime',
+    label: 'Regime fiscale',
+    type: 'select',
+    required: true,
+    // Only the two regimes that have a strategy. A code such as RF07 is real FPR12 and
+    // still has no implementation, and offering it would let someone configure a
+    // profile that refuses at emission time instead of here.
+    options: ['RF19', 'RF01'],
+  },
+  { key: 'aliquota_iva_default', label: 'Aliquota IVA di default', type: 'text', required: true, options: [] },
+  { key: 'natura_default', label: 'Natura (per aliquota zero)', type: 'text', required: false, options: [] },
+  { key: 'riferimento_normativo', label: 'Riferimento normativo', type: 'textarea', required: false, options: [] },
+  { key: 'applica_bollo', label: 'Applica imposta di bollo', type: 'checkbox', required: false, options: [] },
+  { key: 'soglia_bollo', label: 'Soglia bollo (EUR)', type: 'text', required: true, options: [] },
+  { key: 'importo_bollo', label: 'Importo bollo (EUR)', type: 'text', required: true, options: [] },
+  { key: 'condizioni_pagamento', label: 'Condizioni pagamento', type: 'text', required: true, options: [] },
+  { key: 'modalita_pagamento', label: 'Modalità pagamento', type: 'text', required: true, options: [] },
+  { key: 'giorni_scadenza', label: 'Giorni di scadenza', type: 'number', required: true, options: [] },
+  { key: 'iban', label: 'IBAN', type: 'text', required: false, options: [] },
+]
+
+const KEYS = FIELDS.map((field) => field.key)
+
+const DEFAULTS: Record<string, unknown> = {
+  codice_regime: 'RF19',
+  aliquota_iva_default: '0.00',
+  natura_default: 'N2.2',
+  riferimento_normativo:
+    'Operazione non soggetta a IVA ai sensi dell’art. 1, commi 54-89, L. 190/2014 — regime forfettario',
+  applica_bollo: true,
+  soglia_bollo: '77.47',
+  importo_bollo: '2.00',
+  condizioni_pagamento: 'TP02',
+  modalita_pagamento: 'MP05',
+  giorni_scadenza: 30,
+  iban: '',
+}
+
+export function fiscalProfileToFormValues(profile: FiscalProfile): Record<string, unknown> {
+  const values: Record<string, unknown> = {}
+  for (const key of KEYS) {
+    values[key] = (profile as unknown as Record<string, unknown>)[key] ?? ''
+  }
+  return values
+}
+
+/**
+ * One row with required fields, so the whole object is sent on every save -- the same
+ * shape `EmitterPanel` uses for `emitter_profile`, and the reason both endpoints are a
+ * `PUT` rather than a `PATCH`. There is no partial update to get wrong, so A14 has no
+ * surface here at all.
+ */
+export function FiscalProfilePanel() {
+  const profile = useFiscalProfile()
+  const save = useSaveFiscalProfile()
+  const [values, setValues] = useState<Record<string, unknown> | null>(null)
+  const [problem, setProblem] = useState<ProblemDetail | null>(null)
+
+  if (profile.isError) return <QueryErrorBanner error={profile.error} />
+  if (profile.isLoading) return <p className="text-muted-foreground">Caricamento…</p>
+
+  const stored = profile.data
+  const current =
+    values ?? (stored === null ? DEFAULTS : fiscalProfileToFormValues(stored))
+
+  return (
+    <div className="space-y-5">
+      {stored === null && (
+        <p className="rounded-lg border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+          Il profilo fiscale non è ancora configurato. Senza di esso non si può emettere
+          nessuna fattura: i valori proposti qui sotto sono quelli del regime forfettario.
+        </p>
+      )}
+
+      <DynamicForm
+        fields={FIELDS}
+        values={current}
+        onChange={(key, value) =>
+          setValues({ ...current, [key]: value })
+        }
+        problem={problem}
+        mode={stored === null ? 'create' : 'edit'}
+      />
+
+      <div className="flex items-center gap-2">
+        <Button
+          disabled={save.isPending}
+          onClick={() => {
+            setProblem(null)
+            const body: Record<string, unknown> = {}
+            for (const key of KEYS) {
+              const value = current[key]
+              // An empty string means "no value" for the two nullable fields and is
+              // sent as null; `0`, `false` and `'0.00'` are values and go through
+              // untouched.
+              body[key] = typeof value === 'string' && value.trim() === '' ? null : value
+            }
+            body.giorni_scadenza = Number(current.giorni_scadenza)
+            save.mutate(body, {
+              onSuccess: () => toast.success('Profilo fiscale salvato'),
+              onError: (error) => setProblem(toProblem(error)),
+            })
+          }}
+        >
+          {save.isPending ? 'Salvataggio…' : 'Salva'}
+        </Button>
+        <p className="text-xs text-muted-foreground">
+          Ogni modifica lascia una voce in cronologia: cambiare regime senza traccia non è
+          un&apos;opzione.
+        </p>
+      </div>
+    </div>
+  )
+}
+```
+
+- [ ] **Step 4: Add the route and the settings nav entry**
+
+`apps/web/src/routes/app/impostazioni/fiscale.tsx`:
+
+```tsx
+import { createFileRoute } from '@tanstack/react-router'
+import { FiscalProfilePanel } from '@/features/settings/FiscalProfilePanel'
+
+function FiscalSettingsPage() {
+  return (
+    <div className="space-y-4">
+      <header>
+        <h2 className="text-lg font-semibold tracking-tight">Profilo fiscale</h2>
+        <p className="text-sm text-muted-foreground">
+          Regime, aliquote, bollo e condizioni di pagamento. Guidano i totali e il file
+          FatturaPA di ogni fattura emessa da qui in avanti; una fattura già emessa resta
+          congelata sui parametri che aveva.
+        </p>
+      </header>
+      <FiscalProfilePanel />
+    </div>
+  )
+}
+
+export const Route = createFileRoute('/app/impostazioni/fiscale')({
+  component: FiscalSettingsPage,
+})
+```
+
+In `apps/web/src/routes/app/impostazioni.tsx`, add `{ to: '/app/impostazioni/fiscale', label: 'Fiscale' }` to whichever array of settings links that layout renders, next to the existing `Emittente` entry — the two belong together: one is the issuer's identity, the other its fiscal parameters.
+
+- [ ] **Step 5: Add the eslint override**
+
+```js
+  {
+    files: ['src/features/settings/FiscalProfilePanel.tsx'],
+    rules: {
+      'react-refresh/only-export-components': [
+        'warn',
+        { allowExportNames: ['fiscalProfileToFormValues'] },
+      ],
+    },
+  },
+```
+
+- [ ] **Step 6: Run the tests and the compiler**
+
+Run: `cd apps/web && pnpm exec vitest run && pnpm exec tsc --noEmit && pnpm lint`
+Expected: PASS and clean.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add apps/web/src/features/settings/FiscalProfilePanel.tsx apps/web/src/routes/app/impostazioni/fiscale.tsx apps/web/src/routes/app/impostazioni.tsx apps/web/eslint.config.js apps/web/src/features/settings/FiscalProfilePanel.test.tsx
+git commit -m "feat(web): the fiscal profile settings panel"
+```
+
+---
+
+### Task 21: The full cycle, end to end, from both adapters
+
+**Files:**
+- Create: `apps/web/e2e/fatture.spec.ts`
+- Modify: `apps/web/e2e/helpers.ts` (two new helpers)
+- Test: `packages/core/tests/test_full_invoice_cycle.py`
+
+**Interfaces:**
+- Consumes: everything. This task adds no production code.
+- Produces:
+  - `e2e/helpers.ts`: `createFiscalProfile(page: Page): Promise<void>`, `createEmitterProfile(page: Page): Promise<void>`
+  - `e2e/fatture.spec.ts`: the browser half of spec criterion 10
+  - `packages/core/tests/test_full_invoice_cycle.py`: the in-process half — MCP prepares, a human issues, both artefacts validate, and the timeline distinguishes the two actors
+
+- [ ] **Step 1: Write the failing cross-adapter test**
+
+`packages/core/tests/test_full_invoice_cycle.py`:
+
+```python
+"""Spec criterion 10, in process: the whole cycle from both adapters.
+
+Claude prepares a three-line proforma through the MCP call path; a human converts it
+into an invoice; the XML validates against the official schema; the customer's timeline
+distinguishes `mcp` from `user`; and there is no tool for the agent to call in order to
+issue.
+"""
+
+from decimal import Decimal
+from uuid import UUID
+
+import pytest
+from fpr12 import assert_valid
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.activities.service import ActivityService
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.emitter.schemas import EmitterProfileUpsert
+from pigrocrm.core.emitter.service import EmitterProfileService
+from pigrocrm.core.fiscal.schemas import FiscalProfileUpsert
+from pigrocrm.core.fiscal.service import FiscalProfileService
+from pigrocrm.core.invoices.schemas import InvoiceCreate, InvoiceIssue, InvoiceLineIn
+from pigrocrm.core.invoices.service import InvoiceService
+from pigrocrm.core.storage.local import LocalFileStorage
+
+AGENT = Actor(id=None, type="mcp", role="collaboratore")
+HUMAN = Actor(id=None, type="user", role="admin")
+
+
+@pytest.fixture
+def world(db_session: Session, tmp_path) -> tuple[InvoiceService, UUID]:  # type: ignore[no-untyped-def]
+    FiscalProfileService(db_session).upsert(
+        FiscalProfileUpsert(codice_regime="RF19", iban="IT60X0542811101000000123456"), HUMAN
+    )
+    EmitterProfileService(db_session).upsert(
+        EmitterProfileUpsert(
+            ragione_sociale="Humancraft di Ivan Sala",
+            partita_iva="14518240966",
+            codice_fiscale="HMCRFT00A01H501K",
+            indirizzo="Via Vittorio Veneto 12",
+            cap="20124",
+            comune="Milano",
+            provincia="MI",
+            nazione="IT",
+            email="someone@example.com",
+        ),
+        HUMAN,
+    )
+    customer = Customer(
+        ragione_sociale="Acme S.r.l.",
+        partita_iva="12345678901",
+        codice_sdi="ABCDEFG",
+        indirizzo="Corso Italia 5",
+        cap="00100",
+        comune="Roma",
+        provincia="RM",
+        nazione="IT",
+    )
+    db_session.add(customer)
+    db_session.flush()
+    return InvoiceService(db_session, LocalFileStorage(tmp_path / "documents")), customer.id
+
+
+def test_an_agent_prepares_and_a_human_issues(
+    world: tuple[InvoiceService, UUID], db_session: Session
+) -> None:
+    service, customer_id = world
+
+    # 1. The agent prepares a three-line proforma. It consumes no number.
+    proforma = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            causale="Consulenza agosto",
+            tipo="proforma",
+            righe=[
+                InvoiceLineIn(descrizione="Analisi", prezzo_unitario=Decimal("500.00")),
+                InvoiceLineIn(descrizione="Sviluppo", prezzo_unitario=Decimal("1500.00")),
+                InvoiceLineIn(descrizione="Sconto", prezzo_unitario=Decimal("-200.00")),
+            ],
+        ),
+        AGENT,
+    )
+    assert proforma.numero is None
+    assert proforma.totale == Decimal("1800.00")
+
+    # 2. The human confirms and converts. A new row, and the proforma is consumed.
+    service.confirm_proforma(proforma.id, HUMAN)
+    issued = service.issue(proforma.id, InvoiceIssue(), HUMAN)
+    assert issued.id != proforma.id
+    assert issued.numero == 1
+    assert issued.origine_proforma_id == proforma.id
+    assert service.get(proforma.id, HUMAN).stato == "consumata"
+
+    # 3. Both artefacts exist and the XML passes the official schema.
+    data, content_type, filename = service.download(issued.id, "xml", HUMAN)
+    assert content_type == "application/xml"
+    assert filename.startswith("IT")
+    assert_valid(data)
+    pdf, pdf_type, _ = service.download(issued.id, "pdf", HUMAN)
+    assert pdf_type == "application/pdf"
+    assert pdf.startswith(b"%PDF")
+
+    # 4. The timeline distinguishes the agent from the human.
+    proforma_entries = ActivityService(db_session).timeline("invoice", proforma.id)
+    invoice_entries = ActivityService(db_session).timeline("invoice", issued.id)
+    assert {entry.actor_type for entry in proforma_entries} == {"mcp", "user"}
+    assert {entry.actor_type for entry in invoice_entries} == {"user"}
+    assert "issued" in {entry.kind for entry in invoice_entries}
+
+
+def test_the_agent_role_cannot_issue_at_all(world: tuple[InvoiceService, UUID]) -> None:
+    """Belt and braces beside the structural ban: even if a tool existed, the MCP
+    context's actor is a collaborator and `issue` requires admin. The *reason* the tool
+    does not exist is that R10 lets a PAT inherit the owner's admin role, so this check
+    alone would not be enough -- which is exactly why both are here."""
+    from pigrocrm.core.errors import PermissionDenied
+
+    service, customer_id = world
+    draft = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("100.00"))],
+        ),
+        AGENT,
+    )
+    with pytest.raises(PermissionDenied):
+        service.issue(draft.id, InvoiceIssue(), AGENT)
+```
+
+- [ ] **Step 2: Run it to verify it fails, then passes**
+
+Run: `uv run pytest packages/core/tests/test_full_invoice_cycle.py -v`
+Expected: PASS once Tasks 1–13 are done; if it fails, the failure names which stage of the cycle broke, which is the point of having it as one test rather than five.
+
+- [ ] **Step 3: Add the two E2E helpers**
+
+In `apps/web/e2e/helpers.ts`, append:
+
+```ts
+export async function createFiscalProfile(page: Page): Promise<void> {
+  await page.goto('/app/impostazioni/fiscale')
+  await page.getByRole('button', { name: 'Salva' }).click()
+  await expect(page.getByText('Profilo fiscale salvato')).toBeVisible()
+}
+
+export async function createEmitterProfile(page: Page): Promise<void> {
+  await page.goto('/app/impostazioni/emittente')
+  await page.getByLabel('Ragione sociale').fill('Humancraft di Ivan Sala')
+  await page.getByLabel('P.IVA').fill('14518240966')
+  await page.getByLabel('Codice fiscale').fill('HMCRFT00A01H501K')
+  await page.getByLabel('Indirizzo').fill('Via Vittorio Veneto 12')
+  await page.getByLabel('CAP').fill('20124')
+  await page.getByLabel('Comune').fill('Milano')
+  await page.getByLabel('Provincia').fill('MI')
+  await page.getByRole('button', { name: 'Salva' }).click()
+}
+```
+
+`expect` must be imported there if it is not already; use the field labels the shipped `EmitterPanel` actually renders rather than these if they differ.
+
+- [ ] **Step 4: Write the browser spec**
+
+`apps/web/e2e/fatture.spec.ts`:
+
+```ts
+import { expect, test } from '@playwright/test'
+import { createCustomer, createEmitterProfile, createFiscalProfile, loginAsAdmin } from './helpers'
+
+test.describe('Fatture', () => {
+  test('il ciclo completo: bozza, righe, emissione, PDF e XML', async ({ page }) => {
+    await loginAsAdmin(page)
+    await createFiscalProfile(page)
+    await createEmitterProfile(page)
+
+    // A customer with the fiscal columns filled in: without them the emission refuses,
+    // by design, naming the field.
+    await page.goto('/app/clienti')
+    await page.getByRole('button', { name: /nuovo cliente/i }).click()
+    const name = `Fatture ${Date.now()}`
+    await page.getByLabel('Ragione sociale').fill(name)
+    await page.getByLabel('P.IVA').fill('12345678901')
+    await page.getByLabel('Codice destinatario').fill('ABCDEFG')
+    await page.getByLabel('Indirizzo').fill('Corso Italia 5')
+    await page.getByLabel('CAP').fill('00100')
+    await page.getByLabel('Comune').fill('Roma')
+    await page.getByLabel('Provincia').fill('RM')
+    await page.getByRole('button', { name: 'Salva' }).click()
+
+    await page.getByText(name).click()
+    await page.getByRole('tab', { name: 'Fatture' }).click()
+    await expect(page.getByText('Nessuna fattura.')).toBeVisible()
+
+    await page.getByRole('button', { name: /nuovo documento/i }).click()
+    await page.getByLabel('Causale').fill('Consulenza agosto')
+    await page.getByLabel('Descrizione').fill('Consulenza tecnica')
+    await page.getByLabel('Prezzo unitario').fill('1500.00')
+    await page.getByRole('button', { name: 'Crea' }).click()
+
+    await expect(page.getByText('Bozza')).toBeVisible()
+    await expect(page.getByText('1.500,00')).toBeVisible()
+
+    await page.getByRole('button', { name: 'Emetti' }).click()
+    await expect(page.getByText(/consuma un numero del registro/i)).toBeVisible()
+    await page.getByRole('button', { name: /conferma emissione/i }).click()
+
+    await expect(page.getByText('Emessa')).toBeVisible()
+    await expect(page.getByRole('button', { name: /scarica pdf/i })).toBeVisible()
+
+    const download = page.waitForEvent('download')
+    await page.getByRole('button', { name: /scarica xml/i }).click()
+    const file = await download
+    expect(file.suggestedFilename()).toMatch(/^IT[A-Z0-9]+_[A-Z0-9]{5}\.xml$/)
+  })
+
+  test('una fattura emessa non si modifica e non si elimina', async ({ page }) => {
+    await loginAsAdmin(page)
+    await page.goto('/app/fatture')
+    await page.getByRole('button', { name: 'Emessa' }).click()
+    const first = page.getByRole('row').nth(1)
+    if ((await first.count()) === 0) return
+    await first.click()
+    // The line editor is read-only: no save button exists at all, rather than one that
+    // fails when pressed.
+    await expect(page.getByRole('button', { name: /salva righe/i })).toHaveCount(0)
+  })
+
+  test('un annullamento richiede un motivo e conserva il numero', async ({ page }) => {
+    await loginAsAdmin(page)
+    await page.goto('/app/fatture')
+    await page.getByRole('button', { name: 'Emessa' }).click()
+    const first = page.getByRole('row').nth(1)
+    if ((await first.count()) === 0) return
+    const numero = (await first.getByRole('cell').first().textContent()) ?? ''
+    await first.click()
+    await page.getByRole('button', { name: /annulla fattura/i }).click()
+    await expect(page.getByRole('button', { name: /conferma annullamento/i })).toBeDisabled()
+    await page.getByLabel('Motivo').fill('importo errato')
+    await page.getByRole('button', { name: /conferma annullamento/i }).click()
+    await expect(page.getByText('Annullata')).toBeVisible()
+    await expect(page.getByText(numero.trim())).toBeVisible()
+  })
+
+  test('una proforma dichiara di non essere una fattura e non offre XML', async ({ page }) => {
+    await loginAsAdmin(page)
+    await createFiscalProfile(page)
+    const customerName = await createCustomer(page)
+    await page.goto('/app/fatture')
+    await page.getByRole('button', { name: /nuovo documento/i }).click()
+    await page.getByLabel('Cliente (id)').fill('')
+    // Filled through the customer's own tab instead, where the id is known.
+    await page.getByRole('button', { name: 'Annulla' }).click()
+
+    await page.goto('/app/clienti')
+    await page.getByText(customerName).click()
+    await page.getByRole('tab', { name: 'Fatture' }).click()
+    await page.getByRole('button', { name: /nuovo documento/i }).click()
+    await page.getByLabel('Tipo').click()
+    await page.getByRole('option', { name: 'proforma' }).click()
+    await page.getByLabel('Descrizione').fill('Prospetto')
+    await page.getByLabel('Prezzo unitario').fill('500.00')
+    await page.getByRole('button', { name: 'Crea' }).click()
+
+    await expect(page.getByText(/^PROV-/)).toBeVisible()
+    await expect(page.getByRole('button', { name: /scarica xml/i })).toHaveCount(0)
+  })
+
+  test('la lista mostra un banner quando la richiesta fallisce, non una tabella vuota', async ({
+    page,
+  }) => {
+    await loginAsAdmin(page)
+    await page.route('**/api/invoices?**', (route) => route.abort())
+    await page.goto('/app/fatture')
+    await expect(page.getByRole('alert')).toBeVisible()
+    await expect(page.getByText('Nessun documento. Creane uno per iniziare.')).toHaveCount(0)
+  })
+})
+```
+
+- [ ] **Step 5: Run the suite**
+
+Run: `cd apps/web && pnpm test:e2e`
+Expected: PASS. `fullyParallel` is `false` and `workers` is `1` in `playwright.config.ts` because the suite shares one database — this spec depends on that and must not change it.
+
+- [ ] **Step 6: Run everything, once**
+
+```bash
+uv run pytest
+uv run mypy
+uv run ruff check .
+cd apps/web && pnpm exec tsc --noEmit && pnpm lint && pnpm exec vitest run && cd ../..
+```
+Expected: all green, nothing skipped.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add packages/core/tests/test_full_invoice_cycle.py apps/web/e2e/fatture.spec.ts apps/web/e2e/helpers.ts
+git commit -m "test: the full invoice cycle, from both adapters"
+```
+
+---
+
+## Definition of done for slice 3
+
+Every one of the spec's ten success criteria maps to a test that runs in CI:
+
+| Criterion | Where it lives |
+|---|---|
+| 1 — the official schema validates, on five cases including both stamp-duty boundaries | Task 6, `test_invoice_fatturapa.py` |
+| 2 — a hostile name corrupts neither the XML nor the PDF | Task 6 (`test_a_hostile_name_*`), Task 12 (`test_the_hostile_customer_name_survives_the_whole_round_trip`), Task 13 (`test_a_hostile_customer_name_appears_in_the_pdf_as_text`) |
+| 3 — numbering under concurrency, and a failed emission consuming nothing | Task 10, `test_invoice_numbering_concurrency.py` |
+| 4 — immutability enforced by the database, including raw SQL | Task 8, `test_invoice_models.py`; Task 11, `test_invoice_immutability.py`; Task 14, `test_deleting_an_issued_invoice_is_a_409` |
+| 5 — a proforma produces no XML, declares itself, and its reference matches no fiscal pattern | Task 5, Task 12, Task 13 |
+| 6 — faithful regeneration a year later, byte for byte | Task 12 (`test_a_regenerated_export_is_byte_identical_to_the_original`), Task 13 (`test_re_rendering_is_byte_identical_and_writes_no_second_version`) |
+| 7 — the MCP ban is in the build | Task 15, `test_mcp_invoice_ban.py` |
+| 8 — the rounding rules are behaviour, via a synthetic `RF01` | Task 2, Task 3, Task 6 (`test_two_rates_produce_one_summary_group_each_with_group_computed_tax`) |
+| 9 — every refusal names the field | Task 6, Task 10, Task 14 (`test_a_refusal_names_the_field_in_the_problem_document`) |
+| 10 — the full cycle from both adapters | Task 21 |
+
+## Self-review
+
+Run after the plan is written, against the spec with fresh eyes.
+
+**Spec coverage.** §1–2 (what is carried and what is rewritten) → Tasks 1, 2, 5, 6, and the "Contradictions" section. §3 numbering → Tasks 8, 10. §4 immutability and correction → Tasks 8, 11, 12. §5 proformas → Tasks 5, 8, 9, 10, 13. §6 money and rounding, §6.1 the two divergent rules, §6.2 the issue date → Tasks 2, 4, 10. §7 the regime, §7.1 `fiscal_profile`, §7.2 how it drives totals and XML → Tasks 3, 7. §8 the data model, §8.1–8.3 → Tasks 4, 8; §8.4 where the bytes live → Tasks 5, 12, 13; §8.5 `entity_type` → Task 4. §9 XML generation → Task 6. §10 PDF and templates → Task 13. §11 the MCP and API surface → Tasks 14, 15. §12 residuals → the "Known open defects" section, and R1/R10 specifically in Task 15's own test docstring. §13 out of scope → nothing is planned for any of it; the two places a user could expect otherwise (a credit note, a foreign customer) return a refusal that says where to go instead, in Tasks 11 and 6. §14 the ten criteria → the table above.
+
+**Not turned into a concrete task, and why.** Nothing in the spec is left unplanned. Two of its statements are deliberately implemented as *refusals with an explanation* rather than as features, because that is what the spec asks for: the credit note (§13) and the foreign customer (§12, R12). One is implemented differently from the spec's letter and the difference is recorded: the FPR12 schema version, the `xmllint` invocation, the per-year proforma sequence, the SdI file name as a download name, the `issue` signature, where the invoice templates live, and the shape of the MCP exclusion list — all eleven resolutions are in the "Contradictions" section with the file and line that settled each.
+
+**Placeholder scan.** No step says "add appropriate error handling", "similar to Task N", "TBD" or "write tests for the above". Four places tell the implementer to prefer what the repository actually has over what this plan sketched — the `apps/api/tests/conftest.py` client fixtures (Task 14), the `apps/mcp/tests/conftest.py` context fixture and `build_server` enumeration (Task 15), `test_documents_service.py`'s existing helpers (Task 12), and the `EmitterPanel` field labels (Task 21). Each names the file to read and the reason, which is a check against drift rather than a gap.
+
+**Type consistency.** `InvoiceService`'s method names are identical everywhere they appear: `create`, `update`, `replace_lines`, `confirm_proforma`, `issue`, `annul`, `mark_transmitted_externally`, `set_payment_state`, `export_xml`, `render_pdf`, `produce_artifacts`, `download`, `get`, `lines`, `soft_delete`, `list`. `lines` is defined above `list` in Tasks 9 and asserted to be so by `test_list_is_the_last_method_of_the_service_class`. `check_party_exportable` and `check_recipient_routing` are module-level in Task 6 and called from both Task 6 and Task 10. `InvoiceArtifact` has the same five fields in Task 4, Task 12, Task 13 and Task 14. `formatMoney`/`formatDate`/`formatInvoiceNumber`/`sumLineTotals` are declared in Task 16 and used unchanged in Tasks 17, 18 and 19. `queryKeys.invoices`/`invoice`/`invoiceLines`/`fiscalProfile` are added in Task 16 and used with those exact names afterwards. The migration chain is `0003 → 0004 (fiscal_profile) → 0005 (invoices)`, and both `assert revision == …` lines in `test_migrations.py` are updated in the task that adds each revision.
+
