@@ -17,6 +17,7 @@ dependencies = [
   # `psycopg[binary]`, so no test change is needed.
   "pyjwt[crypto]==2.13.0",
   "uuid-utils==0.17.0",
+  "lxml==6.1.2",
 ]
 
 [project.scripts]

@@ -14,9 +14,14 @@ pigrocrm-mcp = { workspace = true }
 
 [dependency-groups]
 dev = [
-  "pytest==9.1.1", "pytest-cov==7.1.0", "pytest-asyncio==1.4.0",
-  "testcontainers[postgres]==4.15.0", "httpx==0.28.1",
-  "ruff==0.16.1", "mypy==2.3.0",
+  "pytest==9.1.1",
+  "pytest-cov==7.1.0",
+  "pytest-asyncio==1.4.0",
+  "testcontainers[postgres]==4.15.0",
+  "httpx==0.28.1",
+  "ruff==0.16.1",
+  "mypy==2.3.0",
+  "lxml-stubs==0.5.1",
 ]
 
 [tool.pytest.ini_options]
