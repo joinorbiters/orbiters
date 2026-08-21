@@ -126,6 +126,18 @@ Il costo è basso — una riga in quattro posti — ma la promessa è stata veri
 volte** da tre agenti diversi, una per slice. La formulazione va corretta alla fonte invece di far
 ripetere l'indagine: «il database è aperto, il tipo va esteso in quattro punti, nessuna migrazione».
 
+**Aggiornamento del 2026-08-21 — chiuso in parte, e il commento è ora corretto alla fonte.** Lo
+slice 2 ha aggiunto `"document"` in tutti e quattro i punti, e `fields/schemas.py` porta adesso un
+commento che dice esattamente cosa serve fare («closed by design… widening it means editing here,
+`ENTITY_TYPES`/`CREATE_MODELS`, and the frontend type»). Quindi la promessa fuorviante non c'è più.
+
+Ma scrivendo il piano dello slice 3 è emerso un difetto vicino e peggiore: **`native_fields()` è
+derivata da `CREATE_MODELS`, e per le fatture la derivazione è sbagliata.** `totale`, `imponibile` e
+`numero` sono colonne calcolate che nessuno schema di creazione dichiara, quindi non compaiono fra i
+nomi nativi — e A13, che è ancora aperto, non le protegge da una collisione con una chiave custom.
+Il piano aggira con un `EXTRA_NATIVE_FIELDS` esplicito e lo dichiara: la derivazione automatica non
+è affidabile quando una colonna esiste senza essere scrivibile.
+
 ---
 
 ## Aggiornamento del 2026-08-20 — R5 e R10 non sono più «da decidere»: bloccano lo slice 5
