@@ -10,10 +10,11 @@ from pigrocrm.core.customers.schemas import CustomerListQuery, CustomerUpdate
 from pigrocrm.core.deals.schemas import DealListQuery, DealUpdate
 from pigrocrm.core.documents.schemas import DocumentListQuery
 from pigrocrm.core.fields.schemas import EntityType
+from pigrocrm.core.invoices.schemas import InvoiceLineIn, InvoiceListQuery
 from pigrocrm.core.people.schemas import PersonListQuery, PersonUpdate
 from pigrocrm.core.pipeline.service import PipelineService
 from pigrocrm_mcp.context import McpContext
-from pigrocrm_mcp.tools import customers, deals, documents, people
+from pigrocrm_mcp.tools import customers, deals, documents, invoices, people
 
 # `changes` stays a plain `dict[str, Any]` at runtime -- deliberately, not an
 # oversight. Typing it directly as `CustomerUpdate` (etc.) would make the MCP SDK
@@ -475,3 +476,107 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
         """Cambia lo stato di un'offerta. Transizioni ammesse: bozza -> inviata;
         inviata -> accettata | rifiutata | bozza. Accettata e rifiutata sono finali."""
         return documents.set_state(context, document_id, stato)
+
+    # -- Invoices -------------------------------------------------------------
+    #
+    # Reads, and the proforma. `issue`, `annul`, `mark_transmitted_externally` and
+    # `export_xml` are deliberately absent, and the absence is the mechanism: a
+    # personal access token inherits its owner's full role and never expires, so a
+    # permission check inside a registered tool would be a check an admin's token
+    # passes. A tool that does not exist cannot be called by anyone.
+    #
+    # `test_mcp_invoice_ban.py` reads this module's AST and fails if any of those four
+    # names appears as a registered tool, so the guarantee survives someone adding one
+    # later without reading this comment.
+
+    @mcp.tool()
+    @guard
+    def list_invoices(
+        customer_id: str | None = None,
+        deal_id: str | None = None,
+        tipo: str | None = None,
+        stato: str | None = None,
+        anno: int | None = None,
+        limit: BoundedLimit = 50,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        """Elenca fatture e proforma. Passa `next_cursor` come `cursor` per la pagina
+        successiva. Per scaricare il PDF o l'XML usa l'API REST: MCP restituisce
+        identificativi, non file."""
+        return invoices.search(
+            context,
+            InvoiceListQuery(
+                customer_id=UUID(customer_id) if customer_id else None,
+                deal_id=UUID(deal_id) if deal_id else None,
+                tipo=tipo,  # type: ignore[arg-type]
+                stato=stato,  # type: ignore[arg-type]
+                anno=anno,
+                limit=cast(int, limit),
+                cursor=UUID(cursor) if cursor else None,
+            ),
+        )
+
+    @mcp.tool()
+    @guard
+    def get_invoice(invoice_id: str) -> dict[str, Any]:
+        """Legge una fattura o una proforma: numero, stato, totali e righe."""
+        return invoices.get(context, invoice_id)
+
+    @mcp.tool()
+    @guard
+    def create_proforma(
+        customer_id: str,
+        righe: list[dict[str, Any]],
+        deal_id: str | None = None,
+        causale: str | None = None,
+    ) -> dict[str, Any]:
+        """Crea una proforma. Una proforma non e' un documento fiscale: non prende un
+        numero, non produce un file per il Sistema di Interscambio, e diventa una
+        fattura solo quando una persona la emette dall'applicazione."""
+        return invoices.create_proforma(
+            context,
+            {
+                "customer_id": UUID(customer_id),
+                "deal_id": UUID(deal_id) if deal_id else None,
+                "causale": causale,
+                "righe": righe,
+            },
+        )
+
+    @mcp.tool()
+    @guard
+    def replace_proforma_lines(invoice_id: str, righe: list[dict[str, Any]]) -> dict[str, Any]:
+        """Sostituisce **tutte** le righe di una proforma e ricalcola i totali. Rifiuta
+        una fattura emessa: le sue righe sono immutabili."""
+        return invoices.replace_proforma_lines(context, invoice_id, righe)
+
+    @mcp.tool()
+    @guard
+    def render_proforma_pdf(invoice_id: str) -> dict[str, Any]:
+        """Genera il PDF di una proforma e restituisce l'identificativo del documento.
+        I byte si scaricano dall'API REST."""
+        return invoices.render_proforma_pdf(context, invoice_id)
+
+    @mcp.tool()
+    @guard
+    def get_invoice_xml_url(invoice_id: str) -> dict[str, Any]:
+        """Il percorso REST da cui scaricare il file FatturaPA di una fattura emessa.
+        Non restituisce i byte: un XML fiscale dentro il contesto di un modello e'
+        spreco e rischio insieme."""
+        return invoices.xml_url(context, invoice_id)
+
+    @mcp.tool()
+    @guard
+    def set_invoice_payment_state(
+        invoice_id: str, stato_pagamento: str, data_incasso: str | None = None
+    ) -> dict[str, Any]:
+        """Registra un incasso o lo annulla. Non cambia lo stato fiscale della
+        fattura, che resta emessa."""
+        return invoices.set_payment_state(context, invoice_id, stato_pagamento, data_incasso)
+
+    @mcp.tool()
+    @guard
+    def describe_fiscal_profile() -> dict[str, Any]:
+        """Il regime fiscale configurato e i parametri che decidono aliquote, natura
+        e bollo. Utile per capire perche' una riga ha una certa IVA."""
+        return invoices.describe_fiscal_profile(context)
