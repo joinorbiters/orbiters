@@ -36,6 +36,7 @@ from pigrocrm.core.invoices.schemas import (
     DIVISA,
     SNAPSHOT_VERSIONE,
     TIPO_DOCUMENTO,
+    InvoiceAnnul,
     InvoiceCreate,
     InvoiceIssue,
     InvoiceLineIn,
@@ -44,6 +45,7 @@ from pigrocrm.core.invoices.schemas import (
     InvoicePage,
     InvoiceRead,
     InvoiceSnapshot,
+    InvoiceTransmitted,
     InvoiceUpdate,
     PartySnapshot,
     PaymentState,
@@ -681,6 +683,103 @@ class InvoiceService:
                 numero=numero,
             ) from exc
         return InvoiceRead.model_validate(target)
+
+    def annul(self, invoice_id: UUID, data: InvoiceAnnul, actor: Actor) -> InvoiceRead:
+        """Strike the page through; keep the number.
+
+        The number **stays consumed** and the row stays readable: that is what
+        preserves the gap-free property of spec 3, which would otherwise be worth
+        nothing -- a number that can disappear is a gap with extra steps.
+
+        Refused once the file has been handed to the intermediary. From that point the
+        correction requires a credit note (`TD04`), which this slice does not produce
+        for a structural reason rather than as a deferral: a credit note corrects an
+        invoice **already accepted by the SdI**, and nothing here is transmitted. So
+        the application says where the correction has to happen, instead of offering a
+        button that pretends to solve it.
+        """
+        actor.require_admin("annul_invoice")
+        invoice = self._require(invoice_id)
+        if invoice.stato != "emessa":
+            raise Conflict(
+                ENTITY,
+                "si annulla solo una fattura emessa: una bozza si elimina, "
+                "una fattura gia' annullata non si annulla due volte",
+                stato_attuale=invoice.stato,
+            )
+        if invoice.trasmessa_esternamente_il is not None:
+            raise Conflict(
+                ENTITY,
+                "la fattura e' stata consegnata all'intermediario il "
+                f"{invoice.trasmessa_esternamente_il.isoformat()}: da questo punto la "
+                "correzione richiede una nota di credito, che PigroCRM non emette. "
+                "Va fatta dal tuo intermediario o dal portale dell'Agenzia delle Entrate.",
+                trasmessa_esternamente_il=invoice.trasmessa_esternamente_il.isoformat(),
+            )
+        invoice.stato = "annullata"
+        # `oggi_in_italia()`, never a bare `date.today()`: see `clock.py`. The date
+        # printed on an annulment record is subject to the same "issuer's own
+        # calendar" requirement as `data_emissione`.
+        invoice.annullata_il = oggi_in_italia()
+        invoice.motivo_annullamento = data.motivo
+        self.activities.record(
+            ENTITY,
+            invoice.id,
+            "annulled",
+            actor,
+            {"numero": invoice.numero, "anno": invoice.anno, "motivo": data.motivo},
+        )
+        self.session.commit()
+        return InvoiceRead.model_validate(invoice)
+
+    def mark_transmitted_externally(
+        self, invoice_id: UUID, data: InvoiceTransmitted, actor: Actor
+    ) -> InvoiceRead:
+        """Record that the XML has been handed to the intermediary. Settable **once**.
+
+        This is the column that makes annulment safe rather than optimistic: without
+        it the system could not distinguish an invoice that never left -- annullable --
+        from one already deposited with the Agenzia delle Entrate, and would treat the
+        two the same. Freezing it after the first write is what stops that distinction
+        from being editable away.
+        """
+        actor.require_admin("mark_transmitted_externally")
+        invoice = self._require(invoice_id)
+        if invoice.stato != "emessa":
+            raise Conflict(
+                ENTITY,
+                "solo una fattura emessa si consegna a un intermediario",
+                stato_attuale=invoice.stato,
+            )
+        if invoice.trasmessa_esternamente_il is not None:
+            raise ImmutableField(
+                ENTITY,
+                "trasmessa_esternamente_il",
+                "la consegna si registra una volta sola: e' il fatto su cui si decide "
+                "se un annullamento e' ancora possibile",
+            )
+        oggi = oggi_in_italia()
+        if data.data > oggi:
+            raise ValidationFailed(
+                ENTITY,
+                "trasmessa_esternamente_il",
+                "una consegna non si registra con data futura",
+                expected=f"una data non successiva a {oggi.isoformat()}",
+            )
+        if invoice.data_emissione is not None and data.data < invoice.data_emissione:
+            raise ValidationFailed(
+                ENTITY,
+                "trasmessa_esternamente_il",
+                "la consegna non puo' precedere l'emissione "
+                f"({invoice.data_emissione.isoformat()})",
+                expected=f"una data dal {invoice.data_emissione.isoformat()} in poi",
+            )
+        invoice.trasmessa_esternamente_il = data.data
+        self.activities.record(
+            ENTITY, invoice.id, "transmitted_externally", actor, {"data": data.data.isoformat()}
+        )
+        self.session.commit()
+        return InvoiceRead.model_validate(invoice)
 
     # ---- reads ---------------------------------------------------------------
 
