@@ -83,3 +83,51 @@ describe('index.html', () => {
     expect(page).not.toMatch(/gtag|googletagmanager|analytics|plausible|fathom|hotjar|pixel/i)
   })
 })
+
+describe('privacy.html', () => {
+  const page = html['privacy.html']
+
+  it('names both restricted Gmail scopes, in full', () => {
+    // Spec 13, criterion 26. Not pedantry: Google's review of a restricted scope
+    // checks that the privacy policy states what the application does with the
+    // data. Without this text 5B-1 stays in Testing, where a consumer refresh
+    // token expires every seven days.
+    expect(page).toContain('https://www.googleapis.com/auth/gmail.readonly')
+    expect(page).toContain('https://www.googleapis.com/auth/gmail.send')
+  })
+
+  it('says what is read, what is stored, and what is never touched', () => {
+    for (const claim of [
+      'indirizzi email già presenti',
+      'non leggiamo',
+      'non trasferiamo',
+      'sul tuo server',
+      'revocare',
+    ]) {
+      expect(page.toLowerCase()).toContain(claim.toLowerCase())
+    }
+  })
+
+  it('names the scopes it deliberately does not ask for', () => {
+    // The consent screen shows what is requested; the policy is where "and not
+    // these" belongs. gmail.modify would let the product touch the mailbox, and
+    // it never does: the state lives in the CRM.
+    expect(page).toContain('gmail.modify')
+    expect(page).toContain('https://mail.google.com/')
+  })
+
+  it('gives a date, so a reviewer can tell when it was last true', () => {
+    expect(page).toMatch(/<time datetime="\d{4}-\d{2}-\d{2}">/)
+  })
+})
+
+describe('termini.html', () => {
+  const page = html['termini.html']
+
+  it('is honest that there is no service being provided', () => {
+    for (const claim of ['nessuna garanzia', 'software', 'licenza']) {
+      expect(page.toLowerCase()).toContain(claim)
+    }
+    expect(page).not.toMatch(/abbonamento|canone|SLA/i)
+  })
+})
