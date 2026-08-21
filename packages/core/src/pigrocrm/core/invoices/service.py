@@ -6,7 +6,7 @@ to `issue`, `annul` and the artefact methods added by the following tasks.
 """
 
 from collections.abc import Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -16,9 +16,11 @@ from sqlalchemy.orm import Session
 
 from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
+from pigrocrm.core.clock import oggi_in_italia
 from pigrocrm.core.config import Settings, get_settings
 from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.emitter.service import EmitterProfileService
 from pigrocrm.core.errors import Conflict, ImmutableField, NotFound, ValidationFailed
 from pigrocrm.core.fields.schemas import EntityType
 from pigrocrm.core.fields.service import FieldDefinitionService
@@ -26,19 +28,24 @@ from pigrocrm.core.fields.validator import validate_custom_fields
 from pigrocrm.core.fiscal.regime import RegimeStrategy, resolve_regime
 from pigrocrm.core.fiscal.schemas import FiscalSnapshot
 from pigrocrm.core.fiscal.service import FiscalProfileService
+from pigrocrm.core.invoices.fatturapa import check_party_exportable, check_recipient_routing
 from pigrocrm.core.invoices.models import Invoice, InvoiceLine
 from pigrocrm.core.invoices.naming import proforma_riferimento
 from pigrocrm.core.invoices.repository import InvoiceRepository
 from pigrocrm.core.invoices.schemas import (
     DIVISA,
+    SNAPSHOT_VERSIONE,
     TIPO_DOCUMENTO,
     InvoiceCreate,
+    InvoiceIssue,
     InvoiceLineIn,
     InvoiceLineRead,
     InvoiceListQuery,
     InvoicePage,
     InvoiceRead,
+    InvoiceSnapshot,
     InvoiceUpdate,
+    PartySnapshot,
     PaymentState,
 )
 from pigrocrm.core.invoices.totals import ComputedLine, build_riepilogo, line_total, sum_totals
@@ -65,6 +72,7 @@ class InvoiceService:
         self.fields = FieldDefinitionService(session)
         self.activities = ActivityService(session)
         self.fiscal = FiscalProfileService(session)
+        self.emitter = EmitterProfileService(session)
 
     # ---- shared helpers -------------------------------------------------------
 
@@ -235,8 +243,16 @@ class InvoiceService:
             custom_fields=self._validated_custom(data.custom_fields or {}),
         )
         if data.tipo == "proforma":
+            # `oggi_in_italia()`, not `date.today()`: see `clock.py`'s module docstring
+            # for why a bare `date.today()` on a host that is not running in
+            # Europe/Rome (this project's own `Dockerfile.api` pins no `TZ`, so its
+            # base image defaults to UTC) reproduces Acme's UTC-instant defect
+            # through the standard library's default rather than an explicit
+            # conversion. Low-stakes here specifically -- `riferimento` is a
+            # non-fiscal, internal-only identifier, not a register entry -- but there
+            # is no reason to let the wrong clock answer the question at all.
             invoice.riferimento = proforma_riferimento(
-                date.today().year, self.repo.next_proforma_sequence()
+                oggi_in_italia().year, self.repo.next_proforma_sequence()
             )
         computed = self._computed_lines(data.righe, profile)
         self._apply_totals(invoice, computed, profile)
@@ -388,6 +404,283 @@ class InvoiceService:
         )
         self.session.commit()
         return InvoiceRead.model_validate(invoice)
+
+    def _party_from_customer(self, customer: Customer) -> PartySnapshot:
+        return PartySnapshot(
+            ragione_sociale=customer.ragione_sociale,
+            partita_iva=customer.partita_iva,
+            codice_fiscale=customer.codice_fiscale,
+            codice_sdi=customer.codice_sdi,
+            pec=customer.pec,
+            indirizzo=customer.indirizzo or "",
+            cap=customer.cap or "",
+            comune=customer.comune or "",
+            provincia=customer.provincia or "",
+            nazione=customer.nazione,
+            email=customer.email,
+            telefono=customer.telefono,
+            sito_web=customer.sito_web,
+        )
+
+    def _party_from_emitter(self, actor: Actor) -> PartySnapshot:
+        """The issuer's identity from `emitter_profile` (slice 2).
+
+        `emitter_profile.regime_fiscale` is deliberately not read here: it is a
+        human-readable caption for the PDF header, `String(200)` of free text, and the
+        machine value the SdI validates is `fiscal_profile.codice_regime`. Two columns,
+        two jobs; conflating them is how a caption ends up inside `RegimeFiscale`.
+        """
+        profile = self.emitter.get(actor)
+        return PartySnapshot(
+            ragione_sociale=profile.ragione_sociale,
+            partita_iva=profile.partita_iva,
+            codice_fiscale=profile.codice_fiscale,
+            codice_sdi=profile.codice_sdi,
+            pec=profile.pec,
+            indirizzo=profile.indirizzo or "",
+            cap=profile.cap or "",
+            comune=profile.comune or "",
+            provincia=profile.provincia or "",
+            nazione=profile.nazione,
+            email=profile.email,
+            telefono=profile.telefono,
+            sito_web=profile.sito_web,
+        )
+
+    def _build_snapshot(
+        self, invoice: Invoice, profile: FiscalSnapshot, actor: Actor
+    ) -> InvoiceSnapshot:
+        customer = self.session.get(Customer, invoice.customer_id)
+        if customer is None:  # pragma: no cover - the FK makes this unreachable
+            raise NotFound("customer", invoice.customer_id)
+        return InvoiceSnapshot(
+            versione=SNAPSHOT_VERSIONE,
+            emittente=self._party_from_emitter(actor),
+            cliente=self._party_from_customer(customer),
+            fiscale=profile,
+        )
+
+    def _check_issue_date(self, data_emissione: date, anno_corrente: int) -> None:
+        """Two limits, both from spec 6.2.
+
+        `data_emissione` is a `date` in the issuer's own calendar, never the UTC
+        projection of an instant: `toISOString()` on 31 December at 23:30 CET yields
+        1 January, which puts an immutable document in the wrong fiscal year. That is
+        the defect this whole method exists around, and the fix is `oggi_in_italia()`
+        -- not a bare `date.today()`, which would only be safe if this process were
+        guaranteed to run with Italy's own timezone, and it is not (see `clock.py`).
+        """
+        oggi = oggi_in_italia()
+        if data_emissione > oggi:
+            raise ValidationFailed(
+                ENTITY,
+                "data_emissione",
+                "una fattura non si emette con data futura",
+                expected=f"una data non successiva a {oggi.isoformat()}",
+            )
+        if data_emissione < date(anno_corrente, 1, 1):
+            raise ValidationFailed(
+                ENTITY,
+                "data_emissione",
+                "un anno chiuso e' chiuso: non si inserisce nel registro di un anno "
+                "precedente dopo che ne e' iniziato uno nuovo",
+                expected=f"una data dal {anno_corrente}-01-01 in poi",
+            )
+
+    def issue(self, invoice_id: UUID, data: InvoiceIssue, actor: Actor) -> InvoiceRead:
+        """Consume a register number. **One transaction, in this exact order.**
+
+        `invoice_id` names either a `bozza` **fattura**, issued in place, or a
+        `confermata` **proforma**, in which case a *new* `emessa` row is created with
+        the proforma's lines copied and `origine_proforma_id` pointing back at it, and
+        the proforma is marked `consumata` (spec 5). One method, because emitting from
+        scratch and from a proforma share the lock, the validations, the freezing and
+        the numbering, and splitting them would mean two paths to keep aligned on
+        exactly the part that must not diverge.
+
+        Ordering, and why each step is where it is:
+
+        1. resolve the source row and the issue date, and check the date against
+           "not in the future, not before 1 January of the current year". No lock yet:
+           these are pure checks on the caller's own input;
+        2. `lock_counter(anno)` -- the **first** row lock this transaction takes;
+        3. every fiscal validation, the totals, and the chronological-monotonicity
+           check. All of it after the lock, so "the date of the previous number" is a
+           safe thing to read, and all of it *before* the counter is touched, so a
+           refusal never even reaches the increment;
+        4. increment the counter, write the row with `(anno, numero)`, write the
+           frozen `snapshot`, write the activity;
+        5. `COMMIT`.
+
+        **The number does not exist before the commit.** If any step fails, the
+        rollback returns `ultimo_numero` to its previous value and nothing was
+        consumed -- the property a `SEQUENCE` does not have.
+
+        The PDF and the XML are produced **after** this commit, in a second
+        transaction, from the snapshot. Holding a row lock for the duration of a Typst
+        subprocess would serialise every emission on PDF compile time, and an invoice
+        is a legal fact independent of its printout: if the render fails, the invoice
+        exists with its number and its artefacts regenerate deterministically. That is
+        the one documented exception to "one service method = one transaction", and
+        spec 3 mandates it.
+
+        Deliberately out of scope: two concurrent `issue()` calls racing on the exact
+        *same* `invoice_id`. Nothing below locks the source row itself (only the
+        year's counter), which every other write method in this class shares --
+        `update`, `replace_lines`, `confirm_proforma` and `soft_delete` all read via
+        `_require` with no lock either. Closing that would mean deciding a lock order
+        between a source row and the counter row for the one method that touches both,
+        a change with no test in this task's brief to prove it against; recorded here
+        rather than fixed silently.
+        """
+        actor.require_admin("issue_invoice")
+        source = self._require(invoice_id)
+        data_emissione = data.data_emissione or oggi_in_italia()
+        anno = data_emissione.year
+        self._check_issue_date(data_emissione, oggi_in_italia().year)
+
+        from_proforma = source.tipo == "proforma"
+        if from_proforma:
+            if source.stato != "confermata":
+                raise Conflict(
+                    ENTITY,
+                    "solo una proforma confermata si converte in fattura",
+                    stato_attuale=source.stato,
+                    stato_richiesto="confermata",
+                )
+        elif source.stato != "bozza":
+            raise Conflict(
+                ENTITY,
+                f"una fattura in stato '{source.stato}' e' gia' stata emessa: "
+                "una correzione e' un annullamento e una nuova fattura",
+                stato_attuale=source.stato,
+            )
+
+        # Step 2. From here on, every other emission for this year waits.
+        counter = self.repo.lock_counter(anno)
+
+        # Step 3. Validations and totals, after the lock and before the increment.
+        _, profile = self._regime()
+        snapshot = self._build_snapshot(source, profile, actor)
+        check_party_exportable(snapshot.emittente, "emitter_profile")
+        check_party_exportable(snapshot.cliente, "customer")
+        check_recipient_routing(snapshot.cliente)
+
+        righe = self.repo.lines(source.id)
+        if not righe:
+            raise ValidationFailed(
+                ENTITY,
+                "righe",
+                "una fattura senza righe non si emette",
+                expected="almeno una riga",
+            )
+        computed = tuple(
+            ComputedLine(
+                numero_linea=r.numero_linea,
+                descrizione=r.descrizione,
+                quantita=r.quantita,
+                unita_misura=r.unita_misura,
+                prezzo_unitario=r.prezzo_unitario,
+                sconto_percentuale=r.sconto_percentuale,
+                sconto_importo=r.sconto_importo,
+                prezzo_totale=r.prezzo_totale,
+                aliquota_iva=r.aliquota_iva,
+                natura=r.natura,
+                riferimento_normativo=r.riferimento_normativo,
+            )
+            for r in righe
+        )
+        riepilogo = build_riepilogo(computed)
+        imponibile, imposta, totale = sum_totals(riepilogo)
+        if totale <= ZERO:
+            raise ValidationFailed(
+                ENTITY,
+                "totale",
+                "una TD01 a zero o negativa non e' una fattura",
+                expected="un totale maggiore di zero",
+            )
+
+        previous = self.repo.last_issued_date(anno)
+        if previous is not None and data_emissione < previous:
+            raise ValidationFailed(
+                ENTITY,
+                "data_emissione",
+                "il registro deve restare cronologicamente monotono rispetto al numero: "
+                f"l'ultima fattura del {anno} porta la data {previous.isoformat()}",
+                expected=f"una data dal {previous.isoformat()} in poi",
+            )
+
+        # Step 4. Increment, write, freeze.
+        counter.ultimo_numero += 1
+        numero = counter.ultimo_numero
+
+        target = source
+        if from_proforma:
+            target = self.repo.add(
+                Invoice(
+                    customer_id=source.customer_id,
+                    deal_id=source.deal_id,
+                    tipo="fattura",
+                    stato="bozza",
+                    tipo_documento=TIPO_DOCUMENTO,
+                    divisa=DIVISA,
+                    causale=source.causale,
+                    note_interne=source.note_interne,
+                    imponibile=ZERO,
+                    imposta=ZERO,
+                    bollo=ZERO,
+                    totale=ZERO,
+                    stato_pagamento="da_incassare",
+                    origine_proforma_id=source.id,
+                    custom_fields=dict(source.custom_fields),
+                )
+            )
+            self._persist_lines(target, computed)
+            source.stato = "consumata"
+
+        strategy = resolve_regime(profile.codice_regime)
+        target.stato = "emessa"
+        target.anno = anno
+        target.numero = numero
+        target.data_emissione = data_emissione
+        target.data_scadenza = data_emissione + timedelta(days=profile.giorni_scadenza)
+        target.imponibile = imponibile
+        target.imposta = imposta
+        target.totale = totale
+        target.bollo = strategy.bollo(riepilogo, profile)
+        target.snapshot = snapshot.model_dump(mode="json")
+        target.snapshot_versione = SNAPSHOT_VERSIONE
+
+        self.activities.record(
+            ENTITY,
+            target.id,
+            "issued",
+            actor,
+            {
+                "anno": anno,
+                "numero": numero,
+                "totale": str(target.totale),
+                "origine_proforma_id": str(source.id) if from_proforma else None,
+            },
+        )
+        try:
+            self.session.commit()
+        except IntegrityError as exc:
+            # The partial unique index `uq_invoices_anno_numero` is the net under the
+            # row lock, not the mechanism (spec 3). Reaching it means something wrote
+            # a number without taking the lock -- an importer, a direct INSERT, a
+            # second service -- and this is what makes that failure observable instead
+            # of a silent duplicate. The rollback is mandatory or the caller's session
+            # is unusable on its next statement.
+            self.session.rollback()
+            raise Conflict(
+                ENTITY,
+                "un altro processo ha scritto lo stesso numero senza passare dal "
+                "contatore: riprova e verifica il registro",
+                anno=anno,
+                numero=numero,
+            ) from exc
+        return InvoiceRead.model_validate(target)
 
     # ---- reads ---------------------------------------------------------------
 
