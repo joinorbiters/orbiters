@@ -12,6 +12,7 @@ from pigrocrm.core.deals.models import Deal  # noqa: F401
 from pigrocrm.core.documents.models import Document, DocumentVersion  # noqa: F401
 from pigrocrm.core.emitter.models import EmitterProfile  # noqa: F401
 from pigrocrm.core.fields.models import FieldDefinition  # noqa: F401
+from pigrocrm.core.fiscal.models import FiscalProfile  # noqa: F401
 from pigrocrm.core.people.models import Person  # noqa: F401
 from pigrocrm.core.pipeline.models import PipelineStage  # noqa: F401
 from pigrocrm.core.templates.models import Template  # noqa: F401

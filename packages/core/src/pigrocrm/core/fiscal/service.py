@@ -1,0 +1,124 @@
+from decimal import Decimal
+from typing import Any
+
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.activities.service import ActivityService
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
+from pigrocrm.core.fiscal.models import FiscalProfile
+from pigrocrm.core.fiscal.regime import resolve_regime
+from pigrocrm.core.fiscal.repository import FiscalProfileRepository
+from pigrocrm.core.fiscal.schemas import FiscalProfileRead, FiscalProfileUpsert, FiscalSnapshot
+
+ENTITY = "fiscal_profile"
+ZERO = Decimal("0.00")
+
+
+class FiscalProfileService:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+        self.repo = FiscalProfileRepository(session)
+        self.activities = ActivityService(session)
+
+    def get(self, actor: Actor) -> FiscalProfileRead:
+        return FiscalProfileRead.model_validate(self._require())
+
+    def snapshot(self) -> FiscalSnapshot:
+        """The parameters as a frozen value object, ready to be written into
+        `invoices.snapshot`. No `actor`: it takes no decision and returns no identity,
+        it is the read `InvoiceService.issue` performs on the caller's behalf."""
+        profile = self._require()
+        return FiscalSnapshot(
+            codice_regime=profile.codice_regime,
+            aliquota_iva_default=profile.aliquota_iva_default,
+            natura_default=profile.natura_default,
+            riferimento_normativo=profile.riferimento_normativo,
+            applica_bollo=profile.applica_bollo,
+            soglia_bollo=profile.soglia_bollo,
+            importo_bollo=profile.importo_bollo,
+            condizioni_pagamento=profile.condizioni_pagamento,
+            modalita_pagamento=profile.modalita_pagamento,
+            giorni_scadenza=profile.giorni_scadenza,
+            iban=profile.iban,
+        )
+
+    def describe(self, actor: Actor) -> dict[str, Any]:
+        """What `describe_fiscal_profile` returns over MCP: the parameters an agent
+        needs to compose a proforma the human will actually be able to issue, with no
+        identity or timestamps in it."""
+        profile = self.get(actor)
+        return profile.model_dump(mode="json", exclude={"id", "created_at", "updated_at"})
+
+    def upsert(self, data: FiscalProfileUpsert, actor: Actor) -> FiscalProfileRead:
+        """Create-or-update the one row, admin only.
+
+        `repo.add` sits **inside** the `try`, not before it: it is the only statement
+        that can violate the `singleton` constraint, and leaving it outside would let
+        two concurrent first-time saves poison the session with a raw `IntegrityError`
+        instead of surfacing a clean `Conflict`. Same shape, same reason, as
+        `EmitterProfileService.upsert`.
+        """
+        actor.require_admin("update_fiscal_profile")
+        payload = data.model_dump()
+        self._check(payload)
+
+        profile = self.repo.get()
+        try:
+            if profile is None:
+                profile = self.repo.add(FiscalProfile(**payload))
+            else:
+                for key, value in payload.items():
+                    setattr(profile, key, value)
+            # R5 is closed for this table: changing regime without a trace is a
+            # different order of severity from renaming a pipeline stage, and the
+            # timeline is also what reconstructs the history of regimes without a
+            # validity column. Recorded last, so it can never survive a rollback.
+            self.activities.record(
+                ENTITY, profile.id, "updated", actor, {"changed": sorted(payload)}
+            )
+            self.session.commit()
+        except IntegrityError as exc:
+            self.session.rollback()
+            raise Conflict(ENTITY, "il profilo fiscale esiste gia'") from exc
+        return FiscalProfileRead.model_validate(profile)
+
+    @staticmethod
+    def _check(payload: dict[str, Any]) -> None:
+        # `resolve_regime` does both checks: the `RF01`-`RF19` shape, with
+        # `.fullmatch` so "RF19\n" cannot reach the String(4) column, and whether a
+        # strategy exists. Raising here means an unimplemented regime is refused at
+        # configuration time rather than at the first emission.
+        resolve_regime(payload["codice_regime"])
+        if payload["aliquota_iva_default"] == ZERO and not payload.get("natura_default"):
+            raise ValidationFailed(
+                ENTITY,
+                "natura_default",
+                "un'aliquota di default a zero richiede una natura, altrimenti ogni "
+                "riepilogo prodotto verrebbe scartato dallo SdI",
+                expected="una natura, per esempio N2.2",
+            )
+        if payload["aliquota_iva_default"] != ZERO and payload.get("natura_default"):
+            raise ValidationFailed(
+                ENTITY,
+                "natura_default",
+                "una natura con un'aliquota di default diversa da zero viene scartata dallo SdI",
+                expected="nessuna natura",
+            )
+        if payload["applica_bollo"] and payload["importo_bollo"] <= ZERO:
+            raise ValidationFailed(
+                ENTITY,
+                "importo_bollo",
+                "il bollo e' attivo ma il suo importo non e' positivo",
+                expected="un importo maggiore di zero",
+            )
+
+    def _require(self) -> FiscalProfile:
+        profile = self.repo.get()
+        if profile is None:
+            raise NotFound(ENTITY, "singleton")
+        return profile
+
+
+__all__ = ["FiscalProfileService"]
