@@ -26,6 +26,8 @@ HAND_MAINTAINED_INDEXES = {
     "ix_customers_custom_fields",
     "ix_people_custom_fields",
     "ix_deals_custom_fields",
+    "uq_invoices_anno_numero",
+    "ix_invoices_custom_fields",
 }
 
 
@@ -64,6 +66,9 @@ def test_every_table_the_slice_needs_exists() -> None:
         "people",
         "deals",
         "fiscal_profile",
+        "invoices",
+        "invoice_lines",
+        "invoice_counters",
     }
     assert expected <= set(Base.metadata.tables)
 
@@ -105,6 +110,16 @@ def test_hand_maintained_indexes_survive_the_migration() -> None:
     ):
         assert "USING gin" in indexes[gin_index], f"{gin_index} was not created as a GIN index"
 
+    assert "USING gin" in indexes["ix_invoices_custom_fields"], (
+        "ix_invoices_custom_fields was not created as a GIN index"
+    )
+    anno_numero_def = indexes["uq_invoices_anno_numero"]
+    assert "UNIQUE" in anno_numero_def, "uq_invoices_anno_numero must be a unique index"
+    assert "WHERE" in anno_numero_def and "numero IS NOT NULL" in anno_numero_def, (
+        "uq_invoices_anno_numero lost its partial predicate, so every unnumbered draft "
+        f"is now a duplicate of every other: {anno_numero_def}"
+    )
+
 
 def _applied_revision(url: str) -> str:
     engine: Engine = create_engine(url)
@@ -137,7 +152,7 @@ def test_env_prefers_an_explicit_config_url_over_settings(monkeypatch: pytest.Mo
     finally:
         get_settings.cache_clear()
 
-    assert revision == "0004"
+    assert revision == "0005"
 
 
 def test_env_falls_back_to_settings_when_config_has_no_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -159,4 +174,4 @@ def test_env_falls_back_to_settings_when_config_has_no_url(monkeypatch: pytest.M
         finally:
             get_settings.cache_clear()
 
-    assert revision == "0004"
+    assert revision == "0005"
