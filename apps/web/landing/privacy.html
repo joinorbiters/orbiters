@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PigroCRM — Informativa sulla privacy</title>
+    <meta
+      name="description"
+      content="Che dati tratta PigroCRM, dove restano, e cosa fa esattamente con l'accesso a Gmail: gli scope richiesti, quelli non richiesti, e come revocarli."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="PigroCRM — Informativa sulla privacy" />
+    <meta
+      property="og:description"
+      content="I dati restano sul tuo server. Questa pagina dice cosa PigroCRM legge da Gmail, perché, e cosa non tocca mai."
+    />
+    <meta property="og:locale" content="it_IT" />
+    <link rel="stylesheet" href="./landing.css" />
+  </head>
+  <body class="grain">
+    <header class="wrap section" style="padding-block: 1.5rem">
+      <nav style="display: flex; align-items: center; justify-content: space-between">
+        <a class="quiet-link" href="/" style="padding-left: 0">PigroCRM</a>
+        <a class="quiet-link" href="/app/">Accedi</a>
+      </nav>
+    </header>
+
+    <main class="wrap section">
+      <p class="overline">Ultimo aggiornamento <time datetime="2026-08-20">20 agosto 2026</time></p>
+      <h1 class="measure">Informativa sulla privacy</h1>
+
+      <div class="measure" style="display: grid; gap: 1.25rem; margin-top: 2rem">
+        <h2>Dove stanno i dati</h2>
+        <p>
+          PigroCRM è un programma che installi tu, sul tuo server. Non esiste un servizio gestito,
+          non esiste un nostro database, non esiste un account da creare presso di noi. I dati dei
+          tuoi clienti stanno nel tuo PostgreSQL, sul tuo server, e <strong>non trasferiamo</strong>
+          nulla a noi né a terzi. Chi tratta quei dati, e con quale base giuridica, sei tu.
+        </p>
+
+        <h2>L'accesso a Gmail</h2>
+        <p>
+          Se scegli di collegare una casella Gmail, PigroCRM chiede a Google due autorizzazioni
+          <em>restricted</em>, e chiede esattamente queste:
+        </p>
+        <ul style="display: grid; gap: 0.75rem">
+          <li>
+            <code>https://www.googleapis.com/auth/gmail.readonly</code> — per trovare e leggere
+            <strong>soltanto</strong> le conversazioni che riguardano gli
+            <strong>indirizzi email già presenti</strong> nella tua anagrafica di clienti e persone.
+            La selezione avviene lato Google, dentro la query: PigroCRM non elenca la tua casella e
+            non la scarica. Di conseguenza <strong>non leggiamo</strong> le newsletter, le ricevute,
+            i messaggi personali, né alcun messaggio che non appartenga a una di quelle
+            conversazioni. L'unica eccezione, dichiarata: quando un messaggio rilevante appartiene a
+            una conversazione, la conversazione viene salvata intera, compresi eventuali
+            partecipanti che non conosciamo — perché una conversazione letta a metà è peggio che non
+            letta. Quegli indirizzi non entrano nell'anagrafica e non allargano le ricerche
+            successive.
+          </li>
+          <li>
+            <code>https://www.googleapis.com/auth/gmail.send</code> — per inviare, dalla tua casella,
+            le email che <strong>tu</strong> scrivi e mandi da dentro PigroCRM: l'offerta con il PDF
+            allegato, un sollecito di pagamento. Nessuna email parte da sola, mai, e nessun
+            assistente AI può inviarne una: il server MCP non espone alcuno strumento di invio.
+          </li>
+        </ul>
+        <p>
+          Di ogni messaggio salviamo intestazioni, oggetto e il corpo in <em>testo semplice</em>;
+          degli allegati solo nome, tipo e dimensione, <strong>mai</strong> i byte. L'HTML delle
+          email non viene conservato né mostrato, perché porta con sé pixel di tracciamento e CSS
+          remoto. Puoi disattivare del tutto il salvataggio dei corpi. Tutto resta
+          <strong>sul tuo server</strong>: i dati di Gmail non passano da noi, non vengono usati per
+          addestrare alcun modello, non vengono venduti e non vengono condivisi.
+        </p>
+
+        <h2>Cosa non chiediamo</h2>
+        <p>
+          Non chiediamo <code>gmail.modify</code>: PigroCRM non etichetta, non archivia e non sposta
+          nulla nella tua casella. Non chiediamo <code>gmail.compose</code>: le bozze vivono nel CRM,
+          non in Gmail. Non chiediamo <code>https://mail.google.com/</code>, che darebbe accesso a
+          tutto, cancellazione compresa. Non chiediamo Calendar né Contacts.
+        </p>
+
+        <h2>Come si toglie</h2>
+        <p>
+          Puoi <strong>revocare</strong> l'accesso in qualsiasi momento, in due modi indipendenti: da
+          Impostazioni → Gmail dentro PigroCRM, oppure dalla pagina delle autorizzazioni del tuo
+          account Google. Alla disconnessione PigroCRM ti chiede se cancellare anche i messaggi già
+          salvati, e non lo fa da solo: cancellare la corrispondenza di un cliente perché è scaduto
+          un token sarebbe un danno, non un'attenzione.
+        </p>
+
+        <h2>Contatti</h2>
+        <p>
+          Per qualunque domanda su questa informativa:
+          <a class="quiet-link" href="mailto:privacy@pigrocrm.it" style="padding-left: 0"
+            >privacy@pigrocrm.it</a
+          >.
+        </p>
+      </div>
+
+      <footer class="hairline" style="margin-top: 3rem; padding-top: 2rem; font-size: 0.9375rem">
+        <a class="quiet-link" href="/" style="padding-left: 0">Home</a>
+        <a class="quiet-link" href="/termini">Termini</a>
+      </footer>
+    </main>
+
+    <script src="./reveal.js" defer></script>
+  </body>
+</html>
