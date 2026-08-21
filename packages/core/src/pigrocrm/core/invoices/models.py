@@ -28,6 +28,7 @@ from sqlalchemy import (
     Index,
     Integer,
     Numeric,
+    Sequence,
     String,
     Text,
     UniqueConstraint,
@@ -40,6 +41,13 @@ from pigrocrm.core.db import Base, PrimaryKeyMixin, SoftDeleteMixin, TimestampMi
 
 PROFORMA_SEQUENCE_NAME = "proforma_riferimento_seq"
 
+# Attached to the metadata, not only created by the migration. The test suite builds its
+# schema with `Base.metadata.create_all` (packages/core/tests/conftest.py), so a sequence
+# that exists only as raw SQL inside `0005_invoices.py` is absent under test and present
+# in production -- which is the worst of the two, because the difference only shows up
+# the first time something calls `nextval`. Declaring it here emits it on both paths.
+PROFORMA_SEQUENCE = Sequence(PROFORMA_SEQUENCE_NAME, start=1, increment=1, metadata=Base.metadata)
+
 
 class Invoice(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     """A fiscal invoice or a proforma. One table, because lists, timeline and search
@@ -51,7 +59,13 @@ class Invoice(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
         ForeignKey("customers.id"), nullable=False, index=True
     )
     deal_id: Mapped[UUID | None] = mapped_column(ForeignKey("deals.id"), default=None, index=True)
-    tipo: Mapped[str] = mapped_column(String(10), nullable=False)
+    # `String(20)`, matching `documents.tipo`, not the 10 that would just fit the two
+    # legal values. The point of this file is that the `CHECK` carries the invariant, and
+    # at 10 a wrong `tipo` longer than that dies on the column width first: Postgres
+    # answers `StringDataRightTruncation` instead of a named constraint violation, which
+    # is the raw-exception-reaching-the-caller family this project has already closed six
+    # times. Width to spare is what lets the constraint be the thing that refuses.
+    tipo: Mapped[str] = mapped_column(String(20), nullable=False)
     stato: Mapped[str] = mapped_column(String(12), nullable=False)
     # `NULL` until emission. That is what makes "a failed creation cannot burn a
     # number" true by construction rather than by care.
@@ -74,9 +88,7 @@ class Invoice(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
         Numeric(12, 2), nullable=False, default=Decimal("0.00")
     )
     bollo: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0.00"))
-    totale: Mapped[Decimal] = mapped_column(
-        Numeric(12, 2), nullable=False, default=Decimal("0.00")
-    )
+    totale: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0.00"))
     causale: Mapped[str | None] = mapped_column(String(200), default=None)
     # Both parties' identity and the fiscal parameters as they were at emission.
     # `NULL` on a draft and on a proforma.
@@ -84,9 +96,7 @@ class Invoice(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     # An integer because a snapshot written today is read by code from three years
     # hence, and an unversioned JSON payload is interpreted by guessing.
     snapshot_versione: Mapped[int | None] = mapped_column(Integer, default=None)
-    stato_pagamento: Mapped[str] = mapped_column(
-        String(14), nullable=False, default="da_incassare"
-    )
+    stato_pagamento: Mapped[str] = mapped_column(String(14), nullable=False, default="da_incassare")
     data_incasso: Mapped[date | None] = mapped_column(Date, default=None)
     # Why this column exists even though the slice performs no transmission: the XML
     # is a deliverable the user hands to their own intermediary. Without it the system
