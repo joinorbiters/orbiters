@@ -13,11 +13,11 @@ export const ADMIN_EMAIL = 'e2e@pigro.it'
 export const ADMIN_PASSWORD = 'supersegreta1'
 
 export async function login(page: Page, email: string, password: string): Promise<void> {
-  await page.goto('/login')
+  await page.goto('/app/login')
   await page.getByLabel('Email').fill(email)
   await page.getByLabel('Password').fill(password)
   await page.getByRole('button', { name: 'Accedi' }).click()
-  await expect(page).toHaveURL(/\/app/)
+  await expect(page).toHaveURL(/\/app(\/|$)/)
 }
 
 export async function loginAsAdmin(page: Page): Promise<void> {

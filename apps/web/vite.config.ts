@@ -6,6 +6,12 @@ import { defineConfig } from 'vite'
 import { configDefaults } from 'vitest/config'
 
 export default defineConfig({
+  // The SPA is served from /usr/share/nginx/html/app (Dockerfile.web) and matched by
+  // `location ^~ /app/` (deploy/nginx/spa.conf). Without this, every emitted asset
+  // URL is /assets/... and 404s under the new prefix. The API client is unaffected:
+  // lib/api.ts uses `baseUrl: ''` with full `/api/...` keys, so its requests are
+  // absolute-from-root and do not inherit this base.
+  base: '/app/',
   plugins: [
     tanstackRouter({
       target: 'react',

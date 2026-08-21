@@ -32,7 +32,7 @@ test('a collaboratore is not offered Settings and cannot reach it by URL, but ca
   await expect(dialog).toBeHidden()
 
   await page.getByRole('button', { name: 'Esci' }).click()
-  await expect(page).toHaveURL(/\/login/)
+  await expect(page).toHaveURL(/\/app\/login$/)
 
   await login(page, email, password)
 
