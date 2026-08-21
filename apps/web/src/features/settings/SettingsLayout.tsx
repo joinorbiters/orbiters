@@ -7,15 +7,22 @@ import { useIsAdmin } from '@/lib/auth'
 const TABS = [
   { value: 'campi', label: 'Campi' },
   { value: 'pipeline', label: 'Pipeline' },
+  { value: 'template', label: 'Template' },
+  { value: 'emittente', label: 'Emittente' },
   { value: 'utenti', label: 'Utenti' },
 ] as const
 
 /**
- * Campi/Pipeline/Utenti are admin-only at the service layer
- * (`FieldDefinitionService`/`PipelineService`/`UserService` all call
- * `actor.require_admin` on every write) -- Token is not (`PatService` scopes
- * by `actor.id`, not role) and lives at its own route, `/app/token`, outside
- * this gate entirely.
+ * Campi/Pipeline/Template/Emittente/Utenti are admin-only at the service layer
+ * (`FieldDefinitionService`/`PipelineService`/`TemplateService`/
+ * `EmitterProfileService`/`UserService` all call `actor.require_admin` on every
+ * write) -- Token is not (`PatService` scopes by `actor.id`, not role) and lives
+ * at its own route, `/app/token`, outside this gate entirely.
+ *
+ * Note the asymmetry on the two newest: `TemplateService.list`/`describe`/
+ * `preview` and `EmitterProfileService.get` carry no role check, because the
+ * new-from-template dialog and the PDF header need them for every role. Only the
+ * writes are gated, and only the writes live behind this tab.
  *
  * `useIsAdmin` reads the session `AuthProvider` already cached -- no extra
  * request -- and this reads it *before* rendering `<Outlet />`, not in a

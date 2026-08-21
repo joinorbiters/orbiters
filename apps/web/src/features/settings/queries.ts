@@ -192,3 +192,108 @@ export function useUpdateUser() {
     },
   })
 }
+
+// -- Templates (admin writes) -------------------------------------------------
+
+// `Template`/`useTemplates` already live in features/documents/queries.ts: the
+// new-from-template dialog reads them and is open to every role, since
+// `TemplateService.list` applies no role check. Only the admin-only writes,
+// which that dialog has no use for, live here.
+
+type TemplateCreateBody = components['schemas']['TemplateCreate']
+type TemplateUpdateBody = components['schemas']['TemplateUpdate']
+
+function invalidateTemplates(queryClient: QueryClient) {
+  void queryClient.invalidateQueries({ queryKey: queryKeys.templates() })
+}
+
+export function useCreateTemplate() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      unwrap(api.POST('/api/templates', { body: body as unknown as TemplateCreateBody })),
+    onSuccess: () => invalidateTemplates(queryClient),
+  })
+}
+
+export function useUpdateTemplate(templateId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      unwrap(
+        api.PATCH('/api/templates/{template_id}', {
+          params: { path: { template_id: templateId } },
+          body: body as unknown as TemplateUpdateBody,
+        }),
+      ),
+    onSuccess: () => invalidateTemplates(queryClient),
+  })
+}
+
+/** `DELETE /api/templates/{id}` deactivates rather than deleting: it flips
+ *  `attivo` and returns the row. Paired with `useActivateTemplate` deliberately
+ *  -- an administrator who deactivates a template by mistake must have a way
+ *  back, the same lesson `useUnarchiveFieldDefinition` exists for. A one-way
+ *  door on a boolean column is a defect, not a simplification. */
+export function useDeactivateTemplate() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (templateId: string) =>
+      unwrap(
+        api.DELETE('/api/templates/{template_id}', {
+          params: { path: { template_id: templateId } },
+        }),
+      ),
+    onSuccess: () => invalidateTemplates(queryClient),
+  })
+}
+
+export function useActivateTemplate() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (templateId: string) =>
+      unwrap(
+        api.POST('/api/templates/{template_id}/activate', {
+          params: { path: { template_id: templateId } },
+        }),
+      ),
+    onSuccess: () => invalidateTemplates(queryClient),
+  })
+}
+
+// -- Emitter profile ----------------------------------------------------------
+
+export type EmitterRecord = components['schemas']['EmitterProfileRead']
+type EmitterUpsertBody = components['schemas']['EmitterProfileUpsert']
+
+/**
+ * One row, or none at all on a fresh install. `GET /api/emitter` answers 404
+ * until it is first saved, and that 404 is not an error the user needs to see --
+ * it means "not configured yet", which is this panel's empty state. Every other
+ * failure still surfaces, which is why this keys on the status rather than
+ * swallowing everything.
+ */
+export function useEmitter() {
+  return useQuery({
+    queryKey: queryKeys.emitter,
+    queryFn: async () => {
+      const { data, error, response } = await api.GET('/api/emitter')
+      if (response.status === 404) return null
+      if (error) throw error
+      return data ?? null
+    },
+  })
+}
+
+/** `PUT`, not `PATCH`: `EmitterProfileUpsert` is one shape for create and
+ *  update, because there is only ever one row and both need the same fields.
+ *  Slice 3 builds FatturaPA on this row, so a partial save leaving
+ *  `partita_iva` empty would surface much later as an invalid invoice. */
+export function useSaveEmitter() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      unwrap(api.PUT('/api/emitter', { body: body as unknown as EmitterUpsertBody })),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.emitter }),
+  })
+}
