@@ -33,6 +33,7 @@
 # Node (see "Load-bearing" above)
 **/node_modules/
 apps/web/dist/
+apps/web/dist-landing/
 apps/web/.tanstack/
 **/*.tsbuildinfo
 
