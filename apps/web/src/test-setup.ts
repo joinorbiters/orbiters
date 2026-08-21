@@ -21,3 +21,19 @@ if (!Element.prototype.releasePointerCapture) {
 if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {}
 }
+
+// jsdom implements no IntersectionObserver at all (unlike the pointer-capture gap
+// above, not even a stub). landing/reveal.js gates every reveal on
+// `typeof IntersectionObserver === 'function'` — deliberately, so a browser that
+// lacks the API gets a fully visible page instead of one stuck hidden — but that
+// means every test of reveal.js's default (non-stubbed) path would otherwise see
+// the API as "absent" and never hide anything, which is indistinguishable from the
+// bug the gate exists to avoid. Global and permanent: any future
+// IntersectionObserver-gated code hits this identical jsdom gap.
+if (typeof window.IntersectionObserver !== 'function') {
+  window.IntersectionObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof IntersectionObserver
+}
