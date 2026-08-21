@@ -11,7 +11,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "generate:api": "openapi-typescript http://localhost:8000/openapi.json -o src/lib/api-types.ts",
-    "test:e2e": "bash scripts/e2e.sh"
+    "test:e2e": "bash scripts/e2e.sh",
+    "test:e2e:compose": "bash scripts/e2e-compose.sh"
   },
   "dependencies": {
     "@dnd-kit/core": "6.3.1",

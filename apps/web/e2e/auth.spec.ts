@@ -8,28 +8,28 @@ const PASSWORD = 'supersegreta1'
 
 test('an unauthenticated visitor is sent to the login page', async ({ page }) => {
   await page.goto('/app/clienti')
-  await expect(page).toHaveURL(/\/login/)
+  await expect(page).toHaveURL(/\/app\/login$/)
 })
 
 test('a wrong password is rejected without saying which field was wrong', async ({ page }) => {
-  await page.goto('/login')
+  await page.goto('/app/login')
   await page.getByLabel('Email').fill(EMAIL)
   await page.getByLabel('Password').fill('sbagliata')
   await page.getByRole('button', { name: 'Accedi' }).click()
 
   await expect(page.getByText(/credenziali non valide/i)).toBeVisible()
-  await expect(page).toHaveURL(/\/login/)
+  await expect(page).toHaveURL(/\/app\/login$/)
 })
 
 test('a correct login reaches the dashboard and logout returns to login', async ({ page }) => {
-  await page.goto('/login')
+  await page.goto('/app/login')
   await page.getByLabel('Email').fill(EMAIL)
   await page.getByLabel('Password').fill(PASSWORD)
   await page.getByRole('button', { name: 'Accedi' }).click()
 
-  await expect(page).toHaveURL(/\/app/)
+  await expect(page).toHaveURL(/\/app(\/|$)/)
   await expect(page.getByText('Ciao E2E')).toBeVisible()
 
   await page.getByRole('button', { name: 'Esci' }).click()
-  await expect(page).toHaveURL(/\/login/)
+  await expect(page).toHaveURL(/\/app\/login$/)
 })

@@ -7,9 +7,13 @@ COPY apps/web/package.json apps/web/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY apps/web ./
-RUN pnpm build
+RUN pnpm build && pnpm build:landing
 
 FROM nginx:1.27-alpine
-COPY --from=build /app/dist /usr/share/nginx/html
+# The landing at the document root, the SPA one directory down. Two builds, one
+# origin: one TLS certificate, one nginx, one deploy, and an "Accedi" link that
+# needs no cross-origin thought.
+COPY --from=build /app/dist-landing /usr/share/nginx/html
+COPY --from=build /app/dist /usr/share/nginx/html/app
 COPY deploy/nginx/spa.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80
