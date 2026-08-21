@@ -725,6 +725,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "sqlalchemy" },
+    { name = "tzdata" },
     { name = "uuid-utils" },
 ]
 
@@ -739,6 +740,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = "==2.14.2" },
     { name = "pyjwt", extras = ["crypto"], specifier = "==2.13.0" },
     { name = "sqlalchemy", specifier = "==2.0.51" },
+    { name = "tzdata", specifier = "==2026.3" },
     { name = "uuid-utils", specifier = "==0.17.0" },
 ]
 
