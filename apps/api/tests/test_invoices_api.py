@@ -1,0 +1,389 @@
+"""The HTTP surface. Role enforcement lives in the services (`actor.require_admin`),
+so these tests assert the status codes and the problem documents that come out of it,
+not a router-level dependency that does not exist in this codebase.
+"""
+
+from typing import Any
+
+import pytest
+from fastapi.testclient import TestClient
+
+from pigrocrm.core.clock import oggi_in_italia
+
+# `oggi_in_italia()`, not `date.today()`: `issue` and `mark_transmitted_externally`
+# both compare against Europe/Rome's own calendar (see `clock.py`), and the two can
+# disagree with the process's own system timezone -- exactly the class of defect that
+# module exists to close. A bare `date.today()` here made
+# `test_a_transmitted_invoice_refuses_annulment_and_says_where_to_go` flake with a 422
+# ("una consegna non si registra con data futura") whenever the two clocks disagreed.
+TODAY = oggi_in_italia().isoformat()
+
+COLLABORATORE_EMAIL = "collaboratore-dual@pigro.it"
+COLLABORATORE_PASSWORD = "supersegreta1"
+
+
+def _second_actor(admin_client: TestClient, ruolo: str) -> TestClient:
+    """A genuinely independent session, not `admin_client`'s own cookie jar.
+
+    `logged_in` and `collaborator_client` (`apps/api/tests/conftest.py`) both build
+    their `TestClient` from the same function-scoped `client` fixture, so requesting
+    both in one test leaves exactly one login active on that shared cookie jar --
+    whichever fixture's own `/api/auth/login` call happened to resolve last -- for
+    every call made under *either* fixture's name for the rest of the test. Confirmed
+    directly: with both requested together, `GET /api/auth/me` returns the same
+    identity under both variables.
+
+    `TestClient(admin_client.app)` is the fix already established in this suite
+    (`test_auth_api.py`'s `bare = TestClient(logged_in.app)`): a fresh cookie jar over
+    the same ASGI app, and therefore the same database session and storage overrides,
+    so the two identities can be exercised concurrently within a single test.
+    """
+    email = f"{ruolo}-{id(admin_client)}@pigro.it"
+    created = admin_client.post(
+        "/api/users",
+        json={"email": email, "password": COLLABORATORE_PASSWORD, "nome": "Test", "ruolo": ruolo},
+    )
+    assert created.status_code == 201, created.text
+    client = TestClient(admin_client.app, base_url="https://testserver")
+    response = client.post(
+        "/api/auth/login", json={"email": email, "password": COLLABORATORE_PASSWORD}
+    )
+    assert response.status_code == 200, response.text
+    return client
+
+
+@pytest.fixture
+def fiscal_profile(logged_in: TestClient) -> dict[str, Any]:
+    response = logged_in.put("/api/fiscal-profile", json={"codice_regime": "RF19"})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+@pytest.fixture
+def emitter(logged_in: TestClient) -> dict[str, Any]:
+    response = logged_in.put(
+        "/api/emitter",
+        json={
+            "ragione_sociale": "Humancraft di Ivan Sala",
+            "partita_iva": "14518240966",
+            "codice_fiscale": "HMCRFT00A01H501K",
+            "indirizzo": "Via Vittorio Veneto 12",
+            "cap": "20124",
+            "comune": "Milano",
+            "provincia": "MI",
+            "nazione": "IT",
+            "email": "someone@example.com",
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+@pytest.fixture
+def customer(logged_in: TestClient) -> dict[str, Any]:
+    response = logged_in.post(
+        "/api/customers",
+        json={
+            "ragione_sociale": "Acme S.r.l.",
+            "partita_iva": "12345678901",
+            "codice_sdi": "ABCDEFG",
+            "indirizzo": "Corso Italia 5",
+            "cap": "00100",
+            "comune": "Roma",
+            "provincia": "RM",
+            "nazione": "IT",
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def _draft(client: TestClient, customer_id: str, prezzo: str = "1000.00") -> dict[str, Any]:
+    response = client.post(
+        "/api/invoices",
+        json={
+            "customer_id": customer_id,
+            "causale": "Consulenza",
+            "righe": [{"descrizione": "Consulenza", "prezzo_unitario": prezzo}],
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_the_fiscal_profile_round_trips(
+    logged_in: TestClient, fiscal_profile: dict[str, Any]
+) -> None:
+    assert fiscal_profile["codice_regime"] == "RF19"
+    assert fiscal_profile["soglia_bollo"] == "77.47"
+    assert logged_in.get("/api/fiscal-profile").json()["codice_regime"] == "RF19"
+
+
+def test_reading_a_missing_fiscal_profile_is_a_problem_document(
+    logged_in: TestClient,
+) -> None:
+    response = logged_in.get("/api/fiscal-profile")
+    if response.status_code == 404:
+        assert response.headers["content-type"].startswith("application/problem+json")
+        assert response.json()["code"] == "not_found"
+
+
+def test_only_an_admin_may_write_the_fiscal_profile(collaborator_client: TestClient) -> None:
+    response = collaborator_client.put("/api/fiscal-profile", json={"codice_regime": "RF19"})
+    assert response.status_code == 403
+    assert response.json()["code"] == "permission_denied"
+
+
+def test_creating_a_draft_returns_201_with_no_number(
+    logged_in: TestClient, customer: dict[str, Any], fiscal_profile: dict[str, Any]
+) -> None:
+    draft = _draft(logged_in, customer["id"])
+    assert draft["stato"] == "bozza"
+    assert draft["numero"] is None
+    assert draft["totale"] == "1000.00"
+
+
+def test_replacing_the_lines_recomputes_the_total(
+    logged_in: TestClient, customer: dict[str, Any], fiscal_profile: dict[str, Any]
+) -> None:
+    draft = _draft(logged_in, customer["id"])
+    response = logged_in.put(
+        f"/api/invoices/{draft['id']}/lines",
+        json={"righe": [{"descrizione": "Altro", "prezzo_unitario": "250.00"}]},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["totale"] == "250.00"
+    lines = logged_in.get(f"/api/invoices/{draft['id']}/lines").json()
+    assert [line["numero_linea"] for line in lines] == [1]
+
+
+def test_issuing_assigns_a_number_and_produces_both_artefacts(
+    logged_in: TestClient,
+    customer: dict[str, Any],
+    fiscal_profile: dict[str, Any],
+    emitter: dict[str, Any],
+) -> None:
+    draft = _draft(logged_in, customer["id"])
+    response = logged_in.post(f"/api/invoices/{draft['id']}/issue", json={})
+    assert response.status_code == 200, response.text
+    issued = response.json()
+    assert issued["stato"] == "emessa"
+    assert issued["numero"] == 1
+    assert issued["anno"] == oggi_in_italia().year
+
+    pdf = logged_in.get(f"/api/invoices/{issued['id']}/pdf")
+    assert pdf.status_code == 200
+    assert pdf.headers["content-type"] == "application/pdf"
+    assert "attachment; filename*=UTF-8''" in pdf.headers["content-disposition"]
+    assert pdf.headers["x-content-type-options"] == "nosniff"
+
+    xml = logged_in.get(f"/api/invoices/{issued['id']}/xml")
+    assert xml.status_code == 200
+    assert xml.headers["content-type"] == "application/xml"
+    assert b"FatturaElettronica" in xml.content
+    assert "IT" in xml.headers["content-disposition"]
+
+
+def test_a_collaboratore_cannot_issue(
+    logged_in: TestClient,
+    customer: dict[str, Any],
+    fiscal_profile: dict[str, Any],
+    emitter: dict[str, Any],
+) -> None:
+    draft = _draft(logged_in, customer["id"])
+    collaboratore = _second_actor(logged_in, "collaboratore")
+    response = collaboratore.post(f"/api/invoices/{draft['id']}/issue", json={})
+    assert response.status_code == 403
+    assert response.json()["code"] == "permission_denied"
+
+
+def test_a_collaboratore_may_record_a_payment(
+    logged_in: TestClient,
+    customer: dict[str, Any],
+    fiscal_profile: dict[str, Any],
+    emitter: dict[str, Any],
+) -> None:
+    draft = _draft(logged_in, customer["id"])
+    issued = logged_in.post(f"/api/invoices/{draft['id']}/issue", json={}).json()
+    collaboratore = _second_actor(logged_in, "collaboratore")
+    response = collaboratore.patch(
+        f"/api/invoices/{issued['id']}/payment",
+        json={"stato_pagamento": "incassato", "data_incasso": TODAY},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["stato_pagamento"] == "incassato"
+
+
+def test_deleting_an_issued_invoice_is_a_409(
+    logged_in: TestClient,
+    customer: dict[str, Any],
+    fiscal_profile: dict[str, Any],
+    emitter: dict[str, Any],
+) -> None:
+    """Criterion 4: `DELETE` is refused by the API."""
+    draft = _draft(logged_in, customer["id"])
+    issued = logged_in.post(f"/api/invoices/{draft['id']}/issue", json={}).json()
+    response = logged_in.delete(f"/api/invoices/{issued['id']}")
+    assert response.status_code == 409
+    assert response.json()["code"] == "conflict"
+
+
+def test_deleting_a_draft_is_204(
+    logged_in: TestClient, customer: dict[str, Any], fiscal_profile: dict[str, Any]
+) -> None:
+    draft = _draft(logged_in, customer["id"])
+    assert logged_in.delete(f"/api/invoices/{draft['id']}").status_code == 204
+
+
+def test_annul_then_reissue_is_the_correction_route(
+    logged_in: TestClient,
+    customer: dict[str, Any],
+    fiscal_profile: dict[str, Any],
+    emitter: dict[str, Any],
+) -> None:
+    first = logged_in.post(
+        f"/api/invoices/{_draft(logged_in, customer['id'])['id']}/issue", json={}
+    ).json()
+    annulled = logged_in.post(
+        f"/api/invoices/{first['id']}/annul", json={"motivo": "importo errato"}
+    )
+    assert annulled.status_code == 200, annulled.text
+    assert annulled.json()["stato"] == "annullata"
+    assert annulled.json()["numero"] == 1
+
+    second = logged_in.post(
+        f"/api/invoices/{_draft(logged_in, customer['id'])['id']}/issue", json={}
+    ).json()
+    assert second["numero"] == 2
+
+
+def test_a_transmitted_invoice_refuses_annulment_and_says_where_to_go(
+    logged_in: TestClient,
+    customer: dict[str, Any],
+    fiscal_profile: dict[str, Any],
+    emitter: dict[str, Any],
+) -> None:
+    issued = logged_in.post(
+        f"/api/invoices/{_draft(logged_in, customer['id'])['id']}/issue", json={}
+    ).json()
+    assert (
+        logged_in.post(
+            f"/api/invoices/{issued['id']}/transmitted", json={"data": TODAY}
+        ).status_code
+        == 200
+    )
+    response = logged_in.post(
+        f"/api/invoices/{issued['id']}/annul", json={"motivo": "importo errato"}
+    )
+    assert response.status_code == 409
+    assert "nota di credito" in response.json()["detail"]
+
+
+def test_a_proforma_refuses_to_produce_xml(
+    logged_in: TestClient,
+    customer: dict[str, Any],
+    fiscal_profile: dict[str, Any],
+    emitter: dict[str, Any],
+) -> None:
+    proforma = logged_in.post(
+        "/api/invoices",
+        json={
+            "customer_id": customer["id"],
+            "tipo": "proforma",
+            "righe": [{"descrizione": "Consulenza", "prezzo_unitario": "500.00"}],
+        },
+    ).json()
+    logged_in.post(f"/api/invoices/{proforma['id']}/confirm", json={})
+    artifacts = logged_in.post(f"/api/invoices/{proforma['id']}/artifacts", json={})
+    assert artifacts.status_code == 200, artifacts.text
+    assert [a["kind"] for a in artifacts.json()] == ["pdf"]
+    response = logged_in.get(f"/api/invoices/{proforma['id']}/xml")
+    assert response.status_code in (404, 409)
+    assert response.json()["code"] in ("not_found", "conflict")
+
+
+def test_converting_a_confirmed_proforma_creates_a_new_numbered_row(
+    logged_in: TestClient,
+    customer: dict[str, Any],
+    fiscal_profile: dict[str, Any],
+    emitter: dict[str, Any],
+) -> None:
+    proforma = logged_in.post(
+        "/api/invoices",
+        json={
+            "customer_id": customer["id"],
+            "tipo": "proforma",
+            "righe": [{"descrizione": "Consulenza", "prezzo_unitario": "500.00"}],
+        },
+    ).json()
+    logged_in.post(f"/api/invoices/{proforma['id']}/confirm", json={})
+    issued = logged_in.post(f"/api/invoices/{proforma['id']}/issue", json={}).json()
+    assert issued["id"] != proforma["id"]
+    assert issued["origine_proforma_id"] == proforma["id"]
+    assert logged_in.get(f"/api/invoices/{proforma['id']}").json()["stato"] == "consumata"
+
+
+def test_a_refusal_names_the_field_in_the_problem_document(
+    logged_in: TestClient, fiscal_profile: dict[str, Any], emitter: dict[str, Any]
+) -> None:
+    """Criterion 9: an RFC 9457 problem document with `entity` and `field` populated,
+    which is what `fieldErrorFrom` in the web client reads."""
+    customer = logged_in.post(
+        "/api/customers",
+        json={
+            "ragione_sociale": "Senza recapito",
+            "nazione": "IT",
+            "cap": "00100",
+            "comune": "Roma",
+            "provincia": "RM",
+            "indirizzo": "Via Roma 1",
+        },
+    ).json()
+    draft = _draft(logged_in, customer["id"])
+    response = logged_in.post(f"/api/invoices/{draft['id']}/issue", json={})
+    assert response.status_code == 422
+    body = response.json()
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert body["entity"] == "customer"
+    assert body["field"] == "codice_sdi"
+    assert body["expected"]
+
+
+def test_the_list_filters_and_paginates(
+    logged_in: TestClient, customer: dict[str, Any], fiscal_profile: dict[str, Any]
+) -> None:
+    for _ in range(3):
+        _draft(logged_in, customer["id"])
+    page = logged_in.get("/api/invoices", params={"limit": 2}).json()
+    assert len(page["items"]) == 2
+    assert page["next_cursor"]
+    filtered = logged_in.get("/api/invoices", params={"tipo": "proforma"}).json()
+    assert filtered["items"] == []
+
+
+def test_the_list_limit_is_bounded_at_the_http_layer(logged_in: TestClient) -> None:
+    assert logged_in.get("/api/invoices", params={"limit": 201}).status_code == 422
+
+
+def test_the_timeline_of_an_invoice_is_readable(
+    logged_in: TestClient,
+    customer: dict[str, Any],
+    fiscal_profile: dict[str, Any],
+    emitter: dict[str, Any],
+) -> None:
+    issued = logged_in.post(
+        f"/api/invoices/{_draft(logged_in, customer['id'])['id']}/issue", json={}
+    ).json()
+    entries = logged_in.get(f"/api/invoices/{issued['id']}/timeline").json()
+    assert {entry["kind"] for entry in entries} >= {"created", "issued"}
+    assert {entry["actor_type"] for entry in entries} == {"user"}
+
+
+def test_the_openapi_document_declares_invoice_as_an_entity_type(
+    logged_in: TestClient,
+) -> None:
+    """The generated TypeScript client reads this; a contract change must break `tsc`."""
+    schema = logged_in.get("/openapi.json").json()
+    assert "/api/invoices" in schema["paths"]
+    assert "InvoiceRead" in schema["components"]["schemas"]
+    assert "FiscalProfileRead" in schema["components"]["schemas"]
