@@ -12,6 +12,8 @@ from pigrocrm_api.routers import (
     documents,
     emitter,
     fields,
+    fiscal_profile,
+    invoices,
     people,
     pipeline,
     schema,
@@ -56,6 +58,8 @@ def create_app() -> FastAPI:
         documents,
         templates,
         emitter,
+        invoices,
+        fiscal_profile,
     ):
         app.include_router(module.router)
 

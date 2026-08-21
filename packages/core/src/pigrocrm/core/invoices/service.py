@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
-from pigrocrm.core.clock import oggi_in_italia
+from pigrocrm.core.clock import ITALY_TZ, oggi_in_italia
 from pigrocrm.core.config import Settings, get_settings
 from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.deals.models import Deal
@@ -854,6 +854,34 @@ class InvoiceService:
             righe=tuple(InvoiceLineRead.model_validate(r) for r in self.repo.lines(invoice.id)),
         )
 
+    def _for_export_proforma(self, invoice: Invoice, actor: Actor) -> InvoiceForExport:
+        """A live view for a proforma's PDF: a proforma never freezes (only `issue`
+        writes `snapshot`/`anno`/`numero`), so there is nothing to read back. Built
+        from the *current* customer/emitter/fiscal profile instead, and from
+        `created_at` converted to Europe/Rome -- not `oggi_in_italia()` -- so
+        re-rendering later reproduces the same displayed date rather than drifting
+        with the clock. `anno`/`numero` are placeholders that satisfy the schema's
+        non-nullable bounds; `build_scope` never reads them here because
+        `riferimento is not None` skips the `numero_completo` branch entirely.
+        """
+        _, profile = self._regime()
+        snapshot = self._build_snapshot(invoice, profile, actor)
+        return InvoiceForExport(
+            anno=invoice.created_at.year,
+            numero=1,
+            data_emissione=invoice.created_at.astimezone(ITALY_TZ).date(),
+            data_scadenza=None,
+            tipo_documento=invoice.tipo_documento,
+            divisa=invoice.divisa,
+            imponibile=invoice.imponibile,
+            imposta=invoice.imposta,
+            bollo=invoice.bollo,
+            totale=invoice.totale,
+            causale=invoice.causale,
+            snapshot=snapshot,
+            righe=tuple(InvoiceLineRead.model_validate(r) for r in self.repo.lines(invoice.id)),
+        )
+
     def _artifact_document(
         self, invoice: Invoice, tipo: str, titolo: str, actor: Actor
     ) -> Document:
@@ -1048,7 +1076,7 @@ class InvoiceService:
         self.session.commit()
         return artifact
 
-    def produce_artifacts(self, invoice_id: UUID, actor: Actor) -> InvoiceArtifact:
+    def produce_artifacts(self, invoice_id: UUID, actor: Actor) -> list[InvoiceArtifact]:
         """Render the PDF, and for an issued invoice the XML too.
 
         Called by `issue` after its commit, and callable again at any time: both
@@ -1063,12 +1091,20 @@ class InvoiceService:
         every PDF's `/CreationDate`, and slice 2 had to discover that by comparing two
         renders rather than by trusting that the call succeeded.
 
-        The PDF is produced for a proforma as well; the XML is not, because a proforma
-        is not a fiscal document. `export_xml` refuses one on the row's own state.
+        The PDF is produced for a proforma as well, from a live view built by
+        `_for_export_proforma` rather than the frozen `_for_export` (a proforma never
+        freezes); the XML is not, because a proforma is not a fiscal document.
+        `export_xml` refuses one on the row's own state. Returns both artefacts
+        (`[pdf]`, or `[pdf, xml]` once the fattura is issued) rather than only the
+        last one produced, so a caller sees the whole result of one call.
         """
         actor.require_write("produce_invoice_artifacts")
         invoice = self._require(invoice_id)
-        export = self._for_export(invoice)
+        export = (
+            self._for_export_proforma(invoice, actor)
+            if invoice.tipo == "proforma"
+            else self._for_export(invoice)
+        )
         riferimento = invoice.riferimento if invoice.tipo == "proforma" else None
 
         _, data = invoice_pdf.render_invoice_pdf(
@@ -1089,7 +1125,7 @@ class InvoiceService:
         # No `expected_hash`: unlike the XML, the PDF's bytes are not a fiscal identity
         # the system promises never to change. A template correction should produce a new
         # version, not a divergence error.
-        artifact = self._store_artifact(
+        pdf_artifact = self._store_artifact(
             invoice,
             kind="pdf",
             tipo=tipo,
@@ -1101,9 +1137,10 @@ class InvoiceService:
             actor=actor,
         )
         self.session.commit()
+        artifacts = [pdf_artifact]
         if invoice.tipo == "fattura" and invoice.stato != "bozza":
-            self.export_xml(invoice_id, actor)
-        return artifact
+            artifacts.append(self.export_xml(invoice_id, actor))
+        return artifacts
 
     def download(
         self, invoice_id: UUID, kind: ArtifactKind, actor: Actor
