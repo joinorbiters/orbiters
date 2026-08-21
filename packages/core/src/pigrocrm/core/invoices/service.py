@@ -32,6 +32,7 @@ from pigrocrm.core.fields.validator import validate_custom_fields
 from pigrocrm.core.fiscal.regime import RegimeStrategy, resolve_regime
 from pigrocrm.core.fiscal.schemas import FiscalSnapshot
 from pigrocrm.core.fiscal.service import FiscalProfileService
+from pigrocrm.core.invoices import pdf as invoice_pdf
 from pigrocrm.core.invoices.fatturapa import (
     FatturaPAExporter,
     check_party_exportable,
@@ -701,6 +702,26 @@ class InvoiceService:
                 anno=anno,
                 numero=numero,
             ) from exc
+
+        # Spec 3 asks for the render to happen **after** this commit, in a second
+        # transaction, and it is right: holding the counter's row lock for the duration
+        # of a Typst subprocess would serialise every emission on PDF compile time, and
+        # an invoice is a legal fact independent of its printout.
+        #
+        # But the second transaction belongs to the **caller**, not to this method. When
+        # `issue` called `produce_artifacts` itself, `issue` stopped being one
+        # transaction: the artefact commit survived the test fixture's rollback, so an
+        # issued invoice leaked across tests and the next first-invoice-of-2026 collided
+        # on `uq_invoices_anno_numero`. Eight tests failed that way, and three more on
+        # the `documents` row pinning a customer that teardown then could not remove.
+        #
+        # A leak that only shows up as someone else's failing test is the cheap version
+        # of the same defect in production, where the transaction boundary would be
+        # equally invisible and the consequence a partially-committed emission. So
+        # `issue` returns here, one method and one transaction, and the adapters call
+        # `produce_artifacts` next -- which is idempotent and regenerates from the
+        # snapshot, so a crash between the two leaves an invoice that is fiscally
+        # complete and merely unprinted.
         return InvoiceRead.model_validate(target)
 
     def annul(self, invoice_id: UUID, data: InvoiceAnnul, actor: Actor) -> InvoiceRead:
@@ -1025,6 +1046,63 @@ class InvoiceService:
         if invoice.xml_hash_sha256 is None:
             invoice.xml_hash_sha256 = artifact.hash_sha256
         self.session.commit()
+        return artifact
+
+    def produce_artifacts(self, invoice_id: UUID, actor: Actor) -> InvoiceArtifact:
+        """Render the PDF, and for an issued invoice the XML too.
+
+        Called by `issue` after its commit, and callable again at any time: both
+        artefacts regenerate deterministically from the frozen snapshot, so this is
+        idempotent by construction rather than by a guard. That is the property that
+        makes the post-commit render of spec 3 safe -- a crash between the commit and
+        the render leaves an invoice that is fiscally complete and merely unprinted,
+        and the next call finishes the job.
+
+        Byte-identical on re-render, which is only true because `render_pdf` pins
+        `--creation-timestamp 0`: Typst otherwise stamps wall-clock compile time into
+        every PDF's `/CreationDate`, and slice 2 had to discover that by comparing two
+        renders rather than by trusting that the call succeeded.
+
+        The PDF is produced for a proforma as well; the XML is not, because a proforma
+        is not a fiscal document. `export_xml` refuses one on the row's own state.
+        """
+        actor.require_write("produce_invoice_artifacts")
+        invoice = self._require(invoice_id)
+        export = self._for_export(invoice)
+        riferimento = invoice.riferimento if invoice.tipo == "proforma" else None
+
+        _, data = invoice_pdf.render_invoice_pdf(
+            export, riferimento=riferimento, settings=self.settings
+        )
+        # `fattura`/`proforma`, the names `DocumentTipo` actually declares -- the PDF is
+        # *the* document of its kind, and `fattura_xml` is the one that needs qualifying
+        # because it is the second stream for the same invoice.
+        if invoice.tipo == "proforma":
+            titolo = f"Proforma {invoice.riferimento or invoice.id} (PDF)"
+            filename = f"proforma-{(invoice.riferimento or str(invoice.id)).lower()}.pdf"
+            tipo = "proforma"
+        else:
+            titolo = f"Fattura {numero_completo(export.anno, export.numero)} (PDF)"
+            filename = f"fattura-{invoice.anno}-{invoice.numero}.pdf"
+            tipo = "fattura"
+
+        # No `expected_hash`: unlike the XML, the PDF's bytes are not a fiscal identity
+        # the system promises never to change. A template correction should produce a new
+        # version, not a divergence error.
+        artifact = self._store_artifact(
+            invoice,
+            kind="pdf",
+            tipo=tipo,
+            titolo=titolo,
+            content_type="application/pdf",
+            filename=filename,
+            data=data,
+            expected_hash=None,
+            actor=actor,
+        )
+        self.session.commit()
+        if invoice.tipo == "fattura" and invoice.stato != "bozza":
+            self.export_xml(invoice_id, actor)
         return artifact
 
     def download(
