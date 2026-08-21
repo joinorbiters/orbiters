@@ -3,16 +3,19 @@ import shutil
 import string
 import subprocess
 from pathlib import Path
+from typing import get_args
 from urllib.parse import quote
 
 import pytest
 
 from pigrocrm.core.templates.escaping import (
+    RenderContext,
     escape_for,
     escape_markdown,
     escape_typst,
     escape_typst_string,
     escape_url,
+    escape_xml,
 )
 
 # The two adversarial values the spec names (§3.3, "Test di accettazione"). Every
@@ -631,3 +634,44 @@ def test_url_context_two_spellings_of_the_same_intent_now_agree_for_real(
     reference = f"vedi [il sito][r] fine\n\n[r]: {escape_markdown(real_url)}\n"
     assert _compile_markdown_to_pdf_uris(inline, tmp_path) == [real_url]
     assert _compile_markdown_to_pdf_uris(reference, tmp_path) == [real_url]
+
+
+# --- the xml context (slice 3) ---------------------------------------------
+
+
+def test_xml_context_returns_the_domain_value_untouched() -> None:
+    """The tree serialiser is the one and only escaping pass. the previous system put a literal
+    backslash into an Agenzia delle Entrate record by running a value through
+    escapeTypstText and then escapeXml; there is no code path here that can stack
+    two escapers, because this one substitutes nothing."""
+    hostile = 'Rossi & C. <IdCodice>999</IdCodice> "#$@\\ ]]>'
+    assert escape_xml(hostile) == hostile
+    assert escape_for("xml", hostile) == hostile
+
+
+@pytest.mark.parametrize(
+    "forbidden",
+    [
+        "\x00",  # NUL, also refused by SafeStr upstream
+        "\x01",
+        "\x08",
+        "\x0b",  # vertical tab
+        "\x0c",  # form feed
+        "\x1f",
+        "￾",  # non-character
+        "￿",  # non-character
+        "\ud800",  # a lone surrogate, reachable in a Python str
+    ],
+)
+def test_xml_context_refuses_a_code_point_xml_cannot_represent(forbidden: str) -> None:
+    with pytest.raises(ValueError, match="non rappresentabile in XML"):
+        escape_xml(f"Rossi{forbidden}C.")
+
+
+@pytest.mark.parametrize("allowed", ["\t", "\n", "\r", "à", "€", "𝄞"])
+def test_xml_context_allows_every_code_point_xml_1_0_permits(allowed: str) -> None:
+    assert escape_xml(f"a{allowed}b") == f"a{allowed}b"
+
+
+def test_xml_is_a_declared_render_context() -> None:
+    assert "xml" in get_args(RenderContext)

@@ -45,7 +45,7 @@ import string
 from typing import Literal
 from urllib.parse import quote, urlsplit
 
-RenderContext = Literal["markdown", "typst", "typst_string", "url", "verbatim"]
+RenderContext = Literal["markdown", "typst", "typst_string", "url", "verbatim", "xml"]
 
 # Every ASCII punctuation character, escaped unconditionally, in both contexts -- see
 # the module docstring for why a curated subset per context is exactly the defect this
@@ -240,6 +240,46 @@ def escape_url(value: str) -> str:
     return quote(value, safe="")
 
 
+# XML 1.0 Char production (spec section 2.2): #x9 | #xA | #xD | [#x20-#xD7FF] |
+# [#xE000-#xFFFD] | [#x10000-#x10FFFF]. Everything else -- the C0 controls other than
+# tab/LF/CR, the surrogate range (reachable in a Python str, e.g. from a lone
+# "\ud800"), and the two non-characters #xFFFE/#xFFFF -- has no representation at
+# all: not as a literal byte, and not as a numeric character reference either, so no
+# escaper could rescue it. A serialiser that emits one produces a file no conformant
+# parser will open, which on a fiscal document means an outright rejection with no
+# diagnostic worth reading. Written with explicit \\x/\\u/\\U escapes, not the literal
+# code points themselves, since some of those code points do not survive every text
+# encoding or editor round-trip intact.
+_INVALID_XML_CHARS = re.compile("[^\t\n\r\x20-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]")
+
+
+def escape_xml(value: str) -> str:
+    """For a value that lands as the text of an XML element.
+
+    Returns `value` **unchanged**. That is the whole rule, and it is deliberate: this
+    slice builds the FatturaPA document as an `lxml` element tree and serialises it
+    once, so the serialiser is the single escaping pass and anything this function
+    substituted would be escaped a second time on the way out -- `&` would reach the
+    Agenzia delle Entrate as `&amp;amp;`. the previous system's own literal-backslash defect
+    (`normalizeSingleLine` ran `escapeTypstText` and then `escapeXml` over the same
+    string) is that mistake in its other direction. The `xml` context therefore exists
+    to say, explicitly and in the same module as the other four contexts, that the
+    correct number of escaping passes for an XML target is one and it does not happen
+    here.
+
+    What it does do is refuse what no escaper can fix: a code point outside XML 1.0's
+    `Char` production. `SafeStr` already stops a NUL byte at the schema boundary; this
+    closes the rest of the class rather than that one case.
+    """
+    invalid = _INVALID_XML_CHARS.search(value)
+    if invalid is not None:
+        raise ValueError(
+            "il testo contiene un carattere non rappresentabile in XML 1.0: "
+            f"U+{ord(invalid.group(0)):04X}"
+        )
+    return value
+
+
 def escape_for(context: RenderContext, value: str) -> str:
     match context:
         case "markdown":
@@ -250,6 +290,8 @@ def escape_for(context: RenderContext, value: str) -> str:
             return escape_typst_string(value)
         case "url":
             return escape_url(value)
+        case "xml":
+            return escape_xml(value)
         case "verbatim":
             # No escaper exists for this context on purpose, not by omission: a
             # verbatim region (a plain code span or fenced code block, as opposed to
