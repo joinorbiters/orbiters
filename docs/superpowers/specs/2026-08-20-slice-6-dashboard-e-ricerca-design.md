@@ -50,7 +50,7 @@ Da verificare **prima** di pianificare. Ogni riga è stata cercata nel codice co
 | `period_locks` e i campi `periodo_chiuso` / `voci_scritte_in_ritardo` nei report | Slice 4 §6.4, §14.2 | La dashboard non può dire se un numero può ancora muoversi, che è metà del suo valore |
 | `documents.tipo='offerta'` con `stato` e `OFFER_TRANSITIONS` | Slice 2 §4.1, `documents/service.py:50` | Le automazioni del §9 non hanno trigger |
 | `pipeline_stages.tipo` e `code` | Slice 1 §5.4, R11 | Le automazioni non sanno cos'è «vinto» senza fare match sul nome, che è esattamente ciò che `tipo` esiste per evitare |
-| **Una sessione per chiamata sul server MCP** (cura di **R1**) | Prerequisito già dichiarato bloccante per lo slice 4 (§12) | §11.3: questo slice **ne dipende** |
+| **Una sessione per chiamata sul server MCP** (cura di **R1**) | È un task del piano dello slice 4, non più un residuo da decidere | §11.3: questo slice **ne dipende**, e non ha un ripiego |
 | **A14 chiuso** (`exclude_unset=True`) | Slice 4 §9.2, §12 | La ricerca aggiunge parametri di ordinamento a schemi di lista; un contratto di aggiornamento a metà strada fra due convenzioni è la condizione peggiore in cui toccarli |
 | Il fuso dell'emittente, come deciso dallo slice 3 §6.2 per `data_emissione` | Slice 3 | §4.1: `deals.chiuso_il` è una data di calendario e deve usare **lo stesso** meccanismo, non un secondo |
 | L'app servita sotto `/app/` | Slice 5 §9.4 | Le rotte del §13 sono scritte nella forma post-slice-5 |
@@ -75,6 +75,13 @@ Due fatti sul codice già spedito, che questo slice eredita e non deve scoprire 
 2. **un `COUNT` o un `SUM` su righe di una sola tabella**, scritto nel repository di quella tabella
    — anche quando la tabella appartiene a un altro slice: l'aggregato sulle ore vive in
    `TimeEntryRepository`, non in un modulo di dashboard.
+
+E una precisazione che serve, perché i segnali del §6.2 sarebbero altrimenti fuori regola: **un
+`COUNT` può attraversare una join, un `SUM` no.** Contare i deal che hanno una fattura emessa
+richiede di guardare due tabelle e non produce nessuna cifra di denaro; sommare importi attraverso
+una join è il modo classico di contare due volte la stessa riga, e su un margine non si scopre
+guardando il totale. Un conteggio su join vive nel repository dell'entità **contata** — quella che
+compare nell'elenco del drill-through — e non ha aritmetica dentro.
 
 Non esiste una terza forma. In particolare **nessuna divisione, nessun prodotto e nessuna
 sottrazione fra grandezze prese da due servizi diversi**: se un numero del genere serve, appartiene
@@ -818,6 +825,8 @@ GET /api/dashboard/commerciale?da=&a=
 GET /api/dashboard/economica?da=&a=
 GET /api/dashboard/operativa
 GET /api/search?q=&limit=
+GET /api/analytics/backlog               # get_unbilled_backlog, accanto agli endpoint analytics
+                                         #   dello slice 4 perche' il metodo e' di AnalyticsService
 GET /api/automation-config        · PUT (admin)
 GET /api/automation-runs?limit=          # lettura di activities per kind, non una tabella nuova
 ```
@@ -827,10 +836,14 @@ parametri `sort` e `dir`, e `cursor` che diventa una stringa opaca (§8.4).
 
 ### 11.3 R1: sì, questo slice ne dipende
 
-Il residuo R1 — una sola `Session` SQLAlchemy condivisa da tutte le chiamate del server MCP — è
-già dichiarato prerequisito bloccante dello slice 4 (§12), quindi quando questo slice esiste è
-chiuso. Va scritto comunque, perché **l'aggregazione in lettura lo peggiora** e perché se per
-qualsiasi ragione la cura slittasse, i tool di questo slice non devono essere registrati:
+Il residuo R1 — una sola `Session` SQLAlchemy condivisa da tutte le chiamate del server MCP — **non
+è più una decisione da prendere: è un task del piano dello slice 4**, dove `log_time` non può
+esistere senza di esso (slice 4 §12, criterio 11). Quando questo slice comincia, la cura è in
+`main`, e questo slice **la dà per fatta invece di aggirarla**.
+
+Va scritto comunque, per due ragioni: perché **l'aggregazione in lettura lo peggiora**, e perché se
+la cura slittasse i tool di questo slice non devono essere registrati — un dashboard tool su una
+sessione condivisa non è una funzionalità degradata, è una cifra sbagliata.
 
 - una query di aggregazione tiene la connessione occupata più a lungo di una `get`, quindi allarga
   la finestra in cui due chiamate si sovrappongono — che è la condizione misurata nella review dello
@@ -882,8 +895,12 @@ quattro punti non serve.
   già porta `radix-ui`. I tre stati del §8.6 sono tre rendering distinti, non un elenco vuoto con
   tre messaggi.
 - **`/app/` — la dashboard.** Sostituisce il segnaposto che nomina questo slice. Tre schede —
-  Commerciale · Economica · Operativa — con il periodo nell'URL. Su ruolo `readonly` le pagine si
-  vedono; la scheda Economica no, per lo stesso criterio con cui la stima fiscale è `admin`.
+  Commerciale · Economica · Operativa — con il periodo nell'URL. **Nessun ruolo nuovo e nessuna
+  regola di autorizzazione nuova**: ogni dashboard è visibile a chi può leggere i servizi da cui
+  legge, e lo slice 4 §11 li dà a tutti i ruoli. Un `readonly` vede tutte e tre. L'unica cifra a
+  `admin` di quell'area è la stima fiscale, che non sta su nessuna dashboard (§5.3) — inventare qui
+  un quarto livello di visibilità significherebbe aggiungere una regola di sicurezza in una
+  schermata di lettura, che è il posto in cui nessuno la va a cercare.
 - **`/app/impostazioni/automazioni`** — §9.5.
 - **Nessun totale calcolato nel browser.** Regola dello slice 4 §6, qui estesa: le dashboard non
   sommano nulla, nemmeno le ore visibili. Il criterio 14 del §16 estende il test sull'AST che lo
@@ -906,7 +923,7 @@ quattro punti non serve.
 |---|---|
 | **R6** — ricerca `ilike` senza indice | **È di questo slice.** Chiuso con `pg_trgm` e dieci indici parziali (§8.3), con la misura in CI (§16.3). Resta il caso sotto i tre caratteri sugli endpoint di lista, dichiarato e limitato |
 | **R9** — l'ordinamento promesso non esiste | **È di questo slice.** Chiuso per `customers`, `people`, `deals`, `documents`, con cursore composito (§8.4). Aperto per il resto, e scritto così |
-| **R1** — sessione MCP condivisa | Già prerequisito bloccante dello slice 4. Questo slice **ne dipende** e spiega perché l'aggregazione lo peggiora (§11.3) |
+| **R1** — sessione MCP condivisa | Non è più aperto come decisione: è un task del piano dello slice 4. Questo slice **ne dipende** e spiega perché l'aggregazione in lettura lo peggiora (§11.3) |
 | **R7** — nessun indice parziale su `deleted_at` | Chiuso per le tabelle che questo slice interroga, come effetto degli indici trigram parziali. Il difetto generale resta |
 | **R5** — nessun audit per la configurazione | Chiuso per `automation_config` (§9.6), come slice 3 per `fiscal_profile` e slice 4 per le tariffe. Aperto per il resto |
 | **R10** — PAT senza scope | È la ragione per cui la stima fiscale non entra in nessun prompt (§10.1). Nessuna chiusura ulteriore qui |
@@ -936,9 +953,14 @@ quattro punti non serve.
 
 ## 16. Criteri di successo
 
-Eseguibili in CI, non da guardare. Il corpus di riferimento — 2.000 deal, 5.000 fatture, 60.000 voci
-di ore, 3.000 costi, 50.000 clienti, 20.000 persone — è generato da una fixture e girato su Postgres
-reale via testcontainers, come tutto il resto della suite (slice 1 §11).
+Eseguibili in CI, non da guardare. Il **corpus di riferimento** — dieci anni di lavoro di uno studio
+da cinque persone: 500 clienti, 800 persone, 2.000 deal, 5.000 fatture, 60.000 voci di ore, 3.000
+costi — è generato da una fixture e girato su Postgres reale via testcontainers, come tutto il resto
+della suite (slice 1 §11). È il corpus dei criteri di dashboard.
+
+Il criterio 3 usa una **variante gonfiata** dello stesso generatore, con ogni tabella cercata a
+50.000 righe, e la ragione sta nel criterio stesso: un'asserzione sul piano di esecuzione non
+significa niente su una tabella che sta in poche pagine.
 
 1. **Una cifra di dashboard si riconcilia esattamente con il servizio che possiede il dato.**
    `GET /api/dashboard/economica?da=&a=` restituisce un `fatturato` uguale **al centesimo** a
@@ -952,13 +974,19 @@ reale via testcontainers, come tutto il resto della suite (slice 1 §11).
 2. **Ogni card coincide con il suo drill-through.** Per ogni cifra della dashboard che ha un
    collegamento, il numero della card è uguale al conteggio delle righe che l'elenco collegato
    restituisce con gli stessi filtri, interrogato indipendentemente. Un solo predicato, due letture.
-3. **La ricerca non degenera in una scansione.** Sul corpus di riferimento, per un termine di 3
-   caratteri e per uno di 12, `EXPLAIN (ANALYZE, BUFFERS)` di ogni ramo di `SearchService` mostra un
-   `Bitmap Index Scan` sull'indice trigram e **nessun `Seq Scan`** su `customers`, `people`,
-   `deals`, `documents`, `invoices`; la latenza totale dell'endpoint sta sotto **300 ms**. Il test
-   asserisce sul piano, non sul tempo soltanto — un tempo buono su una macchina veloce nasconde una
-   scansione. Più: `test_migrations` passa con i dieci indici trigram in
-   `HAND_MAINTAINED_INDEXES`, e fallisce nominando l'indice mancante se uno viene tolto.
+3. **La ricerca non degenera in una scansione.** Per questo criterio il corpus porta **ogni tabella
+   cercata a 50.000 righe** — e la ragione è la stessa che al §7.3 vieta di asserire sul piano di
+   `deals`: su una tabella piccola la scansione sequenziale *è* il piano giusto, quindi
+   un'asserzione sul piano non significherebbe niente e fallirebbe senza un difetto.
+   Su quel corpus, per un termine di 3 caratteri e per uno di 12,
+   `EXPLAIN (ANALYZE, BUFFERS)` di ogni ramo di `SearchService` mostra un `Bitmap Index Scan`
+   sull'indice trigram e **nessun `Seq Scan`** su `customers`, `people`, `deals`, `documents`,
+   `invoices`; la latenza totale dell'endpoint sta sotto **300 ms**. Il test asserisce sul piano, non
+   sul tempo soltanto — un tempo buono su una macchina veloce nasconde una scansione. Più:
+   `test_migrations` passa con i dieci indici trigram in `HAND_MAINTAINED_INDEXES`, e fallisce
+   nominando l'indice mancante se uno viene tolto. E una variante rimuove l'indice a mano e verifica
+   che il test **fallisca**: un'asserzione sul piano che passa anche senza l'indice non sta
+   misurando l'indice.
 4. **L'ordine dei risultati è totale e deterministico.** La stessa base dati e lo stesso termine
    producono un JSON **identico byte per byte** su venti esecuzioni. Un termine che è la partita IVA
    esatta di un cliente lo mette al primo posto; un termine che è un prefisso di una ragione sociale
@@ -968,11 +996,19 @@ reale via testcontainers, come tutto il resto della suite (slice 1 §11).
    database che rifiuta la query: compare lo stato d'errore e la stringa «Nessun risultato» **non è
    presente nel DOM**, verificato con Playwright. Con un termine di 2 caratteri: nessuna richiesta
    HTTP viene emessa.
-6. **Una dashboard è un solo istante.** Ogni query interna riporta il proprio
-   `transaction_timestamp()`: il test asserisce che siano tutti identici fra loro e uguali a
-   `calcolato_alle` nella risposta. Una seconda variante emette un `COMMIT` di una fattura da una
-   connessione parallela nel mezzo dell'esecuzione e verifica che la risposta sia coerente con uno
-   dei due stati, non con entrambi.
+6. **Una dashboard è un solo istante, e lo snapshot è quello che lo dimostra.** Due asserzioni, e la
+   prima da sola non basterebbe: `transaction_timestamp()` è costante per tutta la transazione
+   **anche** in `READ COMMITTED`, quindi un test che si fermasse lì passerebbe su una dashboard che
+   legge sei stati diversi (§7.1).
+   (a) Il livello di isolamento in vigore durante la richiesta è `repeatable read`, letto da
+   `SHOW transaction_isolation` sulla stessa connessione.
+   (b) Una connessione parallela emette il `COMMIT` di una fattura **fra la prima e la seconda**
+   query interna, sincronizzata con una barriera: quella fattura non compare in **nessuna** cifra
+   della risposta — né nel fatturato né nel conteggio. Ripetuto con l'isolamento forzato a
+   `read committed`, il test **fallisce**, che è ciò che rende l'asserzione (a) significativa invece
+   che decorativa.
+   (c) `calcolato_alle` è il `transaction_timestamp()` di quella transazione, ed è precedente al
+   commit parallelo.
 7. **L'automazione è atomica con il suo trigger.** Accettare un'offerta sposta il deal a `vinto`
    nella **stessa** transazione: con un errore iniettato fra l'automazione e il commit, nessuna
    delle due cose risulta avvenuta — l'offerta è ancora `inviata` e il deal è ancora nel suo stage,
@@ -988,18 +1024,26 @@ reale via testcontainers, come tutto il resto della suite (slice 1 §11).
    sua activity.
 10. **I prompt esistono, portano il contesto, e non portano il fisco.** `list_prompts()` restituisce
     i quattro prompt con i loro argomenti inferiti dalla firma; il rendering di `chiusura-mese`
-    contiene un blocco di risorsa con le cifre del P&L **identiche** a quelle di
-    `get_period_pnl`, e **nessun** campo fra `imponibile_fiscale`, `imposta_sostitutiva`,
-    `contributi`, `netto_stimato` — verificato per nome di campo. `revisione-pipeline` reso su un
-    database vuoto produce un messaggio valido, non un'eccezione.
+    contiene le cifre del P&L **identiche** a quelle di `get_period_pnl` — confrontate valore per
+    valore, non a occhio — e **nessun** campo fra `imponibile_fiscale`, `imposta_sostitutiva`,
+    `contributi`, `netto_stimato`, verificato per nome di campo su tutti i messaggi resi.
+    `stato-cliente` contiene un blocco di risorsa il cui URI è `customer://{id}`, ed è l'**unico**
+    prompt che contiene un blocco di risorsa (§10): un test elenca gli URI incorporati da tutti e
+    quattro e verifica che non ne esistano di nuovi. `revisione-pipeline` reso su un database vuoto
+    produce un messaggio valido, non un'eccezione.
 11. **Il divieto MCP è nel build, e la superficie è di sola lettura.** Per ogni metodo pubblico di
     `DashboardService`, `SearchService` e `AutomationConfigService` esiste un tool o il metodo è
     nella lista di esclusione dichiarata, che deve essere **esattamente**
-    `update_automation_config`. Più: il test di architettura verifica che i metodi
-    `*_in_transaction` siano chiamati **solo** da `core/automations/` (§9.3), e che nessun modulo
-    sotto `core/dashboard/` contenga un'operazione `*`, `/` o `-` fra due `Decimal` (§3).
+    `update_automation_config`; e la lista dello slice 4 è ancora **esattamente** i suoi dieci nomi,
+    perché `get_unbilled_backlog` ha il suo tool (§6.3). Più: il test di architettura verifica che i
+    metodi `*_in_transaction` siano chiamati **solo** da `core/automations/` (§9.3), che nessun
+    modulo sotto `core/dashboard/` importi `Decimal`, e che nessuno contenga un nodo `BinOp` con
+    `*`, `/` o `-` (§3).
 12. **Lettura concorrente via MCP.** Dieci `get_economic_dashboard` simultanei su Postgres reale
-    restituiscono dieci risposte identiche, senza nessun errore di sessione. È R1 verificato dal
+    restituiscono dieci risposte identiche **a meno di `calcolato_alle`**, che è per costruzione
+    l'istante di ciascuna transazione e non può coincidere: un test che pretendesse
+    l'uguaglianza byte per byte del JSON intero fallirebbe senza un difetto. Nessun errore di
+    sessione, e ogni chiamata ha il proprio `transaction_isolation` corretto. È R1 verificato dal
     lato lettura, e la condizione per cui questi tool esistono.
 13. **La paginazione ordinata non perde né ripete righe.** Con `sort=ragione_sociale&dir=asc` e
     inserimenti concorrenti durante la scorsa, l'unione delle pagine non contiene duplicati e
@@ -1040,6 +1084,22 @@ Tre ragioni per separarli, non una preferenza estetica.
    di partita IVA fa risparmiare tempo ogni settimana, che è il criterio di esistenza che lo slice 1
    §1 pone a ogni funzionalità. È anche il piano che chiude due residui misurati, quindi il valore
    che consegna non dipende dal fatto che il resto dello slice arrivi.
+
+**Ogni piano porta il proprio collaudo.** È il criterio che ha deciso dove tagliare, non una
+conseguenza fortunata: il segnale «offerta accettata, deal non vinto» sta sulla dashboard
+commerciale e non su quella operativa (§6.2) **proprio** perché è il controllo incrociato
+dell'automazione, e un'automazione che arrivasse in 6B con il suo verificatore in 6C sarebbe in
+produzione per settimane senza nessuno che sappia se sta funzionando. Allo stesso modo i criteri del
+§16 si distribuiscono senza avanzi:
+
+| Piano | Criteri che deve superare |
+|---|---|
+| 6A | 3, 4, 5, 13 |
+| 6B | 7, 8, 9, più **2, 6 e 14 sulla dashboard commerciale** — sono criteri per *ogni* dashboard, e cadono in scadenza con la prima |
+| 6C | 1, 10, 11, 12, 15, più 2, 6 e 14 ripetuti sulle due dashboard nuove |
+
+Nessun piano si chiude con criteri che non può eseguire, e nessun criterio resta senza un piano che
+lo esegua.
 
 **L'ordine 6A → 6B → 6C non è negoziabile in un punto:** gli indici e il contratto di ordinamento di
 6A cambiano la firma degli endpoint di lista, e farlo dopo aver costruito le dashboard significa
