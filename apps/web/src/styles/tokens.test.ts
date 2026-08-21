@@ -64,7 +64,15 @@ describe('design tokens', () => {
     expect(css).toContain('.dark {')
   })
 
-  it('does not load Reenie Beanie, which belongs to the landing page', () => {
+  it('loads no webfont other than Outfit', () => {
+    // `Reenie Beanie` was reserved for the landing page in slice 1B. Slice 5
+    // decided it belongs to neither stylesheet: a second webfont is another
+    // request and another licence check, it is illegible at small sizes, and a
+    // handwritten accent on a page Google reads during OAuth verification looks
+    // unserious. landing/landing-tokens.test.ts asserts the same for the other
+    // stylesheet, so neither can regain it quietly.
     expect(css).not.toMatch(/Reenie/i)
+    const families = [...css.matchAll(/@font-face\s*\{[^}]*font-family:\s*'([^']+)'/g)].map((m) => m[1])
+    expect(families).toEqual(['Outfit'])
   })
 })
