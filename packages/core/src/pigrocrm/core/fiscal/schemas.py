@@ -7,7 +7,9 @@ without the row it came from still existing in its original shape.
 """
 
 import re
+from datetime import datetime
 from decimal import Decimal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -71,11 +73,72 @@ class FiscalSnapshot(BaseModel):
     iban: str | None = Field(default=None, max_length=IBAN_MAX_LENGTH)
 
 
+class FiscalProfileUpsert(BaseModel):
+    """One shape for create and update: there is only ever one row, so "create" and
+    "update" are the same operation with the same required fields -- the same decision
+    `EmitterProfileUpsert` already made.
+
+    `codice_regime` carries `max_length` because the column is `String(4)` and the
+    service's own `.fullmatch` check is *not* a length check on its own for a value
+    that fails the pattern for another reason. Every `Numeric` carries
+    `max_digits`/`decimal_places` mirroring its column, and `giorni_scadenza` carries
+    a bound, because none of the three has a service-level range check that would make
+    a schema bound redundant.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    codice_regime: SafeStr = Field(max_length=CODICE_REGIME_MAX_LENGTH)
+    aliquota_iva_default: Decimal = Field(
+        default=Decimal("0.00"), max_digits=RATE_MAX_DIGITS, decimal_places=RATE_DECIMAL_PLACES
+    )
+    natura_default: SafeStr | None = Field(default="N2.2", max_length=NATURA_MAX_LENGTH)
+    riferimento_normativo: SafeStr | None = Field(default=DEFAULT_RIFERIMENTO_NORMATIVO)
+    applica_bollo: bool = True
+    soglia_bollo: Decimal = Field(
+        default=DEFAULT_SOGLIA_BOLLO,
+        max_digits=MONEY_MAX_DIGITS,
+        decimal_places=MONEY_DECIMAL_PLACES,
+    )
+    importo_bollo: Decimal = Field(
+        default=DEFAULT_IMPORTO_BOLLO,
+        max_digits=MONEY_MAX_DIGITS,
+        decimal_places=MONEY_DECIMAL_PLACES,
+    )
+    condizioni_pagamento: SafeStr = Field(
+        default="TP02", max_length=CONDIZIONI_PAGAMENTO_MAX_LENGTH
+    )
+    modalita_pagamento: SafeStr = Field(default="MP05", max_length=MODALITA_PAGAMENTO_MAX_LENGTH)
+    giorni_scadenza: int = Field(default=30, ge=GIORNI_SCADENZA_MIN, le=GIORNI_SCADENZA_MAX)
+    iban: SafeStr | None = Field(default=None, max_length=IBAN_MAX_LENGTH)
+
+
+class FiscalProfileRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    codice_regime: str
+    aliquota_iva_default: Decimal
+    natura_default: str | None
+    riferimento_normativo: str | None
+    applica_bollo: bool
+    soglia_bollo: Decimal
+    importo_bollo: Decimal
+    condizioni_pagamento: str
+    modalita_pagamento: str
+    giorni_scadenza: int
+    iban: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
 __all__ = [
     "CODICE_REGIME_RE",
     "DEFAULT_IMPORTO_BOLLO",
     "DEFAULT_RIFERIMENTO_NORMATIVO",
     "DEFAULT_SOGLIA_BOLLO",
+    "FiscalProfileRead",
+    "FiscalProfileUpsert",
     "FiscalSnapshot",
     "SafeStr",
 ]
