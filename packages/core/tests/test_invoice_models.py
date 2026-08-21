@@ -80,9 +80,7 @@ def test_a_fattura_may_not_hold_a_proforma_state(
     _refuses(db_session, _draft(customer_id, stato=stato), "ck_invoices_tipo_stato")
 
 
-def test_a_proforma_may_not_hold_the_emessa_state(
-    db_session: Session, customer_id: UUID
-) -> None:
+def test_a_proforma_may_not_hold_the_emessa_state(db_session: Session, customer_id: UUID) -> None:
     _refuses(
         db_session,
         _draft(customer_id, tipo="proforma", stato="emessa"),
@@ -148,9 +146,7 @@ def test_the_same_year_and_number_cannot_exist_twice(
     )
 
 
-def test_two_drafts_do_not_collide_on_a_null_number(
-    db_session: Session, customer_id: UUID
-) -> None:
+def test_two_drafts_do_not_collide_on_a_null_number(db_session: Session, customer_id: UUID) -> None:
     """`WHERE numero IS NOT NULL`: without the partial predicate every draft would be
     a duplicate of every other."""
     _add(db_session, _draft(customer_id))
@@ -268,9 +264,7 @@ def test_a_collection_date_requires_the_collected_state(
     )
 
 
-def test_a_snapshot_and_its_version_travel_together(
-    db_session: Session, customer_id: UUID
-) -> None:
+def test_a_snapshot_and_its_version_travel_together(db_session: Session, customer_id: UUID) -> None:
     _refuses(
         db_session,
         _draft(customer_id, snapshot={"versione": 1}),

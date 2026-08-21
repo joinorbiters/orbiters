@@ -31,7 +31,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("customer_id", sa.Uuid(), nullable=False),
         sa.Column("deal_id", sa.Uuid(), nullable=True),
-        sa.Column("tipo", sa.String(length=10), nullable=False),
+        sa.Column("tipo", sa.String(length=20), nullable=False),
         sa.Column("stato", sa.String(length=12), nullable=False),
         sa.Column("anno", sa.Integer(), nullable=True),
         sa.Column("numero", sa.Integer(), nullable=True),
@@ -57,9 +57,7 @@ def upgrade() -> None:
         sa.Column("annullata_il", sa.Date(), nullable=True),
         sa.Column("motivo_annullamento", sa.String(length=500), nullable=True),
         sa.Column("note_interne", sa.Text(), nullable=True),
-        sa.Column(
-            "custom_fields", postgresql.JSONB(astext_type=sa.Text()), nullable=False
-        ),
+        sa.Column("custom_fields", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
         *_TIMESTAMPS,
         sa.PrimaryKeyConstraint("id"),
