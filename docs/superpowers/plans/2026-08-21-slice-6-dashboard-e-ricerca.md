@@ -1,0 +1,5357 @@
+# PigroCRM Slice 6 — Dashboard, ricerca globale, automazioni, prompt MCP — Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Ship the last slice — a global `Cmd/Ctrl+K` search that finds a customer from a VAT fragment, two automations that run inside their trigger's transaction, three fixed dashboards whose every figure is returned verbatim by the service that owns it, and four MCP prompts — without ever creating a second source of truth for a number.
+
+**Architecture:** Three sub-plans in one document, in a dependency order that is fixed at one point. **6A** closes residui **R6** (`ilike` with no trigram index) and **R9** (the ordering §7 of slice 1 promised and neither adapter delivers): `pg_trgm` with nine partial GIN trigram indexes, a `sort`/`dir` whitelist over an opaque composite keyset cursor, a new `packages/core/src/pigrocrm/core/search/` service, the `AppShell` header slice 1 §10.1 promised and never shipped, and a `cmdk` palette with three distinct states. It comes first because it changes the list endpoints' signature (`cursor: UUID` → `cursor: str`), and doing it after the dashboards means touching the generated client twice. **6B** adds `packages/core/src/pigrocrm/core/automations/` and `packages/core/src/pigrocrm/core/dashboard/` — a runner called explicitly from `DocumentService.set_offer_state` inside its transaction, and a composition service that contains no arithmetic and is proven to contain none by two AST clauses. **6C** adds the economic and operational dashboards and the four MCP prompts, and is the only sub-plan that needs slices 3 and 4. FastAPI routers and MCP tools call the same services in-process; `update_automation_config` is deliberately absent from the MCP surface and the architecture test enforces its absence.
+
+**Tech Stack:** Python 3.13 · FastAPI · SQLAlchemy 2 · Alembic · psycopg 3 · PostgreSQL 17 (`pg_trgm`) · MCP SDK v2 · pytest + testcontainers · Vite · React 19 · TanStack Router/Query/Table · Tailwind v4 · `cmdk` · Playwright · inline SVG and CSS (no charting library)
+
+**Spec:** `docs/superpowers/specs/2026-08-20-slice-6-dashboard-e-ricerca-design.md` — it governs. Supporting: `docs/superpowers/specs/2026-08-06-pigrocrm-core-crm-mcp-design.md` (§4.1, §4.2, §5.4, §5.8, §7, §8.4, §10.1), `docs/superpowers/specs/2026-08-07-slice-1a-residui.md` (R1, R5, R6, R7, R9, R10, R11, R13, R14, R15 and the unnumbered header entry), `docs/superpowers/specs/2026-08-06-slice-1b-residui.md` (A12, A14, B2, B3, B6), `docs/superpowers/specs/2026-08-20-slice-3-fatturazione-design.md` (§3, §6.2, §7.1, §8.1, §11, §14.8), `docs/superpowers/specs/2026-08-20-slice-4-time-tracking-e-pl-design.md` (§5.1, §5.2, §6.4, §7.1, §7.3, §7.4, §11, §14.4), `docs/superpowers/specs/2026-08-20-slice-5-gmail-e-landing-design.md` (§9.3, §9.4).
+
+---
+
+## Sub-plan order, and the one point where it is not negotiable
+
+| Sub-plan | Content | Tasks | Cannot start until |
+|---|---|---|---|
+| **6A — Ricerca globale** | Spec §8 in full, minus the invoice branch; the `AppShell` header; the palette. Closes **R6** and **R9** for four entities | 14 | **Nothing beyond what is in `main` today.** Slices 1 and 2 only |
+| **6B — Automazioni, segnali e dashboard commerciale** | Spec §9 in full, §4, `chiuso_il`, `stato_dal`, `automation_config`, `/app/impostazioni/automazioni` | 17 | 6A merged. Slice 2 (offers are the trigger). **Not** slices 3, 4 or 5 |
+| **6C — Dashboard economica e operativa, prompt MCP** | Spec §5, §6, §10, the §11 tools, the tenth trigram index | 14 | 6A and 6B merged; **slice 3 and slice 4 (both halves 4A and 4B) in `main`**; **the R1 cure in `main`** |
+
+**6A → 6B → 6C is fixed at one point.** The indexes and the ordering contract of 6A change the signature of the list endpoints of `customers`, `people`, `deals` and `documents`: `cursor` stops being a `UUID` and becomes an opaque string. Building the dashboards first means regenerating `apps/web/src/lib/api-types.ts` and re-typing every call site twice. The break is caught by `pnpm tsc --noEmit` against the generated client, which is the mechanism slice 1 §10.2 put there for exactly this case.
+
+**Each sub-plan carries its own verification.** The spec §17 distributes the §16 criteria without remainder, and this plan follows it: 6A executes criteria 3, 4, 5 and 13; 6B executes 7, 8, 9 plus **2, 6 and 14 on the commercial dashboard** — those three are criteria for *every* dashboard and fall due with the first; 6C executes 1, 10, 11, 12, 15 plus 2, 6 and 14 repeated on the two new dashboards. The signal "offerta accettata, deal non vinto" ships in 6B, on the commercial dashboard, **with** the automation it cross-checks — an automation whose only verifier arrives a sub-plan later is in production for weeks with nobody able to say whether it works.
+
+**If slices 3 or 4 slip, 6A and 6B release anyway** and the "Economica" tab simply does not exist yet — which a user understands, unlike a tab showing zeros.
+
+---
+
+## Global Constraints
+
+These apply to **every** task in all three sub-plans. They are not repeated per task. Everything from `## Global Constraints` in `2026-08-06-slice-1a-backend.md`, `2026-08-06-slice-1b-frontend.md`, `2026-08-10-slice-2-documenti-e-template.md`, `2026-08-20-slice-3-fatturazione.md`, `2026-08-20-slice-4-time-tracking-e-pl.md` and `2026-08-20-slice-5-gmail-e-landing.md` that still applies is carried here with its exact values.
+
+### Carried from plan 1A (backend)
+
+- **Python 3.13** (`requires-python = ">=3.13,<3.14"`). Managed by **uv workspaces**. Do not use pip, poetry, or venv directly.
+- **`packages/core` must never import from `apps.`** — enforced by `packages/core/tests/test_architecture.py`. That test is an *allowlist*: core may import the stdlib, the `pigrocrm` namespace, and only what `packages/core/pyproject.toml` declares under `[project].dependencies`. If a task seems to require anything else, either declare the dependency there or the design is wrong; stop and flag it.
+- **Services receive and return Pydantic models only.** No `Request`, `Response`, `HTTPException`, or status codes inside `packages/core`.
+- **Every service method that writes takes `actor: Actor`** as an explicit parameter. Never read the actor from global or contextual state.
+- **One service method = one transaction. The service commits; repositories never commit.**
+- **Money is `Numeric(12, 2)`; hours are `Numeric(8, 2)`; factors — every hourly rate and internal cost — are `Numeric(12, 6)`.** Never `Float` for any of the three.
+- **All timestamps are `TIMESTAMP WITH TIME ZONE` in UTC.** Use `from datetime import UTC, datetime` → `datetime.now(UTC)`, matching `db/base.py`. Never `datetime.utcnow()`.
+- **All primary keys are UUIDv7** via the shared `pigrocrm.core.db.base.uuid7` wrapper, stored as native `UUID`. Never `uuid_utils` directly in a model.
+- **Soft delete**: entities carry `deleted_at`. Repository queries filter `deleted_at IS NULL` unless explicitly asked otherwise. No physical delete exists anywhere in this slice either.
+- **Tests use real PostgreSQL via testcontainers. Never SQLite** — JSONB, GIN indexes and `pg_trgm` do not exist there. Use the existing `db_engine`/`db_session` fixtures in `packages/core/tests/conftest.py`.
+- **TDD is mandatory for `packages/core`.** Write the failing test, watch it fail, then implement.
+- **Commit after every task**, using the message given in the task's final step.
+- **UI language is Italian.** Field labels, buttons, and error messages shown to users are Italian. Code identifiers, table names and column names are English except the Italian fiscal and domain terms already fixed in slices 1–4 (`partita_iva`, `codice_fiscale`, `codice_sdi`, `pec`, `ragione_sociale`, `indirizzo`, `cap`, `comune`, `provincia`, `nazione`, `tipo`, `titolo`, `stato`, `versione_corrente`, `numero`, `sorgente_markdown`, `variabili`, `variabili_dichiarate`, `corpo_markdown`, `attivo`, `creato_da`, `dimensione`, `anno`, `riferimento`, `data_emissione`, `data_scadenza`, `imponibile`, `imposta`, `bollo`, `totale`, `causale`, `stato_pagamento`, `data_incasso`, `ore`, `data`, `importo`, `descrizione`, `fatturabile`, `tariffa_applicata`, `costo_applicato`, `ricavi`, `costi_diretti`, `costo_lavoro`, `margine_lordo`, `margine_percentuale`, `valore_maturato`, `chiuso_il`, `chiuso_da`) and the ones **this** slice fixes: `chiuso_il` (on `deals`), `stato_dal`, `posizione`, `punteggio`, `calcolato_alle`, `periodo`, `valore_ponderato`, `tasso_conversione`, `senza_valore`, `regola`, `motivo`, `attivata_da`, and the four `motivo` values `stage_bersaglio_assente` / `stage_bersaglio_ambiguo` / `gia_nello_stato` / `regola_disattivata`.
+- **The `Expected: PASS (N passed)` counts are indicative, not contractual.** Parametrised tests expand to different totals than the number of test functions. What matters is that every test passes and none is skipped — a differing total is not a failure and must not be "fixed" by deleting or merging cases.
+- **A uniqueness pre-check never replaces the database constraint.** Wherever a service does "SELECT to check, then INSERT", it must also catch `sqlalchemy.exc.IntegrityError` around the commit, `session.rollback()`, and re-raise the domain `Conflict`. Two concurrent requests both pass the SELECT; only the constraint stops the second, and without the rollback the caller's session is left poisoned (`PendingRollbackError` on its next statement).
+- **Case-insensitive uniqueness needs a functional index, not a convention.** Where identity is case-insensitive, declare `Index("uq_…", func.lower(col), unique=True)` in `__table_args__`.
+- **A method named `list` must be the LAST method defined in its class.** `def list(...)` rebinds `list` in the *class* namespace, so any later method annotated `-> list[Something]` resolves it to that method and raises `TypeError: 'function' object is not subscriptable` **at import time**. Python 3.13 evaluates annotations eagerly, so this is a hard failure here; 3.14's PEP 649 would hide it. Calling `self.list()` from an earlier method is fine — that is a call-time attribute lookup, not an annotation. The rule is unconditional: do not reason about whether a later method *currently* returns a `list[...]`. `packages/core/tests/test_module_imports.py` is the real guard; keep it green.
+- **Every `Numeric(p, s)` column needs a matching Pydantic `Field(max_digits=p, decimal_places=s)`** on both schemas. Without it a value beyond the column's capacity reaches Postgres as `NumericValueOutOfRange` — an uncaught `DataError`, not an `IntegrityError` subclass, so no existing handler catches it and the session is poisoned — and a sub-scale value like `Decimal("0.005")` is silently rounded by the database while `expire_on_commit=False` (`db/session.py`) leaves the object returned to the caller still reporting the original. **Reject rather than round.**
+- **Every `String(n)` column needs a matching Pydantic `max_length=n`** on both the Create and the Update schema. Without it an over-long value reaches Postgres, raises `sqlalchemy.exc.DataError` — **not** an `IntegrityError` subclass — and poisons the caller's session.
+- **`re.fullmatch`, never `re.match` with `$`.** Python's `$` matches before a trailing newline, so `^\d{11}$` accepts a 12-character string and the value still reaches the database. **This applies to every regex in this slice, database-bound or not** — the fiscal-number shape of §8.1, the `sort`/`dir` whitelist checks, the cursor decoder, the CSS token tests. The habit is what protects the ones that are.
+- **Every `Integer` column needs a bounded Pydantic field** (`Field(ge=…, le=…)`) on both schemas, picked to be defensible for that field's meaning. Without a bound a value like `2**40` reaches Postgres raw as `IntegerOutOfRange`. **Exception, not violation**: a field already fully bounded by an equivalent service-level range check does not also need a schema-level bound — adding one changes which exception type fires (`pydantic.ValidationError` instead of this project's own `ValidationFailed`) for a same-shaped value the service already rejects correctly. Document any omission in a comment.
+- **A NUL byte (`"\x00"`) in a native `String`/`Text` field is rejected, not stored.** Use `pigrocrm.core.validation.SafeStr` on every user-supplied string field on every Create/Update schema and on every free-text query parameter, including inside `list[str]` fields. Reject, never strip. A field that structurally cannot carry a NUL byte through does not need `SafeStr` layered on top — document why rather than adding a check that can be shown never to fire.
+- **Every foreign key column is validated against the table it references, in both `create` and `update`**, including an optional (nullable) one — a nullable FK is skipped only when the caller supplies nothing, never when the caller supplies a value. Without this any syntactically valid UUID reaches `flush()`/`commit()` and comes back as a raw `IntegrityError` (`ForeignKeyViolation`) instead of this project's own `NotFound`.
+- **Escape LIKE metacharacters in every search filter.** Use the shared `pigrocrm.core.db.escape_like` helper, escape `\`, `%` and `_` (backslash first), and pass `escape="\\"` — **unless Task A2's `EXPLAIN` measurement says otherwise**, in which case that task removes the clause everywhere at once and records the measurement. Never remove it in one call site only.
+- **Pagination `limit` must be bounded** — `Field(ge=1, le=200)` on the query schema, not only on the router.
+- **On update, validate only the custom-field keys the caller supplies**, not the merge of stored and supplied. A supplied key with value `None` removes that entry — and must work even when its definition is archived, no longer exists, or is optional. It must **not** work when the key's current definition is active and `required=True`. Untouched stored keys pass through unchanged, archived ones included. *(No task in this slice writes a custom field; carried so no task introduces one that skips it.)*
+- **Errors are RFC 9457 problem details with structured `details`.** Raise `pigrocrm.core.errors.{NotFound, ValidationFailed, Conflict, PermissionDenied, ImmutableField}` and never a pre-formatted sentence; `apps/api/src/pigrocrm_api/errors.py::domain_error_handler` renders them. `ValidationFailed(entity, field, reason, expected=…)` must always name the real offending field, because both `fieldErrorFrom` in the web client and an MCP agent read `field`. **There is no class called `ValidationError` in this codebase.**
+
+### Carried from plan 1B (frontend)
+
+- **No `fetch` inside components.** Every request goes through the generated client wrapped in TanStack Query hooks. The two standing exceptions already in the codebase are multipart upload and blob download, which `openapi-fetch` cannot express (`features/documents/queries.ts`); **this slice adds no third exception** — every request it makes is a plain `GET` or `PUT` that `openapi-fetch` expresses natively.
+- **The API client is generated, never handwritten.** `openapi-typescript` reads `openapi.json` from the running API (`pnpm generate:api`). A contract change must break `tsc`, not production.
+- **No business logic in the frontend. Validation lives in the backend.** Validation messages come from the API's problem documents. Recomputing a rule client-side is how the three interfaces start disagreeing.
+- **No component file over ~250 lines.** If a file approaches the limit, extract.
+- **UI language is Italian.** Every visible label, button and message.
+- **TypeScript strict mode**, no `any`, no `@ts-ignore`. **`tsconfig.json` has `noUncheckedIndexedAccess`, `noUnusedLocals` and `noUnusedParameters` on**, and `build` is `vite build && tsc --noEmit`. Indexing an array or a `Record` yields `T | undefined` and must be narrowed.
+- **Form state keeps `{native, custom}` as two namespaces, decided once at seed time and never re-derived at submit.** The split lives in the *feature's* form component (`CustomerForm.tsx`, `DealForm.tsx`), **not** in `DynamicForm`, which is a controlled flat renderer taking one merged `values` object. Provenance is structural. A native column clears on `""` and only on `""`; a custom field clears on `null` and only on `null`; an omitted key clears nothing; an archived custom key is omitted entirely so the server carries the stored value over. **`0` and `false` are values, never blanks** — mirror the shipped `isBlank` in `CustomerForm.tsx` exactly, which is itself a mirror of `fields/validator.py::is_blank`. *(This slice adds no form with custom fields; carried so no task invents a third namespace.)*
+- **`DynamicForm` takes a required, undefaulted `mode: 'create' | 'edit'` prop.** Its props are exactly `{ fields, values, onChange, problem?, mode }`. Every new call site answers the question explicitly.
+- **Never sum money as a JS float.** `Numeric` columns arrive as strings in the generated types; format them with `Intl.NumberFormat('it-IT', { style: 'currency', currency: 'EUR', useGrouping: 'always' })` and, where a sum is unavoidable, add integer cents parsed by splitting the string on `.` — `Number("0.29") * 100` is `28.999999999999996`. The shipped exemplar is `apps/web/src/features/deals/columns.tsx`, whose `centsFromDecimalString` is **private to that module**: the codebase's stated precedent is a small per-feature display helper, not a shared module. **In this slice no sum is unavoidable** — every total arrives already summed — so no dashboard module carries such a helper at all, and Task B16's AST test is what proves it.
+- **A failed request must never look like an empty result.** A query in `isError` renders `QueryErrorBanner` (`apps/web/src/components/QueryErrorBanner.tsx`, props `{ error: unknown }`), never an empty table or an empty list. `DataTable` already does this internally when `isError && data.length === 0`. In this slice the rule has a second, sharper form: see "New to slice 6" below.
+- **`DataTable` is TanStack Table v9** (`@tanstack/react-table 9.0.0`): `tableFeatures({})` + `useTable({ features, columns, data })`, `ColumnDef<DataTableFeatures, T>` with the feature type parameter **first**, `row.getAllCells()`, and rendering through the table-bound `<table.FlexRender header={…} />` / `<table.FlexRender cell={…} />`. There is no `useReactTable`, no `getCoreRowModel`, no `getVisibleCells` and no standalone `flexRender()` in v9, and `useLegacyTable` is `@deprecated` — do not reach for it. Its props are exactly `{ columns, data, isLoading?, isError?, error?, onRowClick?, emptyMessage? }`.
+- **`unwrap` throws the `ProblemDetail` object itself**, not an `Error` and not a `Response`. A form-level failure goes to `setProblem(toProblem(error))`; a page-level action's failure goes to `toast.error(...)` from `sonner`. `toProblem` is idempotent on an already-normalised problem.
+- **A hook must never be called with an empty id.** Make the row conditional, or give the hook a discriminated argument with no "empty string" spelling to get wrong, or carry an `enabled:` guard — and ship a test for it (residuo B1). All three remedies are established precedent; pick one and test it.
+- **A new module that exports both a component and a non-component needs its own `react-refresh/only-export-components` override in `apps/web/eslint.config.js`**, with `allowExportNames`. Every shipped form and every detail route already has one; without it `pnpm lint` fails.
+- **`Intl.NumberFormat('it-IT')` always takes `useGrouping: 'always'`.** it-IT's default withholds the thousands separator until the integer part has five digits (`Intl.NumberFormat('it-IT').format(2500.5)` → `"2500,50"`), so a four-figure total silently loses its separator without it.
+- **`new Date("YYYY-MM-DD")` parses as UTC midnight.** Formatting it with `Intl.DateTimeFormat` renders in the browser's zone, so anywhere behind UTC the date loses a day. Build the `Date` from its year/month/day parts in local time (`new Date(year, month - 1, day)`).
+- **Commit after every task.**
+
+### Carried from plan 2
+
+- **No user input ever reaches a command line.** `subprocess.run` is always called with an argument *list*, never a string, never `shell=True`. This slice adds no new subprocess call; the constraint stands so that no task introduces one.
+- **Escaping is decided by context, never by a single pass.** No function may escape a value without being told which context it is escaping for. This slice adds no escaping context; the only text it prepares is Markdown for an MCP prompt, and it goes through `templates/escaping.py`'s existing `"markdown"` context.
+- **No new Python dependency is added to `packages/core`.** Everything this slice needs is stdlib (`ast`, `base64`, `json`, `zoneinfo`) or already declared.
+
+### Carried from plans 3 and 4
+
+- **`ROUND_HALF_UP`, per row, then sum the already-rounded rows.** An aggregate is `Σ ROUND(row, 2)`, never `ROUND(Σ exact, 2)`. Half-up, not half-even: Italian fiscal practice.
+- **No `float`, anywhere, in any language.** `Decimal` in the service, `Numeric` in Postgres, totals computed by the service and returned already summed.
+- **A date that decides which period a figure falls in is `Date`, never `timestamptz`.** `invoices.data_emissione`, `costs.data`, `time_entries.data` and — new here — `deals.chiuso_il` and `documents.stato_dal`. A `toISOString()` projection moves everything after 23:00 CET by a day and everything on 31 December by a year.
+- **Revenue is `Σ invoices.imponibile`** over `tipo='fattura'`, `stato='emessa'`, `deleted_at IS NULL`, attributed to the period by `data_emissione`. Not `totale`. **This slice introduces no third meaning** and no task may compute it.
+- **The deal is the P&L unit; overhead is never apportioned; a rate freezes onto the row; a period can be closed.** These are settled by slice 4 §7.1, §7.4, §5.1 and §6.4. A third meaning for any of them is a defect, and no task in this plan restates or recomputes them.
+- **Every change to a rate column, a cost category, a fiscal parameter or — new here — the automation configuration writes an activity.** R5 stays open in general; it closes here for `automation_config`.
+
+### New to slice 6
+
+- **No figure is born in `core/dashboard/`.** Every figure on a dashboard is either (1) returned verbatim by the service that owns the data, with the same name and the same value, or (2) a single `COUNT` or `SUM` over rows of one table, written in **that table's** repository — even when the table belongs to another slice. A `COUNT` may cross a join; a `SUM` may not. There is no third form, and the only two exceptions are the weighted pipeline value and the conversion rate, both in `deals/repository.py`, both combining only columns of `deals`, neither of them money received. Task B12 makes this a fact of the build: no module under `core/dashboard/` may import `Decimal`, and none may contain a `BinOp` node with `*`, `/` or `-`, with an exceptions list that is **empty**.
+- **One dashboard is one endpoint, one transaction, and one instant, in `REPEATABLE READ`.** Not one endpoint per card. `READ COMMITTED` — Postgres's default, and therefore what you get by saying nothing — takes a fresh snapshot **per statement**, so six queries in one transaction can see six states exactly as six transactions can. The transaction is read-only, so the usual price of the higher level is not paid: a serialisation failure can only strike a writer, and nothing here writes.
+- **No dashboard writes anything.** There is no state to repair, no reconciliation, and no "recompute the totals" button that does anything but re-read.
+- **A card and its drill-through are the same predicate, not two calculations.** If the two numbers differ, the difference is the age of the cached dashboard response, the list wins, and the card refreshes.
+- **No materialised summary, no server-side cache, no `dashboard_summary` table, no materialised view.** A materialised total is the second source of truth made permanent, and the project has no worker process to refresh it (slice 5 §4.5, §10).
+- **`staleTime` for a dashboard query is 60 seconds** — a deliberate override of the 30 000 ms default in `apps/web/src/lib/query.ts` — and the response's age is shown on screen, derived from `calcolato_alle`.
+- **An automation that cannot run inside its trigger's transaction does not become an automation. It becomes a dashboard signal.** "Fatturato ma non vinto" is that signal.
+- **A service may expose a `*_in_transaction(...)` method that mutates, does not record, does not commit, and does not check authorisation. Task B5's architecture test verifies that such methods are called only from `core/automations/`.**
+- **A search that returns partial results without saying so is worse than no search.** The palette has **three** distinct renderings — no results, truncated results with the real count, search unavailable — plus a fourth non-error state below three characters. An empty list drawn after an error says "there is none" when the truth is "I do not know", and Task A14 asserts that the string `Nessun risultato` is **absent from the DOM** in the error state.
+- **The global search requires at least 3 characters and issues no request below that threshold.** A trigram index cannot serve a pattern from which no trigram can be extracted; a two-character term on 50 000 customers returns thousands of rows, which is not an answer either.
+- **No total is computed in the browser, not even visible hours.** Task B16 ships the AST test that fails the build if a dashboard module applies `Number()`, `parseFloat` or `+` to an economic field coming from the API.
+- **No charting library.** Four shapes — big numbers, horizontal bars as CSS widths, one sparkline, one table — as inline SVG and CSS. `apps/web/src/styles/tokens.css` stays the single source of colour: the five `--chart-1…5` tokens are `color-mix()` derivations of the five existing tints, no raw hexadecimal appears in the block, and every chart has an equivalent table because a chart without a table is a figure a screen reader does not read.
+- **No new MCP resource.** A resource is addressed by a URI; a dashboard is a question with a period. The existing `customer://`, `person://` and `deal://` stay the way to make an agent **read** before it **acts**.
+
+### Pinned versions
+
+Backend (unchanged): `fastapi 0.141.1` · `uvicorn 0.52.1` · `sqlalchemy 2.0.51` · `alembic 1.19.0` · `psycopg[binary] 3.3.4` · `pydantic 2.13.4` · `pydantic-settings 2.14.2` · `email-validator 2.3.0` · `argon2-cffi 25.1.0` · `pyjwt[crypto] 2.13.0` · `mcp 2.0.0` · `uuid-utils 0.17.0` · `pytest 9.1.1` · `pytest-cov 7.1.0` · `pytest-asyncio 1.4.0` · `testcontainers[postgres] 4.15.0` · `httpx 0.28.1` · `ruff 0.16.1` · `mypy 2.3.0`. **No new backend dependency.**
+
+Frontend (unchanged): `vite 8.2.0` · `react 19.2.8` · `react-dom 19.2.8` · `typescript 5.9` (**not** 7.x) · `@tanstack/react-router 1.170.20` · `@tanstack/router-plugin 1.168.25` · `@tanstack/react-query 5.101.4` · `@tanstack/react-table 9.0.0` · `tailwindcss 4.3.3` · `@tailwindcss/vite 4.3.3` · `@dnd-kit/core 6.3.1` · `openapi-typescript 7.13.0` · `openapi-fetch 0.17.0` · `@playwright/test 1.62.1` · `vitest 4.1.10` · `sonner 2.0.7`. Package manager **pnpm 10.12.4**.
+
+**New to this slice:** `cmdk` — added with `pnpm add cmdk` in Task A13, and whatever version that resolves is pinned into `apps/web/package.json` in the same commit, the convention this repo already uses for `lucide-react`. It is the only new dependency in the slice, front or back.
+
+### Design tokens (exact values — do not improvise)
+
+| Token | Hex | Role |
+|---|---|---|
+| Watermelon | `#ed254e` | brand accent, borders, icons, focus ring. **Never a solid fill under white text** |
+| Watermelon strong | `#e5133e` | every solid fill that carries white text (4.673:1) |
+| Royal Gold | `#f9dc5c` | warning, attention |
+| Mint Cream | `#f4fffd` | app background (light) |
+| Prussian Blue | `#011936` | foreground text, dark surface |
+| Charcoal Blue | `#465362` | muted / secondary text |
+
+The five chart tokens, all derived, none new (Task B16):
+
+| Token | Expression |
+|---|---|
+| `--chart-1` | `color-mix(in oklab, var(--color-watermelon) 78%, #ffffff)` |
+| `--chart-2` | `color-mix(in oklab, var(--color-prussian-blue) 72%, #ffffff)` |
+| `--chart-3` | `color-mix(in oklab, var(--color-royal-gold) 82%, var(--color-charcoal-blue))` |
+| `--chart-4` | `color-mix(in oklab, var(--color-charcoal-blue) 84%, #ffffff)` |
+| `--chart-5` | `color-mix(in oklab, var(--color-watermelon) 40%, var(--color-prussian-blue))` |
+
+`#ffffff` is the one literal permitted inside a `color-mix()` — it is the neutral being mixed toward, not a sixth tint, and Task B16's no-raw-hex test allows exactly that token and no other.
+
+### Test and verification commands
+
+Nothing in this plan invents a command. These are the ones `.github/workflows/ci-deploy.yml` runs:
+
+| What | Command |
+|---|---|
+| One backend test | `uv run pytest packages/core/tests/test_x.py::test_name -v` |
+| Backend suite gate | `uv run pytest -q` (testcontainers starts PostgreSQL itself; no service container) |
+| Lint | `uv run ruff check . && uv run ruff format --check .` |
+| Type check | `uv run mypy packages/core/src apps/api/src apps/mcp/src` |
+| Frontend unit tests | `cd apps/web && pnpm exec vitest run src/path/to/file.test.tsx` |
+| Frontend typecheck | `cd apps/web && pnpm exec tsc --noEmit` (or `pnpm build`, which is `vite build && tsc --noEmit`) |
+| Frontend lint | `cd apps/web && pnpm lint` |
+| E2E | `cd apps/web && pnpm test:e2e` (which is `bash scripts/e2e.sh`) |
+| Regenerate the API client | API running on `:8000`, then `cd apps/web && pnpm generate:api` |
+
+**There is no `pnpm test` script.** Slice 3's Global Constraints state this explicitly and it is still true of `apps/web/package.json`: unit tests run as `pnpm exec vitest run`, end-to-end as `pnpm test:e2e`. CI's own `frontend` job happens to spell the same thing `pnpm vitest run`; either resolves, but the tasks below use the `pnpm exec` form, which is the documented one.
+
+**Commit convention.** Conventional Commits, `type(scope): lowercase imperative summary`, no body, no trailer. `git add` takes the explicit paths the task touched, never `-A` and never `.`. The scopes in use across the 136 commits of the six earlier plans are `web`, `api`, `mcp`, `core`, plus one per domain package; this slice uses `search`, `dashboard`, `automations`, `web`, `api`, `mcp` and `core`. Every task below gives the exact command.
+
+**One version flag, carried so nobody reintroduces a regression.** Slice 2's plan pinned `PANDOC_VERSION=3.1.12.2` / `TYPST_VERSION=0.11.0`; slice 3's plan records that the values actually shipped are `PANDOC_VERSION=3.8.2.1` / `TYPST_VERSION=0.14.2`, and slice 4's plan then reverted to the stale pair in its own text. **Slice 3's values are the shipped ones.** This slice renders nothing and must not touch `Dockerfile.api` — the note exists only so that no task "helpfully" aligns a version table with the wrong plan.
+
+**One environment note that has cost two agents real time.** `docs/superpowers/plans/2026-08-20-slice-3-fatturazione.md` contains exactly one NUL byte, so BSD `grep` on macOS classifies it as binary and prints **nothing at all** — `grep -c "" ` on it returns empty. An empty result on that file means "output suppressed", not "no match". Pass `-a`, or search it with `python3`. Every other file under `docs/superpowers/` is clean; verified by counting `b"\x00"` in all fifteen.
+
+---
+
+## Contradictions between the spec and the shipped code, and how they were resolved
+
+Resolved **in favour of the shipped code**, as instructed. Each was verified against the tree, not taken from the spec's own list — and the spec's list turned out to be incomplete in eight places.
+
+1. **The spec's `sort` whitelist names `creato_il` and `aggiornato_il`; the shipped columns are `created_at` and `updated_at`.** §8.4 lists the whitelist as "`creato_il`, `aggiornato_il`, e la colonna identificativa", and §8.5's second sort key is `aggiornato_il DESC`. `packages/core/src/pigrocrm/core/db/base.py`'s `TimestampMixin` declares `created_at` and `updated_at`, and all four `*Read` schemas expose them under those names (`customers/schemas.py:116-117`, `people/schemas.py:103-104`, `deals/schemas.py:122-123`, `documents/schemas.py:80-81`). **Resolution (Tasks A3, A8):** the whitelist values are `created_at` and `updated_at`, and §8.5's second key is `updated_at DESC`. Renaming the columns would touch four `*Read` schemas, the generated client and every call site, and the Global Constraints rule is that identifiers are English except the named Italian fiscal and domain terms — `created_at`/`updated_at` are not among them. The spec's substantive requirement (sort by creation, by last touch, and by the identifying column) holds exactly; its spelling does not.
+
+2. **The spec calls the analytics methods `get_period_pnl` / `get_deal_pnl` / `get_budget_vs_actual`; slice 4's approved plan names them `period_pnl` / `deal_pnl` / `budget_vs_actual`.** `docs/superpowers/plans/2026-08-20-slice-4-time-tracking-e-pl.md:10986-10992` defines `AnalyticsService.deal_pnl(self, deal_id: UUID, actor: Actor) -> DealPnl`, `period_pnl(self, query: PeriodPnlQuery, actor: Actor) -> PeriodPnl` and `budget_vs_actual(self, query: BudgetQuery, actor: Actor) -> BudgetPage`; `get_period_pnl` and friends are the **MCP tool** names (same file, lines 13444-13495). Slice 4's spec gives no Python signature at all — only the tool names in its §11 table — so there is nothing in the spec for the plan to contradict. **Resolution (Tasks C1, C4):** call the service methods by their slice-4 names and take `PeriodPnlQuery(da=…, a=…, customer_id=None)`; the new method added here is `AnalyticsService.unbilled_backlog(actor)` and its MCP tool is `get_unbilled_backlog`, which is the name the spec §11.1 fixes. This keeps the spec's "the exclusion list stays exactly its ten names" true: `unbilled_backlog` is a public method with a tool.
+
+3. **The spec calls three period figures "righe informative di `get_period_pnl`"; slice 4's `PeriodPnl` does not carry them.** §5's table sources "valore maturato non fatturato · ore fatturabili non fatturate · ore senza tariffa" from `get_period_pnl`. Slice 4's plan (line 11363) defines `PeriodPnl` as `da, a, customer_id, chiusi, in_corso, spese_generali, periodo_chiuso, voci_scritte_in_ritardo`, with `PnlTotals` as `ricavi, costi_diretti, costo_lavoro, margine_lordo, margine_percentuale, deal`. The three names live only on `DealPnl`. **Resolution (Task C4):** `AnalyticsService` — the service that owns the formula — gains the three fields on `PeriodPnl`: `valore_maturato: Decimal`, `ore_fatturabili_non_fatturate: Decimal`, `ore_senza_tariffa: int`. §3 permits exactly this ("se un numero del genere serve, appartiene al servizio che possiede i dati da cui deriva, e va aggiunto là") and forbids the alternative, which would be `DashboardService` multiplying hours by a rate. Adding *fields* triggers no architecture-test clause; adding a public *method* would. The names are the same as `DealPnl`'s because they are the same quantity on a different object; §5's requirement is that the **label** carries the scope — "nel periodo" on the economic dashboard, "in totale" on the operational one — and the two are never shown side by side.
+
+4. **The spec sources "Da incassare" from `InvoiceService`; §3 rule 2 puts a single-table `SUM` in that table's repository.** §5's table says "`InvoiceService`: `Σ totale` su …". **Resolution (Task C3):** the three aggregates live in `InvoiceRepository` (`sum_da_incassare`, `sum_scaduto`, `count_emesse_in_periodo`) and `DashboardService` calls the repository directly, exactly as §3 rule 2 anticipates for a table belonging to another slice. Adding a public method to `InvoiceService` would force either a new MCP tool or an edit to slice 3 §11's exclusion list, which that spec fixes at **exactly** `issue_invoice`, `annul_invoice`, `mark_transmitted_externally`, `update_fiscal_profile`. §3 is the governing rule; §5's row is prose about provenance, and the provenance is unchanged.
+
+5. **The spec says criterion 14 "extends the AST test slice 4 §14.4 has already written". No such test exists.** Slice 4 is not implemented: `apps/web/` has no source-reading test other than `src/styles/tokens.test.ts`, which is a regex-and-arithmetic test over `tokens.css`, not an AST test. `Number()` is used today in five shipped modules (`features/settings/FieldsPanel.tsx:172`, `features/settings/PipelinePanel.tsx:72`, `features/deals/columns.tsx:51,61,134`, `components/DynamicFieldRenderer.tsx:254,256`, `routes/app/clienti/$customerId.tsx:49`). **Resolution (Task B16):** this slice **creates** the test rather than extending it, scoped to `apps/web/src/features/dashboard/**` and `apps/web/src/routes/app/index.tsx`, with the five existing call sites explicitly out of scope and named in the test's own docstring — they coerce a position, a probability and a form input, none of which is an economic field from a dashboard response. If slice 4 lands first and ships a wider guard, this test's scope is subsumed and the narrower file may be deleted; the task says so.
+
+6. **The spec lists "l'app servita sotto `/app/`" as a slice 5 prerequisite. Half of it is already shipped.** `apps/web/src/routes/app.tsx` already makes `/app` a real path and `apps/web/src/routes/index.tsx` already redirects `/` there; every nav link in `AppShell.tsx` is already `/app/...`. What is *not* shipped is Vite's `base: '/app/'` and the nginx form of slice 5 §9.4 — `deploy/nginx/spa.conf` still serves the SPA from the root. **Resolution:** every route this plan writes is spelled `/app/...`, which is correct both before and after slice 5, and **6C's dependency on slice 5 is dropped**. Nothing in this slice needs `base` to change; nothing in this slice touches `spa.conf`.
+
+7. **The spec lists "A14 chiuso (`exclude_unset=True`)" as a prerequisite. A14 is open, and this slice does not need it.** `exclude_unset` appears nowhere in the repository; every service still uses `model_dump(exclude_none=True, exclude={"custom_fields"})`. The spec's stated reason for the prerequisite is that "la ricerca aggiunge parametri di ordinamento a schemi di lista" and a half-migrated update contract is a bad time to touch them. **Resolution:** 6A adds `sort`, `dir` and a re-typed `cursor` to the four `*ListQuery` schemas and to nothing else — **no `*Update` schema is touched anywhere in this slice**, so the risk the prerequisite names does not arise. A14 is neither waited on nor closed here. Recorded so nobody blocks 6A on it.
+
+8. **The spec lists "una sessione per chiamata sul server MCP (cura di R1)" as done. It is not done.** `apps/mcp/src/pigrocrm_mcp/__main__.py:22-32` still builds one `Session` and passes `lambda: session` to `build_server`; `server.py:55-64` documents the choice in place. The only mitigation is `_guard`'s unconditional `context.session.rollback()`. **Resolution:** the spec's own §11.3 is honoured literally — this slice depends on the cure and does not work around it. **6C cannot start until the R1 cure is in `main`**, and 6C's MCP tasks (C8, C9, C11) must not register a dashboard tool before then: a dashboard tool on a shared session is not a degraded feature, it is a wrong figure. 6A's `search_everything` and 6B's tools are in the same position and inherit the same gate — which is why **the whole of 6C**, and only 6C, carries the R1 prerequisite in its header, while 6A and 6B register their tools too. That is the one place this plan is stricter than the spec: **Task A11 and Task B15 each end with a check that the R1 cure is in `main`, and if it is not, they ship the API half and leave the MCP half to the first task of 6C.** The reason is the spec's own: aggregation in read widens the window in which two calls overlap.
+
+9. **`DocumentRepository.list` has no search branch, and `DocumentListQuery` has no `search` field.** §8.1 requires `documents.titolo` to be searchable and §8.5's "vedi tutti" lands on the documents list filtered by the same term. `documents/repository.py:53-68` has `customer_id`, `deal_id`, `tipo`, `stato`, `cursor` and no `ilike` anywhere. **Resolution (Task A7):** 6A adds it, with the same `escape_like` shape the other three use. The spec assumed it existed.
+
+10. **There is no timezone mechanism to reuse.** §4.1 requires the calendar-day computation for `chiuso_il` to use "lo stesso meccanismo di fuso che lo slice 3 §6.2 impone a `data_emissione`, non un secondo". Slice 3 §6.2 imposes a **rule** — a `date` is not an instant, never project a `timestamptz` through `toISOString()` — not a mechanism; for an invoice, `data_emissione` is supplied by the caller and validated, never derived from "now". `Settings` (`packages/core/src/pigrocrm/core/config.py`) has no timezone field, and `zoneinfo` is not imported anywhere in core. **Resolution (Task B1):** introduce the mechanism once, here — `Settings.timezone: str = "Europe/Rome"` and a single `pigrocrm.core.db.clock.today_local(settings)` using stdlib `zoneinfo` — and state in its docstring that it is the project's only clock, so that slice 3's `data_emissione` validation adopts it rather than growing a second one. One clock, introduced once, is exactly what §4.1 asks for; the spec's mistake is only about which slice introduces it.
+
+11. **`invoices` has no table, no model and no service.** `packages/core/src/pigrocrm/core/invoices/` contains `schemas.py` and `totals.py` only; `packages/core/src/pigrocrm/core/fiscal/` contains `regime.py` and `schemas.py`. There is no `invoices/models.py`, no `InvoiceService`, no `analytics` package, no `timetracking` package, and the migration chain ends at `0003` (`packages/core/migrations/versions/`, confirmed by two `assert revision == "0003"` in `test_migrations.py`). Slice 3 is partially in flight; slice 4 is absent. **Resolution:** §17 puts the whole of §8 in 6A, but §8.1's fifth branch is `invoices.causale` plus `(anno, numero)`. That branch cannot exist in a sub-plan whose stated dependencies are slices 1 and 2. **The invoice search branch and the tenth trigram index move to 6C as Task C13**, and 6A closes R6 for the four entities that exist. This is a scope correction to §17, not to §8: the branch is built exactly as §8.1 and §8.5 specify, one sub-plan later.
+
+12. **`pipeline_stages` has `code`, and it has no uniqueness constraint on `tipo`.** Both matter and both check out: `pipeline/models.py` declares `code: Mapped[str | None] = mapped_column(String(30), default=None)` with `Index("uq_pipeline_stage_code", "code", unique=True)`, and `DEFAULT_STAGES` in `pipeline/service.py:18-25` seeds `code='offerta'` (`tipo='open'`) and `code='vinto'` (`tipo='won'`) — the two the automations resolve by. Nothing forbids two stages with `tipo='won'` (**R14**). The core design §5.4 still does not mention `code` (**R11**). **Resolution (Task B6):** A1 resolves by `code='vinto'`, then falls back to the unique stage with `tipo='won'`, then does nothing and records `motivo='stage_bersaglio_ambiguo'` or `'stage_bersaglio_assente'`. A2 resolves by `code='offerta'` **only** — there is no `tipo` fallback, because "Offerta" is `open` like every other open stage. No migration adds a constraint: it would refuse data an installation may already have for a reason. R11 and R14 stay open and are not closed by this plan.
+
+13. **The timeline records stage changes by user-renamable name (R15), and this plan does not fix it.** `deals/service.py:236-238` writes `{"from": previous.nome, "to": target.nome}`. **Resolution (Task B2):** `deals.chiuso_il` is the new authoritative column and is **not** backfilled; the dashboards exclude `chiuso_il IS NULL` from period figures and declare how many rows they excluded. `documents.stato_dal` **is** backfilled, because the offer timeline's payload is `{"da": "inviata", "a": "accettata"}` — literals of `OfferState`, not user text (`documents/service.py:544-546`). Enriching the `stage_changed` payload with the stage id and `code` is the right fix for R15 and is **out of scope here**: it would not make the timeline authoritative (the payload is sanitised, not validated), and this plan already gives the question a column that is.
+
+14. **The exception type is `ValidationFailed`, not `ValidationError`.** `packages/core/src/pigrocrm/core/errors.py` exports `DomainError`, `NotFound`, `ValidationFailed`, `Conflict`, `PermissionDenied`, `ImmutableField`. Every task in this plan uses those names.
+
+15. **`packages/core/tests/conftest.py` builds the schema with `Base.metadata.create_all`, not with migrations.** A trigram `Index(...)` declared in `__table_args__` therefore reaches `create_all` before any migration has run `CREATE EXTENSION`, and `create_all` fails with `operator class "gin_trgm_ops" does not exist`. **Resolution (Task A2):** the `db_engine` fixture issues `CREATE EXTENSION IF NOT EXISTS pg_trgm` on its own connection **before** `create_all`. Without this the whole suite goes red on the first task of the slice, for a reason that looks nothing like its cause.
+
+16. **`packages/core/tests/conftest.py`'s `db_session` fixture cannot host a `REPEATABLE READ` test.** It hands out a session bound to a connection with an already-open outer transaction (`connection.begin()` plus `join_transaction_mode="create_savepoint"`), and Postgres refuses `SET TRANSACTION ISOLATION LEVEL` once a transaction has begun. **Resolution (Task B13):** the isolation tests build their own sessions straight from `db_engine`, clean up their own rows in a `finally`, and are marked in their docstring as the two tests in the suite that deliberately do not use `db_session`. Criterion 6 is unwritable without this, and discovering it as a red test costs an afternoon.
+
+17. **`apps/web/src/lib/query.ts` exposes `queryKeys` and no invalidation helpers.** §7.2 says "le chiavi di invalidazione sono quelle che `lib/query.ts` già espone". It exposes the key factory; invalidation is inlined in each feature's mutation `onSuccess`. **Resolution (Task B17):** add `queryKeys.dashboard(kind, params)` and `queryKeys.search(term)` to the same object and invalidate inline, matching the shipped idiom rather than introducing a helper module the codebase does not have.
+
+18. **No route in the app uses URL search params.** §4 requires the period to be in the URL. `validateSearch`, `useSearch` and `Route.useSearch` appear nowhere in `apps/web/src`; list filters are component-local `useState`. **Resolution (Task B17):** `/app/` is the first route in this codebase with `validateSearch`. That is a new pattern, so the task spells out the whole route definition rather than pointing at a neighbour.
+
+---
+
+## File Structure
+
+New and modified files, with each one's single responsibility. Directories that do not exist yet are marked **new**.
+
+### 6A
+
+```
+packages/core/src/pigrocrm/core/db/
+  sort.py                     NEW  the sort whitelist type, the opaque composite cursor codec,
+                                   and the keyset predicate/ORDER BY builder. One module because
+                                   the codec and the predicate must agree about NULLS LAST, and
+                                   splitting them is how they stop agreeing.
+packages/core/src/pigrocrm/core/search/          NEW package
+  __init__.py                      re-exports SearchService and the schemas
+  schemas.py                       SearchQuery, SearchHit, SearchGroup, SearchResults
+  scoring.py                       the §8.5 formula: field score, field weight, row score,
+                                   the 0.20 floor. Pure functions over Decimal, no session.
+  repository.py                    one branch per entity: the trigram predicate, the score
+                                   expression, the count-to-201. No cross-entity logic.
+  service.py                       SearchService: term validation, fan-out, total ordering
+packages/core/src/pigrocrm/core/{customers,people,deals,documents}/schemas.py
+                              MOD  sort/dir on *ListQuery; cursor: UUID|None -> str|None;
+                                   next_cursor: UUID|None -> str|None on *Page
+packages/core/src/pigrocrm/core/{customers,people,deals,documents}/repository.py
+                              MOD  ORDER BY from db/sort.py; documents gains its search branch
+packages/core/src/pigrocrm/core/{customers,people,deals,documents}/service.py
+                              MOD  next_cursor is encoded, not the bare id
+packages/core/src/pigrocrm/core/{customers,people,deals,documents}/models.py
+                              MOD  the trigram and B-tree __table_args__ entries
+packages/core/migrations/versions/
+  0004_pg_trgm_search_indexes.py   NEW  the extension and the nine partial GIN indexes
+  0005_sort_indexes.py             NEW  the thirteen B-tree (column, id) indexes
+packages/core/tests/
+  conftest.py                 MOD  CREATE EXTENSION pg_trgm before create_all
+  corpus.py                   NEW  the §16 reference corpus and its inflated variant
+  test_corpus.py              NEW  the corpus builds and has the row counts it claims
+  test_sort_cursor.py         NEW  the codec round-trips, rejects, and orders totally
+  test_search_scoring.py      NEW  the §8.5 formula, table-driven
+  test_search_service.py      NEW  the branches, the floor, the count-to-201
+  test_search_plan.py         NEW  criterion 3: EXPLAIN, plus the index-removal variant
+  test_search_determinism.py  NEW  criterion 4: twenty byte-identical runs
+  test_keyset_pagination.py   NEW  criterion 13: no losses, no repeats, under inserts
+  test_migrations.py          MOD  HAND_MAINTAINED_INDEXES gains twenty-two names
+  test_architecture.py        MOD  SearchService joins the audited surface
+apps/api/src/pigrocrm_api/routers/
+  search.py                   NEW  GET /api/search
+  {customers,people,deals,documents}.py  MOD  sort, dir, cursor: str
+apps/api/src/pigrocrm_api/main.py        MOD  include the search router
+apps/mcp/src/pigrocrm_mcp/tools/
+  search.py                   NEW  search_everything
+  __init__.py                 MOD  register it; cursor is already a str at this boundary
+apps/web/src/
+  lib/api-types.ts            MOD  regenerated, never hand-edited
+  lib/query.ts                MOD  queryKeys.search
+  components/AppShell.tsx     MOD  the header: breadcrumb, search field, shortcut hint
+  components/AppHeader.tsx    NEW  extracted so AppShell stays under 250 lines
+  components/ui/command.tsx   NEW  the shadcn cmdk wrapper
+  features/search/
+    queries.ts                NEW  useGlobalSearch, with the 3-character gate
+    CommandPalette.tsx        NEW  the three states, the debounce, the cancellation
+    CommandPalette.test.tsx   NEW  the three states as three renderings
+  e2e/search.spec.ts          NEW  criterion 5
+```
+
+### 6B
+
+```
+packages/core/src/pigrocrm/core/db/
+  clock.py                    NEW  today_local(settings) — the project's only clock
+packages/core/src/pigrocrm/core/config.py        MOD  Settings.timezone
+packages/core/src/pigrocrm/core/automations/     NEW package
+  __init__.py                      re-exports AutomationRunner and the schemas
+  models.py                        AutomationConfig (single row)
+  schemas.py                       AutomationConfigRead/Update, AutomationRun, AutomationsDescription
+  repository.py                    AutomationConfigRepository
+  config_service.py                AutomationConfigService (get, describe, update — admin)
+  runner.py                        AutomationRunner.on_offer_state_changed
+packages/core/src/pigrocrm/core/dashboard/       NEW package
+  __init__.py                      re-exports DashboardService and the schemas
+  schemas.py                       CommercialDashboard and its rows (6C adds two more)
+  service.py                       DashboardService — composition only, no arithmetic
+packages/core/src/pigrocrm/core/deals/models.py  MOD  chiuso_il
+packages/core/src/pigrocrm/core/deals/service.py MOD  move_stage writes chiuso_il;
+                                                      set_stage_in_transaction
+packages/core/src/pigrocrm/core/deals/repository.py MOD pipeline_summary, closed_in_period,
+                                                      expected_closures, count_won_not_invoiced
+packages/core/src/pigrocrm/core/documents/models.py MOD stato_dal
+packages/core/src/pigrocrm/core/documents/service.py MOD set_offer_state writes stato_dal and
+                                                      calls the runner
+packages/core/src/pigrocrm/core/documents/repository.py MOD pending_offers,
+                                                      count_accepted_with_unwon_deal
+packages/core/src/pigrocrm/core/activities/repository.py MOD by_kind
+packages/core/src/pigrocrm/core/models_registry.py MOD  AutomationConfig
+packages/core/migrations/versions/
+  0006_automations_and_dates.py    NEW  chiuso_il, stato_dal + backfill, automation_config
+packages/core/tests/
+  test_clock.py               NEW  the one clock
+  test_automation_runner.py   NEW  criteria 7, 8, 9
+  test_automation_config.py   NEW  admin-only, and the R5 activity
+  test_dashboard_commercial.py NEW the figures, and the two §3 exceptions
+  test_dashboard_no_arithmetic.py NEW criterion 11's two AST clauses
+  test_dashboard_snapshot.py  NEW  criterion 6, with its own sessions
+  test_dashboard_drillthrough.py NEW criterion 2
+  test_in_transaction_callers.py NEW the *_in_transaction architecture check
+apps/api/src/pigrocrm_api/routers/
+  dashboard.py                NEW  GET /api/dashboard/commerciale (6C adds two)
+  automations.py              NEW  GET/PUT /api/automation-config, GET /api/automation-runs
+apps/mcp/src/pigrocrm_mcp/tools/
+  dashboard.py                NEW  get_commercial_dashboard, describe_automations
+apps/web/src/
+  styles/tokens.css           MOD  --chart-1..5
+  styles/tokens.test.ts       MOD  the five new tokens: contrast, and no raw hex
+  lib/query.ts                MOD  queryKeys.dashboard
+  features/dashboard/
+    queries.ts                NEW  useCommercialDashboard (60s staleTime)
+    charts.tsx                NEW  BigNumber, BarRow, Sparkline — SVG and CSS only
+    charts.test.tsx           NEW  every chart renders its equivalent table
+    CommercialTab.tsx         NEW
+    CommercialTab.test.tsx    NEW
+    Freshness.tsx             NEW  "aggiornato N minuti fa" + recompute
+  features/settings/AutomationsPanel.tsx      NEW
+  features/settings/AutomationsPanel.test.tsx NEW
+  routes/app/index.tsx        MOD  replaced: the three tabs, the period in the URL
+  routes/app/impostazioni/automazioni.tsx     NEW
+  test/no-browser-arithmetic.test.ts          NEW criterion 14
+```
+
+### 6C
+
+```
+packages/core/src/pigrocrm/core/analytics/service.py  MOD  unbilled_backlog; PeriodPnl grows
+                                                           three informative period fields
+packages/core/src/pigrocrm/core/analytics/schemas.py MOD  UnbilledBacklog
+packages/core/src/pigrocrm/core/invoices/repository.py MOD sum_da_incassare, sum_scaduto,
+                                                           count_emesse_in_periodo,
+                                                           count_deals_invoiced_not_won
+packages/core/src/pigrocrm/core/invoices/models.py   MOD  the causale trigram index
+packages/core/src/pigrocrm/core/timetracking/repository.py MOD hours_by_day
+packages/core/src/pigrocrm/core/activities/models.py MOD  ix_activities_recent
+packages/core/src/pigrocrm/core/activities/repository.py MOD recent
+packages/core/src/pigrocrm/core/dashboard/schemas.py MOD  EconomicDashboard, OperationalDashboard
+packages/core/src/pigrocrm/core/dashboard/service.py MOD  the two new compositions
+packages/core/src/pigrocrm/core/search/{repository,service}.py MOD the invoice branch
+packages/core/migrations/versions/
+  0007_dashboard_indexes.py        NEW  ix_activities_recent, the invoice trigram index
+packages/core/tests/
+  test_dashboard_economic.py  NEW  criterion 1, both directions
+  test_dashboard_operational.py NEW
+  test_search_invoices.py     NEW  the fiscal-number shape
+apps/api/src/pigrocrm_api/routers/dashboard.py MOD  economica, operativa
+apps/api/src/pigrocrm_api/routers/analytics.py MOD  GET /api/analytics/backlog
+apps/mcp/src/pigrocrm_mcp/
+  prompts/__init__.py         NEW  register the four prompts
+  prompts/dashboards.py       NEW  revisione-pipeline, chiusura-mese, ore-da-registrare
+  prompts/customer.py         NEW  stato-cliente (the one prompt with a resource block)
+  server.py                   MOD  register_prompts(mcp, context, _guard)
+apps/mcp/tests/
+  test_mcp_prompts.py         NEW  criterion 10
+  test_mcp_concurrency.py     NEW  criterion 12
+apps/web/src/features/dashboard/
+  EconomicTab.tsx             NEW
+  OperationalTab.tsx          NEW
+  *.test.tsx                  NEW
+apps/web/e2e/dashboard.spec.ts NEW  criterion 15
+```
+
+---
+# Sub-plan 6A — Ricerca globale
+
+**Before 6A can start, all of this must already be true.** Verify, do not assume:
+
+| Prerequisite | How to check | If it is missing |
+|---|---|---|
+| Slice 1 and slice 2 in `main` | `packages/core/src/pigrocrm/core/{customers,people,deals,documents,templates,emitter}/service.py` all exist | Stop. 6A has no substitute for them |
+| The migration chain head is `0003` | `ls packages/core/migrations/versions/` shows `0001`, `0002`, `0003` and nothing later | If something later exists, another slice landed; renumber 6A's migrations to follow the real head and update the `down_revision` values |
+| The suite is green | `uv run pytest -q` | Fix that first. A red baseline makes every "watch it fail" step meaningless |
+| PostgreSQL 17 with contrib | `packages/core/tests/conftest.py` uses `PostgresContainer("postgres:17-alpine", …)` | `pg_trgm` ships in that image's contrib set; a stripped image would fail Task A2 loudly, which is the intended behaviour |
+
+**6A needs nothing from slices 3, 4 or 5.** It does not need the R1 cure either, except for the MCP half of Task A11 — see that task's own gate.
+
+**6A executes §16 criteria 3, 4, 5 and 13.**
+
+---
+
+### Task A1: The reference corpus, and its inflated variant
+
+**Files:**
+- Create: `packages/core/tests/corpus.py`
+- Create: `packages/core/tests/test_corpus.py`
+
+**Interfaces:**
+- Consumes: the `db_engine` fixture from `packages/core/tests/conftest.py`; `pigrocrm.core.{customers,people,deals,documents}.models`; `pigrocrm.core.pipeline.models.PipelineStage`.
+- Produces:
+  - `packages/core/tests/corpus.py::CorpusScale` — a frozen dataclass with `customers: int`, `people: int`, `deals: int`, `documents: int`.
+  - `REFERENCE = CorpusScale(customers=500, people=800, deals=2000, documents=1000)`
+  - `INFLATED = CorpusScale(customers=50_000, people=50_000, deals=50_000, documents=50_000)`
+  - `build_corpus(session: Session, scale: CorpusScale, *, seed: int = 20260821) -> CorpusIds`
+  - `CorpusIds` — a frozen dataclass with `stage_open_id: UUID`, `stage_won_id: UUID`, `stage_lost_id: UUID`, `customer_ids: list[UUID]`, `deal_ids: list[UUID]`.
+  - `KNOWN_PARTITA_IVA = "01234567890"` and `KNOWN_RAGIONE_SOCIALE = "Rossi Ingegneria Srl"` — the one customer every search test looks for by name.
+
+Why a module and not a fixture: three sub-plans and six test files need it, at two scales, and `INFLATED` takes long enough that a function callable once per session-scoped fixture is the only affordable shape. 6C extends this module with invoices, hours and costs; it does not fork it.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_corpus.py
+"""The corpus is a test fixture, so it gets a test: a generator that silently produces
+400 rows instead of 50 000 turns Task A9's plan assertion into a measurement of nothing.
+
+Only REFERENCE is exercised here. INFLATED is asserted by Task A9, which is the only
+place that pays for it.
+"""
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.documents.models import Document
+from pigrocrm.core.people.models import Person
+
+from .corpus import KNOWN_PARTITA_IVA, KNOWN_RAGIONE_SOCIALE, REFERENCE, build_corpus
+
+
+def test_build_corpus_produces_exactly_the_row_counts_it_claims(db_session: Session) -> None:
+    build_corpus(db_session, REFERENCE)
+
+    assert db_session.scalar(select(func.count()).select_from(Customer)) == 500
+    assert db_session.scalar(select(func.count()).select_from(Person)) == 800
+    assert db_session.scalar(select(func.count()).select_from(Deal)) == 2000
+    assert db_session.scalar(select(func.count()).select_from(Document)) == 1000
+
+
+def test_build_corpus_plants_the_one_customer_every_search_test_looks_for(
+    db_session: Session,
+) -> None:
+    build_corpus(db_session, REFERENCE)
+
+    row = db_session.scalar(
+        select(Customer).where(Customer.partita_iva == KNOWN_PARTITA_IVA)
+    )
+    assert row is not None
+    assert row.ragione_sociale == KNOWN_RAGIONE_SOCIALE
+
+
+def test_build_corpus_is_deterministic_for_a_given_seed(db_session: Session) -> None:
+    """Criterion 4 asserts byte-identical JSON across runs; that is only meaningful if
+    the data underneath is byte-identical too."""
+    build_corpus(db_session, REFERENCE, seed=7)
+    first = db_session.scalars(
+        select(Customer.ragione_sociale).order_by(Customer.ragione_sociale).limit(20)
+    ).all()
+
+    db_session.rollback()
+    build_corpus(db_session, REFERENCE, seed=7)
+    second = db_session.scalars(
+        select(Customer.ragione_sociale).order_by(Customer.ragione_sociale).limit(20)
+    ).all()
+
+    assert list(first) == list(second)
+
+
+def test_build_corpus_leaves_some_deals_without_a_value(db_session: Session) -> None:
+    """Task B9 counts those rows separately and never sums them as zero; the corpus has
+    to contain some or that branch is never executed."""
+    build_corpus(db_session, REFERENCE)
+    without = db_session.scalar(
+        select(func.count()).select_from(Deal).where(Deal.valore_previsto.is_(None))
+    )
+    assert without is not None and without > 0
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_corpus.py -v`
+Expected: collection error — `ModuleNotFoundError: No module named 'packages.core.tests.corpus'` or `ImportError: cannot import name 'build_corpus'`, because `corpus.py` does not exist.
+
+- [ ] **Step 3: Write the corpus generator**
+
+```python
+# packages/core/tests/corpus.py
+"""The §16 reference corpus, and the inflated variant criterion 3 needs.
+
+Two scales, one generator. The reference scale is ten years of a five-person practice;
+the inflated one brings every searched table to 50 000 rows, because an assertion about
+a query plan means nothing on a table that fits in a handful of pages -- Postgres picks
+a sequential scan there because it *is* the cheapest plan, and a test asserting
+otherwise would go red without a defect.
+
+Rows are inserted with `session.execute(insert(Model), [dicts])` rather than through the
+ORM: at 50 000 rows per table the unit-of-work overhead is the difference between a test
+that runs and a test nobody runs. `flush()` is called, never `commit()` -- the caller's
+transaction owns the lifetime, which is what lets `db_session` roll the whole corpus back.
+
+Determinism is by seed, not by luck. `random.Random(seed)` is instantiated locally and
+never the module-level `random` functions, so a concurrent test that seeds the global
+generator cannot change what this one produces.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from uuid import UUID
+
+from sqlalchemy import insert, select
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.db.base import uuid7
+from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.documents.models import Document
+from pigrocrm.core.people.models import Person
+from pigrocrm.core.pipeline.models import PipelineStage
+
+# The one customer every search test looks for. Both values are deliberately ordinary:
+# a VAT number whose middle five digits ("34567") are a realistic fragment to type, and
+# a company name whose first four characters ("Ross") are a realistic prefix.
+KNOWN_PARTITA_IVA = "01234567890"
+KNOWN_RAGIONE_SOCIALE = "Rossi Ingegneria Srl"
+
+_SURNAMES = (
+    "Rossi", "Bianchi", "Ferrari", "Russo", "Esposito", "Colombo", "Ricci", "Marino",
+    "Greco", "Bruno", "Gallo", "Conti", "De Luca", "Costa", "Giordano", "Mancini",
+    "Rizzo", "Lombardi", "Moretti", "Barbieri",
+)
+_FIRST_NAMES = (
+    "Marco", "Giulia", "Luca", "Chiara", "Andrea", "Sara", "Matteo", "Elena",
+    "Francesco", "Alessia", "Davide", "Martina", "Simone", "Federica", "Alessandro",
+    "Valentina",
+)
+_SECTORS = (
+    "Ingegneria", "Consulenza", "Logistica", "Impianti", "Servizi", "Costruzioni",
+    "Informatica", "Trasporti", "Manutenzioni", "Progettazione",
+)
+_LEGAL_FORMS = ("Srl", "Spa", "Snc", "Sas", "Srls")
+_DEAL_WORDS = (
+    "Rifacimento", "Ampliamento", "Adeguamento", "Collaudo", "Fornitura", "Revisione",
+    "Migrazione", "Assistenza", "Ristrutturazione", "Certificazione",
+)
+_DOC_WORDS = ("Offerta", "Contratto", "Verbale", "Relazione", "Preventivo", "Capitolato")
+
+
+@dataclass(frozen=True)
+class CorpusScale:
+    customers: int
+    people: int
+    deals: int
+    documents: int
+
+
+REFERENCE = CorpusScale(customers=500, people=800, deals=2000, documents=1000)
+INFLATED = CorpusScale(customers=50_000, people=50_000, deals=50_000, documents=50_000)
+
+
+@dataclass(frozen=True)
+class CorpusIds:
+    stage_open_id: UUID
+    stage_won_id: UUID
+    stage_lost_id: UUID
+    customer_ids: list[UUID] = field(default_factory=list)
+    deal_ids: list[UUID] = field(default_factory=list)
+
+
+def _stages(session: Session) -> tuple[UUID, UUID, UUID]:
+    """Three stages, resolved by `code` and created only if absent.
+
+    By `code`, never by `nome`: `PipelineStage`'s own docstring gives the reason, and a
+    corpus that deduplicated on the renamable label would create a second "Vinto" the
+    moment a test renamed the first one.
+    """
+    wanted = (("offerta", "Offerta", 2, 50, "open"), ("vinto", "Vinto", 4, 100, "won"),
+              ("perso", "Perso", 5, 0, "lost"))
+    ids: list[UUID] = []
+    for code, nome, posizione, probabilita, tipo in wanted:
+        existing = session.scalar(select(PipelineStage).where(PipelineStage.code == code))
+        if existing is None:
+            existing = PipelineStage(
+                code=code, nome=nome, posizione=posizione,
+                probabilita_default=probabilita, tipo=tipo,
+            )
+            session.add(existing)
+            session.flush()
+        ids.append(existing.id)
+    return ids[0], ids[1], ids[2]
+
+
+def build_corpus(session: Session, scale: CorpusScale, *, seed: int = 20260821) -> CorpusIds:
+    import random
+
+    rng = random.Random(seed)
+    stage_open, stage_won, stage_lost = _stages(session)
+
+    customer_ids: list[UUID] = []
+    customer_rows: list[dict[str, object]] = []
+    for index in range(scale.customers):
+        cid = uuid7()
+        customer_ids.append(cid)
+        if index == 0:
+            ragione, piva = KNOWN_RAGIONE_SOCIALE, KNOWN_PARTITA_IVA
+        else:
+            ragione = (
+                f"{rng.choice(_SURNAMES)} {rng.choice(_SECTORS)} "
+                f"{rng.choice(_LEGAL_FORMS)} {index}"
+            )
+            piva = f"{index:011d}"
+        customer_rows.append({
+            "id": cid,
+            "ragione_sociale": ragione[:255],
+            "partita_iva": piva,
+            "codice_fiscale": f"CF{index:014d}"[:16],
+            "email": f"info{index}@{rng.choice(_SECTORS).lower()}.example",
+            "nazione": "IT",
+            "stato": rng.choice(("attivo", "prospect", None)),
+            "custom_fields": {},
+        })
+    session.execute(insert(Customer), customer_rows)
+
+    person_rows: list[dict[str, object]] = []
+    for index in range(scale.people):
+        # Every fifth person has no surname: `people.cognome` is nullable, and Task A3's
+        # NULLS LAST cursor has no exerciser without rows in the null tail.
+        cognome = None if index % 5 == 0 else rng.choice(_SURNAMES)
+        person_rows.append({
+            "id": uuid7(),
+            "customer_id": customer_ids[index % len(customer_ids)],
+            "nome": rng.choice(_FIRST_NAMES),
+            "cognome": cognome,
+            "email": f"persona{index}@example.it",
+            "custom_fields": {},
+        })
+    session.execute(insert(Person), person_rows)
+
+    deal_ids: list[UUID] = []
+    deal_rows: list[dict[str, object]] = []
+    for index in range(scale.deals):
+        did = uuid7()
+        deal_ids.append(did)
+        stage = (stage_open, stage_won, stage_lost)[index % 3]
+        # Every seventh deal has no expected value. Task B9 counts these under
+        # "senza valore" and never sums them as zero.
+        valore = None if index % 7 == 0 else f"{1000 + index % 90000}.00"
+        deal_rows.append({
+            "id": did,
+            "nome": f"{rng.choice(_DEAL_WORDS)} {rng.choice(_SECTORS)} {index}",
+            "customer_id": customer_ids[index % len(customer_ids)],
+            "pipeline_stage_id": stage,
+            "valore_previsto": valore,
+            "probabilita": (index % 11) * 10,
+            "custom_fields": {},
+        })
+    session.execute(insert(Deal), deal_rows)
+
+    document_rows: list[dict[str, object]] = []
+    for index in range(scale.documents):
+        # `ck_documents_customer_xor_deal`: exactly one of the two, never both.
+        owner_is_deal = index % 2 == 0
+        document_rows.append({
+            "id": uuid7(),
+            "customer_id": None if owner_is_deal else customer_ids[index % len(customer_ids)],
+            "deal_id": deal_ids[index % len(deal_ids)] if owner_is_deal else None,
+            "tipo": "offerta" if index % 3 == 0 else "documento",
+            "titolo": f"{rng.choice(_DOC_WORDS)} {rng.choice(_SECTORS)} {index}",
+            "stato": "inviata" if index % 3 == 0 else None,
+            "versione_corrente": 1,
+            "custom_fields": {},
+        })
+    session.execute(insert(Document), document_rows)
+
+    session.flush()
+    return CorpusIds(
+        stage_open_id=stage_open,
+        stage_won_id=stage_won,
+        stage_lost_id=stage_lost,
+        customer_ids=customer_ids,
+        deal_ids=deal_ids,
+    )
+```
+
+- [ ] **Step 4: Run the test and watch it pass**
+
+Run: `uv run pytest packages/core/tests/test_corpus.py -v`
+Expected: PASS, four tests.
+
+- [ ] **Step 5: Check the whole suite is still green and the types hold**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+Expected: everything passes. `corpus.py` lives under `tests/`, which `mypy`'s `files` setting does not cover, so it is linted but not type-checked — that is the existing arrangement for every other test module and is not changed here.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/core/tests/corpus.py packages/core/tests/test_corpus.py
+git commit -m "test(core): reference and inflated search corpora, deterministic by seed"
+```
+
+---
+
+### Task A2: `pg_trgm`, the nine partial trigram indexes, and the `ESCAPE` verdict
+
+**Files:**
+- Modify: `packages/core/src/pigrocrm/core/customers/models.py` (`__table_args__`)
+- Modify: `packages/core/src/pigrocrm/core/people/models.py` (`__table_args__`)
+- Modify: `packages/core/src/pigrocrm/core/deals/models.py` (`__table_args__`)
+- Modify: `packages/core/src/pigrocrm/core/documents/models.py` (`__table_args__`)
+- Create: `packages/core/migrations/versions/0004_pg_trgm_search_indexes.py`
+- Modify: `packages/core/tests/conftest.py` (create the extension before `create_all`)
+- Modify: `packages/core/tests/test_migrations.py` (`HAND_MAINTAINED_INDEXES`)
+- Create: `packages/core/tests/test_trgm_escape.py`
+- Modify: `README.md` (the `pg_trgm` privilege line, under "### Prerequisiti sul server")
+
+**Interfaces:**
+- Consumes: `build_corpus`, `REFERENCE` from Task A1; `pigrocrm.core.db.escape_like`.
+- Produces:
+  - Nine index names, which Task A9 asserts on and Task A11's endpoint depends on:
+    `ix_customers_ragione_sociale_trgm`, `ix_customers_partita_iva_trgm`,
+    `ix_customers_codice_fiscale_trgm`, `ix_customers_email_trgm`,
+    `ix_people_nome_trgm`, `ix_people_cognome_trgm`, `ix_people_email_trgm`,
+    `ix_deals_nome_trgm`, `ix_documents_titolo_trgm`.
+  - A recorded decision, in the docstring of `test_trgm_escape.py`, about whether `escape="\\"` stays. **If it must go, this task removes it from all four existing call sites in the same commit** — `customers/repository.py`, `people/repository.py`, `deals/repository.py`, `templates/repository.py` — and amends the Global Constraint above.
+
+The tenth index, `ix_invoices_causale_trgm`, belongs to Task C13: there is no `invoices` table in 6A.
+
+- [ ] **Step 1: Write the failing test that measures the `ESCAPE` clause**
+
+```python
+# packages/core/tests/test_trgm_escape.py
+r"""Spec §8.3 point 3, measured instead of assumed.
+
+The predicate the four shipped repositories emit is `col ILIKE :p ESCAPE '\'`. Postgres
+plans `LIKE ... ESCAPE` as `like_escape(pattern, escape)` inside the `~~*` operator, and
+with both arguments constant, constant folding should produce a constant pattern that the
+trigram index can serve. "Should" is not a measurement, so this test is the measurement,
+and it runs before anything is built on top of it.
+
+If `test_ilike_with_an_explicit_escape_uses_the_trigram_index` fails, the fallback is one
+line and is stated in the spec: drop the `ESCAPE` clause. The backslash is already
+Postgres's default LIKE escape character -- `escape_like`'s own docstring says so -- so
+removing the clause changes no semantics. It must then be removed from **all four** call
+sites in this same commit, never from one.
+
+`SET enable_seqscan = off` is deliberately NOT used. It would force the planner's hand and
+turn a measurement into a tautology; the point is what the planner chooses on its own.
+"""
+
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.db import escape_like
+
+from .corpus import REFERENCE, build_corpus
+
+
+def _plan(session: Session, sql: str, params: dict[str, object]) -> str:
+    rows = session.execute(text(f"EXPLAIN {sql}"), params).all()
+    return "\n".join(str(row[0]) for row in rows)
+
+
+def test_the_trigram_extension_and_index_exist(db_session: Session) -> None:
+    installed = db_session.scalar(
+        text("SELECT count(*) FROM pg_extension WHERE extname = 'pg_trgm'")
+    )
+    assert installed == 1, "pg_trgm is not installed on the test database"
+
+    found = db_session.scalar(
+        text(
+            "SELECT count(*) FROM pg_indexes "
+            "WHERE schemaname = 'public' AND indexname = 'ix_customers_ragione_sociale_trgm'"
+        )
+    )
+    assert found == 1, "ix_customers_ragione_sociale_trgm was not created"
+
+
+def test_ilike_with_an_explicit_escape_uses_the_trigram_index(db_session: Session) -> None:
+    build_corpus(db_session, REFERENCE)
+    db_session.execute(text("ANALYZE customers"))
+
+    pattern = f"%{escape_like('ingegn')}%"
+    plan = _plan(
+        db_session,
+        "SELECT id FROM customers "
+        r"WHERE deleted_at IS NULL AND ragione_sociale ILIKE :p ESCAPE '\'",
+        {"p": pattern},
+    )
+    assert "ix_customers_ragione_sociale_trgm" in plan, (
+        "the ESCAPE clause defeated the trigram index; apply the spec's one-line "
+        f"fallback and remove `escape=` from all four repositories.\nPlan was:\n{plan}"
+    )
+
+
+def test_the_same_predicate_without_escape_also_uses_the_index(db_session: Session) -> None:
+    """The control. If this one fails too, the problem is the index or the statistics,
+    not the ESCAPE clause, and removing the clause would be the wrong fix."""
+    build_corpus(db_session, REFERENCE)
+    db_session.execute(text("ANALYZE customers"))
+
+    plan = _plan(
+        db_session,
+        "SELECT id FROM customers WHERE deleted_at IS NULL AND ragione_sociale ILIKE :p",
+        {"p": "%ingegn%"},
+    )
+    assert "ix_customers_ragione_sociale_trgm" in plan, f"plan was:\n{plan}"
+
+
+def test_similarity_needs_no_lower_in_the_index_expression(db_session: Session) -> None:
+    """Spec §8.2's non-obvious note, pinned so nobody "fixes" the index by wrapping the
+    column in `lower()` -- which would make ILIKE on the raw column unable to use it."""
+    same = db_session.scalar(text("SELECT similarity('Rossi', 'rossi')"))
+    assert same == 1.0
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_trgm_escape.py -v`
+Expected: `test_the_trigram_extension_and_index_exist` FAILS with `assert 0 == 1` / "pg_trgm is not installed on the test database", and the two plan tests FAIL because the index does not exist. The `similarity` test errors with `UndefinedFunction: function similarity(unknown, unknown) does not exist`.
+
+- [ ] **Step 3: Create the extension in the test fixture, before `create_all`**
+
+```python
+# packages/core/tests/conftest.py -- replace the db_engine fixture body.
+# The rest of the file (db_session) is untouched.
+
+from collections.abc import Iterator
+
+import pytest
+from sqlalchemy import Engine, text
+from sqlalchemy.orm import Session
+from testcontainers.community.postgres import PostgresContainer
+
+from pigrocrm.core.config import Settings
+from pigrocrm.core.db import Base, create_engine_from_settings, session_factory
+
+
+@pytest.fixture(scope="session")
+def db_engine() -> Iterator[Engine]:
+    """Real PostgreSQL. JSONB, GIN and pg_trgm do not exist in SQLite, so there is no
+    shortcut.
+
+    `CREATE EXTENSION` runs **before** `create_all`, and that order is load-bearing: from
+    slice 6 on, four models declare GIN indexes with `gin_trgm_ops`, and `create_all`
+    fails outright with `operator class "gin_trgm_ops" does not exist` if the extension is
+    not there yet. The migrations create the extension too (0004) -- this is the same
+    statement for the path that bypasses them.
+    """
+    with PostgresContainer("postgres:17-alpine", driver="psycopg") as container:
+        settings = Settings(database_url=container.get_connection_url())
+        engine = create_engine_from_settings(settings)
+        with engine.begin() as connection:
+            connection.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+        import pigrocrm.core.models_registry  # noqa: F401  (imports every model)
+
+        Base.metadata.create_all(engine)
+        yield engine
+        engine.dispose()
+```
+
+- [ ] **Step 4: Declare the nine indexes on the models**
+
+```python
+# packages/core/src/pigrocrm/core/customers/models.py -- replace __table_args__ only.
+    __tablename__ = "customers"
+    __table_args__ = (
+        Index("ix_customers_custom_fields", "custom_fields", postgresql_using="gin"),
+        Index("ix_customers_ragione_sociale", "ragione_sociale"),
+        # Trigram indexes, partial on `deleted_at IS NULL` because that is the condition
+        # every search carries (spec §8.3): the index is smaller and residuo R7 closes
+        # for this table. No `lower()` in the expression -- `similarity()` normalises to
+        # lower case internally, and wrapping the column would make ILIKE on the raw
+        # column unable to use the index (spec §8.2).
+        Index(
+            "ix_customers_ragione_sociale_trgm", "ragione_sociale",
+            postgresql_using="gin", postgresql_ops={"ragione_sociale": "gin_trgm_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "ix_customers_partita_iva_trgm", "partita_iva",
+            postgresql_using="gin", postgresql_ops={"partita_iva": "gin_trgm_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "ix_customers_codice_fiscale_trgm", "codice_fiscale",
+            postgresql_using="gin", postgresql_ops={"codice_fiscale": "gin_trgm_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "ix_customers_email_trgm", "email",
+            postgresql_using="gin", postgresql_ops={"email": "gin_trgm_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
+```
+
+The import line at the top of that file becomes `from sqlalchemy import Index, String, Text, text`.
+
+```python
+# packages/core/src/pigrocrm/core/people/models.py -- replace __table_args__ only.
+    __tablename__ = "people"
+    __table_args__ = (
+        Index("ix_people_custom_fields", "custom_fields", postgresql_using="gin"),
+        Index(
+            "ix_people_nome_trgm", "nome",
+            postgresql_using="gin", postgresql_ops={"nome": "gin_trgm_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "ix_people_cognome_trgm", "cognome",
+            postgresql_using="gin", postgresql_ops={"cognome": "gin_trgm_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "ix_people_email_trgm", "email",
+            postgresql_using="gin", postgresql_ops={"email": "gin_trgm_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
+```
+
+Add `text` to that file's `from sqlalchemy import ...` line.
+
+```python
+# packages/core/src/pigrocrm/core/deals/models.py -- replace __table_args__ only.
+    __tablename__ = "deals"
+    __table_args__ = (
+        Index("ix_deals_custom_fields", "custom_fields", postgresql_using="gin"),
+        Index(
+            "ix_deals_nome_trgm", "nome",
+            postgresql_using="gin", postgresql_ops={"nome": "gin_trgm_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
+```
+
+```python
+# packages/core/src/pigrocrm/core/documents/models.py -- append to the existing
+# __table_args__ tuple, which already holds the CHECK and the GIN index.
+        Index(
+            "ix_documents_titolo_trgm", "titolo",
+            postgresql_using="gin", postgresql_ops={"titolo": "gin_trgm_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+```
+
+Add `text` to the `from sqlalchemy import ...` line in both files.
+
+- [ ] **Step 5: Write migration 0004**
+
+```python
+# packages/core/migrations/versions/0004_pg_trgm_search_indexes.py
+"""pg_trgm and the partial trigram search indexes
+
+Revision ID: 0004
+Revises: 0003
+Create Date: 2026-08-21
+
+Closes residuo R6 for customers, people, deals and documents, and residuo R7 for those
+four tables as a side effect of the indexes being partial on `deleted_at IS NULL`.
+
+`CREATE EXTENSION` is deliberately not guarded by a capability check. Migrations run at
+API start-up (slice 1 §12), so on a managed Postgres whose allowlist forbids `pg_trgm`
+the deploy fails loudly here -- which is what is wanted. The alternative is an
+application that starts and scans sequentially in silence, which is the defect being
+cured, with one index fewer.
+
+`CONCURRENTLY` is not used: Alembic runs each migration inside a transaction, and
+`CREATE INDEX CONCURRENTLY` cannot run in one. On a table of this size the exclusive lock
+is short; on a live installation large enough for it to matter, the operator builds the
+indexes by hand out-of-band and this migration finds them already present -- which is why
+every statement carries `IF NOT EXISTS`.
+"""
+
+from collections.abc import Sequence
+
+from alembic import op
+
+revision: str = "0004"
+down_revision: str | Sequence[str] | None = "0003"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+# (index name, table, column). Nine entries; the tenth, on invoices.causale, arrives with
+# slice 6C because there is no invoices table at this revision.
+_TRGM_INDEXES: tuple[tuple[str, str, str], ...] = (
+    ("ix_customers_ragione_sociale_trgm", "customers", "ragione_sociale"),
+    ("ix_customers_partita_iva_trgm", "customers", "partita_iva"),
+    ("ix_customers_codice_fiscale_trgm", "customers", "codice_fiscale"),
+    ("ix_customers_email_trgm", "customers", "email"),
+    ("ix_people_nome_trgm", "people", "nome"),
+    ("ix_people_cognome_trgm", "people", "cognome"),
+    ("ix_people_email_trgm", "people", "email"),
+    ("ix_deals_nome_trgm", "deals", "nome"),
+    ("ix_documents_titolo_trgm", "documents", "titolo"),
+)
+
+
+def upgrade() -> None:
+    op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+    for name, table, column in _TRGM_INDEXES:
+        op.execute(
+            f"CREATE INDEX IF NOT EXISTS {name} ON {table} "
+            f"USING gin ({column} gin_trgm_ops) WHERE deleted_at IS NULL"
+        )
+
+
+def downgrade() -> None:
+    for name, _table, _column in reversed(_TRGM_INDEXES):
+        op.execute(f"DROP INDEX IF EXISTS {name}")
+    # The extension is left installed. Dropping it would fail if anything else in the
+    # database came to depend on it, and an extension costs nothing to leave behind.
+```
+
+- [ ] **Step 6: Add the nine names to `HAND_MAINTAINED_INDEXES`**
+
+```python
+# packages/core/tests/test_migrations.py -- replace the set and its comment.
+# Autogenerate is known to silently omit exactly these shapes: a unique index over a SQL
+# expression rather than a bare column (`uq_users_email_lower`), a plain unique index on a
+# nullable column (`uq_pipeline_stage_code`), a GIN index, and -- from slice 6 -- a
+# *partial* GIN index over an operator class (`*_trgm`). Nine trigram indexes omitted in
+# silence are nine sequential scans that come back a month later, so they are named here
+# and a regression fails with the missing index's name instead of a generic metadata diff.
+HAND_MAINTAINED_INDEXES = {
+    "uq_users_email_lower",
+    "uq_pipeline_stage_code",
+    "ix_customers_custom_fields",
+    "ix_people_custom_fields",
+    "ix_deals_custom_fields",
+    "ix_customers_ragione_sociale_trgm",
+    "ix_customers_partita_iva_trgm",
+    "ix_customers_codice_fiscale_trgm",
+    "ix_customers_email_trgm",
+    "ix_people_nome_trgm",
+    "ix_people_cognome_trgm",
+    "ix_people_email_trgm",
+    "ix_deals_nome_trgm",
+    "ix_documents_titolo_trgm",
+}
+
+TRGM_INDEX_NAMES = frozenset(n for n in HAND_MAINTAINED_INDEXES if n.endswith("_trgm"))
+```
+
+And append this test to the same file:
+
+```python
+def test_every_trigram_index_is_a_partial_gin_index_over_gin_trgm_ops() -> None:
+    """A trigram index created without `gin_trgm_ops` is an ordinary GIN index that
+    cannot serve `ILIKE '%x%'` at all, and one created without the `WHERE` clause is
+    bigger than it needs to be and leaves residuo R7 open for that table. Both mistakes
+    produce a green `compare_metadata`, so they are asserted on the definition text.
+    """
+    with PostgresContainer("postgres:17-alpine", driver="psycopg") as container:
+        url = container.get_connection_url()
+        upgrade(_alembic_config(url), "head")
+
+        engine: Engine = create_engine(url)
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text("SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public'")
+            ).all()
+        engine.dispose()
+
+    indexes = {row.indexname: row.indexdef for row in rows}
+    for name in sorted(TRGM_INDEX_NAMES):
+        definition = indexes[name]
+        assert "USING gin" in definition, f"{name} is not a GIN index: {definition}"
+        assert "gin_trgm_ops" in definition, f"{name} lacks gin_trgm_ops: {definition}"
+        assert "WHERE (deleted_at IS NULL)" in definition, (
+            f"{name} is not partial on deleted_at IS NULL: {definition}"
+        )
+        assert "lower(" not in definition, (
+            f"{name} wraps the column in lower(), which stops ILIKE on the raw column "
+            f"from using it (spec §8.2): {definition}"
+        )
+```
+
+Also change the two `assert revision == "0003"` occurrences in that file to `"0004"`, since the head has moved.
+
+- [ ] **Step 7: Run the tests and watch them pass**
+
+Run: `uv run pytest packages/core/tests/test_trgm_escape.py packages/core/tests/test_migrations.py -v`
+Expected: PASS.
+
+**If `test_ilike_with_an_explicit_escape_uses_the_trigram_index` fails while the control test passes**, apply the spec's fallback now, in this task, and not later:
+
+1. In `customers/repository.py`, `people/repository.py`, `deals/repository.py` and `templates/repository.py`, change every `.ilike(like, escape="\\")` to `.ilike(like)` — **all of them, in one commit.** `escape_like` still runs; only the redundant clause goes.
+2. Add this comment above the first changed call site:
+   ```python
+   # No `escape=` clause: measured in Task A2 (packages/core/tests/test_trgm_escape.py),
+   # `ILIKE ... ESCAPE '\'` was not served by the trigram index while the same predicate
+   # without the clause was. The backslash is already Postgres's default LIKE escape
+   # character -- see `escape_like`'s docstring -- so the clause was redundant and its
+   # removal changes no semantics. Do not add it back without re-running that test.
+   ```
+3. Amend the "Escape LIKE metacharacters" bullet in this plan's Global Constraints to say the clause is omitted, and record the plan text in the test's docstring.
+4. Re-run Step 7.
+
+- [ ] **Step 8: Add the runbook line**
+
+```markdown
+<!-- README.md, appended to "### Prerequisiti sul server" -->
+- **`pg_trgm`.** Le migrazioni eseguono `CREATE EXTENSION IF NOT EXISTS pg_trgm`
+  all'avvio dell'API. Sull'immagine `postgres:17-alpine` del compose l'utente
+  `pigrocrm` è superuser e funziona senza intervento. Su un PostgreSQL gestito serve
+  che il fornitore abbia `pg_trgm` in allowlist e che l'utente possa creare estensioni:
+  senza, **il deploy fallisce all'avvio** — che è il comportamento voluto, perché
+  l'alternativa è un'applicazione che parte e scansiona sequenzialmente in silenzio.
+  Sintomo esatto nei log: `permission denied to create extension "pg_trgm"`.
+```
+
+- [ ] **Step 9: Full gate**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+Expected: everything passes.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/customers/models.py \
+        packages/core/src/pigrocrm/core/people/models.py \
+        packages/core/src/pigrocrm/core/deals/models.py \
+        packages/core/src/pigrocrm/core/documents/models.py \
+        packages/core/migrations/versions/0004_pg_trgm_search_indexes.py \
+        packages/core/tests/conftest.py \
+        packages/core/tests/test_migrations.py \
+        packages/core/tests/test_trgm_escape.py \
+        README.md
+git commit -m "feat(search): pg_trgm and nine partial trigram indexes, closing R6"
+```
+
+---
+### Task A3: The sort whitelist, the opaque composite cursor, and the thirteen B-tree indexes
+
+**Files:**
+- Create: `packages/core/src/pigrocrm/core/db/sort.py`
+- Modify: `packages/core/src/pigrocrm/core/db/__init__.py` (re-export)
+- Modify: `packages/core/src/pigrocrm/core/{customers,people,deals,documents}/models.py` (`__table_args__`)
+- Create: `packages/core/migrations/versions/0005_sort_indexes.py`
+- Create: `packages/core/tests/test_sort_cursor.py`
+- Modify: `packages/core/tests/test_migrations.py` (`HAND_MAINTAINED_INDEXES`, head revision)
+
+**Interfaces:**
+- Consumes: `pigrocrm.core.db.base.Base`; nothing from Task A1 or A2.
+- Produces, all importable from `pigrocrm.core.db`:
+  - `SortDirection = Literal["asc", "desc"]`
+  - `SortKind = Literal["text", "datetime"]`
+  - `SortSpec` — frozen dataclass: `key: str`, `column: InstrumentedAttribute[Any]`, `kind: SortKind`, `nullable: bool`
+  - `SortWhitelist` — frozen dataclass: `specs: tuple[SortSpec, ...]`, `default_key: str`; methods `keys() -> tuple[str, ...]` and `resolve(key: str | None) -> SortSpec`
+  - `encode_cursor(spec: SortSpec, value: object, row_id: UUID) -> str`
+  - `decode_cursor(spec: SortSpec, raw: str) -> tuple[object | None, UUID]`
+  - `keyset_predicate(spec: SortSpec, direction: SortDirection, value: object | None, row_id: UUID) -> ColumnElement[bool]`
+  - `order_by(spec: SortSpec, direction: SortDirection) -> tuple[UnaryExpression[Any], ...]`
+  - `CURSOR_MAX_LENGTH = 512`
+- Later tasks rely on the exact names above. Task A4 calls all of them; Tasks A5 and A11 only ever pass the string through.
+
+**The ordering contract, stated once so no task re-derives it.** `ORDER BY <col> <dir> NULLS LAST, id <dir>` — the tie-break follows the direction, which is what lets a single ascending `(col, id)` index serve `desc` as a backward scan. The only nullable whitelisted column is `people.cognome`, and it alone gets a second index, `(cognome DESC NULLS LAST, id DESC)`, because a backward scan of the ascending index would put its nulls first. That asymmetry is the whole reason the whitelist is short.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_sort_cursor.py
+"""Residuo R9's machinery, tested before anything uses it.
+
+R9 measures that no `list()` in either adapter orders by anything but `id`, while slice 1
+§7 promised ordering. The fix keeps keyset pagination -- offset pagination re-reads and
+skips rows under concurrent insertion, which is why slice 1 chose keyset -- so ordering by
+a non-unique column needs a *composite* cursor. That makes the cursor opaque, and opacity
+is also what lets it represent a null: an empty string in a query parameter is
+indistinguishable from a null, and rows are lost on exactly that distinction.
+"""
+
+from datetime import UTC, datetime
+from uuid import UUID
+
+import pytest
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.db import (
+    CURSOR_MAX_LENGTH,
+    SortSpec,
+    SortWhitelist,
+    decode_cursor,
+    encode_cursor,
+    keyset_predicate,
+    order_by,
+)
+from pigrocrm.core.db.base import uuid7
+from pigrocrm.core.errors import ValidationFailed
+from pigrocrm.core.people.models import Person
+
+_TEXT = SortSpec(key="ragione_sociale", column=Customer.ragione_sociale, kind="text",
+                 nullable=False)
+_STAMP = SortSpec(key="created_at", column=Customer.created_at, kind="datetime",
+                  nullable=False)
+_NULLABLE = SortSpec(key="cognome", column=Person.cognome, kind="text", nullable=True)
+
+
+def test_a_text_cursor_round_trips() -> None:
+    row_id = uuid7()
+    raw = encode_cursor(_TEXT, "Rossi Ingegneria Srl", row_id)
+    assert decode_cursor(_TEXT, raw) == ("Rossi Ingegneria Srl", row_id)
+
+
+def test_a_datetime_cursor_round_trips_with_its_timezone() -> None:
+    row_id = uuid7()
+    moment = datetime(2026, 8, 21, 14, 30, 5, 123456, tzinfo=UTC)
+    raw = encode_cursor(_STAMP, moment, row_id)
+    assert decode_cursor(_STAMP, raw) == (moment, row_id)
+
+
+def test_a_null_cursor_round_trips_and_is_not_an_empty_string() -> None:
+    """The distinction the opacity exists for."""
+    row_id = uuid7()
+    raw_null = encode_cursor(_NULLABLE, None, row_id)
+    raw_empty = encode_cursor(_NULLABLE, "", row_id)
+    assert raw_null != raw_empty
+    assert decode_cursor(_NULLABLE, raw_null) == (None, row_id)
+    assert decode_cursor(_NULLABLE, raw_empty) == ("", row_id)
+
+
+def test_a_cursor_is_url_safe_and_unpadded() -> None:
+    raw = encode_cursor(_TEXT, 'a/b+c=d "e" &f?', uuid7())
+    assert "=" not in raw
+    assert "/" not in raw
+    assert "+" not in raw
+    assert len(raw) <= CURSOR_MAX_LENGTH
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "",
+        "not-base64!!",
+        "eyJ2IjogMX0",                       # {"v": 1} -- no id at all
+        "eyJ2IjogbnVsbCwgImkiOiAibm90LWEtdXVpZCJ9",  # {"v": null, "i": "not-a-uuid"}
+        "x" * (CURSOR_MAX_LENGTH + 1),
+    ],
+)
+def test_a_malformed_cursor_is_a_domain_error_not_a_crash(raw: str) -> None:
+    """A cursor arrives from a query string, so a hostile or stale one is ordinary input.
+    It must produce a 422 with a named field, never a `binascii.Error` or a `KeyError`
+    escaping as a 500."""
+    with pytest.raises(ValidationFailed) as caught:
+        decode_cursor(_TEXT, raw)
+    assert caught.value.details["field"] == "cursor"
+
+
+def test_a_cursor_encoded_for_one_sort_key_is_refused_by_another() -> None:
+    """Changing `sort` mid-scan while replaying `next_cursor` would otherwise compare a
+    surname against a timestamp and return an arbitrary page."""
+    raw = encode_cursor(_TEXT, "Rossi", uuid7())
+    with pytest.raises(ValidationFailed) as caught:
+        decode_cursor(_STAMP, raw)
+    assert caught.value.details["field"] == "cursor"
+
+
+def test_the_whitelist_refuses_a_key_it_does_not_contain() -> None:
+    whitelist = SortWhitelist(specs=(_TEXT, _STAMP), default_key="created_at")
+    assert whitelist.keys() == ("ragione_sociale", "created_at")
+    assert whitelist.resolve(None).key == "created_at"
+    assert whitelist.resolve("ragione_sociale").key == "ragione_sociale"
+    with pytest.raises(ValidationFailed) as caught:
+        whitelist.resolve("note; DROP TABLE customers")
+    assert caught.value.details["field"] == "sort"
+
+
+def test_order_by_puts_nulls_last_in_both_directions(db_session: Session) -> None:
+    """`people.cognome` is nullable. Nulls last ascending is Postgres's default; nulls
+    last *descending* is not, and getting it by accident is how the null tail ends up at
+    the top of page one with no cursor value to resume from."""
+    for cognome in ("Bianchi", None, "Rossi"):
+        db_session.add(Person(nome="Marco", cognome=cognome, custom_fields={}))
+    db_session.flush()
+
+    ascending = db_session.scalars(
+        select(Person.cognome).order_by(*order_by(_NULLABLE, "asc"))
+    ).all()
+    descending = db_session.scalars(
+        select(Person.cognome).order_by(*order_by(_NULLABLE, "desc"))
+    ).all()
+
+    assert list(ascending) == ["Bianchi", "Rossi", None]
+    assert list(descending) == ["Rossi", "Bianchi", None]
+
+
+def test_the_keyset_predicate_resumes_exactly_after_the_cursor_row(
+    db_session: Session,
+) -> None:
+    rows = [Person(nome="A", cognome=c, custom_fields={}) for c in ("B", "C", None, None)]
+    for row in rows:
+        db_session.add(row)
+    db_session.flush()
+
+    ordered = db_session.scalars(
+        select(Person).order_by(*order_by(_NULLABLE, "asc"))
+    ).all()
+    third = ordered[2]  # the first of the two nulls
+
+    after = db_session.scalars(
+        select(Person.id)
+        .where(keyset_predicate(_NULLABLE, "asc", third.cognome, third.id))
+        .order_by(*order_by(_NULLABLE, "asc"))
+    ).all()
+
+    assert list(after) == [ordered[3].id]
+
+
+def test_the_keyset_predicate_from_a_non_null_value_still_reaches_the_null_tail(
+    db_session: Session,
+) -> None:
+    """The clause people forget. Without `OR col IS NULL`, paging ascending stops at the
+    last non-null row and the null tail is never returned at all."""
+    for cognome in ("B", None):
+        db_session.add(Person(nome="A", cognome=cognome, custom_fields={}))
+    db_session.flush()
+
+    first = db_session.scalars(
+        select(Person).order_by(*order_by(_NULLABLE, "asc"))
+    ).all()[0]
+
+    after = db_session.scalars(
+        select(Person.cognome)
+        .where(keyset_predicate(_NULLABLE, "asc", first.cognome, first.id))
+        .order_by(*order_by(_NULLABLE, "asc"))
+    ).all()
+
+    assert list(after) == [None]
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_sort_cursor.py -v`
+Expected: collection error — `ImportError: cannot import name 'SortSpec' from 'pigrocrm.core.db'`.
+
+- [ ] **Step 3: Write `db/sort.py`**
+
+```python
+# packages/core/src/pigrocrm/core/db/sort.py
+"""Ordering and keyset pagination for the four entities residuo R9 covers.
+
+R9: slice 1 §7 promised "paginazione cursor-based, ordinamento e filtri" and every
+shipped `list()` orders by `id` alone -- which with UUIDv7 means creation order. This
+module is the missing half.
+
+Three decisions, and each one is load-bearing.
+
+**Keyset, not offset.** Offset pagination re-reads and skips rows under concurrent
+insertion. That is why slice 1 chose keyset, and it does not stop being true because the
+sort column changed.
+
+**The cursor is opaque.** A keyset over a non-unique column needs the pair
+`(sort value, id)`, and the sort value can be null (`people.cognome`). An empty string in
+a query parameter is indistinguishable from a null, and rows are lost on exactly that
+distinction -- so the pair is JSON, base64url, unpadded, and the client echoes it back
+without interpreting it. The encoding also carries the sort key, so replaying a cursor
+against a different `sort` is refused rather than silently comparing a surname to a
+timestamp.
+
+**`NULLS LAST` in both directions, tie-break in the direction of travel.**
+`ORDER BY col <dir> NULLS LAST, id <dir>`. The tie-break following the direction is what
+lets one ascending `(col, id)` index serve `desc` as a backward scan; the exception is a
+nullable column, where a backward scan would put nulls first, so `people.cognome` carries
+a second index `(cognome DESC NULLS LAST, id DESC)`. This is why the whitelist is short:
+every admitted column costs an index, and a nullable one costs two.
+"""
+
+from __future__ import annotations
+
+import base64
+import binascii
+import json
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Literal
+from uuid import UUID
+
+from sqlalchemy import ColumnElement, UnaryExpression, and_, or_
+from sqlalchemy.orm.attributes import InstrumentedAttribute
+
+from pigrocrm.core.errors import ValidationFailed
+
+SortDirection = Literal["asc", "desc"]
+SortKind = Literal["text", "datetime"]
+
+# Long enough for a 255-character `ragione_sociale` plus a UUID plus the JSON and base64
+# expansion (255 * 4/3 + overhead), short enough that a megabyte of query string is
+# refused before it is decoded. Bounded for the same reason `limit` is (Global
+# Constraints): an unbounded parameter reaching a decoder is a denial of service with
+# extra steps.
+CURSOR_MAX_LENGTH = 512
+
+_ENTITY = "cursor"
+
+
+@dataclass(frozen=True)
+class SortSpec:
+    """One admissible sort column.
+
+    `kind` exists because the cursor is JSON and JSON has no datetime: the decoder needs
+    to be told how to read the value back. Inferring it from the column type is possible
+    and rejected -- it would put a `isinstance` ladder over SQLAlchemy type objects in the
+    hot path of every list request, to answer a question the declaration already knows.
+    """
+
+    key: str
+    column: InstrumentedAttribute[Any]
+    kind: SortKind
+    nullable: bool
+
+
+@dataclass(frozen=True)
+class SortWhitelist:
+    specs: tuple[SortSpec, ...]
+    default_key: str
+
+    def keys(self) -> tuple[str, ...]:
+        return tuple(spec.key for spec in self.specs)
+
+    def resolve(self, key: str | None) -> SortSpec:
+        wanted = key if key is not None else self.default_key
+        for spec in self.specs:
+            if spec.key == wanted:
+                return spec
+        raise ValidationFailed(
+            "list_query", "sort", "ordinamento non ammesso",
+            expected=", ".join(self.keys()),
+        )
+
+
+def _encode_value(spec: SortSpec, value: object) -> object:
+    if value is None:
+        return None
+    if spec.kind == "datetime":
+        if not isinstance(value, datetime):
+            raise ValidationFailed(
+                _ENTITY, "cursor", "valore di ordinamento non è una data",
+                expected="datetime",
+            )
+        return value.isoformat()
+    return str(value)
+
+
+def _decode_value(spec: SortSpec, raw: object) -> object | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ValidationFailed(_ENTITY, "cursor", "cursore non valido", expected="stringa")
+    if spec.kind == "datetime":
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError as exc:
+            raise ValidationFailed(
+                _ENTITY, "cursor", "cursore non valido", expected="data ISO 8601"
+            ) from exc
+    return raw
+
+
+def encode_cursor(spec: SortSpec, value: object, row_id: UUID) -> str:
+    payload = {"k": spec.key, "v": _encode_value(spec, value), "i": str(row_id)}
+    # `separators` without spaces, `sort_keys=True`: the encoding must be a pure function
+    # of its inputs, because criterion 4 asserts byte-identical responses across runs.
+    body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return base64.urlsafe_b64encode(body).decode("ascii").rstrip("=")
+
+
+def decode_cursor(spec: SortSpec, raw: str) -> tuple[object | None, UUID]:
+    if not raw or len(raw) > CURSOR_MAX_LENGTH:
+        raise ValidationFailed(
+            _ENTITY, "cursor", "cursore non valido",
+            expected=f"stringa opaca di al massimo {CURSOR_MAX_LENGTH} caratteri",
+        )
+    padded = raw + "=" * (-len(raw) % 4)
+    try:
+        body = base64.urlsafe_b64decode(padded.encode("ascii"))
+        payload = json.loads(body)
+    except (binascii.Error, UnicodeDecodeError, ValueError) as exc:
+        raise ValidationFailed(
+            _ENTITY, "cursor", "cursore non valido", expected="cursore restituito dall'API"
+        ) from exc
+    if not isinstance(payload, dict) or set(payload) != {"k", "v", "i"}:
+        raise ValidationFailed(
+            _ENTITY, "cursor", "cursore non valido", expected="cursore restituito dall'API"
+        )
+    if payload["k"] != spec.key:
+        raise ValidationFailed(
+            _ENTITY, "cursor", "il cursore appartiene a un altro ordinamento",
+            expected=f"un cursore prodotto con sort={spec.key}",
+        )
+    try:
+        row_id = UUID(str(payload["i"]))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValidationFailed(
+            _ENTITY, "cursor", "cursore non valido", expected="UUID"
+        ) from exc
+    return _decode_value(spec, payload["v"]), row_id
+
+
+def order_by(spec: SortSpec, direction: SortDirection) -> tuple[UnaryExpression[Any], ...]:
+    """`col <dir> NULLS LAST, id <dir>`. Both clauses carry the same direction -- see the
+    module docstring for why that is what makes one index enough for a non-nullable
+    column."""
+    column, identity = spec.column, spec.column.parent.class_.id
+    if direction == "asc":
+        return (column.asc().nulls_last(), identity.asc())
+    return (column.desc().nulls_last(), identity.desc())
+
+
+def keyset_predicate(
+    spec: SortSpec,
+    direction: SortDirection,
+    value: object | None,
+    row_id: UUID,
+) -> ColumnElement[bool]:
+    """Everything strictly after `(value, row_id)` in `order_by(spec, direction)`.
+
+    The `or_(column.is_(None))` arm is the one that gets forgotten: without it, paging
+    from a non-null value stops at the last non-null row and the null tail is never
+    returned at all -- rows silently missing from a complete scan, which is precisely the
+    failure keyset pagination was chosen to avoid.
+    """
+    column, identity = spec.column, spec.column.parent.class_.id
+    if value is None:
+        # Already inside the null tail, which is ordered by `id` alone.
+        after_id = identity > row_id if direction == "asc" else identity < row_id
+        return and_(column.is_(None), after_id)
+
+    strictly_after = column > value if direction == "asc" else column < value
+    same_value_after_id = and_(
+        column == value,
+        identity > row_id if direction == "asc" else identity < row_id,
+    )
+    return or_(strictly_after, same_value_after_id, column.is_(None))
+```
+
+- [ ] **Step 4: Re-export from `db/__init__.py`**
+
+```python
+# packages/core/src/pigrocrm/core/db/__init__.py -- replace the whole file.
+from pigrocrm.core.db.base import (
+    Base,
+    PrimaryKeyMixin,
+    SoftDeleteMixin,
+    TimestampMixin,
+    uuid7,
+)
+from pigrocrm.core.db.search import escape_like
+from pigrocrm.core.db.session import create_engine_from_settings, session_factory
+from pigrocrm.core.db.sort import (
+    CURSOR_MAX_LENGTH,
+    SortDirection,
+    SortKind,
+    SortSpec,
+    SortWhitelist,
+    decode_cursor,
+    encode_cursor,
+    keyset_predicate,
+    order_by,
+)
+
+__all__ = [
+    "CURSOR_MAX_LENGTH",
+    "Base",
+    "PrimaryKeyMixin",
+    "SoftDeleteMixin",
+    "SortDirection",
+    "SortKind",
+    "SortSpec",
+    "SortWhitelist",
+    "TimestampMixin",
+    "create_engine_from_settings",
+    "decode_cursor",
+    "encode_cursor",
+    "escape_like",
+    "keyset_predicate",
+    "order_by",
+    "session_factory",
+    "uuid7",
+]
+```
+
+- [ ] **Step 5: Declare the thirteen B-tree indexes on the models**
+
+Append these entries to the `__table_args__` tuples changed in Task A2. Nothing else in those tuples moves.
+
+```python
+# customers/models.py -- append
+        Index("ix_customers_created_at_id", "created_at", "id"),
+        Index("ix_customers_updated_at_id", "updated_at", "id"),
+        Index("ix_customers_ragione_sociale_id", "ragione_sociale", "id"),
+
+# people/models.py -- append
+        Index("ix_people_created_at_id", "created_at", "id"),
+        Index("ix_people_updated_at_id", "updated_at", "id"),
+        Index("ix_people_cognome_id", "cognome", "id"),
+        # The second index the nullable column costs. A backward scan of the ascending
+        # index above yields NULLS FIRST, which is not the order `order_by` declares.
+        Index(
+            "ix_people_cognome_desc_id",
+            desc(nullslast(column("cognome"))),
+            desc(column("id")),
+        ),
+
+# deals/models.py -- append
+        Index("ix_deals_created_at_id", "created_at", "id"),
+        Index("ix_deals_updated_at_id", "updated_at", "id"),
+        Index("ix_deals_nome_id", "nome", "id"),
+
+# documents/models.py -- append
+        Index("ix_documents_created_at_id", "created_at", "id"),
+        Index("ix_documents_updated_at_id", "updated_at", "id"),
+        Index("ix_documents_titolo_id", "titolo", "id"),
+```
+
+`people/models.py` needs `from sqlalchemy import column, desc, nullslast` added to its import line. `ix_customers_ragione_sociale` (the plain single-column index shipped in slice 1) is **left in place**: it is not redundant for equality lookups, and removing an index is a separate decision from adding one.
+
+- [ ] **Step 6: Write migration 0005**
+
+```python
+# packages/core/migrations/versions/0005_sort_indexes.py
+"""B-tree (column, id) indexes for the sort whitelist
+
+Revision ID: 0005
+Revises: 0004
+Create Date: 2026-08-21
+
+Residuo R9's other half. Without these, `ORDER BY ragione_sociale, id` on 50 000 rows is
+an in-memory sort of the whole table, and the ordering feature is slower than the absence
+of it.
+
+Twelve ascending indexes, one per admitted (entity, column) pair, plus one descending
+index for the single nullable column in the whitelist. A backward scan of an ascending
+index yields `NULLS FIRST`, which is not the order `db/sort.py::order_by` declares -- so
+`people.cognome` is the one column that costs two.
+"""
+
+from collections.abc import Sequence
+
+from alembic import op
+
+revision: str = "0005"
+down_revision: str | Sequence[str] | None = "0004"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+_ASCENDING: tuple[tuple[str, str, str], ...] = (
+    ("ix_customers_created_at_id", "customers", "created_at"),
+    ("ix_customers_updated_at_id", "customers", "updated_at"),
+    ("ix_customers_ragione_sociale_id", "customers", "ragione_sociale"),
+    ("ix_people_created_at_id", "people", "created_at"),
+    ("ix_people_updated_at_id", "people", "updated_at"),
+    ("ix_people_cognome_id", "people", "cognome"),
+    ("ix_deals_created_at_id", "deals", "created_at"),
+    ("ix_deals_updated_at_id", "deals", "updated_at"),
+    ("ix_deals_nome_id", "deals", "nome"),
+    ("ix_documents_created_at_id", "documents", "created_at"),
+    ("ix_documents_updated_at_id", "documents", "updated_at"),
+    ("ix_documents_titolo_id", "documents", "titolo"),
+)
+
+_DESCENDING_NULLABLE: tuple[tuple[str, str, str], ...] = (
+    ("ix_people_cognome_desc_id", "people", "cognome"),
+)
+
+
+def upgrade() -> None:
+    for name, table, column in _ASCENDING:
+        op.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({column}, id)")
+    for name, table, column in _DESCENDING_NULLABLE:
+        op.execute(
+            f"CREATE INDEX IF NOT EXISTS {name} ON {table} "
+            f"({column} DESC NULLS LAST, id DESC)"
+        )
+
+
+def downgrade() -> None:
+    for name, _table, _column in reversed(_ASCENDING + _DESCENDING_NULLABLE):
+        op.execute(f"DROP INDEX IF EXISTS {name}")
+```
+
+- [ ] **Step 7: Extend `HAND_MAINTAINED_INDEXES` and move the head assertion**
+
+```python
+# packages/core/tests/test_migrations.py -- add these thirteen names to the set declared
+# in Task A2. The descending one is the only genuinely non-trivial shape; the twelve
+# ascending ones are listed too, because a composite index dropped in silence is the same
+# sequential scan as a GIN index dropped in silence.
+    "ix_customers_created_at_id",
+    "ix_customers_updated_at_id",
+    "ix_customers_ragione_sociale_id",
+    "ix_people_created_at_id",
+    "ix_people_updated_at_id",
+    "ix_people_cognome_id",
+    "ix_people_cognome_desc_id",
+    "ix_deals_created_at_id",
+    "ix_deals_updated_at_id",
+    "ix_deals_nome_id",
+    "ix_documents_created_at_id",
+    "ix_documents_updated_at_id",
+    "ix_documents_titolo_id",
+```
+
+And change the two head assertions from `"0004"` to `"0005"`. Then append:
+
+```python
+def test_the_nullable_sort_column_has_a_descending_nulls_last_index() -> None:
+    """The one index `compare_metadata` is least likely to notice and the one whose
+    absence turns descending pagination over `people.cognome` into a full sort."""
+    with PostgresContainer("postgres:17-alpine", driver="psycopg") as container:
+        url = container.get_connection_url()
+        upgrade(_alembic_config(url), "head")
+
+        engine: Engine = create_engine(url)
+        with engine.connect() as connection:
+            definition = connection.execute(
+                text(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE schemaname = 'public' AND indexname = 'ix_people_cognome_desc_id'"
+                )
+            ).scalar_one()
+        engine.dispose()
+
+    assert "DESC NULLS LAST" in definition, definition
+    assert "id DESC" in definition, definition
+```
+
+- [ ] **Step 8: Run the tests and watch them pass**
+
+Run: `uv run pytest packages/core/tests/test_sort_cursor.py packages/core/tests/test_migrations.py -v`
+Expected: PASS.
+
+If `test_migrations_produce_exactly_the_models_schema` reports a diff, the model `__table_args__` and the migration disagree about a name or a shape — fix the pair, never silence the test.
+
+- [ ] **Step 9: Full gate**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+Expected: everything passes.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/db/sort.py \
+        packages/core/src/pigrocrm/core/db/__init__.py \
+        packages/core/src/pigrocrm/core/customers/models.py \
+        packages/core/src/pigrocrm/core/people/models.py \
+        packages/core/src/pigrocrm/core/deals/models.py \
+        packages/core/src/pigrocrm/core/documents/models.py \
+        packages/core/migrations/versions/0005_sort_indexes.py \
+        packages/core/tests/test_sort_cursor.py \
+        packages/core/tests/test_migrations.py
+git commit -m "feat(core): sort whitelist and opaque composite keyset cursor"
+```
+
+---
+### Task A4: R9 wired into the four repositories and services, and the documents search branch
+
+**Files:**
+- Modify: `packages/core/src/pigrocrm/core/customers/{schemas.py,repository.py,service.py}`
+- Modify: `packages/core/src/pigrocrm/core/people/{schemas.py,repository.py,service.py}`
+- Modify: `packages/core/src/pigrocrm/core/deals/{schemas.py,repository.py,service.py}`
+- Modify: `packages/core/src/pigrocrm/core/documents/{schemas.py,repository.py,service.py}`
+- Modify: `packages/core/tests/{test_customers.py,test_people.py,test_deals.py,test_documents_service.py}` (the `cursor` type changed; existing assertions comparing `next_cursor` to a `UUID` must compare to the encoded string)
+- Create: `packages/core/tests/test_list_ordering.py`
+
+**Interfaces:**
+- Consumes: `SortSpec`, `SortWhitelist`, `encode_cursor`, `decode_cursor`, `keyset_predicate`, `order_by` from `pigrocrm.core.db` (Task A3); `escape_like` from `pigrocrm.core.db`.
+- Produces, per entity `X ∈ {Customer, Person, Deal, Document}`:
+  - `X_SORTS: SortWhitelist` at module level in `<entity>/schemas.py`
+  - `XListQuery` gains `sort: str | None = None`, `dir: SortDirection = "asc"`, and `cursor: str | None = Field(default=None, max_length=CURSOR_MAX_LENGTH)` — **replacing** `cursor: UUID | None`
+  - `XPage.next_cursor: str | None` — **replacing** `UUID | None`
+  - `DocumentListQuery` additionally gains `search: SafeStr | None = None`
+  - repository and service `list` signatures are unchanged in shape: `XRepository.list(self, query: XListQuery) -> list[X]`, `XService.list(self, query: XListQuery, actor: Actor) -> XPage`
+- Task A5 wires these into the routers and tools; Task A6 tests the pagination property; Task A8's `SearchService` reuses `X_SORTS` for nothing — it has its own ordering — but Task A13's "vedi tutti" link relies on `DocumentListQuery.search` existing.
+
+**The whitelists, fixed here so no later task invents a sixth key.**
+
+| Entity | keys | default | nullable key |
+|---|---|---|---|
+| Customer | `created_at`, `updated_at`, `ragione_sociale` | `created_at` | — |
+| Person | `created_at`, `updated_at`, `cognome` | `created_at` | `cognome` |
+| Deal | `created_at`, `updated_at`, `nome` | `created_at` | — |
+| Document | `created_at`, `updated_at`, `titolo` | `created_at` | — |
+
+`created_at` is the default because it reproduces today's behaviour: UUIDv7 order *is* creation order, so a caller that sends no `sort` sees the same page it saw before this task. That is what makes the contract change contained to the `cursor` type.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_list_ordering.py
+"""Residuo R9, closed for four entities.
+
+The `sort` parameter is a whitelist and not a column name, and that is a security
+property, not tidiness: a column name taken from a query string and interpolated into
+`ORDER BY` is an injection point, and one taken from a query string and passed to
+`getattr` on a model is an information leak (`ORDER BY password_hash` orders by a secret
+even though it never returns it).
+"""
+
+from datetime import UTC, datetime, timedelta
+
+import pytest
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.customers.schemas import CustomerCreate, CustomerListQuery
+from pigrocrm.core.customers.service import CustomerService
+from pigrocrm.core.db import decode_cursor
+from pigrocrm.core.errors import ValidationFailed
+from pigrocrm.core.people.models import Person
+from pigrocrm.core.people.schemas import PersonListQuery
+from pigrocrm.core.people.service import PersonService
+
+ADMIN = Actor(id=None, type="system", role="admin")
+
+
+def _customer(service: CustomerService, ragione_sociale: str) -> None:
+    service.create(CustomerCreate(ragione_sociale=ragione_sociale), ADMIN)
+
+
+def test_default_sort_reproduces_creation_order(db_session: Session) -> None:
+    """The compatibility guarantee that keeps this a cursor-type change and nothing
+    more: a caller that sends no `sort` sees exactly the page it saw before."""
+    service = CustomerService(db_session)
+    for name in ("Terza", "Prima", "Seconda"):
+        _customer(service, name)
+
+    page = service.list(CustomerListQuery(limit=10), ADMIN)
+    assert [c.ragione_sociale for c in page.items] == ["Terza", "Prima", "Seconda"]
+
+
+def test_sorting_by_the_identifying_column_ascending_and_descending(
+    db_session: Session,
+) -> None:
+    service = CustomerService(db_session)
+    for name in ("Gamma", "Alfa", "Beta"):
+        _customer(service, name)
+
+    ascending = service.list(
+        CustomerListQuery(sort="ragione_sociale", dir="asc", limit=10), ADMIN
+    )
+    descending = service.list(
+        CustomerListQuery(sort="ragione_sociale", dir="desc", limit=10), ADMIN
+    )
+
+    assert [c.ragione_sociale for c in ascending.items] == ["Alfa", "Beta", "Gamma"]
+    assert [c.ragione_sociale for c in descending.items] == ["Gamma", "Beta", "Alfa"]
+
+
+def test_an_unknown_sort_key_is_refused_by_name(db_session: Session) -> None:
+    with pytest.raises(ValidationFailed) as caught:
+        CustomerService(db_session).list(
+            CustomerListQuery(sort="note", limit=10), ADMIN
+        )
+    assert caught.value.details["field"] == "sort"
+    assert "ragione_sociale" in caught.value.details["expected"]
+
+
+def test_next_cursor_is_an_opaque_string_carrying_the_sort_value(
+    db_session: Session,
+) -> None:
+    from pigrocrm.core.customers.schemas import CUSTOMER_SORTS
+
+    service = CustomerService(db_session)
+    for name in ("Alfa", "Beta", "Gamma"):
+        _customer(service, name)
+
+    first = service.list(
+        CustomerListQuery(sort="ragione_sociale", dir="asc", limit=2), ADMIN
+    )
+    assert first.next_cursor is not None
+    assert isinstance(first.next_cursor, str)
+
+    spec = CUSTOMER_SORTS.resolve("ragione_sociale")
+    value, row_id = decode_cursor(spec, first.next_cursor)
+    assert value == "Beta"
+    assert row_id == first.items[-1].id
+
+
+def test_paging_with_the_cursor_returns_the_rest_exactly_once(db_session: Session) -> None:
+    service = CustomerService(db_session)
+    for name in ("Alfa", "Beta", "Gamma", "Delta", "Epsilon"):
+        _customer(service, name)
+
+    seen: list[str] = []
+    cursor: str | None = None
+    while True:
+        page = service.list(
+            CustomerListQuery(sort="ragione_sociale", dir="asc", limit=2, cursor=cursor),
+            ADMIN,
+        )
+        seen.extend(c.ragione_sociale for c in page.items)
+        if page.next_cursor is None:
+            break
+        cursor = page.next_cursor
+
+    assert seen == ["Alfa", "Beta", "Delta", "Epsilon", "Gamma"]
+    assert len(seen) == len(set(seen))
+
+
+def test_paging_a_nullable_sort_column_reaches_the_null_tail(db_session: Session) -> None:
+    """`people.cognome` is nullable, and the null tail is the half that gets lost."""
+    for cognome in ("Bianchi", None, "Rossi", None):
+        db_session.add(Person(nome="Marco", cognome=cognome, custom_fields={}))
+    db_session.flush()
+
+    service = PersonService(db_session)
+    seen: list[str | None] = []
+    cursor: str | None = None
+    while True:
+        page = service.list(
+            PersonListQuery(sort="cognome", dir="asc", limit=1, cursor=cursor), ADMIN
+        )
+        seen.extend(p.cognome for p in page.items)
+        if page.next_cursor is None:
+            break
+        cursor = page.next_cursor
+
+    assert seen == ["Bianchi", "Rossi", None, None]
+
+
+def test_documents_can_be_searched_by_title(db_session: Session) -> None:
+    """The branch spec §8.1 assumes exists and `DocumentRepository.list` did not have.
+    Task A13's "vedi tutti" link lands on it."""
+    from pigrocrm.core.customers.models import Customer
+    from pigrocrm.core.documents.models import Document
+    from pigrocrm.core.documents.schemas import DocumentListQuery
+    from pigrocrm.core.documents.repository import DocumentRepository
+
+    customer = Customer(ragione_sociale="Cliente", nazione="IT", custom_fields={})
+    db_session.add(customer)
+    db_session.flush()
+    for titolo in ("Offerta impianti 2026", "Verbale riunione", "Offerta_speciale"):
+        db_session.add(
+            Document(
+                customer_id=customer.id, tipo="documento", titolo=titolo,
+                versione_corrente=1, custom_fields={},
+            )
+        )
+    db_session.flush()
+
+    repo = DocumentRepository(db_session)
+    found = repo.list(DocumentListQuery(search="offerta", limit=10))
+    assert sorted(d.titolo for d in found) == ["Offerta impianti 2026", "Offerta_speciale"]
+
+    # `_` is a LIKE metacharacter: unescaped, "Offerta_speciale" would also be matched by
+    # "offertaXspeciale". `escape_like` is what stops that.
+    literal = repo.list(DocumentListQuery(search="offerta_speciale", limit=10))
+    assert [d.titolo for d in literal] == ["Offerta_speciale"]
+
+
+def test_sorting_by_updated_at_reflects_a_touch(db_session: Session) -> None:
+    service = CustomerService(db_session)
+    for name in ("Alfa", "Beta"):
+        _customer(service, name)
+
+    first = service.list(CustomerListQuery(sort="ragione_sociale", limit=10), ADMIN)
+    oldest = first.items[0]
+    # Move `updated_at` back so the ordering is unambiguous without sleeping.
+    db_session.execute(
+        Person.__table__.select().limit(0)  # no-op, keeps the import used
+    )
+    from pigrocrm.core.customers.models import Customer as CustomerModel
+
+    row = db_session.get(CustomerModel, oldest.id)
+    assert row is not None
+    row.updated_at = datetime.now(UTC) + timedelta(hours=1)
+    db_session.flush()
+
+    newest_first = service.list(
+        CustomerListQuery(sort="updated_at", dir="desc", limit=10), ADMIN
+    )
+    assert newest_first.items[0].id == oldest.id
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_list_ordering.py -v`
+Expected: every test FAILS. The first failures are `pydantic_core.ValidationError: Unexpected keyword argument` for `sort`/`dir` on `CustomerListQuery`, and `ImportError: cannot import name 'CUSTOMER_SORTS'`.
+
+- [ ] **Step 3: Declare the whitelists and change the query schemas**
+
+```python
+# packages/core/src/pigrocrm/core/customers/schemas.py
+# Add to the imports:
+#   from pigrocrm.core.customers.models import Customer
+#   from pigrocrm.core.db import CURSOR_MAX_LENGTH, SortDirection, SortSpec, SortWhitelist
+# and drop `from uuid import UUID` only if nothing else in the file uses it (CustomerRead
+# does, so keep it).
+
+# Residuo R9. Three keys and no more: every admitted column costs a `(column, id)` B-tree
+# index (migration 0005), and a nullable one costs two. The list is short for that reason,
+# not out of caution.
+CUSTOMER_SORTS = SortWhitelist(
+    specs=(
+        SortSpec(key="created_at", column=Customer.created_at, kind="datetime",
+                 nullable=False),
+        SortSpec(key="updated_at", column=Customer.updated_at, kind="datetime",
+                 nullable=False),
+        SortSpec(key="ragione_sociale", column=Customer.ragione_sociale, kind="text",
+                 nullable=False),
+    ),
+    default_key="created_at",
+)
+
+
+class CustomerListQuery(BaseModel):
+    search: SafeStr | None = None
+    stato: SafeStr | None = None
+    custom: dict[str, Any] | None = None
+    limit: int = Field(default=50, ge=1, le=200)
+    # `str`, not `UUID`: ordering by a non-unique column needs the pair
+    # `(sort value, id)`, and the pair is opaque so that a null is representable -- an
+    # empty string in a query parameter is indistinguishable from a null. The frontend
+    # echoes `next_cursor` back verbatim and never parses it. See db/sort.py.
+    cursor: str | None = Field(default=None, max_length=CURSOR_MAX_LENGTH)
+    sort: SafeStr | None = None
+    dir: SortDirection = "asc"
+
+
+class CustomerPage(BaseModel):
+    items: list[CustomerRead]
+    next_cursor: str | None
+```
+
+Repeat verbatim, with names swapped, in the other three:
+
+```python
+# people/schemas.py
+PERSON_SORTS = SortWhitelist(
+    specs=(
+        SortSpec(key="created_at", column=Person.created_at, kind="datetime",
+                 nullable=False),
+        SortSpec(key="updated_at", column=Person.updated_at, kind="datetime",
+                 nullable=False),
+        # The one nullable sort column in the whole whitelist, and the reason
+        # `order_by` declares NULLS LAST explicitly in both directions.
+        SortSpec(key="cognome", column=Person.cognome, kind="text", nullable=True),
+    ),
+    default_key="created_at",
+)
+# PersonListQuery: same three new fields; PersonPage.next_cursor: str | None
+
+# deals/schemas.py
+DEAL_SORTS = SortWhitelist(
+    specs=(
+        SortSpec(key="created_at", column=Deal.created_at, kind="datetime",
+                 nullable=False),
+        SortSpec(key="updated_at", column=Deal.updated_at, kind="datetime",
+                 nullable=False),
+        SortSpec(key="nome", column=Deal.nome, kind="text", nullable=False),
+    ),
+    default_key="created_at",
+)
+# DealListQuery: same three new fields; DealPage.next_cursor: str | None
+
+# documents/schemas.py
+DOCUMENT_SORTS = SortWhitelist(
+    specs=(
+        SortSpec(key="created_at", column=Document.created_at, kind="datetime",
+                 nullable=False),
+        SortSpec(key="updated_at", column=Document.updated_at, kind="datetime",
+                 nullable=False),
+        SortSpec(key="titolo", column=Document.titolo, kind="text", nullable=False),
+    ),
+    default_key="created_at",
+)
+
+
+class DocumentListQuery(BaseModel):
+    customer_id: UUID | None = None
+    deal_id: UUID | None = None
+    tipo: DocumentTipo | None = None
+    stato: OfferState | None = None
+    # New in slice 6: spec §8.1 makes `titolo` searchable, and Task A13's "vedi tutti"
+    # link for the Documento class lands on this filter. SafeStr for the same reason the
+    # other three carry it.
+    search: SafeStr | None = None
+    limit: int = Field(default=50, ge=1, le=200)
+    cursor: str | None = Field(default=None, max_length=CURSOR_MAX_LENGTH)
+    sort: SafeStr | None = None
+    dir: SortDirection = "asc"
+```
+
+- [ ] **Step 4: Change the four repositories**
+
+```python
+# packages/core/src/pigrocrm/core/customers/repository.py -- replace `list` only.
+# Imports gain: from pigrocrm.core.db import decode_cursor, keyset_predicate, order_by
+# and from pigrocrm.core.customers.schemas import CUSTOMER_SORTS
+
+    def list(self, query: CustomerListQuery) -> list[Customer]:
+        stmt = select(Customer).where(Customer.deleted_at.is_(None))
+
+        if query.search:
+            # escape_like neutralizes "%"/"_"/"\" in the *user's* term before it is
+            # wrapped in the wildcard "%...%" this method builds. Since slice 6 this
+            # predicate is served by ix_customers_*_trgm, which is partial on
+            # `deleted_at IS NULL` -- the clause above is what makes the index usable.
+            like = f"%{escape_like(query.search.lower())}%"
+            stmt = stmt.where(
+                or_(
+                    Customer.ragione_sociale.ilike(like, escape="\\"),
+                    Customer.partita_iva.ilike(like, escape="\\"),
+                    Customer.email.ilike(like, escape="\\"),
+                    Customer.codice_fiscale.ilike(like, escape="\\"),
+                )
+            )
+        if query.stato:
+            stmt = stmt.where(Customer.stato == query.stato)
+        if query.custom:
+            # JSONB containment, served by the GIN index.
+            stmt = stmt.where(Customer.custom_fields.contains(query.custom))
+
+        # Residuo R9: keyset pagination over a whitelisted column, ordered
+        # `col <dir> NULLS LAST, id <dir>`. `resolve` raises ValidationFailed on an
+        # unknown key, so an injected column name never reaches ORDER BY.
+        spec = CUSTOMER_SORTS.resolve(query.sort)
+        if query.cursor:
+            value, row_id = decode_cursor(spec, query.cursor)
+            stmt = stmt.where(keyset_predicate(spec, query.dir, value, row_id))
+
+        return list(
+            self.session.execute(
+                stmt.order_by(*order_by(spec, query.dir)).limit(query.limit + 1)
+            ).scalars()
+        )
+```
+
+`people/repository.py` and `deals/repository.py` take the identical treatment with `PERSON_SORTS` / `DEAL_SORTS` and their own existing filter branches untouched. `documents/repository.py` additionally gains the search branch it never had:
+
+```python
+# packages/core/src/pigrocrm/core/documents/repository.py -- replace `list` only.
+# Imports gain: from pigrocrm.core.db import (decode_cursor, escape_like,
+#   keyset_predicate, order_by) and from pigrocrm.core.documents.schemas import
+#   DOCUMENT_SORTS
+
+    def list(self, query: DocumentListQuery) -> list[Document]:
+        stmt = select(Document).where(Document.deleted_at.is_(None))
+        if query.customer_id:
+            stmt = stmt.where(Document.customer_id == query.customer_id)
+        if query.deal_id:
+            stmt = stmt.where(Document.deal_id == query.deal_id)
+        if query.tipo:
+            stmt = stmt.where(Document.tipo == query.tipo)
+        if query.stato:
+            stmt = stmt.where(Document.stato == query.stato)
+        if query.search:
+            # New in slice 6. One column, so no `or_`: spec §8.1 searches `titolo` and
+            # nothing else on this table -- a document's body lives in storage, not in a
+            # column, and its Markdown source is explicitly out of scope (§8.1).
+            like = f"%{escape_like(query.search.lower())}%"
+            stmt = stmt.where(Document.titolo.ilike(like, escape="\\"))
+
+        spec = DOCUMENT_SORTS.resolve(query.sort)
+        if query.cursor:
+            value, row_id = decode_cursor(spec, query.cursor)
+            stmt = stmt.where(keyset_predicate(spec, query.dir, value, row_id))
+
+        return list(
+            self.session.execute(
+                stmt.order_by(*order_by(spec, query.dir)).limit(query.limit + 1)
+            ).scalars()
+        )
+```
+
+- [ ] **Step 5: Change the four services' `next_cursor`**
+
+```python
+# packages/core/src/pigrocrm/core/customers/service.py -- replace `list` only.
+# Imports gain: from pigrocrm.core.db import encode_cursor
+# and CUSTOMER_SORTS from .schemas
+
+    # `list` must stay the last method defined in this class -- an unconditional project
+    # rule (`test_module_imports.py`): defining a method named `list` rebinds that name in
+    # the *class* namespace, so any later method whose own return annotation is a bare
+    # `list[...]` would resolve `list` to this method instead of the builtin and fail at
+    # import time on Python 3.13.
+    def list(self, query: CustomerListQuery, actor: Actor) -> CustomerPage:
+        rows = self.repo.list(query)
+        has_more = len(rows) > query.limit
+        items = rows[: query.limit]
+        # The cursor encodes `(sort value, id)` of the last returned row, not the bare id:
+        # ordering by a non-unique column cannot resume from an id alone.
+        spec = CUSTOMER_SORTS.resolve(query.sort)
+        next_cursor = (
+            encode_cursor(spec, getattr(items[-1], spec.key), items[-1].id)
+            if has_more and items
+            else None
+        )
+        return CustomerPage(
+            items=[CustomerRead.model_validate(c) for c in items],
+            next_cursor=next_cursor,
+        )
+```
+
+`getattr(items[-1], spec.key)` is safe precisely because `spec.key` came out of the whitelist: it is one of three literals declared in this module, never a caller string. The other three services take the identical shape with their own names.
+
+- [ ] **Step 6: Repair the existing tests the contract change breaks**
+
+Search for every assertion that treats `next_cursor` as a `UUID`:
+
+Run: `grep -rn "next_cursor" packages/core/tests apps/api/tests apps/mcp/tests apps/web/src`
+
+Each hit that compares to `.id` becomes a comparison through `decode_cursor`. The shape:
+
+```python
+# before
+assert page.next_cursor == rows[1].id
+# after
+from pigrocrm.core.customers.schemas import CUSTOMER_SORTS
+from pigrocrm.core.db import decode_cursor
+
+assert page.next_cursor is not None
+_value, row_id = decode_cursor(CUSTOMER_SORTS.resolve(None), page.next_cursor)
+assert row_id == rows[1].id
+```
+
+Hits that only assert `next_cursor is None` or `is not None` need no change. Hits that feed `next_cursor` straight back in as `cursor` need no change either — that is the intended usage and it now type-checks as `str`.
+
+- [ ] **Step 7: Run the tests and watch them pass**
+
+Run: `uv run pytest packages/core/tests/test_list_ordering.py packages/core/tests/test_customers.py packages/core/tests/test_people.py packages/core/tests/test_deals.py packages/core/tests/test_documents_service.py -v`
+Expected: PASS.
+
+- [ ] **Step 8: Full gate**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+Expected: `mypy` reports errors in `apps/api` and `apps/mcp` where a `UUID` is still passed as `cursor`. **That is the contract change being caught by the type checker, exactly as intended.** Leave those for Task A5; this task's own gate is `uv run pytest -q` green and `mypy packages/core/src` clean.
+
+Run: `uv run mypy packages/core/src`
+Expected: clean.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/customers/ \
+        packages/core/src/pigrocrm/core/people/ \
+        packages/core/src/pigrocrm/core/deals/ \
+        packages/core/src/pigrocrm/core/documents/ \
+        packages/core/tests/test_list_ordering.py \
+        packages/core/tests/test_customers.py \
+        packages/core/tests/test_people.py \
+        packages/core/tests/test_deals.py \
+        packages/core/tests/test_documents_service.py
+git commit -m "feat(core): ordering and composite cursors on four lists, closing R9"
+```
+
+---
+### Task A5: `sort`, `dir` and the string cursor across both adapters
+
+**Files:**
+- Modify: `apps/api/src/pigrocrm_api/routers/{customers.py,people.py,deals.py,documents.py}`
+- Modify: `apps/mcp/src/pigrocrm_mcp/tools/__init__.py`
+- Modify: `apps/api/tests/test_entities_api.py`
+- Modify: `apps/mcp/tests/test_mcp_tools.py`
+- Create: `apps/api/tests/test_list_sorting_api.py`
+
+**Interfaces:**
+- Consumes: `CustomerListQuery`, `PersonListQuery`, `DealListQuery`, `DocumentListQuery` with `sort: str | None`, `dir: SortDirection`, `cursor: str | None` (Task A4); `CURSOR_MAX_LENGTH` from `pigrocrm.core.db`.
+- Produces: on `GET /api/customers`, `/api/people`, `/api/deals`, `/api/documents` — query parameters `sort: str | None`, `dir: "asc" | "desc" = "asc"`, `cursor: str | None` (was `UUID | None`), and on documents additionally `search: str | None`. The MCP tools `search_customers`, `search_people`, `search_deals`, `list_documents` gain `sort` and `dir` and their `cursor` parameter stops being parsed as a UUID.
+- Task A11 adds a fifth endpoint; Task A12 regenerates the TypeScript client against this shape.
+
+**Why the MCP change is smaller than it looks.** `apps/mcp/src/pigrocrm_mcp/tools/__init__.py` already declares `cursor: str | None = None` at the tool boundary and converts with `UUID(cursor) if cursor else None`. Only the conversion goes; the tool's own signature and JSON Schema are unchanged, so no agent-facing contract moves. The API is where the break is.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# apps/api/tests/test_list_sorting_api.py
+"""The HTTP half of residuo R9.
+
+`dir` is spelled `dir` and not `direction` because the spec fixes it (§8.4) and because
+`dir` is what the frontend query key will carry; it shadows no Python builtin at module
+scope here since it is only ever a parameter name.
+"""
+
+import pytest
+from fastapi.testclient import TestClient
+
+
+def test_sorting_by_the_identifying_column(client: TestClient, admin_cookie: dict[str, str]) -> None:
+    for name in ("Gamma Srl", "Alfa Srl", "Beta Srl"):
+        created = client.post("/api/customers", json={"ragione_sociale": name},
+                             cookies=admin_cookie)
+        assert created.status_code == 201
+
+    response = client.get(
+        "/api/customers", params={"sort": "ragione_sociale", "dir": "asc", "limit": 10},
+        cookies=admin_cookie,
+    )
+    assert response.status_code == 200
+    assert [c["ragione_sociale"] for c in response.json()["items"]] == [
+        "Alfa Srl", "Beta Srl", "Gamma Srl",
+    ]
+
+
+def test_next_cursor_is_a_string_in_the_response_body(
+    client: TestClient, admin_cookie: dict[str, str]
+) -> None:
+    for name in ("Alfa Srl", "Beta Srl", "Gamma Srl"):
+        client.post("/api/customers", json={"ragione_sociale": name}, cookies=admin_cookie)
+
+    response = client.get(
+        "/api/customers", params={"sort": "ragione_sociale", "limit": 2},
+        cookies=admin_cookie,
+    )
+    body = response.json()
+    assert isinstance(body["next_cursor"], str)
+
+    second = client.get(
+        "/api/customers",
+        params={"sort": "ragione_sociale", "limit": 2, "cursor": body["next_cursor"]},
+        cookies=admin_cookie,
+    )
+    assert second.status_code == 200
+    assert [c["ragione_sociale"] for c in second.json()["items"]] == ["Gamma Srl"]
+
+
+@pytest.mark.parametrize("path", ["/api/customers", "/api/people", "/api/deals",
+                                  "/api/documents"])
+def test_an_unknown_sort_key_is_a_422_naming_the_field(
+    client: TestClient, admin_cookie: dict[str, str], path: str
+) -> None:
+    response = client.get(path, params={"sort": "note"}, cookies=admin_cookie)
+    assert response.status_code == 422
+    body = response.json()
+    assert body["field"] == "sort", body
+
+
+@pytest.mark.parametrize("path", ["/api/customers", "/api/people", "/api/deals",
+                                  "/api/documents"])
+def test_an_unknown_direction_is_a_422(
+    client: TestClient, admin_cookie: dict[str, str], path: str
+) -> None:
+    """`dir` is a Literal, so FastAPI rejects it before the service is reached -- which is
+    why this assertion is on the status code and not on a `field` key: a FastAPI
+    validation error is the `application/json` HTTPValidationError shape, not the
+    problem+json shape."""
+    response = client.get(path, params={"dir": "sideways"}, cookies=admin_cookie)
+    assert response.status_code == 422
+
+
+def test_a_garbage_cursor_is_a_422_and_not_a_500(
+    client: TestClient, admin_cookie: dict[str, str]
+) -> None:
+    response = client.get(
+        "/api/customers", params={"cursor": "not-a-cursor"}, cookies=admin_cookie
+    )
+    assert response.status_code == 422
+    assert response.json()["field"] == "cursor"
+
+
+def test_an_over_long_cursor_is_refused_before_it_is_decoded(
+    client: TestClient, admin_cookie: dict[str, str]
+) -> None:
+    response = client.get(
+        "/api/customers", params={"cursor": "x" * 5000}, cookies=admin_cookie
+    )
+    assert response.status_code == 422
+
+
+def test_documents_accept_a_search_term(
+    client: TestClient, admin_cookie: dict[str, str]
+) -> None:
+    response = client.get(
+        "/api/documents", params={"search": "offerta"}, cookies=admin_cookie
+    )
+    assert response.status_code == 200
+    assert "items" in response.json()
+
+
+def test_the_openapi_document_types_cursor_as_a_string(client: TestClient) -> None:
+    """The mechanism slice 1 §10.2 put in place for exactly this change: the generated
+    TypeScript client must break on the type, not in production."""
+    schema = client.get("/openapi.json").json()
+    params = schema["paths"]["/api/customers"]["get"]["parameters"]
+    cursor = next(p for p in params if p["name"] == "cursor")
+    assert "string" in str(cursor["schema"]), cursor
+    assert "uuid" not in str(cursor["schema"]).lower(), cursor
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest apps/api/tests/test_list_sorting_api.py -v`
+Expected: the sorting tests FAIL with `422` (FastAPI does not know the `sort` parameter and it is silently ignored, so the order is creation order), and `test_the_openapi_document_types_cursor_as_a_string` FAILS because the schema still says `format: uuid`.
+
+- [ ] **Step 3: Change the four routers**
+
+```python
+# apps/api/src/pigrocrm_api/routers/customers.py -- replace `list_customers` only.
+# Imports gain: from pigrocrm.core.db import CURSOR_MAX_LENGTH, SortDirection
+# `from uuid import UUID` stays — the path parameters still use it.
+
+@router.get("", response_model=CustomerPage)
+def list_customers(
+    session: SessionDep,
+    actor: ActorDep,
+    # SafeStr here, not just on Create/Update: these are ordinary query parameters, not
+    # schema fields, so the guard has to sit on the parameter itself for FastAPI's own
+    # validation to catch a NUL byte as a 422 before CustomerListQuery is hand-built.
+    search: Annotated[SafeStr | None, Query()] = None,
+    stato: Annotated[SafeStr | None, Query()] = None,
+    custom: Annotated[list[SafeStr] | None, Query(description=CUSTOM_QUERY_DESCRIPTION)] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    # `str`, not `UUID`, since slice 6: the cursor encodes `(sort value, id)` so that
+    # ordering by a non-unique or nullable column can resume. Opaque by design — clients
+    # echo `next_cursor` back and never parse it. `max_length` here as well as on the
+    # schema, so an oversized value is refused by FastAPI before the decoder sees it.
+    cursor: Annotated[str | None, Query(max_length=CURSOR_MAX_LENGTH)] = None,
+    sort: Annotated[SafeStr | None, Query(description="created_at | updated_at | ragione_sociale")] = None,
+    dir: Annotated[SortDirection, Query()] = "asc",
+) -> CustomerPage:
+    query = CustomerListQuery(
+        search=search,
+        stato=stato,
+        custom=parse_custom_filter(custom),
+        limit=limit,
+        cursor=cursor,
+        sort=sort,
+        dir=dir,
+    )
+    return CustomerService(session).list(query, actor)
+```
+
+`people.py` and `deals.py` take the identical shape, with `description="created_at | updated_at | cognome"` and `"created_at | updated_at | nome"` respectively, and their own existing filters untouched. `documents.py` additionally gains the `search` parameter:
+
+```python
+# apps/api/src/pigrocrm_api/routers/documents.py -- replace the list endpoint only.
+@router.get("", response_model=DocumentPage)
+def list_documents(
+    session: SessionDep,
+    actor: ActorDep,
+    customer_id: Annotated[UUID | None, Query()] = None,
+    deal_id: Annotated[UUID | None, Query()] = None,
+    tipo: Annotated[SafeStr | None, Query()] = None,
+    stato: Annotated[SafeStr | None, Query()] = None,
+    search: Annotated[SafeStr | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    cursor: Annotated[str | None, Query(max_length=CURSOR_MAX_LENGTH)] = None,
+    sort: Annotated[SafeStr | None, Query(description="created_at | updated_at | titolo")] = None,
+    dir: Annotated[SortDirection, Query()] = "asc",
+) -> DocumentPage:
+    query = DocumentListQuery(
+        customer_id=customer_id,
+        deal_id=deal_id,
+        tipo=tipo,
+        stato=stato,
+        search=search,
+        limit=limit,
+        cursor=cursor,
+        sort=sort,
+        dir=dir,
+    )
+    return DocumentService(session, storage).list(query, actor)
+```
+
+Keep whatever `storage` dependency that endpoint already declares; only the parameter list and the `DocumentListQuery` construction change.
+
+- [ ] **Step 4: Change the MCP tools**
+
+```python
+# apps/mcp/src/pigrocrm_mcp/tools/__init__.py
+# In `search_customers`, `search_people`, `search_deals` and `list_documents`:
+#   * add two parameters, immediately before `cursor`:
+#         sort: str | None = None,
+#         dir: str = "asc",
+#   * pass them through, and stop parsing the cursor as a UUID.
+# `search_customers` in full, as the exemplar:
+
+    @mcp.tool()
+    @guard
+    def search_customers(
+        search: str | None = None,
+        stato: str | None = None,
+        custom: dict[str, Any] | None = None,
+        limit: BoundedLimit = 50,
+        cursor: str | None = None,
+        sort: str | None = None,
+        dir: str = "asc",
+    ) -> dict[str, Any]:
+        """Cerca clienti per ragione sociale, P.IVA, codice fiscale o email.
+        `custom` filtra sui campi personalizzati per uguaglianza esatta (es.
+        {"settore": "IT"}); chiama `describe_schema` per conoscere le chiavi
+        disponibili. `sort` accetta `created_at`, `updated_at` o `ragione_sociale`,
+        `dir` accetta `asc` o `desc`. Per leggere la pagina successiva passa
+        `next_cursor` come `cursor` nella chiamata seguente, senza interpretarlo.
+        """
+        return customers.search(
+            context,
+            CustomerListQuery(
+                search=search, stato=stato, custom=custom,
+                limit=cast(int, limit),
+                # Since slice 6 the cursor is an opaque string, not a UUID: it encodes
+                # `(sort value, id)`. Passing it through unparsed is the whole contract.
+                cursor=cursor,
+                sort=sort,
+                dir=cast(SortDirection, dir),
+            ),
+        )
+```
+
+`dir` is `str` at the tool boundary and `cast` at the call, following the file's own documented "runtime-permissive, schema-only-strict" convention: an out-of-range value then raises `pydantic.ValidationError` inside `_guard`, which converts it to a domain error the agent can read, instead of failing in the SDK's pre-call `validate_arguments` where the message is not ours. Add `SortDirection` to the imports from `pigrocrm.core.db`.
+
+`list_documents` also gains `search: str | None = None`, passed straight to `DocumentListQuery(search=search, …)`.
+
+- [ ] **Step 5: Run the tests and watch them pass**
+
+Run: `uv run pytest apps/api/tests/test_list_sorting_api.py apps/api/tests/test_entities_api.py apps/mcp/tests/test_mcp_tools.py -v`
+Expected: PASS. Any existing test in those files that asserted a UUID-shaped `next_cursor` is repaired the same way Task A4 Step 6 describes.
+
+- [ ] **Step 6: Full gate, including the type check that was red at the end of Task A4**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+Expected: all green. The `mypy` errors Task A4 deliberately left are resolved here.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add apps/api/src/pigrocrm_api/routers/customers.py \
+        apps/api/src/pigrocrm_api/routers/people.py \
+        apps/api/src/pigrocrm_api/routers/deals.py \
+        apps/api/src/pigrocrm_api/routers/documents.py \
+        apps/mcp/src/pigrocrm_mcp/tools/__init__.py \
+        apps/api/tests/test_list_sorting_api.py \
+        apps/api/tests/test_entities_api.py \
+        apps/mcp/tests/test_mcp_tools.py
+git commit -m "feat(api): sort and dir on four lists, cursor becomes an opaque string"
+```
+
+---
+
+### Task A6: Criterion 13 — ordered pagination loses no row and repeats none
+
+**Files:**
+- Create: `packages/core/tests/test_keyset_pagination.py`
+
+**Interfaces:**
+- Consumes: `CustomerService.list`, `CustomerListQuery`, `CUSTOMER_SORTS`, `decode_cursor` (Task A4); the `db_engine` fixture.
+- Produces: nothing importable. This task's deliverable is the executable criterion.
+
+**Why it needs its own sessions.** `db_session` hands out one savepoint-backed session on one connection, so a "concurrent" insert made through it is not concurrent at all — it is the same transaction. Slice 3's plan records the same limitation for its numbering race. This test opens two sessions from `db_engine`, commits from one while the other pages, and cleans up in a `finally`.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_keyset_pagination.py
+"""**Criterion 13.** Ordered pagination under concurrent insertion neither loses a row
+nor returns one twice.
+
+This is the property keyset pagination was chosen for and the only reason the composite
+cursor is worth a contract change. Offset pagination fails it by construction: inserting a
+row that sorts before the current page shifts every later row down by one, so page two
+re-reads the last row of page one and page three skips one entirely.
+
+The corpus is built and committed once, then a second connection inserts rows *while* the
+first is paging. The assertions are deliberately weaker than "the union equals the final
+table": a row inserted after the scan passed its position legitimately may or may not
+appear. What must hold is exactly what the criterion states -- no duplicates, and every
+row that was present both before and after the scan is in the union.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from uuid import UUID
+
+import pytest
+from sqlalchemy import Engine, delete, select
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.customers.schemas import CustomerListQuery
+from pigrocrm.core.customers.service import CustomerService
+from pigrocrm.core.db import session_factory
+
+ADMIN = Actor(id=None, type="system", role="admin")
+_PAGE = 25
+_INITIAL = 300
+
+
+@pytest.fixture
+def committed_customers(db_engine: Engine) -> Iterator[set[UUID]]:
+    """Real committed rows on their own connections, removed afterwards.
+
+    Not the `db_session` fixture: its outer transaction makes two sessions on one
+    connection, and nothing committed from one would be a concurrent write to the other.
+    """
+    factory = session_factory(db_engine)
+    created: set[UUID] = set()
+    with factory() as session:
+        for index in range(_INITIAL):
+            row = Customer(
+                ragione_sociale=f"KEYSET {index:05d} Srl", nazione="IT", custom_fields={}
+            )
+            session.add(row)
+            session.flush()
+            created.add(row.id)
+        session.commit()
+    try:
+        yield created
+    finally:
+        with factory() as session:
+            session.execute(
+                delete(Customer).where(Customer.ragione_sociale.like("KEYSET %"))
+            )
+            session.commit()
+
+
+def _all_keyset_ids(session: Session) -> set[UUID]:
+    return set(
+        session.scalars(
+            select(Customer.id).where(Customer.ragione_sociale.like("KEYSET %"))
+        ).all()
+    )
+
+
+def test_ordered_paging_under_concurrent_inserts_loses_nothing_and_repeats_nothing(
+    db_engine: Engine, committed_customers: set[UUID]
+) -> None:
+    factory = session_factory(db_engine)
+    reader = factory()
+    writer = factory()
+    try:
+        present_at_start = _all_keyset_ids(reader)
+
+        service = CustomerService(reader)
+        seen: list[UUID] = []
+        cursor: str | None = None
+        inserted = 0
+        while True:
+            page = service.list(
+                CustomerListQuery(
+                    search="KEYSET",
+                    sort="ragione_sociale",
+                    dir="asc",
+                    limit=_PAGE,
+                    cursor=cursor,
+                ),
+                ADMIN,
+            )
+            seen.extend(item.id for item in page.items)
+
+            # A concurrent insert between every pair of pages, half of them sorting
+            # *before* the page just read -- the case offset pagination gets wrong.
+            if inserted < 8:
+                prefix = "KEYSET 00000" if inserted % 2 == 0 else "KEYSET 99999"
+                writer.add(
+                    Customer(
+                        ragione_sociale=f"{prefix} intruso {inserted} Srl",
+                        nazione="IT",
+                        custom_fields={},
+                    )
+                )
+                writer.commit()
+                inserted += 1
+
+            if page.next_cursor is None:
+                break
+            cursor = page.next_cursor
+
+        reader.rollback()  # start a fresh snapshot before the closing read
+        present_at_end = _all_keyset_ids(reader)
+
+        assert len(seen) == len(set(seen)), (
+            f"{len(seen) - len(set(seen))} row(s) were returned more than once"
+        )
+        stable = present_at_start & present_at_end
+        missing = stable - set(seen)
+        assert not missing, f"{len(missing)} row(s) present throughout were never returned"
+    finally:
+        reader.close()
+        writer.close()
+
+
+def test_the_same_property_holds_descending(
+    db_engine: Engine, committed_customers: set[UUID]
+) -> None:
+    """Descending is served by a backward index scan and by the mirrored predicate, so it
+    is a genuinely different code path in `keyset_predicate` and gets its own run."""
+    factory = session_factory(db_engine)
+    reader = factory()
+    writer = factory()
+    try:
+        present_at_start = _all_keyset_ids(reader)
+        service = CustomerService(reader)
+        seen: list[UUID] = []
+        cursor: str | None = None
+        inserted = 0
+        while True:
+            page = service.list(
+                CustomerListQuery(
+                    search="KEYSET", sort="ragione_sociale", dir="desc",
+                    limit=_PAGE, cursor=cursor,
+                ),
+                ADMIN,
+            )
+            seen.extend(item.id for item in page.items)
+            if inserted < 8:
+                prefix = "KEYSET 00000" if inserted % 2 == 0 else "KEYSET 99999"
+                writer.add(
+                    Customer(
+                        ragione_sociale=f"{prefix} discendente {inserted} Srl",
+                        nazione="IT", custom_fields={},
+                    )
+                )
+                writer.commit()
+                inserted += 1
+            if page.next_cursor is None:
+                break
+            cursor = page.next_cursor
+
+        reader.rollback()
+        present_at_end = _all_keyset_ids(reader)
+
+        assert len(seen) == len(set(seen))
+        assert not (present_at_start & present_at_end) - set(seen)
+    finally:
+        reader.close()
+        writer.close()
+
+
+def test_the_scan_terminates_rather_than_looping(
+    db_engine: Engine, committed_customers: set[UUID]
+) -> None:
+    """A keyset predicate that is `>=` instead of `>` returns the cursor row again on
+    every page and the loop above never ends. Bounding the page count turns that into a
+    named failure rather than a hung suite."""
+    factory = session_factory(db_engine)
+    with factory() as reader:
+        service = CustomerService(reader)
+        cursor: str | None = None
+        pages = 0
+        while pages <= (_INITIAL // _PAGE) + 5:
+            page = service.list(
+                CustomerListQuery(
+                    search="KEYSET", sort="ragione_sociale", limit=_PAGE, cursor=cursor
+                ),
+                ADMIN,
+            )
+            pages += 1
+            if page.next_cursor is None:
+                return
+            cursor = page.next_cursor
+    pytest.fail(
+        "pagination did not terminate: the keyset predicate is probably inclusive (>=) "
+        "where it must be exclusive (>)"
+    )
+```
+
+- [ ] **Step 2: Run it and watch it fail on purpose first**
+
+Before running it green, prove it can go red. Temporarily change `keyset_predicate` in `packages/core/src/pigrocrm/core/db/sort.py` so the ascending same-value arm uses `identity >= row_id` instead of `identity > row_id`.
+
+Run: `uv run pytest packages/core/tests/test_keyset_pagination.py -v`
+Expected: `test_ordered_paging_under_concurrent_inserts_loses_nothing_and_repeats_nothing` FAILS with "row(s) were returned more than once", and `test_the_scan_terminates_rather_than_looping` FAILS with the termination message. **Revert the change.** A criterion that has never been observed to fail is not a criterion.
+
+- [ ] **Step 3: Run it green**
+
+Run: `uv run pytest packages/core/tests/test_keyset_pagination.py -v`
+Expected: PASS, three tests.
+
+- [ ] **Step 4: Full gate**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check .`
+Expected: green.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/core/tests/test_keyset_pagination.py
+git commit -m "test(core): criterion 13, ordered keyset paging under concurrent inserts"
+```
+
+---
+### Task A7: The search schemas and the §8.5 score, as one SQL expression
+
+**Files:**
+- Create: `packages/core/src/pigrocrm/core/search/__init__.py`
+- Create: `packages/core/src/pigrocrm/core/search/schemas.py`
+- Create: `packages/core/src/pigrocrm/core/search/scoring.py`
+- Create: `packages/core/tests/test_search_scoring.py`
+
+**Interfaces:**
+- Consumes: `pigrocrm.core.validation.SafeStr`; `pigrocrm.core.db.escape_like`; `pigrocrm.core.errors.ValidationFailed`.
+- Produces:
+  - `packages/core/src/pigrocrm/core/search/schemas.py`:
+    - `MIN_TERM_LENGTH = 3`, `PER_CLASS_LIMIT = 5`, `COUNT_CEILING = 200`
+    - `SearchEntity = Literal["customer", "person", "deal", "document", "invoice"]`
+    - `SearchQuery(BaseModel)` — `termine: SafeStr = Field(min_length=MIN_TERM_LENGTH, max_length=100)`, `limite: int = Field(default=PER_CLASS_LIMIT, ge=1, le=20)`
+    - `SearchHit(BaseModel)` — `entity: SearchEntity`, `id: UUID`, `etichetta: str`, `sottotitolo: str | None`, `punteggio: Decimal`, `campo: str`
+    - `SearchGroup(BaseModel)` — `entity: SearchEntity`, `hits: list[SearchHit]`, `totale: int`, `totale_e_un_minimo: bool`
+    - `SearchResults(BaseModel)` — `termine: str`, `gruppi: list[SearchGroup]`
+  - `packages/core/src/pigrocrm/core/search/scoring.py`:
+    - `SCORE_EXACT = Decimal("1.00")`, `SCORE_PREFIX = Decimal("0.80")`, `SCORE_SUBSTRING_FACTOR = Decimal("0.60")`, `SCORE_FLOOR = Decimal("0.20")`, `SCORE_SCALE = 4`
+    - `WEIGHT_IDENTIFYING = Decimal("1.00")`, `WEIGHT_CODE = Decimal("1.00")`, `WEIGHT_EMAIL = Decimal("0.90")`, `WEIGHT_CAUSALE = Decimal("0.80")`
+    - `ScoredField` — frozen dataclass: `name: str`, `column: InstrumentedAttribute[Any]`, `weight: Decimal`
+    - `field_score(field: ScoredField, term: str) -> ColumnElement[Decimal]`
+    - `row_score(fields: Sequence[ScoredField], term: str) -> ColumnElement[Decimal]`
+    - `best_field(fields: Sequence[ScoredField], term: str) -> ColumnElement[str]`
+    - `matches_any(fields: Sequence[ScoredField], term: str) -> ColumnElement[bool]`
+- Task A8 builds every entity branch out of `ScoredField`, `row_score`, `best_field` and `matches_any`, and applies `SCORE_FLOOR`.
+
+**The score is computed in SQL, and that is a decision.** Computing it in Python would mean fetching every trigram match to rank it — the tail of a trigram scan on 50 000 rows is thousands of rows, and criterion 3's budget is 300 ms. Computing it in SQL lets `ORDER BY … LIMIT` discard the tail in the database. The cost is that the expression is the formula, so §8.5 is pinned by tests against real Postgres rather than by unit tests over pure functions.
+
+**`similarity()` returns `real`, and it is cast to `numeric` immediately.** A float would violate the no-float rule for no benefit and would make `punteggio` render as `0.6000000238418579` in JSON. `::numeric` on a `real` is exact and deterministic for a given input, so criterion 4's byte-identical requirement survives.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_search_scoring.py
+"""Spec §8.5's formula, pinned against real Postgres.
+
+    punteggio_campo = 1.00  se lower(campo) = lower(termine)
+                    = 0.80  se lower(campo) inizia con lower(termine)
+                    = 0.60 × similarity(campo, termine)
+    peso_campo      = 1.00  campo identificativo / codice
+                    = 0.90  email
+                    = 0.80  causale
+    punteggio_riga  = max(peso_campo × punteggio_campo)
+
+Exact and prefix scores are asserted to the cent, because they are literals. The
+substring score is asserted only by *ordering* and by its bounds: the precise value of
+`similarity()` is a pg_trgm implementation detail, and pinning it would make a Postgres
+upgrade look like a defect in this file.
+"""
+
+from decimal import Decimal
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.search.scoring import (
+    SCORE_EXACT,
+    SCORE_FLOOR,
+    SCORE_PREFIX,
+    WEIGHT_EMAIL,
+    WEIGHT_IDENTIFYING,
+    ScoredField,
+    best_field,
+    field_score,
+    matches_any,
+    row_score,
+)
+
+_NAME = ScoredField(name="ragione_sociale", column=Customer.ragione_sociale,
+                    weight=WEIGHT_IDENTIFYING)
+_EMAIL = ScoredField(name="email", column=Customer.email, weight=WEIGHT_EMAIL)
+_FIELDS = (_NAME, _EMAIL)
+
+
+def _add(session: Session, ragione_sociale: str, email: str | None = None) -> Customer:
+    row = Customer(
+        ragione_sociale=ragione_sociale, email=email, nazione="IT", custom_fields={}
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+def _score(session: Session, row: Customer, term: str) -> Decimal:
+    value = session.scalar(
+        select(row_score(_FIELDS, term)).where(Customer.id == row.id)
+    )
+    assert value is not None
+    return value
+
+
+def test_an_exact_case_insensitive_match_scores_one(db_session: Session) -> None:
+    row = _add(db_session, "Rossi Ingegneria Srl")
+    assert _score(db_session, row, "rossi ingegneria srl") == SCORE_EXACT
+
+
+def test_a_prefix_match_scores_zero_point_eight(db_session: Session) -> None:
+    row = _add(db_session, "Rossi Ingegneria Srl")
+    assert _score(db_session, row, "Rossi") == SCORE_PREFIX
+
+
+def test_a_mid_word_match_scores_below_a_prefix_match(db_session: Session) -> None:
+    """§16 criterion 4's second sentence: a prefix of a company name ranks above a
+    match in the middle of a word."""
+    prefix_row = _add(db_session, "Ingegneria Rossi Srl")
+    middle_row = _add(db_session, "Grande Ingegneria Lombarda Srl")
+
+    prefix = _score(db_session, prefix_row, "Ingegn")
+    middle = _score(db_session, middle_row, "Ingegn")
+
+    assert prefix == SCORE_PREFIX
+    assert Decimal("0") < middle < prefix
+
+
+def test_an_email_match_is_weighted_below_an_identifying_match(db_session: Session) -> None:
+    by_name = _add(db_session, "Vulcano Srl")
+    by_email = _add(db_session, "Altra Societa Srl", email="vulcano@example.it")
+
+    assert _score(db_session, by_name, "Vulcano") == SCORE_PREFIX
+    # 0.90 × 0.80 = 0.72: same field score, lower weight.
+    assert _score(db_session, by_email, "Vulcano") == Decimal("0.7200")
+
+
+def test_the_row_score_is_the_maximum_and_not_the_sum(db_session: Session) -> None:
+    """Summing would let two mediocre matches outrank one exact one, and would make a
+    row with more populated columns rank higher for no reason a user could explain."""
+    both = _add(db_session, "Vulcano Srl", email="vulcano@example.it")
+    assert _score(db_session, both, "Vulcano") == SCORE_PREFIX
+
+
+def test_best_field_names_the_column_that_produced_the_score(db_session: Session) -> None:
+    by_email = _add(db_session, "Altra Societa Srl", email="vulcano@example.it")
+    name = db_session.scalar(
+        select(best_field(_FIELDS, "Vulcano")).where(Customer.id == by_email.id)
+    )
+    assert name == "email"
+
+
+def test_matches_any_is_true_only_for_a_row_with_a_trigram_match(
+    db_session: Session,
+) -> None:
+    hit = _add(db_session, "Rossi Ingegneria Srl")
+    miss = _add(db_session, "Quadrifoglio Logistica Spa")
+
+    found = set(
+        db_session.scalars(
+            select(Customer.id).where(matches_any(_FIELDS, "ingegn"))
+        ).all()
+    )
+    assert hit.id in found
+    assert miss.id not in found
+
+
+def test_a_null_column_never_wins_and_never_raises(db_session: Session) -> None:
+    """`customers.email` is nullable. `GREATEST` in Postgres ignores NULLs, but
+    `similarity(NULL, 'x')` is NULL and a CASE that returned NULL for every field would
+    make the row score NULL — which would sort unpredictably rather than not matching."""
+    row = _add(db_session, "Rossi Ingegneria Srl", email=None)
+    assert _score(db_session, row, "Rossi") == SCORE_PREFIX
+
+
+def test_the_floor_is_a_declared_constant_and_not_a_literal(db_session: Session) -> None:
+    """Task A8 applies it; this pins the value so the two cannot drift."""
+    assert SCORE_FLOOR == Decimal("0.20")
+
+
+def test_a_like_metacharacter_in_the_term_is_escaped_in_the_prefix_test(
+    db_session: Session,
+) -> None:
+    """The prefix arm builds a LIKE pattern, so it needs `escape_like` just as the
+    substring filter does — otherwise searching `Rossi_` prefix-matches `RossiX`."""
+    exact = _add(db_session, "Rossi_Ingegneria")
+    other = _add(db_session, "RossiXIngegneria")
+
+    assert _score(db_session, exact, "Rossi_") == SCORE_PREFIX
+    assert _score(db_session, other, "Rossi_") < SCORE_PREFIX
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_search_scoring.py -v`
+Expected: collection error — `ModuleNotFoundError: No module named 'pigrocrm.core.search'`.
+
+- [ ] **Step 3: Write the schemas**
+
+```python
+# packages/core/src/pigrocrm/core/search/schemas.py
+"""What the global search accepts and returns.
+
+Spec §8.1 fixes the searched fields, §8.5 the ordering and the counting, §8.6 the three
+interface states. The shape here is what makes those three states expressible without the
+client inferring anything: `totale` is the real count and `totale_e_un_minimo` says
+whether it was truncated, so "5 of 500" and "5 of 5" are different responses rather than
+the same list of five.
+"""
+
+from decimal import Decimal
+from typing import Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from pigrocrm.core.validation import SafeStr
+
+# Spec §8.3: a trigram index cannot serve a pattern from which no trigram can be
+# extracted, so below three characters the search would be a sequential scan; and a
+# two-character term on 50 000 customers returns thousands of rows, which is not an answer
+# either. The palette says "continua a scrivere" and issues no request; this bound is the
+# server-side half of the same rule.
+MIN_TERM_LENGTH = 3
+# A term longer than this is not a search, and the column being searched is at most 320
+# characters anyway (`customers.email`).
+MAX_TERM_LENGTH = 100
+# Spec §8.5: the palette does not paginate. Five per class plus the real count.
+PER_CLASS_LIMIT = 5
+# Exact up to here, then declared as a minimum. Implemented as `count(*)` over a subquery
+# with `LIMIT 201`: exact when exactness matters, cheap when it does not, never a lie.
+COUNT_CEILING = 200
+
+SearchEntity = Literal["customer", "person", "deal", "document", "invoice"]
+
+
+class SearchQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    termine: SafeStr = Field(min_length=MIN_TERM_LENGTH, max_length=MAX_TERM_LENGTH)
+    limite: int = Field(default=PER_CLASS_LIMIT, ge=1, le=20)
+
+
+class SearchHit(BaseModel):
+    entity: SearchEntity
+    id: UUID
+    # What the palette renders on the row. Built by the repository from the entity's own
+    # identifying columns, never by the frontend concatenating fields — that would be
+    # business logic in the browser.
+    etichetta: str
+    sottotitolo: str | None
+    # `Decimal`, never float: a float score renders as 0.6000000238418579 and would break
+    # criterion 4's byte-identical requirement.
+    punteggio: Decimal = Field(max_digits=6, decimal_places=4)
+    # Which field produced the score. Shown as a hint ("P.IVA", "email") so a match on a
+    # column the row does not display is not a mystery.
+    campo: str
+
+
+class SearchGroup(BaseModel):
+    entity: SearchEntity
+    hits: list[SearchHit]
+    # The real count of matching rows, exact up to COUNT_CEILING.
+    totale: int
+    # True when `totale` is COUNT_CEILING and the real count may be higher. The palette
+    # renders "oltre 200" for this case; it never renders "200".
+    totale_e_un_minimo: bool
+
+
+class SearchResults(BaseModel):
+    termine: str
+    gruppi: list[SearchGroup]
+```
+
+```python
+# packages/core/src/pigrocrm/core/search/__init__.py
+from pigrocrm.core.search.schemas import (
+    COUNT_CEILING,
+    MAX_TERM_LENGTH,
+    MIN_TERM_LENGTH,
+    PER_CLASS_LIMIT,
+    SearchEntity,
+    SearchGroup,
+    SearchHit,
+    SearchQuery,
+    SearchResults,
+)
+
+__all__ = [
+    "COUNT_CEILING",
+    "MAX_TERM_LENGTH",
+    "MIN_TERM_LENGTH",
+    "PER_CLASS_LIMIT",
+    "SearchEntity",
+    "SearchGroup",
+    "SearchHit",
+    "SearchQuery",
+    "SearchResults",
+]
+```
+
+`SearchService` is added to this `__all__` by Task A8; it cannot be imported here yet because the module does not exist.
+
+- [ ] **Step 4: Write the scoring expressions**
+
+```python
+# packages/core/src/pigrocrm/core/search/scoring.py
+r"""Spec §8.5's score, as a SQL expression.
+
+Computed in the database, not in Python, and that is a decision rather than a shortcut:
+the tail of a trigram scan on 50 000 rows is thousands of rows, and ranking in Python
+would mean fetching all of them to throw almost all away. Ranking in SQL lets
+`ORDER BY … LIMIT` discard the tail before it crosses the wire, which is what makes
+criterion 3's 300 ms budget reachable.
+
+Two details that are easy to get wrong and expensive to rediscover.
+
+**`similarity()` returns `real`.** It is cast to `numeric` the moment it appears. A float
+would violate the project's no-float rule for no benefit and would render as
+`0.6000000238418579` in JSON, which also breaks criterion 4's byte-identical requirement.
+A `real` cast to `numeric` is exact and deterministic for a given input.
+
+**The prefix arm builds a LIKE pattern, so it escapes.** Without `escape_like`, a term
+ending in `_` prefix-matches any character in that position, and the score for
+`Rossi_Ingegneria` and `RossiXIngegneria` would be identical. The substring filter has
+always escaped; the prefix arm is new here and needs the same treatment.
+
+There is no `lower()` around the trigram column anywhere: `similarity()` normalises to
+lower case internally (`similarity('Rossi','rossi') = 1`), and wrapping the column would
+make the `*_trgm` indexes unusable by `ILIKE` on the raw column (spec §8.2).
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import Any
+
+from sqlalchemy import ColumnElement, Numeric, case, func, literal, or_
+from sqlalchemy.orm.attributes import InstrumentedAttribute
+
+from pigrocrm.core.db import escape_like
+
+SCORE_EXACT = Decimal("1.00")
+SCORE_PREFIX = Decimal("0.80")
+SCORE_SUBSTRING_FACTOR = Decimal("0.60")
+# Rows below this are discarded: the tail of a trigram match is noise, and showing noise
+# in a palette teaches the user to ignore it.
+SCORE_FLOOR = Decimal("0.20")
+# Four places. Two would collapse distinct substring matches into ties and make the
+# ordering depend on the third sort key more often than it should.
+SCORE_SCALE = 4
+
+WEIGHT_IDENTIFYING = Decimal("1.00")
+# A match on a fiscal code is wanted, not incidental: someone typing a VAT fragment knows
+# exactly what they are looking for.
+WEIGHT_CODE = Decimal("1.00")
+WEIGHT_EMAIL = Decimal("0.90")
+WEIGHT_CAUSALE = Decimal("0.80")
+
+_NUMERIC = Numeric(6, SCORE_SCALE)
+
+
+@dataclass(frozen=True)
+class ScoredField:
+    name: str
+    column: InstrumentedAttribute[Any]
+    weight: Decimal
+
+
+def _like_prefix(term: str) -> str:
+    return f"{escape_like(term.lower())}%"
+
+
+def _like_anywhere(term: str) -> str:
+    return f"%{escape_like(term.lower())}%"
+
+
+def field_score(field: ScoredField, term: str) -> ColumnElement[Decimal]:
+    """`peso × punteggio_campo`, or `0` when the column is NULL or does not match.
+
+    Zero rather than NULL for the miss case: `GREATEST` ignores NULLs, but a row whose
+    every field were NULL would score NULL and sort unpredictably instead of not matching
+    at all.
+    """
+    column = field.column
+    weight = literal(field.weight, type_=_NUMERIC)
+    return func.coalesce(
+        case(
+            (column.is_(None), literal(Decimal("0.0000"), type_=_NUMERIC)),
+            (func.lower(column) == term.lower(), literal(SCORE_EXACT, type_=_NUMERIC)),
+            (
+                func.lower(column).like(_like_prefix(term), escape="\\"),
+                literal(SCORE_PREFIX, type_=_NUMERIC),
+            ),
+            else_=func.round(
+                literal(SCORE_SUBSTRING_FACTOR, type_=_NUMERIC)
+                * func.cast(func.similarity(column, term), _NUMERIC),
+                SCORE_SCALE,
+            ),
+        )
+        * weight,
+        literal(Decimal("0.0000"), type_=_NUMERIC),
+    ).label(f"score_{field.name}")
+
+
+def row_score(fields: Sequence[ScoredField], term: str) -> ColumnElement[Decimal]:
+    """`max(peso × punteggio_campo)` over the fields that matched.
+
+    The maximum and not the sum: summing would let two mediocre matches outrank one exact
+    one, and would rank a row higher merely for having more populated columns — an order
+    no user could explain to themselves.
+    """
+    scores = [field_score(field, term) for field in fields]
+    if len(scores) == 1:
+        return func.round(scores[0], SCORE_SCALE).label("punteggio")
+    return func.round(func.greatest(*scores), SCORE_SCALE).label("punteggio")
+
+
+def best_field(fields: Sequence[ScoredField], term: str) -> ColumnElement[str]:
+    """The name of the field that produced the row score.
+
+    Declared in the same order as `fields`, so ties resolve to the earlier field — which
+    is the identifying one by convention, and which keeps the output deterministic
+    (criterion 4).
+    """
+    top = row_score(fields, term)
+    branches = [
+        (func.round(field_score(field, term), SCORE_SCALE) == top, literal(field.name))
+        for field in fields
+    ]
+    return case(*branches, else_=literal(fields[0].name)).label("campo")
+
+
+def matches_any(fields: Sequence[ScoredField], term: str) -> ColumnElement[bool]:
+    """The filter, kept separate from the score so the planner sees a plain
+    `ILIKE '%…%'` on an indexed column.
+
+    This is the predicate the `*_trgm` indexes serve. Filtering on `row_score(...) >=
+    floor` instead would be correct and would also be a sequential scan on every searched
+    table, because a `CASE` over `similarity()` is not an indexable expression.
+    """
+    pattern = _like_anywhere(term)
+    return or_(*(field.column.ilike(pattern, escape="\\") for field in fields))
+```
+
+If Task A2's measurement removed the `ESCAPE` clause, remove it from `matches_any` and from `field_score`'s prefix arm here too, in the same shape and with the same comment.
+
+- [ ] **Step 5: Run the tests and watch them pass**
+
+Run: `uv run pytest packages/core/tests/test_search_scoring.py -v`
+Expected: PASS, ten tests.
+
+- [ ] **Step 6: Full gate**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+Expected: green.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/search/ packages/core/tests/test_search_scoring.py
+git commit -m "feat(search): the §8.5 relevance score as a numeric SQL expression"
+```
+
+---
+### Task A8: `SearchRepository` and `SearchService`
+
+**Files:**
+- Create: `packages/core/src/pigrocrm/core/search/repository.py`
+- Create: `packages/core/src/pigrocrm/core/search/service.py`
+- Modify: `packages/core/src/pigrocrm/core/search/__init__.py`
+- Create: `packages/core/tests/test_search_service.py`
+
+**Interfaces:**
+- Consumes: `ScoredField`, `row_score`, `best_field`, `matches_any`, `SCORE_FLOOR`, the four `WEIGHT_*` constants (Task A7); `SearchQuery`, `SearchHit`, `SearchGroup`, `SearchResults`, `COUNT_CEILING`, `PER_CLASS_LIMIT` (Task A7); `Actor`.
+- Produces:
+  - `SearchRepository(session: Session)` with `customers(term: str, limit: int) -> SearchGroup`, `people(...)`, `deals(...)`, `documents(...)` — identical signatures. Task C13 adds `invoices(...)`.
+  - `SearchService(session: Session)` with exactly one public method: `search_everything(self, query: SearchQuery, actor: Actor) -> SearchResults`.
+- Task A11 exposes `search_everything` over both adapters and registers `SearchService` in the architecture test's audited set; Task A9 asserts on the plans these queries produce; Task A10 asserts their determinism.
+
+**One public method, and that is deliberate.** Task A11 must declare an MCP exclusion list that is *exactly* `update_automation_config`, so every other public method of every audited service needs a tool. `SearchService` having one public method means one tool, and no temptation to expose per-entity search twice — the four entity tools already exist from slice 1.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_search_service.py
+"""Spec §8.1, §8.5 and §8.6's server half.
+
+Three things get asserted here that a happy-path test would not reach: the floor discards
+the trigram tail, the count is exact up to 200 and declared as a minimum beyond it, and a
+soft-deleted row is not a search result.
+"""
+
+from decimal import Decimal
+
+import pytest
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.db.base import uuid7
+from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.documents.models import Document
+from pigrocrm.core.people.models import Person
+from pigrocrm.core.search.schemas import COUNT_CEILING, SearchQuery
+from pigrocrm.core.search.scoring import SCORE_FLOOR
+from pigrocrm.core.search.service import SearchService
+
+from .corpus import KNOWN_PARTITA_IVA, KNOWN_RAGIONE_SOCIALE, REFERENCE, build_corpus
+
+READONLY = Actor(id=uuid7(), type="user", role="readonly")
+
+
+def _groups(results: object) -> dict[str, object]:
+    return {group.entity: group for group in results.gruppi}  # type: ignore[attr-defined]
+
+
+def test_a_vat_fragment_finds_the_customer(db_session: Session) -> None:
+    """The use case §17 names as 6A's reason to exist on its own."""
+    build_corpus(db_session, REFERENCE)
+    results = SearchService(db_session).search_everything(
+        SearchQuery(termine="34567"), READONLY
+    )
+    customers = _groups(results)["customer"]
+    assert KNOWN_RAGIONE_SOCIALE in [hit.etichetta for hit in customers.hits]
+
+
+def test_an_exact_vat_number_ranks_the_customer_first(db_session: Session) -> None:
+    """§16 criterion 4, first sentence."""
+    build_corpus(db_session, REFERENCE)
+    results = SearchService(db_session).search_everything(
+        SearchQuery(termine=KNOWN_PARTITA_IVA), READONLY
+    )
+    customers = _groups(results)["customer"]
+    assert customers.hits[0].etichetta == KNOWN_RAGIONE_SOCIALE
+    assert customers.hits[0].campo == "partita_iva"
+    assert customers.hits[0].punteggio == Decimal("1.0000")
+
+
+def test_every_group_is_present_even_when_empty(db_session: Session) -> None:
+    """§8.6's states are per-palette, not per-group, so the response always carries all
+    four groups: a missing group and an empty group would render identically, and the
+    client would have to guess which it was."""
+    results = SearchService(db_session).search_everything(
+        SearchQuery(termine="zzzqqq"), READONLY
+    )
+    assert [group.entity for group in results.gruppi] == [
+        "customer", "person", "deal", "document",
+    ]
+    assert all(group.totale == 0 and group.hits == [] for group in results.gruppi)
+
+
+def test_a_group_is_truncated_to_the_limit_and_reports_the_real_count(
+    db_session: Session,
+) -> None:
+    for index in range(40):
+        db_session.add(
+            Customer(
+                ragione_sociale=f"Vulcano Impianti {index} Srl", nazione="IT",
+                custom_fields={},
+            )
+        )
+    db_session.flush()
+
+    results = SearchService(db_session).search_everything(
+        SearchQuery(termine="Vulcano", limite=5), READONLY
+    )
+    customers = _groups(results)["customer"]
+    assert len(customers.hits) == 5
+    assert customers.totale == 40
+    assert customers.totale_e_un_minimo is False
+
+
+def test_beyond_the_ceiling_the_count_is_declared_as_a_minimum(
+    db_session: Session,
+) -> None:
+    """Exact when exactness serves, cheap when it does not, never a lie (§8.5)."""
+    for index in range(COUNT_CEILING + 25):
+        db_session.add(
+            Customer(
+                ragione_sociale=f"Quadrifoglio {index} Srl", nazione="IT",
+                custom_fields={},
+            )
+        )
+    db_session.flush()
+
+    results = SearchService(db_session).search_everything(
+        SearchQuery(termine="Quadrifoglio"), READONLY
+    )
+    customers = _groups(results)["customer"]
+    assert customers.totale == COUNT_CEILING
+    assert customers.totale_e_un_minimo is True
+
+
+def test_every_returned_hit_is_above_the_floor(db_session: Session) -> None:
+    """The tail of a trigram match is noise, and showing noise in a palette teaches the
+    user to ignore the palette."""
+    build_corpus(db_session, REFERENCE)
+    results = SearchService(db_session).search_everything(
+        SearchQuery(termine="ingegneria", limite=20), READONLY
+    )
+    for group in results.gruppi:
+        for hit in group.hits:
+            assert hit.punteggio >= SCORE_FLOOR, (group.entity, hit)
+
+
+def test_a_soft_deleted_row_is_not_a_result(db_session: Session) -> None:
+    from datetime import UTC, datetime
+
+    row = Customer(ragione_sociale="Cancellata Srl", nazione="IT", custom_fields={})
+    db_session.add(row)
+    db_session.flush()
+    row.deleted_at = datetime.now(UTC)
+    db_session.flush()
+
+    results = SearchService(db_session).search_everything(
+        SearchQuery(termine="Cancellata"), READONLY
+    )
+    assert _groups(results)["customer"].totale == 0
+
+
+def test_people_are_found_by_first_name_by_surname_and_by_email(
+    db_session: Session,
+) -> None:
+    db_session.add(Person(nome="Ludovica", cognome="Ferraresi",
+                          email="lf@studio.example", custom_fields={}))
+    db_session.flush()
+    service = SearchService(db_session)
+
+    for term in ("Ludovi", "Ferrar", "lf@studio"):
+        group = _groups(service.search_everything(SearchQuery(termine=term), READONLY))["person"]
+        assert group.totale == 1, term
+        assert group.hits[0].etichetta == "Ludovica Ferraresi", term
+
+
+def test_a_person_without_a_surname_has_a_label_and_no_trailing_space(
+    db_session: Session,
+) -> None:
+    db_session.add(Person(nome="Ludovica", cognome=None, custom_fields={}))
+    db_session.flush()
+    group = _groups(
+        SearchService(db_session).search_everything(SearchQuery(termine="Ludovi"), READONLY)
+    )["person"]
+    assert group.hits[0].etichetta == "Ludovica"
+
+
+def test_a_deal_hit_carries_its_customer_as_the_subtitle(db_session: Session) -> None:
+    """A palette row reading "Rifacimento impianti 42" with no client is not an answer.
+    The subtitle is built by the repository, never by the browser concatenating fields."""
+    ids = build_corpus(db_session, REFERENCE)
+    customer = db_session.get(Customer, ids.customer_ids[0])
+    assert customer is not None
+    db_session.add(
+        Deal(
+            nome="Rifacimento cabina elettrica", customer_id=customer.id,
+            pipeline_stage_id=ids.stage_open_id, probabilita=50, custom_fields={},
+        )
+    )
+    db_session.flush()
+
+    group = _groups(
+        SearchService(db_session).search_everything(
+            SearchQuery(termine="cabina elettrica"), READONLY
+        )
+    )["deal"]
+    assert group.hits[0].etichetta == "Rifacimento cabina elettrica"
+    assert group.hits[0].sottotitolo == customer.ragione_sociale
+
+
+def test_a_document_hit_carries_its_type_as_the_subtitle(db_session: Session) -> None:
+    ids = build_corpus(db_session, REFERENCE)
+    db_session.add(
+        Document(
+            customer_id=ids.customer_ids[0], tipo="offerta",
+            titolo="Capitolato speciale d'appalto", versione_corrente=1, custom_fields={},
+        )
+    )
+    db_session.flush()
+
+    group = _groups(
+        SearchService(db_session).search_everything(
+            SearchQuery(termine="capitolato speciale"), READONLY
+        )
+    )["document"]
+    assert group.hits[0].etichetta == "Capitolato speciale d'appalto"
+    assert group.hits[0].sottotitolo == "offerta"
+
+
+def test_a_two_character_term_is_refused_by_the_schema(db_session: Session) -> None:
+    """The server-side half of the three-character rule. The palette does not send it,
+    and an agent that does gets a named validation error rather than a table scan."""
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
+        SearchQuery(termine="ab")
+
+
+def test_a_readonly_actor_can_search(db_session: Session) -> None:
+    """Search is a read, and slice 4 §11 gives every dashboard read to every role. There
+    is no new authorisation rule in this slice (§13)."""
+    build_corpus(db_session, REFERENCE)
+    results = SearchService(db_session).search_everything(
+        SearchQuery(termine="Rossi"), READONLY
+    )
+    assert results.termine == "Rossi"
+
+
+def test_search_service_exposes_exactly_one_public_method() -> None:
+    """Task A11's exclusion list must be exactly `update_automation_config`, so every
+    other public method of an audited service needs a tool. Pinning the count here makes
+    a second method a failure in this file rather than a surprise in the architecture
+    test."""
+    import inspect
+
+    public = {
+        name
+        for name, member in inspect.getmembers(SearchService, predicate=inspect.isfunction)
+        if not name.startswith("_")
+        and member.__qualname__.startswith("SearchService.")
+    }
+    assert public == {"search_everything"}
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_search_service.py -v`
+Expected: collection error — `ModuleNotFoundError: No module named 'pigrocrm.core.search.service'`.
+
+- [ ] **Step 3: Write the repository**
+
+```python
+# packages/core/src/pigrocrm/core/search/repository.py
+"""One branch per searched entity, and nothing that crosses two of them.
+
+The shape of every branch is the same and the repetition is deliberate: a generic
+"search any model" helper would need the label rule, the subtitle rule, the field set and
+the weight set as parameters, which is four dictionaries keyed by entity plus a dispatch —
+strictly more code than four explicit methods, and unreadable at the point where a plan
+goes wrong.
+
+`etichetta` and `sottotitolo` are built **here**, from the entity's own columns. Not in
+the browser: composing "nome cognome" client-side is business logic in the frontend, and
+the whole point of the two-adapter architecture is that an MCP agent sees the same label a
+human does.
+
+The floor is applied by repeating the score expression in `WHERE`, not by wrapping the
+query in a subquery. Postgres cannot reference a select alias in `WHERE`, and the extra
+evaluation costs nothing: `matches_any` has already narrowed the row set through the
+trigram index, which is the only place a plan could go wrong.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from uuid import UUID
+
+from sqlalchemy import Select, func, literal, select
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.documents.models import Document
+from pigrocrm.core.people.models import Person
+from pigrocrm.core.search.schemas import COUNT_CEILING, SearchEntity, SearchGroup, SearchHit
+from pigrocrm.core.search.scoring import (
+    SCORE_FLOOR,
+    WEIGHT_CODE,
+    WEIGHT_EMAIL,
+    WEIGHT_IDENTIFYING,
+    ScoredField,
+    best_field,
+    matches_any,
+    row_score,
+)
+
+CUSTOMER_FIELDS: tuple[ScoredField, ...] = (
+    ScoredField("ragione_sociale", Customer.ragione_sociale, WEIGHT_IDENTIFYING),
+    ScoredField("partita_iva", Customer.partita_iva, WEIGHT_CODE),
+    ScoredField("codice_fiscale", Customer.codice_fiscale, WEIGHT_CODE),
+    ScoredField("email", Customer.email, WEIGHT_EMAIL),
+)
+PERSON_FIELDS: tuple[ScoredField, ...] = (
+    ScoredField("cognome", Person.cognome, WEIGHT_IDENTIFYING),
+    ScoredField("nome", Person.nome, WEIGHT_IDENTIFYING),
+    ScoredField("email", Person.email, WEIGHT_EMAIL),
+)
+DEAL_FIELDS: tuple[ScoredField, ...] = (
+    ScoredField("nome", Deal.nome, WEIGHT_IDENTIFYING),
+)
+DOCUMENT_FIELDS: tuple[ScoredField, ...] = (
+    ScoredField("titolo", Document.titolo, WEIGHT_IDENTIFYING),
+)
+
+
+class SearchRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    # -- shared plumbing -------------------------------------------------------
+
+    def _count(self, model: type, fields: Sequence[ScoredField], term: str) -> tuple[int, bool]:
+        """Exact up to COUNT_CEILING, then declared as a minimum.
+
+        `count(*)` over a subquery with `LIMIT ceiling + 1`: the database stops reading
+        once it has 201 rows, so the cost is bounded no matter how many rows match, and
+        the answer is exact whenever exactness is what is being shown.
+        """
+        inner = (
+            select(literal(1))
+            .select_from(model)
+            .where(
+                model.deleted_at.is_(None),
+                matches_any(fields, term),
+                row_score(fields, term) >= SCORE_FLOOR,
+            )
+            .limit(COUNT_CEILING + 1)
+            .subquery()
+        )
+        found = self.session.scalar(select(func.count()).select_from(inner)) or 0
+        if found > COUNT_CEILING:
+            return COUNT_CEILING, True
+        return found, False
+
+    def _scored(
+        self, model: type, fields: Sequence[ScoredField], term: str, limit: int
+    ) -> Select[tuple[object, object, object]]:
+        """`punteggio DESC, updated_at DESC, id DESC`, limited.
+
+        The third key exists because the order must be **total**: without it two runs over
+        the same data can return the same set in a different order, and §16 criterion 4
+        checks twenty runs for a byte-identical response. The second key is §8.5's own —
+        at equal score, what was touched most recently is more likely what is wanted.
+        """
+        return (
+            select(model, row_score(fields, term), best_field(fields, term))
+            .where(
+                model.deleted_at.is_(None),
+                matches_any(fields, term),
+                row_score(fields, term) >= SCORE_FLOOR,
+            )
+            .order_by(
+                row_score(fields, term).desc(),
+                model.updated_at.desc(),
+                model.id.desc(),
+            )
+            .limit(limit)
+        )
+
+    def _group(
+        self,
+        entity: SearchEntity,
+        model: type,
+        fields: Sequence[ScoredField],
+        term: str,
+        limit: int,
+        label: object,
+        subtitle: object,
+    ) -> SearchGroup:
+        rows = self.session.execute(self._scored(model, fields, term, limit)).all()
+        totale, is_minimum = self._count(model, fields, term)
+        hits = [
+            SearchHit(
+                entity=entity,
+                id=row[0].id,
+                etichetta=label(row[0]),  # type: ignore[operator]
+                sottotitolo=subtitle(row[0]),  # type: ignore[operator]
+                punteggio=row[1],
+                campo=row[2],
+            )
+            for row in rows
+        ]
+        return SearchGroup(
+            entity=entity, hits=hits, totale=totale, totale_e_un_minimo=is_minimum
+        )
+
+    # -- one branch per entity -------------------------------------------------
+
+    def customers(self, term: str, limit: int) -> SearchGroup:
+        return self._group(
+            "customer", Customer, CUSTOMER_FIELDS, term, limit,
+            label=lambda row: row.ragione_sociale,
+            subtitle=lambda row: row.partita_iva,
+        )
+
+    def people(self, term: str, limit: int) -> SearchGroup:
+        # `cognome` is nullable, so the label is joined from the parts that exist rather
+        # than formatted with a placeholder: "Ludovica" and not "Ludovica None".
+        return self._group(
+            "person", Person, PERSON_FIELDS, term, limit,
+            label=lambda row: " ".join(p for p in (row.nome, row.cognome) if p),
+            subtitle=lambda row: row.email,
+        )
+
+    def deals(self, term: str, limit: int) -> SearchGroup:
+        group = self._group(
+            "deal", Deal, DEAL_FIELDS, term, limit,
+            label=lambda row: row.nome,
+            subtitle=lambda row: None,
+        )
+        return SearchGroup(
+            entity=group.entity,
+            hits=self._with_customer_names(group.hits),
+            totale=group.totale,
+            totale_e_un_minimo=group.totale_e_un_minimo,
+        )
+
+    def _with_customer_names(self, hits: list[SearchHit]) -> list[SearchHit]:
+        """One extra lookup, after the limit, for at most `limit` rows.
+
+        Resolving the customer name inside the scored query would mean a join evaluated
+        over every trigram match rather than over the five rows that survive. A `COUNT`
+        may cross a join and a `SUM` may not (spec §3); this is neither — it is a label
+        lookup, and it is placed after `LIMIT` so its cost is bounded by the page.
+        """
+        if not hits:
+            return hits
+        deal_ids = [hit.id for hit in hits]
+        pairs = self.session.execute(
+            select(Deal.id, Customer.ragione_sociale)
+            .join(Customer, Customer.id == Deal.customer_id)
+            .where(Deal.id.in_(deal_ids))
+        ).all()
+        names: dict[UUID, str] = {row[0]: row[1] for row in pairs}
+        return [hit.model_copy(update={"sottotitolo": names.get(hit.id)}) for hit in hits]
+
+    def documents(self, term: str, limit: int) -> SearchGroup:
+        return self._group(
+            "document", Document, DOCUMENT_FIELDS, term, limit,
+            label=lambda row: row.titolo,
+            subtitle=lambda row: row.tipo,
+        )
+```
+
+- [ ] **Step 4: Write the service**
+
+```python
+# packages/core/src/pigrocrm/core/search/service.py
+"""The one public entry point of the global search.
+
+It is a fan-out and nothing else: term normalisation, four repository calls, and a fixed
+group order. There is deliberately no cross-entity ranking — the palette shows five per
+class with each class's own count (§8.5), so a global order across classes would be a
+figure nobody looks at, computed on every keystroke.
+
+**No authorisation check.** Not an omission: search reads the same rows the four list
+endpoints already return to every role, slice 4 §11 gives every read to every role, and
+spec §13 states that this slice adds no role and no authorisation rule. Adding a check
+here would put a security rule on a read-only surface, which is the place nobody looks for
+one. `actor` is still taken, because every service method in this project takes it and a
+signature that differs invites a call site that forgets it.
+
+**No transaction.** Four `SELECT`s with no isolation requirement between them: a search is
+not a reconciliation, and a hit that vanishes between the palette and the click lands on a
+404 the palette already handles. The dashboards are the surface that needs one instant
+(§7.1); this one does not, and pretending otherwise would put `REPEATABLE READ` on the
+hottest read path in the product for no property gained.
+"""
+
+from __future__ import annotations
+
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.search.repository import SearchRepository
+from pigrocrm.core.search.schemas import SearchQuery, SearchResults
+
+
+class SearchService:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+        self.repo = SearchRepository(session)
+
+    def search_everything(self, query: SearchQuery, actor: Actor) -> SearchResults:
+        """Every group is present even when empty.
+
+        A missing group and an empty group render identically in a palette, so the client
+        would have to guess which it was — and the whole point of §8.6 is that the client
+        never guesses what it is looking at.
+
+        The group order is fixed, not sorted by count: a palette whose sections move
+        between keystrokes cannot be used with the keyboard, which is the only way a
+        palette is used.
+        """
+        # `strip()` and nothing else. No lowercasing here: the scoring expression
+        # lowercases on both sides where it needs to, and `similarity()` normalises
+        # internally, so a second normalisation would only make the returned `termine`
+        # differ from what the user typed.
+        term = query.termine.strip()
+        limit = query.limite
+        return SearchResults(
+            termine=term,
+            gruppi=[
+                self.repo.customers(term, limit),
+                self.repo.people(term, limit),
+                self.repo.deals(term, limit),
+                self.repo.documents(term, limit),
+            ],
+        )
+```
+
+- [ ] **Step 5: Extend the package exports**
+
+```python
+# packages/core/src/pigrocrm/core/search/__init__.py -- add to the imports and __all__
+from pigrocrm.core.search.service import SearchService
+# ... and "SearchService" in __all__, keeping it alphabetically sorted as ruff requires.
+```
+
+- [ ] **Step 6: Run the tests and watch them pass**
+
+Run: `uv run pytest packages/core/tests/test_search_service.py -v`
+Expected: PASS, fourteen tests.
+
+- [ ] **Step 7: Full gate**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+Expected: green.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/search/ packages/core/tests/test_search_service.py
+git commit -m "feat(search): SearchService over four entities, with floor and real counts"
+```
+
+---
+### Task A9: Criterion 3 — the search does not degenerate into a table scan
+
+**Files:**
+- Create: `packages/core/tests/test_search_plan.py`
+
+**Interfaces:**
+- Consumes: `INFLATED`, `build_corpus` (Task A1); `CUSTOMER_FIELDS`, `PERSON_FIELDS`, `DEAL_FIELDS`, `DOCUMENT_FIELDS`, `SearchRepository` (Task A8); `matches_any`, `row_score`, `SCORE_FLOOR` (Task A7); the `db_engine` fixture.
+- Produces: nothing importable. The deliverable is the executable criterion, plus the marker `@pytest.mark.slow`, registered in `pyproject.toml` under `[tool.pytest.ini_options].markers`.
+
+**Why it needs its own committed corpus and its own session.** 50 000 rows per table have to be `ANALYZE`d for the planner to have statistics, and `ANALYZE` cannot run inside the savepoint the `db_session` fixture holds open. This test builds the inflated corpus once per session in its own transaction, commits, analyses, and deletes it in a `finally`.
+
+**Why `deals` is exempt from the plan assertion, restated where the code is.** Spec §7.3 says it and the reason must travel with the test or someone adds `deals` for symmetry and gets a red test with no defect: at the reference scale two thousand deals sit in a handful of pages and a sequential scan *is* the cheapest plan. At the inflated scale `deals` has 50 000 rows like the rest, so the assertion **is** made here — the exemption in §7.3 is about the *dashboard* queries on the reference corpus, not about this one. That distinction is written into the test's docstring.
+
+- [ ] **Step 1: Register the marker**
+
+```toml
+# pyproject.toml -- add to [tool.pytest.ini_options]
+markers = [
+  "slow: builds the 50 000-row inflated corpus; minutes, not seconds",
+]
+```
+
+Nothing skips on this marker by default. It exists so a developer can say `-m "not slow"` while iterating, and so CI's own `uv run pytest -q` still runs it — a plan assertion that CI skips is a plan assertion that does not exist.
+
+- [ ] **Step 2: Write the failing test**
+
+```python
+# packages/core/tests/test_search_plan.py
+"""**Criterion 3.** The search uses its indexes, measured on the plan and not on the clock.
+
+A good time on a fast machine hides a sequential scan; a plan assertion does not. And a
+plan assertion on a small table is meaningless — Postgres picks a sequential scan on a
+table of a few pages because it *is* the cheapest plan — so this is the one test that pays
+for the inflated corpus: every searched table at 50 000 rows.
+
+Note the difference from spec §7.3, which forbids asserting on the plan for `deals`. That
+exemption is about the *dashboard* queries on the *reference* corpus, where `deals` holds
+two thousand rows. Here `deals` holds fifty thousand like every other table, so the
+assertion is made. Keeping the two straight is why this paragraph exists.
+
+The last test is the one that makes the rest mean anything: it drops an index and asserts
+that the plan assertion **fails**. A plan assertion that passes without the index is not
+measuring the index.
+"""
+
+from __future__ import annotations
+
+import time
+from collections.abc import Iterator
+
+import pytest
+from sqlalchemy import Engine, delete, select, text
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.db import session_factory
+from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.documents.models import Document
+from pigrocrm.core.people.models import Person
+from pigrocrm.core.search.repository import (
+    CUSTOMER_FIELDS,
+    DEAL_FIELDS,
+    DOCUMENT_FIELDS,
+    PERSON_FIELDS,
+    SearchRepository,
+)
+from pigrocrm.core.search.scoring import SCORE_FLOOR, matches_any, row_score
+
+from .corpus import INFLATED, build_corpus
+
+pytestmark = pytest.mark.slow
+
+# Spec §16: "per un termine di 3 caratteri e per uno di 12". Three characters is the
+# shortest a trigram index can serve; twelve is a realistic full name or fiscal code.
+_TERM_SHORT = "ing"
+_TERM_LONG = "Ingegneria S"
+# Spec §7.3 and §16: 300 ms for the endpoint. The bare query gets a third of that budget,
+# leaving room for serialisation and the four-way fan-out.
+_QUERY_BUDGET_MS = 100
+
+_BRANCHES = (
+    ("customers", Customer, CUSTOMER_FIELDS),
+    ("people", Person, PERSON_FIELDS),
+    ("deals", Deal, DEAL_FIELDS),
+    ("documents", Document, DOCUMENT_FIELDS),
+)
+
+
+@pytest.fixture(scope="module")
+def inflated(db_engine: Engine) -> Iterator[Engine]:
+    """50 000 rows per searched table, committed and analysed, removed afterwards.
+
+    Module-scoped: building it four times would quadruple the cost of the one test that
+    needs it. `ANALYZE` is mandatory, not hygiene — without statistics the planner has no
+    basis to prefer an index and this whole file measures the wrong thing.
+    """
+    factory = session_factory(db_engine)
+    with factory() as session:
+        build_corpus(session, INFLATED)
+        session.commit()
+    with db_engine.begin() as connection:
+        for table in ("customers", "people", "deals", "documents"):
+            connection.execute(text(f"ANALYZE {table}"))
+    try:
+        yield db_engine
+    finally:
+        with factory() as session:
+            # Children first: `people.customer_id` and `deals.customer_id` reference
+            # `customers`, and `documents` references both.
+            session.execute(delete(Document))
+            session.execute(delete(Deal))
+            session.execute(delete(Person))
+            session.execute(delete(Customer))
+            session.commit()
+
+
+def _plan(session: Session, model: type, fields: tuple[object, ...], term: str) -> str:
+    stmt = (
+        select(model.id)
+        .where(
+            model.deleted_at.is_(None),
+            matches_any(fields, term),  # type: ignore[arg-type]
+            row_score(fields, term) >= SCORE_FLOOR,  # type: ignore[arg-type]
+        )
+        .limit(5)
+    )
+    compiled = stmt.compile(
+        session.get_bind(), compile_kwargs={"literal_binds": True}
+    )
+    rows = session.execute(text(f"EXPLAIN (ANALYZE, BUFFERS) {compiled}")).all()
+    return "\n".join(str(row[0]) for row in rows)
+
+
+@pytest.mark.parametrize("term", [_TERM_SHORT, _TERM_LONG])
+@pytest.mark.parametrize("name,model,fields", _BRANCHES, ids=[b[0] for b in _BRANCHES])
+def test_every_branch_uses_a_bitmap_index_scan_and_never_a_seq_scan(
+    inflated: Engine, name: str, model: type, fields: tuple[object, ...], term: str
+) -> None:
+    with session_factory(inflated)() as session:
+        plan = _plan(session, model, fields, term)
+
+    assert "Bitmap Index Scan" in plan, (
+        f"{name} for term {term!r} did not use a bitmap index scan:\n{plan}"
+    )
+    assert f"Seq Scan on {name}" not in plan, (
+        f"{name} for term {term!r} fell back to a sequential scan:\n{plan}"
+    )
+    assert "_trgm" in plan, (
+        f"{name} for term {term!r} used an index, but not a trigram one:\n{plan}"
+    )
+
+
+@pytest.mark.parametrize("term", [_TERM_SHORT, _TERM_LONG])
+def test_the_whole_fan_out_stays_inside_its_budget(inflated: Engine, term: str) -> None:
+    """Latency as well as plan. The plan assertion catches the regression that matters;
+    the clock catches the one where every branch uses its index and there are simply too
+    many of them."""
+    with session_factory(inflated)() as session:
+        repo = SearchRepository(session)
+        # One warm run first: the first statement of a session pays for plan caching and
+        # connection warm-up, which is not what is being measured.
+        for method in (repo.customers, repo.people, repo.deals, repo.documents):
+            method(term, 5)
+
+        started = time.perf_counter()
+        for method in (repo.customers, repo.people, repo.deals, repo.documents):
+            method(term, 5)
+        elapsed_ms = (time.perf_counter() - started) * 1000
+
+    assert elapsed_ms < 300, f"the four branches took {elapsed_ms:.0f} ms for {term!r}"
+
+
+def test_the_bounded_count_does_not_read_the_whole_match_set(inflated: Engine) -> None:
+    """The `LIMIT 201` inside the count subquery is what keeps a term matching 40 000 rows
+    as cheap as one matching 40. Without it the count is a full scan of the match set on
+    every keystroke."""
+    with session_factory(inflated)() as session:
+        plan = session.execute(
+            text(
+                "EXPLAIN (ANALYZE) SELECT count(*) FROM ("
+                "  SELECT 1 FROM customers WHERE deleted_at IS NULL "
+                r"    AND ragione_sociale ILIKE '%ing%' ESCAPE '\' LIMIT 201"
+                ") s"
+            )
+        ).all()
+    rendered = "\n".join(str(row[0]) for row in plan)
+    assert "Limit" in rendered, rendered
+    # `rows=201` on the Limit node: the scan stopped, it did not merely cap the output.
+    assert "rows=201" in rendered, rendered
+
+
+def test_the_assertion_fails_without_the_index(inflated: Engine) -> None:
+    """The test that makes this file worth having.
+
+    A plan assertion that also passes with the index dropped is not measuring the index.
+    The index is dropped, the assertion is re-run and required to fail, and the index is
+    rebuilt in a `finally` so a failure here cannot leave the database degraded for the
+    rest of the session.
+    """
+    with session_factory(inflated)() as session:
+        session.execute(text("DROP INDEX ix_customers_ragione_sociale_trgm"))
+        session.commit()
+        try:
+            plan = _plan(session, Customer, CUSTOMER_FIELDS, _TERM_SHORT)
+            assert "Seq Scan on customers" in plan, (
+                "with the trigram index dropped, the query still avoided a sequential "
+                f"scan -- so the earlier assertions are not measuring that index:\n{plan}"
+            )
+        finally:
+            session.rollback()
+            session.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_customers_ragione_sociale_trgm "
+                    "ON customers USING gin (ragione_sociale gin_trgm_ops) "
+                    "WHERE deleted_at IS NULL"
+                )
+            )
+            session.commit()
+            session.execute(text("ANALYZE customers"))
+            session.commit()
+```
+
+- [ ] **Step 3: Run it and watch the right things fail**
+
+Run: `uv run pytest packages/core/tests/test_search_plan.py -v`
+
+Expected on a tree where Tasks A2, A7 and A8 are done: PASS. Run it once **before** merging A2's indexes (or with them temporarily dropped) to see it fail — the failure message names the branch and prints the plan, which is what makes it useful when it fires for real.
+
+If a branch reports `Bitmap Index Scan` on the wrong index — for example `ix_customers_partita_iva` rather than `ix_customers_partita_iva_trgm` — the `_trgm` assertion catches it. That is a genuine finding, not a test bug: a B-tree index cannot serve `ILIKE '%x%'`, so the planner choosing one means the predicate is not the one intended.
+
+- [ ] **Step 4: Full gate**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check .`
+Expected: green. This file adds minutes to the suite; that is the price of the only assertion in the project that can tell a fast machine from a correct index.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/core/tests/test_search_plan.py pyproject.toml
+git commit -m "test(search): criterion 3, EXPLAIN on 50k rows plus the index-removal check"
+```
+
+---
+
+### Task A10: Criterion 4 — the order is total and the response is byte-identical
+
+**Files:**
+- Create: `packages/core/tests/test_search_determinism.py`
+
+**Interfaces:**
+- Consumes: `SearchService`, `SearchQuery` (Tasks A7, A8); `build_corpus`, `REFERENCE`, `KNOWN_PARTITA_IVA`, `KNOWN_RAGIONE_SOCIALE` (Task A1).
+- Produces: nothing importable.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_search_determinism.py
+"""**Criterion 4.** The same database and the same term produce a byte-identical response
+on twenty runs.
+
+The third sort key (`id DESC`) exists for this and only this: `punteggio DESC,
+updated_at DESC` is not a total order — two rows created in the same statement share
+`updated_at` to the microsecond often enough that it happens on the first corpus you try —
+and without a total order Postgres is free to return the same set in a different sequence
+each time. A palette whose rows reorder between identical keystrokes cannot be driven with
+the arrow keys, which is the only way a palette is driven.
+
+`model_dump_json()` and not `model_dump()`: the comparison has to be on bytes, because
+that is what the client receives. A `Decimal` and a `float` that compare equal in Python
+serialise differently.
+"""
+
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.db.base import uuid7
+from pigrocrm.core.search.schemas import SearchQuery
+from pigrocrm.core.search.service import SearchService
+
+from .corpus import KNOWN_PARTITA_IVA, KNOWN_RAGIONE_SOCIALE, REFERENCE, build_corpus
+
+READONLY = Actor(id=uuid7(), type="user", role="readonly")
+_RUNS = 20
+
+
+def test_twenty_runs_produce_one_byte_identical_response(db_session: Session) -> None:
+    build_corpus(db_session, REFERENCE)
+    service = SearchService(db_session)
+
+    renderings = {
+        service.search_everything(
+            SearchQuery(termine="Ingegneria", limite=5), READONLY
+        ).model_dump_json()
+        for _ in range(_RUNS)
+    }
+    assert len(renderings) == 1, (
+        f"{len(renderings)} distinct responses across {_RUNS} runs -- the order is not "
+        "total. Check that every branch orders by punteggio DESC, updated_at DESC, "
+        "id DESC."
+    )
+
+
+def test_the_property_holds_for_a_term_with_many_ties(db_session: Session) -> None:
+    """The adversarial version. Two hundred rows with the *same* name, inserted in one
+    statement so they share `updated_at`: score and second key are both ties, and only
+    `id DESC` can break them."""
+    from pigrocrm.core.customers.models import Customer
+
+    db_session.execute(
+        Customer.__table__.insert(),
+        [
+            {"id": uuid7(), "ragione_sociale": "Identica Srl", "nazione": "IT",
+             "custom_fields": {}}
+            for _ in range(200)
+        ],
+    )
+    db_session.flush()
+    service = SearchService(db_session)
+
+    renderings = {
+        service.search_everything(
+            SearchQuery(termine="Identica", limite=5), READONLY
+        ).model_dump_json()
+        for _ in range(_RUNS)
+    }
+    assert len(renderings) == 1, (
+        "identical rows returned in a different order across runs: the third sort key is "
+        "missing or is not on a unique column"
+    )
+
+
+def test_an_exact_vat_number_puts_that_customer_first(db_session: Session) -> None:
+    """§16 criterion 4's first named expectation."""
+    build_corpus(db_session, REFERENCE)
+    results = SearchService(db_session).search_everything(
+        SearchQuery(termine=KNOWN_PARTITA_IVA), READONLY
+    )
+    customer_group = next(g for g in results.gruppi if g.entity == "customer")
+    assert customer_group.hits[0].etichetta == KNOWN_RAGIONE_SOCIALE
+
+
+def test_a_prefix_outranks_a_mid_word_match(db_session: Session) -> None:
+    """§16 criterion 4's second named expectation, at the service level rather than the
+    expression level (Task A7 covers the expression)."""
+    from pigrocrm.core.customers.models import Customer
+
+    db_session.add(Customer(ragione_sociale="Vulcano Impianti Srl", nazione="IT",
+                            custom_fields={}))
+    db_session.add(Customer(ragione_sociale="Grande Vulcanologia Spa", nazione="IT",
+                            custom_fields={}))
+    db_session.flush()
+
+    results = SearchService(db_session).search_everything(
+        SearchQuery(termine="Vulcan", limite=5), READONLY
+    )
+    labels = [hit.etichetta for hit in
+              next(g for g in results.gruppi if g.entity == "customer").hits]
+    assert labels.index("Vulcano Impianti Srl") < labels.index("Grande Vulcanologia Spa")
+
+
+def test_the_group_order_is_fixed_and_not_by_count(db_session: Session) -> None:
+    """A palette whose sections move between keystrokes cannot be used with the
+    keyboard."""
+    build_corpus(db_session, REFERENCE)
+    results = SearchService(db_session).search_everything(
+        SearchQuery(termine="Ingegneria"), READONLY
+    )
+    assert [g.entity for g in results.gruppi] == ["customer", "person", "deal", "document"]
+```
+
+- [ ] **Step 2: Run it and watch it fail on purpose first**
+
+Temporarily delete the `model.id.desc()` clause from `SearchRepository._scored`.
+
+Run: `uv run pytest packages/core/tests/test_search_determinism.py -v`
+Expected: `test_the_property_holds_for_a_term_with_many_ties` FAILS with "identical rows returned in a different order across runs". **Restore the clause.** If it passes even without the third key, the tie-generating test is not generating ties — increase the 200 rows until it does, because the criterion is unverified until it has been seen to fail.
+
+- [ ] **Step 3: Run it green**
+
+Run: `uv run pytest packages/core/tests/test_search_determinism.py -v`
+Expected: PASS, five tests.
+
+- [ ] **Step 4: Full gate**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check .`
+Expected: green.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/core/tests/test_search_determinism.py
+git commit -m "test(search): criterion 4, a total order and twenty identical responses"
+```
+
+---
+### Task A11: `GET /api/search`, the `search_everything` tool, and the audited surface
+
+**Files:**
+- Create: `apps/api/src/pigrocrm_api/routers/search.py`
+- Modify: `apps/api/src/pigrocrm_api/main.py`
+- Create: `apps/mcp/src/pigrocrm_mcp/tools/search.py`
+- Modify: `apps/mcp/src/pigrocrm_mcp/tools/__init__.py`
+- Modify: `packages/core/tests/test_architecture.py`
+- Create: `apps/api/tests/test_search_api.py`
+- Create: `apps/mcp/tests/test_mcp_search.py`
+
+**Interfaces:**
+- Consumes: `SearchService.search_everything(query: SearchQuery, actor: Actor) -> SearchResults`, `SearchQuery`, `SearchResults` (Tasks A7, A8); `ActorDep`, `SessionDep`, `PROBLEM_RESPONSES`; `McpContext`, the `_guard` decorator and `register_entity_tools`'s existing shape.
+- Produces:
+  - `GET /api/search?q=&limit=` → `SearchResults`. `q`, not `termine`, in the query string: the spec's §11.2 endpoint block writes `?q=&limit=`, and the schema field stays `termine`.
+  - MCP tool `search_everything(termine: str, limite: int = 5) -> dict[str, Any]`.
+  - In `packages/core/tests/test_architecture.py`: `MCP_EXCLUDED_SLICE6: tuple[str, ...] = ("update_automation_config",)` and `_audited_services_slice6()`, alongside — never replacing — slice 4's `MCP_EXCLUDED` and `_audited_services()`.
+- Task A12 regenerates the client against this endpoint; Task B15 adds `DashboardService` and `AutomationConfigService` to `_audited_services_slice6()` and changes not one character of the list.
+
+**The R1 gate, stated as a step and not as a hope.** Spec §11.3 says this slice depends on the one-session-per-call cure and does not work around it. That cure is a task of slice 4's plan and is **not** in `main` as of this plan's writing (`apps/mcp/src/pigrocrm_mcp/__main__.py:22-32` still builds one `Session` for the process). Step 6 below is the check. A read-only search tool on a shared session is the mildest case of the problem — but it is still the case, and registering it before the cure lands means shipping a tool whose failure mode is `Method 'rollback()' can't be called here`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# apps/api/tests/test_search_api.py
+"""`GET /api/search`, and the three §8.6 states as far as the API can express them.
+
+The API's job for the third state is to fail loudly with a problem document. Rendering
+that as an error and not as an empty list is the frontend's job, and Task A14 asserts it.
+"""
+
+import pytest
+from fastapi.testclient import TestClient
+
+
+def test_a_search_returns_all_four_groups(
+    client: TestClient, admin_cookie: dict[str, str]
+) -> None:
+    client.post("/api/customers", json={"ragione_sociale": "Vulcano Impianti Srl"},
+                cookies=admin_cookie)
+
+    response = client.get("/api/search", params={"q": "Vulcano"}, cookies=admin_cookie)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["termine"] == "Vulcano"
+    assert [g["entity"] for g in body["gruppi"]] == [
+        "customer", "person", "deal", "document",
+    ]
+    customer = body["gruppi"][0]
+    assert customer["totale"] == 1
+    assert customer["totale_e_un_minimo"] is False
+    assert customer["hits"][0]["etichetta"] == "Vulcano Impianti Srl"
+
+
+def test_the_score_is_serialised_as_a_decimal_string_not_a_float(
+    client: TestClient, admin_cookie: dict[str, str]
+) -> None:
+    """A float score renders as 0.6000000238418579 and breaks criterion 4."""
+    client.post("/api/customers", json={"ragione_sociale": "Vulcano Impianti Srl"},
+                cookies=admin_cookie)
+    response = client.get("/api/search", params={"q": "Vulcano"}, cookies=admin_cookie)
+    punteggio = response.json()["gruppi"][0]["hits"][0]["punteggio"]
+    assert isinstance(punteggio, str), type(punteggio)
+    assert punteggio == "0.8000"
+
+
+@pytest.mark.parametrize("term", ["", "a", "ab"])
+def test_a_term_shorter_than_three_characters_is_a_422(
+    client: TestClient, admin_cookie: dict[str, str], term: str
+) -> None:
+    response = client.get("/api/search", params={"q": term}, cookies=admin_cookie)
+    assert response.status_code == 422
+
+
+def test_a_readonly_actor_may_search(
+    client: TestClient, readonly_cookie: dict[str, str]
+) -> None:
+    response = client.get("/api/search", params={"q": "Vulcano"},
+                          cookies=readonly_cookie)
+    assert response.status_code == 200
+
+
+def test_an_unauthenticated_request_is_a_401(client: TestClient) -> None:
+    assert client.get("/api/search", params={"q": "Vulcano"}).status_code == 401
+
+
+def test_the_limit_is_bounded(client: TestClient, admin_cookie: dict[str, str]) -> None:
+    assert client.get("/api/search", params={"q": "abc", "limit": 0},
+                      cookies=admin_cookie).status_code == 422
+    assert client.get("/api/search", params={"q": "abc", "limit": 500},
+                      cookies=admin_cookie).status_code == 422
+
+
+def test_the_endpoint_appears_in_the_openapi_document(client: TestClient) -> None:
+    schema = client.get("/openapi.json").json()
+    assert "/api/search" in schema["paths"]
+```
+
+```python
+# apps/mcp/tests/test_mcp_search.py
+"""The MCP half. Same service, same figures, one call.
+
+Spec §11.1 lists `search_everything` on both surfaces. The reason it is a tool rather than
+four is the same reason it is one service method: an agent that had to call four searches
+and merge them would be doing in a transcript what the service already does in one query.
+"""
+
+from typing import Any
+
+
+async def test_search_everything_is_registered(mcp_server: Any) -> None:
+    tools = {tool.name for tool in await mcp_server.list_tools()}
+    assert "search_everything" in tools
+
+
+async def test_search_everything_returns_the_four_groups(
+    mcp_server: Any, seeded_customer: Any
+) -> None:
+    result = await mcp_server.call_tool(
+        "search_everything", {"termine": seeded_customer.ragione_sociale[:6]}
+    )
+    payload = result.structured_content
+    assert [g["entity"] for g in payload["gruppi"]] == [
+        "customer", "person", "deal", "document",
+    ]
+    assert payload["gruppi"][0]["hits"][0]["id"] == str(seeded_customer.id)
+
+
+async def test_a_two_character_term_is_a_domain_error_not_a_scan(mcp_server: Any) -> None:
+    """`_guard` converts the pydantic failure into a message the agent can act on,
+    instead of the SDK rejecting it with one we did not write."""
+    result = await mcp_server.call_tool("search_everything", {"termine": "ab"})
+    assert result.is_error
+    assert "3" in str(result.content)
+```
+
+Follow whatever fixture names `apps/mcp/tests/conftest.py` already provides for `mcp_server` and a seeded customer; if the seeded-customer fixture does not exist, add it next to the existing ones rather than inventing a second conftest.
+
+- [ ] **Step 2: Run them and watch them fail**
+
+Run: `uv run pytest apps/api/tests/test_search_api.py apps/mcp/tests/test_mcp_search.py -v`
+Expected: every API test FAILS with `404`, and every MCP test FAILS on the missing tool name.
+
+- [ ] **Step 3: Write the router**
+
+```python
+# apps/api/src/pigrocrm_api/routers/search.py
+"""One endpoint. The palette calls it on every keystroke above three characters, so it is
+the hottest read path in the product.
+
+No transaction wrapper and no isolation level: see `SearchService`'s own docstring for
+why. The dashboards are the surface that needs one instant (spec §7.1); a search does not,
+and putting `REPEATABLE READ` here would pay for a property nothing reads.
+"""
+
+from typing import Annotated
+
+from fastapi import APIRouter, Query
+
+from pigrocrm.core.search.schemas import (
+    MAX_TERM_LENGTH,
+    MIN_TERM_LENGTH,
+    PER_CLASS_LIMIT,
+    SearchQuery,
+    SearchResults,
+)
+from pigrocrm.core.search.service import SearchService
+from pigrocrm.core.validation import SafeStr
+from pigrocrm_api.deps import ActorDep, SessionDep
+from pigrocrm_api.errors import PROBLEM_RESPONSES
+
+router = APIRouter(prefix="/api/search", tags=["search"], responses=PROBLEM_RESPONSES)
+
+
+@router.get("", response_model=SearchResults)
+def search(
+    session: SessionDep,
+    actor: ActorDep,
+    # `q` in the query string, `termine` in the schema: spec §11.2 fixes the parameter
+    # name and §8 fixes the field name, and they differ. The bounds are repeated here as
+    # well as on SearchQuery so FastAPI answers a two-character term with a 422 before the
+    # service is constructed -- the palette does not send one, but an agent might.
+    q: Annotated[SafeStr, Query(min_length=MIN_TERM_LENGTH, max_length=MAX_TERM_LENGTH)],
+    limit: Annotated[int, Query(ge=1, le=20)] = PER_CLASS_LIMIT,
+) -> SearchResults:
+    return SearchService(session).search_everything(
+        SearchQuery(termine=q, limite=limit), actor
+    )
+```
+
+```python
+# apps/api/src/pigrocrm_api/main.py -- two edits.
+# 1. add `search` to the router import line
+from pigrocrm_api.routers import (
+    auth, customers, deals, documents, emitter, fields, people, pipeline, schema,
+    search, templates, tokens, users,
+)
+# 2. add it to the registration tuple
+    for module in (
+        auth, customers, people, deals, fields, pipeline,
+        users, tokens, schema, documents, templates, emitter, search,
+    ):
+        app.include_router(module.router)
+```
+
+- [ ] **Step 4: Write the MCP tool**
+
+```python
+# apps/mcp/src/pigrocrm_mcp/tools/search.py
+"""The thin half. Everything that matters happened in `SearchService`.
+
+Shaped exactly like `tools/customers.py`: resolve the service on the context's session,
+call it, `model_dump(mode="json")`. `mode="json"` and not the default is what turns the
+`Decimal` score into a string rather than into something the JSON encoder refuses.
+"""
+
+from typing import Any
+
+from pigrocrm.core.search.schemas import SearchQuery
+from pigrocrm.core.search.service import SearchService
+
+from pigrocrm_mcp.context import McpContext
+
+
+def search_everything(context: McpContext, query: SearchQuery) -> dict[str, Any]:
+    return (
+        SearchService(context.session)
+        .search_everything(query, context.actor)
+        .model_dump(mode="json")
+    )
+```
+
+```python
+# apps/mcp/src/pigrocrm_mcp/tools/__init__.py
+# Add to the imports:
+#   from pigrocrm.core.search.schemas import PER_CLASS_LIMIT, SearchQuery
+#   from pigrocrm_mcp.tools import search as search_tools
+# and register the tool inside register_entity_tools, next to the four entity searches:
+
+    @mcp.tool()
+    @guard
+    def search_everything(termine: str, limite: int = PER_CLASS_LIMIT) -> dict[str, Any]:
+        """Cerca in tutto il CRM -- clienti, persone, deal e documenti -- con una sola
+        chiamata: ragione sociale, P.IVA, codice fiscale, email, nome e cognome, nome del
+        deal, titolo del documento. Accetta anche un frammento in mezzo a una parola (per
+        esempio "34567" trova la P.IVA 01234567890). Servono almeno 3 caratteri.
+        Restituisce fino a `limite` risultati per classe di entita' piu' il conteggio
+        reale di quella classe: se `totale_e_un_minimo` e' true il conteggio e' un minimo
+        e i risultati completi stanno sull'elenco della singola entita'.
+        """
+        return search_tools.search_everything(
+            context, SearchQuery(termine=termine, limite=limite)
+        )
+```
+
+`termine` is `str` at the tool boundary with no `Annotated` bound, following the file's documented "runtime-permissive, schema-only-strict" convention: the length check happens inside `SearchQuery`, inside `_guard`, so a short term produces a domain error the agent can read rather than an SDK rejection whose wording is not ours.
+
+- [ ] **Step 5: Grow the architecture test**
+
+```python
+# packages/core/tests/test_architecture.py -- append. Slice 4's MCP_EXCLUDED and
+# _audited_services() are NOT touched: spec §11.1 requires that list to still be exactly
+# its ten names, and a single shared list would make the two specs contradict each other.
+"""Slice 6's MCP ban, made mechanical.
+
+Spec §11.1: for every public method of `DashboardService`, `SearchService` and
+`AutomationConfigService` either an MCP tool calls it, or it appears in a declared
+exclusion list -- and for these three services the list must be **exactly**
+`update_automation_config`. Adding a tool for it breaks the build; removing it from the
+list without adding a tool breaks it too.
+
+Two of the three services do not exist until sub-plan 6B. The list is asserted as a
+constant regardless -- it is the *declaration* the spec fixes -- while the coverage half
+inspects only the classes actually importable, exactly as slice 4's clause does for
+`AnalyticsService`.
+"""
+
+MCP_EXCLUDED_SLICE6: tuple[str, ...] = ("update_automation_config",)
+
+
+def _audited_services_slice6() -> list[type]:
+    found: list[type] = []
+    for module_path, class_name in (
+        ("pigrocrm.core.search.service", "SearchService"),
+        ("pigrocrm.core.dashboard.service", "DashboardService"),
+        ("pigrocrm.core.automations.config_service", "AutomationConfigService"),
+    ):
+        try:
+            module = importlib.import_module(module_path)
+        except ModuleNotFoundError:
+            continue
+        found.append(getattr(module, class_name))
+    return found
+
+
+def test_the_slice6_exclusion_list_is_exactly_one_name() -> None:
+    assert MCP_EXCLUDED_SLICE6 == ("update_automation_config",)
+
+
+def test_no_mcp_tool_reaches_update_automation_config() -> None:
+    """Matched on the call site, not on the tool's own name: a tool called `tidy_settings`
+    that happened to call `.update_automation_config(` is exactly how this ban would
+    otherwise be lost. The ban is imposed by not registering a tool rather than by an
+    authorisation check, because residuo R10 leaves a PAT inheriting its owner's full role
+    -- an admin token would pass any check we wrote."""
+    source = _tool_source()
+    offenders = [name for name in MCP_EXCLUDED_SLICE6 if f".{name}(" in source]
+    assert not offenders, f"these methods must not be reachable from any MCP tool: {offenders}"
+
+
+def test_every_other_public_method_of_a_slice6_service_has_a_tool() -> None:
+    source = _tool_source()
+    audited = _audited_services_slice6()
+    assert audited, "expected at least SearchService to be importable"
+    missing: list[str] = []
+    for cls in audited:
+        for name in sorted(_public_methods(cls)):
+            if name in MCP_EXCLUDED_SLICE6:
+                continue
+            if f".{name}(" not in source:
+                missing.append(f"{cls.__name__}.{name}")
+    assert not missing, (
+        "every public method of an audited slice-6 service must either be reachable from "
+        f"an MCP tool or be the one declared exclusion: {missing}"
+    )
+
+
+def test_the_slice4_exclusion_list_is_still_exactly_its_ten_names() -> None:
+    """Spec §6.3 and §11.1: `unbilled_backlog` is a new public method on
+    `AnalyticsService` and it has a tool (`get_unbilled_backlog`), so slice 4's list does
+    not grow. Asserted here so that adding the method without the tool fails as a
+    violation of slice 4's contract, named as such."""
+    assert len(MCP_EXCLUDED) == 10
+    assert "unbilled_backlog" not in MCP_EXCLUDED
+```
+
+`importlib`, `inspect`, `_tool_source`, `_public_methods` and `MCP_EXCLUDED` come from slice 4's clause in the same file. **If slice 4 is not merged**, that clause does not exist yet: in that case this task adds the four helpers (`importlib`/`inspect` imports, `MCP_TOOLS_DIR`, `_tool_source`, `_public_methods`) with the bodies slice 4's plan gives verbatim, omits `test_the_slice4_exclusion_list_is_still_exactly_its_ten_names`, and Task 4A-13 then finds them present and adds only `MCP_EXCLUDED` and its own three tests. Neither ordering duplicates a helper.
+
+- [ ] **Step 6: The R1 gate**
+
+Run: `grep -n "session_provider\|lambda: session\|contextvars" apps/mcp/src/pigrocrm_mcp/__main__.py apps/mcp/src/pigrocrm_mcp/server.py`
+
+- If the output shows a **per-call** session (a `contextvars`-scoped provider, one session per tool invocation), proceed to Step 7 with both halves.
+- If it still shows `lambda: session` over a single process-lifetime `Session`, **do not register the MCP tool.** Comment out the `@mcp.tool()` registration block added in Step 4, leaving `tools/search.py` in place, and add this comment above it:
+
+```python
+    # NOT REGISTERED until residuo R1 is cured. `apps/mcp/src/pigrocrm_mcp/__main__.py`
+    # still shares one SQLAlchemy Session across the whole process, and the slice-1A
+    # measurement of that arrangement was 10 concurrent operations, 0 successes, 0 rows.
+    # Spec §11.3: this slice depends on the cure and does not work around it. A search
+    # tool on a shared session is the mildest case of the problem and still the problem.
+    # Uncomment together with the first task of sub-plan 6C, which carries the same gate.
+```
+
+Then skip `apps/mcp/tests/test_mcp_search.py` at module level with `pytestmark = pytest.mark.skip(reason="blocked on residuo R1; see tools/__init__.py")`, and record the decision in this task's commit message. The API half ships either way.
+
+- [ ] **Step 7: Run the tests and watch them pass**
+
+Run: `uv run pytest apps/api/tests/test_search_api.py apps/mcp/tests/test_mcp_search.py packages/core/tests/test_architecture.py -v`
+Expected: PASS (with the MCP file skipped if Step 6 said so).
+
+- [ ] **Step 8: Full gate**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+Expected: green.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add apps/api/src/pigrocrm_api/routers/search.py \
+        apps/api/src/pigrocrm_api/main.py \
+        apps/mcp/src/pigrocrm_mcp/tools/search.py \
+        apps/mcp/src/pigrocrm_mcp/tools/__init__.py \
+        packages/core/tests/test_architecture.py \
+        apps/api/tests/test_search_api.py \
+        apps/mcp/tests/test_mcp_search.py
+git commit -m "feat(api): GET /api/search and the search_everything tool"
+```
+
+---
+### Task A12: The `AppShell` header slice 1 promised and never shipped
+
+**Files:**
+- Create: `apps/web/src/components/AppHeader.tsx`
+- Create: `apps/web/src/components/AppHeader.test.tsx`
+- Modify: `apps/web/src/components/AppShell.tsx`
+- Modify: `apps/web/src/components/AppShell.test.tsx`
+- Modify: `apps/web/src/lib/query.ts`
+- Modify: `apps/web/src/lib/api-types.ts` (regenerated, never hand-edited)
+
+**Interfaces:**
+- Consumes: `GET /api/search` (Task A11) only for the type regeneration; nothing at runtime yet — the field is a button until Task A13 mounts the palette.
+- Produces:
+  - `apps/web/src/components/AppHeader.tsx`: `export function AppHeader({ onOpenSearch }: { onOpenSearch: () => void })`, and `export function breadcrumbFor(pathname: string): string[]` — exported for its own test.
+  - `apps/web/src/lib/query.ts`: `queryKeys.search(term: string)` returning `['search', term] as const`.
+- Task A13 supplies the real `onOpenSearch` and the `Cmd/Ctrl+K` listener.
+
+**This is half of a residuo, not a flourish.** The slice-1A residui document's final, unnumbered entry: "La spec dello slice 1 (§10.1) promette «header con breadcrumb e ricerca». `AppShell.tsx` non ha alcun header." The global search has nowhere to live until it does, which is why the header is built here and not in slice 1's own follow-up.
+
+- [ ] **Step 1: Write the failing test**
+
+```tsx
+// apps/web/src/components/AppHeader.test.tsx
+/**
+ * The header slice 1 §10.1 promised. Three regions: breadcrumb, search, actions.
+ *
+ * `breadcrumbFor` is a pure function and is tested as one, because the alternative is
+ * asserting on rendered crumbs through a router mock and then not being able to tell a
+ * routing failure from a labelling one.
+ */
+import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { describe, expect, it, vi } from 'vitest'
+import { AppHeader, breadcrumbFor } from './AppHeader'
+
+describe('breadcrumbFor', () => {
+  it('labels the dashboard root', () => {
+    expect(breadcrumbFor('/app')).toEqual(['Dashboard'])
+    expect(breadcrumbFor('/app/')).toEqual(['Dashboard'])
+  })
+
+  it('labels a known section', () => {
+    expect(breadcrumbFor('/app/clienti')).toEqual(['Clienti'])
+    expect(breadcrumbFor('/app/impostazioni/campi')).toEqual(['Impostazioni', 'Campi'])
+  })
+
+  it('renders a detail route without leaking the id into the crumb', () => {
+    expect(breadcrumbFor('/app/clienti/0192f3b2-8c1a-7c3d-9f4e-1a2b3c4d5e6f')).toEqual([
+      'Clienti',
+      'Dettaglio',
+    ])
+  })
+
+  it('falls back to a capitalised segment for an unmapped path', () => {
+    expect(breadcrumbFor('/app/qualcosa')).toEqual(['Qualcosa'])
+  })
+})
+
+describe('AppHeader', () => {
+  it('shows a search control with the keyboard shortcut visible', () => {
+    render(<AppHeader onOpenSearch={vi.fn()} />)
+    const trigger = screen.getByRole('button', { name: /cerca/i })
+    expect(trigger).toBeInTheDocument()
+    // Spec §13: "campo di ricerca al centro con la scorciatoia visibile". Visible, not
+    // discoverable by trying it.
+    expect(trigger).toHaveTextContent(/K/)
+  })
+
+  it('calls onOpenSearch when the control is activated', async () => {
+    const onOpenSearch = vi.fn()
+    render(<AppHeader onOpenSearch={onOpenSearch} />)
+    await userEvent.click(screen.getByRole('button', { name: /cerca/i }))
+    expect(onOpenSearch).toHaveBeenCalledTimes(1)
+  })
+
+  it('is a landmark so a screen reader can skip to it', () => {
+    render(<AppHeader onOpenSearch={vi.fn()} />)
+    expect(screen.getByRole('banner')).toBeInTheDocument()
+  })
+})
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `cd apps/web && pnpm exec vitest run src/components/AppHeader.test.tsx`
+Expected: `Failed to resolve import "./AppHeader"`.
+
+- [ ] **Step 3: Write the header**
+
+```tsx
+// apps/web/src/components/AppHeader.tsx
+import { useRouterState } from '@tanstack/react-router'
+import { Search } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+
+/**
+ * The top bar slice 1 §10.1 promised and `AppShell` never had. Three regions:
+ * breadcrumb on the left, the search control in the middle, actions on the right.
+ *
+ * The actions region is deliberately empty today. It exists as a slot because the
+ * alternative is a two-region header that has to be restructured the first time anything
+ * needs to sit there, and because the sidebar already owns the account menu.
+ */
+
+const SEGMENT_LABELS: Record<string, string> = {
+  app: 'Dashboard',
+  clienti: 'Clienti',
+  persone: 'Persone',
+  deal: 'Deal',
+  documenti: 'Documenti',
+  impostazioni: 'Impostazioni',
+  campi: 'Campi',
+  emittente: 'Emittente',
+  pipeline: 'Pipeline',
+  template: 'Template',
+  utenti: 'Utenti',
+  automazioni: 'Automazioni',
+  token: 'Token',
+  lista: 'Lista',
+}
+
+// A UUID segment is an id, not a name. Rendering it would put a 36-character opaque
+// string in the breadcrumb, and resolving it to the record's title would mean a second
+// request from a component whose job is navigation.
+const UUID_SEGMENT =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+
+export function breadcrumbFor(pathname: string): string[] {
+  const segments = pathname.split('/').filter((segment) => segment.length > 0)
+  if (segments.length === 0) return ['Dashboard']
+  // Drop the leading "app": every authenticated route carries it and repeating it in
+  // every breadcrumb is noise.
+  const rest = segments[0] === 'app' ? segments.slice(1) : segments
+  if (rest.length === 0) return ['Dashboard']
+  return rest.map((segment) =>
+    UUID_SEGMENT.test(segment)
+      ? 'Dettaglio'
+      : (SEGMENT_LABELS[segment] ?? segment.charAt(0).toUpperCase() + segment.slice(1)),
+  )
+}
+
+// `metaKey` on Apple platforms, `ctrlKey` elsewhere. Read once at module scope from the
+// platform hint rather than sniffing the user agent string: this only decides which glyph
+// is drawn, and Task A13's listener accepts either modifier regardless.
+const IS_APPLE =
+  typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform ?? '')
+
+export function AppHeader({ onOpenSearch }: { onOpenSearch: () => void }) {
+  const { location } = useRouterState()
+  const crumbs = breadcrumbFor(location.pathname)
+
+  return (
+    <header
+      role="banner"
+      className="flex h-14 shrink-0 items-center gap-4 border-b bg-card px-6"
+    >
+      <nav aria-label="Percorso" className="min-w-0 flex-1">
+        <ol className="flex items-center gap-2 text-sm text-muted-foreground">
+          {crumbs.map((crumb, index) => (
+            <li key={`${crumb}-${index}`} className="flex items-center gap-2">
+              {index > 0 && <span aria-hidden="true">/</span>}
+              <span
+                className={index === crumbs.length - 1 ? 'truncate text-foreground' : 'truncate'}
+                aria-current={index === crumbs.length - 1 ? 'page' : undefined}
+              >
+                {crumb}
+              </span>
+            </li>
+          ))}
+        </ol>
+      </nav>
+
+      <Button
+        variant="outline"
+        onClick={onOpenSearch}
+        // A button and not an <input>: the palette is a dialog, so a real text field here
+        // would take focus, accept typing, and then hand it over -- two places to type the
+        // same query. One control, one place to type.
+        className="w-full max-w-sm justify-between text-muted-foreground"
+        aria-label="Cerca in tutto il CRM"
+      >
+        <span className="flex items-center gap-2">
+          <Search className="size-4" aria-hidden="true" />
+          Cerca…
+        </span>
+        <kbd className="rounded border bg-muted px-1.5 py-0.5 text-xs font-medium">
+          {IS_APPLE ? '⌘' : 'Ctrl'} K
+        </kbd>
+      </Button>
+
+      {/* Actions. Empty today; see the file docstring. */}
+      <div className="flex flex-1 items-center justify-end gap-2" />
+    </header>
+  )
+}
+```
+
+- [ ] **Step 4: Mount it in `AppShell`**
+
+Two edits to `apps/web/src/components/AppShell.tsx`, and nothing else in that file changes:
+
+```tsx
+// 1. Add the import and the local state, next to `collapsed`:
+import { AppHeader } from '@/components/AppHeader'
+import { CommandPalette } from '@/features/search/CommandPalette'
+// ...
+  const [searchOpen, setSearchOpen] = useState(false)
+
+// 2. Replace the closing `<main>` with a column that carries the header above it:
+      <div className="flex min-w-0 flex-1 flex-col">
+        <AppHeader onOpenSearch={() => setSearchOpen(true)} />
+        <main className="flex-1 overflow-auto">{children}</main>
+      </div>
+      <CommandPalette open={searchOpen} onOpenChange={setSearchOpen} />
+```
+
+The `CommandPalette` import is added **in Task A13**, together with the component; in this task the two `CommandPalette` lines are omitted and `searchOpen` is passed nowhere but `AppHeader`'s callback. Splitting it this way keeps this task's deliverable independently reviewable: a header with a search button that opens nothing yet is a complete, shippable increment, and `pnpm build` stays green.
+
+`AppShell.tsx` grows by roughly six lines and stays well under the 250-line limit; the header itself is a separate file precisely so it does not push it over.
+
+- [ ] **Step 5: Extend the `AppShell` test**
+
+```tsx
+// apps/web/src/components/AppShell.test.tsx -- append inside the existing describe.
+  it('renders the header with the search control', () => {
+    // The existing render helper in this file already wraps AppShell in the router and
+    // auth providers; reuse it rather than building a second harness.
+    renderAppShell()
+    expect(screen.getByRole('banner')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /cerca/i })).toBeInTheDocument()
+  })
+```
+
+If the file's existing render helper has another name, use that one; do not add a second harness.
+
+- [ ] **Step 6: Add the query key and regenerate the client**
+
+```ts
+// apps/web/src/lib/query.ts -- add to the queryKeys object, keeping the file's ordering.
+  // The term is part of the key so an in-flight response for "ross" cannot overwrite the
+  // rendering of "rossi": TanStack Query discards the stale entry rather than the
+  // component having to compare what came back with what was typed.
+  search: (term: string) => ['search', term] as const,
+```
+
+With the API running on `:8000`:
+
+Run: `cd apps/web && pnpm generate:api`
+
+This rewrites `src/lib/api-types.ts` with the `/api/search` path **and** with `cursor` typed as `string` on the four list endpoints. `pnpm exec tsc --noEmit` will now fail at every call site that passes a UUID-typed cursor — which is exactly the mechanism slice 1 §10.2 put there. Fix each by removing the parse: `fetchAllDeals` in `apps/web/src/features/deals/queries.ts` is the only shipped walker, and its `cursor` local becomes `string | null` with no other change.
+
+- [ ] **Step 7: Run the tests and watch them pass**
+
+Run: `cd apps/web && pnpm exec vitest run src/components/AppHeader.test.tsx src/components/AppShell.test.tsx && pnpm exec tsc --noEmit && pnpm lint`
+Expected: PASS, and a clean typecheck.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add apps/web/src/components/AppHeader.tsx \
+        apps/web/src/components/AppHeader.test.tsx \
+        apps/web/src/components/AppShell.tsx \
+        apps/web/src/components/AppShell.test.tsx \
+        apps/web/src/lib/query.ts \
+        apps/web/src/lib/api-types.ts \
+        apps/web/src/features/deals/queries.ts
+git commit -m "feat(web): the AppShell header with breadcrumb and search, closing slice 1 §10.1"
+```
+
+---
+
+### Task A13: The `cmdk` palette, with its three states
+
+**Files:**
+- Modify: `apps/web/package.json` (`cmdk`)
+- Create: `apps/web/src/components/ui/command.tsx`
+- Create: `apps/web/src/features/search/queries.ts`
+- Create: `apps/web/src/features/search/CommandPalette.tsx`
+- Create: `apps/web/src/features/search/CommandPalette.test.tsx`
+- Modify: `apps/web/src/components/AppShell.tsx` (mount the palette)
+- Modify: `apps/web/eslint.config.js` (the `react-refresh` override for `queries.ts`)
+
+**Interfaces:**
+- Consumes: `GET /api/search` through the generated client; `queryKeys.search` (Task A12); `AppHeader`'s `onOpenSearch` (Task A12); `QueryErrorBanner`.
+- Produces:
+  - `apps/web/src/features/search/queries.ts`: `export type SearchResults = components['schemas']['SearchResults']`, `export type SearchGroup = components['schemas']['SearchGroup']`, `export type SearchHit = components['schemas']['SearchHit']`, `export const MIN_TERM_LENGTH = 3`, `export const SEARCH_DEBOUNCE_MS = 250`, `export function useGlobalSearch(term: string)`.
+  - `apps/web/src/features/search/CommandPalette.tsx`: `export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void })`.
+- Task A14 drives this component through Playwright.
+
+**Four renderings, and the fourth is not an error.** Spec §8.6 plus §8.3: *no results* ("Nessun risultato per «termine»"), *truncated results* (five per class, the real count, "vedi tutti"), *search unavailable* (the error message and **no list**), and below three characters an invitation ("continua a scrivere") that issues no request at all. They are four separate branches, not one list with four captions — a list that renders empty after a failure says "there is none" when the truth is "I do not know".
+
+**The debounce and the cancellation are part of §8, not a later optimisation.** Residuo B2 records that the deal list has no debounce and fires `ceil(n/200)` requests per keystroke; the palette would query five entities on every keystroke, so it is strictly worse. 250 ms, and TanStack Query's own key-based discarding handles the stale response — the term is in the query key, so a response for `ross` cannot paint over the rendering of `rossi`.
+
+- [ ] **Step 1: Add the dependency and the shadcn wrapper**
+
+```bash
+cd apps/web && pnpm add cmdk
+```
+
+Then pin whatever version resolved into `package.json` in this same commit — the convention this repo already uses for `lucide-react`. Generate the wrapper with the CLI the repo already carries rather than hand-writing it:
+
+```bash
+cd apps/web && pnpm dlx shadcn@4.16.1 add command
+```
+
+That writes `src/components/ui/command.tsx` in the project's own `radix-nova` style (from `components.json`), exporting `Command`, `CommandDialog`, `CommandEmpty`, `CommandGroup`, `CommandInput`, `CommandItem`, `CommandList` and `CommandSeparator`. If the CLI adds a `dialog` dependency it does not already have, accept it — `dialog.tsx` is already present, so it will be a no-op.
+
+- [ ] **Step 2: Write the failing test**
+
+```tsx
+// apps/web/src/features/search/CommandPalette.test.tsx
+/**
+ * §8.6's three states, as three renderings, plus the sub-three-character invitation.
+ *
+ * The third state is the one that gets forgotten, so it is the one with the sharpest
+ * assertion: with the query failing, the string "Nessun risultato" must be **absent from
+ * the DOM**. An empty list drawn after an error *is* a wrong answer -- it says "there is
+ * none" when the truth is "I do not know".
+ */
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { CommandPalette } from './CommandPalette'
+
+const fetchMock = vi.fn()
+
+function renderPalette() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: 0 } },
+  })
+  return render(
+    <QueryClientProvider client={client}>
+      <CommandPalette open onOpenChange={vi.fn()} />
+    </QueryClientProvider>,
+  )
+}
+
+function results(overrides: Partial<{ totale: number; totale_e_un_minimo: boolean }> = {}) {
+  return {
+    termine: 'rossi',
+    gruppi: [
+      {
+        entity: 'customer',
+        totale: overrides.totale ?? 1,
+        totale_e_un_minimo: overrides.totale_e_un_minimo ?? false,
+        hits: [
+          {
+            entity: 'customer',
+            id: '0192f3b2-8c1a-7c3d-9f4e-1a2b3c4d5e6f',
+            etichetta: 'Rossi Ingegneria Srl',
+            sottotitolo: '01234567890',
+            punteggio: '0.8000',
+            campo: 'ragione_sociale',
+          },
+        ],
+      },
+      { entity: 'person', totale: 0, totale_e_un_minimo: false, hits: [] },
+      { entity: 'deal', totale: 0, totale_e_un_minimo: false, hits: [] },
+      { entity: 'document', totale: 0, totale_e_un_minimo: false, hits: [] },
+    ],
+  }
+}
+
+beforeEach(() => {
+  vi.stubGlobal('fetch', fetchMock)
+  fetchMock.mockReset()
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+})
+
+afterEach(() => {
+  vi.useRealTimers()
+})
+
+describe('CommandPalette', () => {
+  it('invites more typing below three characters and issues no request', async () => {
+    renderPalette()
+    await userEvent.type(screen.getByRole('combobox'), 'ro')
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(screen.getByText(/continua a scrivere/i)).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(screen.queryByText(/nessun risultato/i)).not.toBeInTheDocument()
+  })
+
+  it('debounces to a single request per burst of typing', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify(results()), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    renderPalette()
+    await userEvent.type(screen.getByRole('combobox'), 'rossi')
+    await vi.advanceTimersByTimeAsync(1000)
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+  })
+
+  it('renders a hit with its subtitle', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify(results()), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    renderPalette()
+    await userEvent.type(screen.getByRole('combobox'), 'rossi')
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(await screen.findByText('Rossi Ingegneria Srl')).toBeInTheDocument()
+    expect(screen.getByText('01234567890')).toBeInTheDocument()
+  })
+
+  it('states the real count and offers "vedi tutti" when the group is truncated', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify(results({ totale: 42 })), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    renderPalette()
+    await userEvent.type(screen.getByRole('combobox'), 'rossi')
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(await screen.findByText(/42/)).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: /vedi tutti/i })).toBeInTheDocument()
+  })
+
+  it('says "oltre 200" rather than "200" when the count is a minimum', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify(results({ totale: 200, totale_e_un_minimo: true })),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    )
+    renderPalette()
+    await userEvent.type(screen.getByRole('combobox'), 'rossi')
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(await screen.findByText(/oltre 200/i)).toBeInTheDocument()
+  })
+
+  it('says there is nothing, naming the term, when every group is empty', async () => {
+    const empty = { termine: 'zzzqqq', gruppi: results().gruppi.map((g) => ({ ...g, hits: [], totale: 0 })) }
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify(empty), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    renderPalette()
+    await userEvent.type(screen.getByRole('combobox'), 'zzzqqq')
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(await screen.findByText(/nessun risultato per/i)).toBeInTheDocument()
+    expect(screen.getByText(/zzzqqq/)).toBeInTheDocument()
+  })
+
+  it('renders the error state and NOT an empty result when the query fails', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ type: 'about:blank', title: 'Errore', detail: 'Ricerca non disponibile' }),
+        { status: 500, headers: { 'content-type': 'application/problem+json' } },
+      ),
+    )
+    renderPalette()
+    await userEvent.type(screen.getByRole('combobox'), 'rossi')
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/ricerca non disponibile/i)
+    // The assertion §8.6 exists for.
+    expect(screen.queryByText(/nessun risultato/i)).not.toBeInTheDocument()
+    expect(screen.queryAllByRole('option')).toHaveLength(0)
+  })
+})
+```
+
+- [ ] **Step 3: Run it and watch it fail**
+
+Run: `cd apps/web && pnpm exec vitest run src/features/search/CommandPalette.test.tsx`
+Expected: `Failed to resolve import "./CommandPalette"`.
+
+- [ ] **Step 4: Write the query hook**
+
+```ts
+// apps/web/src/features/search/queries.ts
+import { useQuery } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
+import { api, unwrap } from '@/lib/api'
+import type { components } from '@/lib/api-types'
+import { queryKeys } from '@/lib/query'
+
+export type SearchResults = components['schemas']['SearchResults']
+export type SearchGroup = components['schemas']['SearchGroup']
+export type SearchHit = components['schemas']['SearchHit']
+
+/**
+ * Below this the palette issues no request at all. Spec §8.3: a trigram index cannot
+ * serve a pattern from which no trigram can be extracted, and a two-character term on
+ * 50 000 customers returns thousands of rows, which is not an answer either. The API
+ * enforces the same bound; this is the half that stops the request being made.
+ */
+export const MIN_TERM_LENGTH = 3
+
+/**
+ * Residuo B2 gets worse here than on the deal list: the palette queries five entities on
+ * every keystroke. 250 ms is short enough to feel immediate and long enough that typing
+ * "rossi" is one request, not five.
+ */
+export const SEARCH_DEBOUNCE_MS = 250
+
+function useDebounced(value: string, delayMs: number): string {
+  const [settled, setSettled] = useState(value)
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), delayMs)
+    return () => clearTimeout(timer)
+  }, [value, delayMs])
+  return settled
+}
+
+/**
+ * The previous request is not aborted by hand. TanStack Query keys the cache by the term,
+ * so an in-flight response for "ross" resolves into its own entry and cannot paint over
+ * the rendering of "rossi"; the component reads only the entry for the term it is
+ * currently showing. Manual `AbortController` plumbing would add a second mechanism for
+ * the property the key already gives.
+ *
+ * `enabled` is the guard, not an early `return`: a hook must never be called with an
+ * argument it cannot serve (residuo B1), and a short term is exactly that case.
+ */
+export function useGlobalSearch(term: string) {
+  const debounced = useDebounced(term.trim(), SEARCH_DEBOUNCE_MS)
+  const query = useQuery({
+    queryKey: queryKeys.search(debounced),
+    queryFn: () => unwrap(api.GET('/api/search', { params: { query: { q: debounced } } })),
+    enabled: debounced.length >= MIN_TERM_LENGTH,
+    // A palette is re-opened constantly and the same term is retyped constantly. Ten
+    // seconds is long enough to make reopening instant and short enough that a record
+    // created a moment ago is findable.
+    staleTime: 10_000,
+  })
+  return { ...query, debounced }
+}
+
+export const ENTITY_LABELS: Record<SearchGroup['entity'], string> = {
+  customer: 'Clienti',
+  person: 'Persone',
+  deal: 'Deal',
+  document: 'Documenti',
+  invoice: 'Fatture',
+}
+
+/** Where a hit's row navigates, and where its group's "vedi tutti" navigates. */
+export const ENTITY_ROUTES: Record<
+  SearchGroup['entity'],
+  { detail: (id: string) => string; list: (term: string) => string }
+> = {
+  customer: {
+    detail: (id) => `/app/clienti/${id}`,
+    list: (term) => `/app/clienti?search=${encodeURIComponent(term)}`,
+  },
+  person: {
+    detail: (id) => `/app/persone/${id}`,
+    list: (term) => `/app/persone?search=${encodeURIComponent(term)}`,
+  },
+  deal: {
+    detail: (id) => `/app/deal/${id}`,
+    list: (term) => `/app/deal/lista?search=${encodeURIComponent(term)}`,
+  },
+  document: {
+    detail: (id) => `/app/documenti/${id}`,
+    list: (term) => `/app/documenti?search=${encodeURIComponent(term)}`,
+  },
+  // 6C's Task C13 adds the branch; the route is declared here so the record is
+  // exhaustive and `tsc` catches the omission rather than a runtime `undefined`.
+  invoice: {
+    detail: (id) => `/app/fatture/${id}`,
+    list: (term) => `/app/fatture?search=${encodeURIComponent(term)}`,
+  },
+}
+```
+
+- [ ] **Step 5: Write the palette**
+
+```tsx
+// apps/web/src/features/search/CommandPalette.tsx
+import { useNavigate } from '@tanstack/react-router'
+import { useEffect, useState } from 'react'
+import { QueryErrorBanner } from '@/components/QueryErrorBanner'
+import {
+  CommandDialog,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandSeparator,
+} from '@/components/ui/command'
+import {
+  ENTITY_LABELS,
+  ENTITY_ROUTES,
+  MIN_TERM_LENGTH,
+  useGlobalSearch,
+  type SearchGroup,
+} from './queries'
+
+/**
+ * The four renderings of §8.6 and §8.3, as four branches.
+ *
+ * They are branches and not captions on one list because a list rendered empty after a
+ * failure *is* a wrong answer: it says "there is none" when the truth is "I do not know".
+ * The error branch renders no `<CommandList>` at all, which is what makes the assertion
+ * "the string «Nessun risultato» is absent from the DOM" hold structurally rather than by
+ * a conditional someone can later invert.
+ *
+ * `cmdk` rather than `dialog` + `input`: an accessible combobox -- ARIA roles,
+ * `aria-activedescendant`, keyboard navigation, results announced to a screen reader -- is
+ * one of the things that is written badly by hand, and the cost is one small dependency in
+ * a project that already carries `radix-ui`.
+ *
+ * `shouldFilter={false}` is load-bearing: `cmdk` filters and reorders client-side by
+ * default, which would apply a second, different ranking on top of §8.5's. The server
+ * ranks; this renders.
+ */
+export function CommandPalette({
+  open,
+  onOpenChange,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const [term, setTerm] = useState('')
+  const navigate = useNavigate()
+  const search = useGlobalSearch(term)
+
+  // Cmd/Ctrl+K from anywhere. Either modifier is accepted regardless of platform: a user
+  // on a Mac keyboard plugged into Linux should not have to know which one this build
+  // decided to draw in the header.
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key.toLowerCase() === 'k' && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault()
+        onOpenChange(!open)
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [open, onOpenChange])
+
+  function go(path: string) {
+    onOpenChange(false)
+    setTerm('')
+    void navigate({ to: path })
+  }
+
+  const tooShort = search.debounced.length < MIN_TERM_LENGTH
+  const groups: SearchGroup[] = search.data?.gruppi ?? []
+  const anyHits = groups.some((group) => group.hits.length > 0)
+
+  return (
+    <CommandDialog open={open} onOpenChange={onOpenChange} shouldFilter={false}>
+      <CommandInput
+        value={term}
+        onValueChange={setTerm}
+        placeholder="Cerca clienti, persone, deal, documenti…"
+        aria-label="Cerca in tutto il CRM"
+      />
+
+      {/* State 4 (not an error): an invitation, and no request was made. */}
+      {tooShort && (
+        <p className="px-4 py-6 text-sm text-muted-foreground">
+          Continua a scrivere: servono almeno {MIN_TERM_LENGTH} caratteri.
+        </p>
+      )}
+
+      {/* State 3: unavailable. No list is rendered at all. */}
+      {!tooShort && search.isError && (
+        <div className="px-4 py-4">
+          <QueryErrorBanner error={search.error} />
+        </div>
+      )}
+
+      {!tooShort && !search.isError && (
+        <CommandList>
+          {search.isLoading && (
+            <p role="status" className="px-4 py-6 text-sm text-muted-foreground">
+              Ricerca in corso…
+            </p>
+          )}
+
+          {/* State 1: nothing, and the term is named so the user can see what was asked. */}
+          {!search.isLoading && !anyHits && (
+            <p className="px-4 py-6 text-sm text-muted-foreground">
+              Nessun risultato per «{search.debounced}»
+            </p>
+          )}
+
+          {/* State 2: truncated, with the real count and a way to the whole set. */}
+          {groups.map((group, index) =>
+            group.hits.length === 0 ? null : (
+              <div key={group.entity}>
+                {index > 0 && <CommandSeparator />}
+                <CommandGroup
+                  heading={`${ENTITY_LABELS[group.entity]} · ${
+                    group.totale_e_un_minimo ? `oltre ${group.totale}` : group.totale
+                  }`}
+                >
+                  {group.hits.map((hit) => (
+                    <CommandItem
+                      key={hit.id}
+                      value={hit.id}
+                      onSelect={() => go(ENTITY_ROUTES[group.entity].detail(hit.id))}
+                    >
+                      <span className="truncate">{hit.etichetta}</span>
+                      {hit.sottotitolo && (
+                        <span className="ml-2 truncate text-xs text-muted-foreground">
+                          {hit.sottotitolo}
+                        </span>
+                      )}
+                    </CommandItem>
+                  ))}
+                  {group.hits.length < group.totale && (
+                    <CommandItem
+                      value={`vedi-tutti-${group.entity}`}
+                      onSelect={() =>
+                        go(ENTITY_ROUTES[group.entity].list(search.debounced))
+                      }
+                    >
+                      Vedi tutti{' '}
+                      {group.totale_e_un_minimo ? `oltre ${group.totale}` : group.totale}{' '}
+                      {ENTITY_LABELS[group.entity].toLowerCase()}
+                    </CommandItem>
+                  )}
+                </CommandGroup>
+              </div>
+            ),
+          )}
+        </CommandList>
+      )}
+    </CommandDialog>
+  )
+}
+```
+
+- [ ] **Step 6: Mount it and add the eslint override**
+
+Add the two `CommandPalette` lines to `apps/web/src/components/AppShell.tsx` that Task A12 Step 4 deferred.
+
+```js
+// apps/web/eslint.config.js -- add an override in the same shape as the existing ones.
+  {
+    files: ['src/features/search/queries.ts'],
+    rules: {
+      'react-refresh/only-export-components': [
+        'warn',
+        { allowExportNames: ['MIN_TERM_LENGTH', 'SEARCH_DEBOUNCE_MS', 'ENTITY_LABELS', 'ENTITY_ROUTES', 'useGlobalSearch'] },
+      ],
+    },
+  },
+```
+
+- [ ] **Step 7: Run the tests and watch them pass**
+
+Run: `cd apps/web && pnpm exec vitest run src/features/search/CommandPalette.test.tsx && pnpm exec tsc --noEmit && pnpm lint`
+Expected: PASS, seven tests, clean typecheck, clean lint.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add apps/web/package.json apps/web/pnpm-lock.yaml \
+        apps/web/src/components/ui/command.tsx \
+        apps/web/src/features/search/ \
+        apps/web/src/components/AppShell.tsx \
+        apps/web/eslint.config.js
+git commit -m "feat(web): cmdk command palette with four distinct states and a debounce"
+```
+
+---
+<!--NEXT-->
