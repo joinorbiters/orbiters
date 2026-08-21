@@ -17,8 +17,8 @@
 | Sub-plan | Content | Tasks | Cannot start until |
 |---|---|---|---|
 | **6A — Ricerca globale** | Spec §8 in full, minus the invoice branch; the `AppShell` header; the palette. Closes **R6** and **R9** for four entities | 14 | **Nothing beyond what is in `main` today.** Slices 1 and 2 only |
-| **6B — Automazioni, segnali e dashboard commerciale** | Spec §9 in full, §4, `chiuso_il`, `stato_dal`, `automation_config`, `/app/impostazioni/automazioni` | 17 | 6A merged. Slice 2 (offers are the trigger). **Not** slices 3, 4 or 5 |
-| **6C — Dashboard economica e operativa, prompt MCP** | Spec §5, §6, §10, the §11 tools, the tenth trigram index | 14 | 6A and 6B merged; **slice 3 and slice 4 (both halves 4A and 4B) in `main`**; **the R1 cure in `main`** |
+| **6B — Automazioni, segnali e dashboard commerciale** | Spec §9 in full, §4, `chiuso_il`, `stato_dal`, `automation_config`, `/app/impostazioni/automazioni` | 14 | 6A merged. Slice 2 (offers are the trigger). **Not** slices 3, 4 or 5 |
+| **6C — Dashboard economica e operativa, prompt MCP** | Spec §5, §6, §10, the §11 tools, the tenth trigram index | 13 | 6A and 6B merged; **slice 3 and slice 4 (both halves 4A and 4B) in `main`**; **the R1 cure in `main`** |
 
 **6A → 6B → 6C is fixed at one point.** The indexes and the ordering contract of 6A change the signature of the list endpoints of `customers`, `people`, `deals` and `documents`: `cursor` stops being a `UUID` and becomes an opaque string. Building the dashboards first means regenerating `apps/web/src/lib/api-types.ts` and re-typing every call site twice. The break is caught by `pnpm tsc --noEmit` against the generated client, which is the mechanism slice 1 §10.2 put there for exactly this case.
 
@@ -12755,20 +12755,12 @@ def test_recent_orders_totally_so_two_reads_agree(db_session: Session) -> None:
     second = [row.id for row in repo.recent(limit=20)]
     assert first == second
 
-
-def test_recent_uses_its_own_index_and_not_the_entity_one() -> None:
-    """§6.1: `ix_activities_entity (entity_type, entity_id, occurred_at)` cannot serve a
-    global feed ordered by date -- the ordering column is third. Asserted on the plan
-    because the query is fast either way on a small table, and slow in production."""
-    import pytest
-
-    pytest.importorskip("testcontainers")
-    # The assertion runs against the inflated corpus in test_search_plan.py's fixture
-    # style; see that file. Kept here as a named marker so the requirement is discoverable
-    # from the activities tests, with the measurement where the corpus already exists.
 ```
 
-Replace that last placeholder-shaped test with the real plan assertion, in `packages/core/tests/test_search_plan.py` where the inflated corpus fixture already lives:
+The plan assertion for this index does **not** live in this file. It needs the 50 000-row
+inflated corpus -- on a small `activities` table Postgres picks a sequential scan because it
+*is* the cheapest plan -- so it goes where that fixture already exists,
+`packages/core/tests/test_search_plan.py`:
 
 ```python
 # packages/core/tests/test_search_plan.py -- append.
@@ -14284,4 +14276,3000 @@ git commit -m "feat(dashboard): operational dashboard with three predicate signa
 ```
 
 ---
-<!--NEXT-->
+### Task C7: The two new dashboards on both adapters, and criteria 2, 6 and 14 repeated
+
+**Blocked on: Tasks C4 and C6, and the R1 cure in `main` for the MCP half.**
+
+**Files:**
+- Modify: `apps/api/src/pigrocrm_api/routers/dashboard.py`
+- Modify: `apps/mcp/src/pigrocrm_mcp/tools/dashboard.py`
+- Modify: `apps/mcp/src/pigrocrm_mcp/tools/__init__.py`
+- Modify: `packages/core/tests/test_dashboard_snapshot.py` (criterion 6 on both)
+- Modify: `packages/core/tests/test_dashboard_drillthrough.py` (criterion 2 on both)
+- Modify: `apps/api/tests/test_dashboard_api.py`
+
+**Interfaces:**
+- Consumes: `DashboardService.get_economic_dashboard(query: PeriodoQuery, actor: Actor) -> EconomicDashboard` (Task C4); `DashboardService.get_operational_dashboard(actor: Actor) -> OperationalDashboard` (Task C6).
+- Produces:
+  - `GET /api/dashboard/economica?da=&a=` → `EconomicDashboard`
+  - `GET /api/dashboard/operativa` → `OperationalDashboard` (**no** period parameter)
+  - MCP tools `get_economic_dashboard(da: str | None, a: str | None)` and `get_operational_dashboard()`
+  - `_run_with_a_commit_in_the_middle` in `test_dashboard_snapshot.py` gains a `dashboard` parameter so all three dashboards run through the same barrier
+- Task C10 asserts ten of these concurrently; Task C11 renders them.
+
+**Criteria 2, 6 and 14 are repeated here and not assumed.** 6B executed all three on the commercial dashboard because they are criteria for *every* dashboard and fell due with the first one. Two new dashboards means two new snapshots to prove, two new sets of linked cards to reconcile, and two new frontend modules for the AST guard to cover — the third of those arrives with Task C11.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# apps/api/tests/test_dashboard_api.py -- append.
+
+def test_the_economic_dashboard_is_one_request(
+    client: TestClient, admin_cookie: dict[str, str]
+) -> None:
+    response = client.get(
+        "/api/dashboard/economica", params={"da": "2026-03-01", "a": "2026-03-31"},
+        cookies=admin_cookie,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {
+        "periodo", "calcolato_alle", "pnl", "da_incassare", "scaduto", "fatture_emesse",
+    }
+    # The P&L is embedded verbatim, not flattened -- §5 adds no aggregate to this page.
+    assert set(body["pnl"]) >= {
+        "chiusi", "in_corso", "spese_generali", "periodo_chiuso",
+        "voci_scritte_in_ritardo", "valore_maturato",
+        "ore_fatturabili_non_fatturate", "ore_senza_tariffa",
+    }
+
+
+def test_the_economic_dashboard_carries_no_fiscal_field(
+    client: TestClient, admin_cookie: dict[str, str]
+) -> None:
+    """§5.3: the fiscal estimate stays at /app/analisi/fiscale, admin-only. A dashboard is
+    the screen most likely to end up in a screenshot or a screen share."""
+    body = client.get("/api/dashboard/economica", cookies=admin_cookie).text
+    for forbidden in (
+        "imponibile_fiscale", "imposta_sostitutiva", "contributi", "netto_stimato",
+    ):
+        assert forbidden not in body, forbidden
+
+
+def test_the_operational_dashboard_takes_no_period(
+    client: TestClient, admin_cookie: dict[str, str]
+) -> None:
+    """§6: the current week and a backlog are the two things that make no sense in the
+    past, so the endpoint has no period parameter at all -- not an optional one."""
+    schema = client.get("/openapi.json").json()
+    params = schema["paths"]["/api/dashboard/operativa"]["get"].get("parameters", [])
+    assert [p["name"] for p in params] == []
+
+    response = client.get("/api/dashboard/operativa", cookies=admin_cookie)
+    assert response.status_code == 200
+    assert set(response.json()) == {
+        "calcolato_alle", "settimana", "arretrato", "segnali", "attivita_recenti",
+    }
+
+
+def test_a_period_on_the_operational_endpoint_is_ignored_not_honoured(
+    client: TestClient, admin_cookie: dict[str, str]
+) -> None:
+    """A stray `?da=` must not silently produce a period-filtered answer from an endpoint
+    that has no period. FastAPI ignores undeclared query parameters, and this pins that."""
+    response = client.get(
+        "/api/dashboard/operativa", params={"da": "2020-01-01"}, cookies=admin_cookie
+    )
+    assert response.status_code == 200
+
+
+def test_every_signal_carries_a_drill_through_link(
+    client: TestClient, admin_cookie: dict[str, str]
+) -> None:
+    body = client.get("/api/dashboard/operativa", cookies=admin_cookie).json()
+    assert [s["codice"] for s in body["segnali"]] == [
+        "fatturato_non_vinto", "vinto_da_fatturare", "scaduto_non_incassato",
+    ]
+    assert all(s["collegamento"] for s in body["segnali"])
+
+
+def test_money_is_serialised_as_a_string_on_both_new_dashboards(
+    client: TestClient, admin_cookie: dict[str, str]
+) -> None:
+    economic = client.get("/api/dashboard/economica", cookies=admin_cookie).json()
+    assert isinstance(economic["da_incassare"], str)
+    assert isinstance(economic["pnl"]["chiusi"]["ricavi"], str)
+
+    operational = client.get("/api/dashboard/operativa", cookies=admin_cookie).json()
+    assert isinstance(operational["arretrato"]["valore_maturato"], str)
+
+
+def test_a_readonly_actor_sees_all_three_dashboards(
+    client: TestClient, readonly_cookie: dict[str, str]
+) -> None:
+    """§13: no new role and no new authorisation rule. A readonly sees all three."""
+    for path in ("commerciale", "economica", "operativa"):
+        assert client.get(
+            f"/api/dashboard/{path}", cookies=readonly_cookie
+        ).status_code == 200, path
+```
+
+```python
+# packages/core/tests/test_dashboard_snapshot.py -- replace the helper's signature and add
+# two parametrised runs. The three clauses are unchanged; only what is being run changes.
+
+# Replace `_run_with_a_commit_in_the_middle`'s call to the service with a caller-supplied
+# one, and add a `first_query_owner` so the barrier hangs off whichever aggregate each
+# dashboard calls first:
+def _run_with_a_commit_in_the_middle(
+    engine: Engine,
+    stages: dict,
+    customer_id: object,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    call: Callable[[DashboardService], object],
+    barrier_on: tuple[type, str],
+) -> tuple[object, datetime]:
+    ...
+    original = getattr(barrier_on[0], barrier_on[1])
+    state = {"tripped": False}
+
+    def barrier(self: object, *args: object, **kwargs: object) -> object:
+        if not state["tripped"]:
+            state["tripped"] = True
+            reader_reached_first_query.set()
+            writer_committed.wait(_BARRIER_TIMEOUT)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(barrier_on[0], barrier_on[1], barrier)
+    ...
+    with session_factory(engine)() as session:
+        result = call(DashboardService(session))
+    ...
+
+
+@pytest.mark.parametrize(
+    "call,barrier_on,label",
+    [
+        (
+            lambda service: service.get_commercial_dashboard(PeriodoQuery(), READONLY),
+            (DealRepository, "pipeline_summary"),
+            "commerciale",
+        ),
+        (
+            lambda service: service.get_economic_dashboard(PeriodoQuery(), READONLY),
+            (AnalyticsService, "period_pnl"),
+            "economica",
+        ),
+        (
+            lambda service: service.get_operational_dashboard(READONLY),
+            (TimeEntryRepository, "week_hours"),
+            "operativa",
+        ),
+    ],
+)
+def test_clause_a_every_dashboard_runs_in_repeatable_read(
+    seeded: tuple[Engine, dict, Customer],
+    call: object,
+    barrier_on: tuple[type, str],
+    label: str,
+) -> None:
+    """§16 criterion 6 applies to *every* dashboard, not to the first one built."""
+    engine, _stages, _customer = seeded
+    with session_factory(engine)() as session:
+        call(DashboardService(session))  # type: ignore[operator]
+        level = session.execute(text("SHOW transaction_isolation")).scalar_one()
+    assert level == "repeatable read", label
+
+
+def test_clause_b_the_economic_dashboard_sees_no_mid_flight_invoice(
+    seeded: tuple[Engine, dict, Customer], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The criterion's own wording: "una connessione parallela emette il `COMMIT` di una
+    fattura fra la prima e la seconda query interna ... quella fattura non compare in
+    **nessuna** cifra della risposta -- ne' nel fatturato ne' nel conteggio."
+
+    So the intruder here is an invoice, and both assertions are made: the revenue figure and
+    the count. A test asserting only the total would pass on an implementation that leaked
+    the row into the count.
+    """
+    engine, stages, customer = seeded
+    result, _instant = _run_with_a_commit_in_the_middle(
+        engine, stages, customer.id, monkeypatch,
+        call=lambda service: service.get_economic_dashboard(PeriodoQuery(), READONLY),
+        barrier_on=(AnalyticsService, "period_pnl"),
+        intruder="invoice",
+    )
+    assert result.fatture_emesse == 0
+    assert result.pnl.chiusi.ricavi + result.pnl.in_corso.ricavi == Decimal("0.00")
+```
+
+The writer in `_run_with_a_commit_in_the_middle` gains an `intruder` parameter: `"deal"` inserts the open deal 6B's version used, `"invoice"` inserts an issued invoice dated inside the period. Both are committed at the barrier; the assertion differs per dashboard because each dashboard has a different set of figures the row could leak into.
+
+- [ ] **Step 2: Run them and watch them fail**
+
+Run: `uv run pytest apps/api/tests/test_dashboard_api.py packages/core/tests/test_dashboard_snapshot.py -v`
+Expected: the new API tests FAIL with `404`; the parametrised snapshot tests FAIL on the missing service methods only if Tasks C4 and C6 are not yet merged — with them merged, they fail on the two missing endpoints alone.
+
+- [ ] **Step 3: Add the endpoints**
+
+```python
+# apps/api/src/pigrocrm_api/routers/dashboard.py -- two endpoints, after `commerciale`.
+# Imports gain: EconomicDashboard, OperationalDashboard from pigrocrm.core.dashboard.schemas
+
+@router.get("/economica", response_model=EconomicDashboard)
+def economica(
+    session: SessionDep,
+    actor: ActorDep,
+    da: Annotated[date | None, Query()] = None,
+    a: Annotated[date | None, Query()] = None,
+) -> EconomicDashboard:
+    return DashboardService(session).get_economic_dashboard(
+        PeriodoQuery(da=da, a=a), actor
+    )
+
+
+@router.get("/operativa", response_model=OperationalDashboard)
+def operativa(session: SessionDep, actor: ActorDep) -> OperationalDashboard:
+    """No period parameter, and not an optional one either.
+
+    §6: its figures are the current week and a backlog, which are the two things that make
+    no sense in the past. An optional `da`/`a` that the service ignored would be a
+    parameter the API advertises and does not honour -- worse than not having it, because a
+    caller would believe it worked.
+    """
+    return DashboardService(session).get_operational_dashboard(actor)
+```
+
+- [ ] **Step 4: Add the tools**
+
+```python
+# apps/mcp/src/pigrocrm_mcp/tools/dashboard.py -- append.
+def get_economic_dashboard(context: McpContext, query: PeriodoQuery) -> dict[str, Any]:
+    return (
+        DashboardService(context.session)
+        .get_economic_dashboard(query, context.actor)
+        .model_dump(mode="json")
+    )
+
+
+def get_operational_dashboard(context: McpContext) -> dict[str, Any]:
+    return (
+        DashboardService(context.session)
+        .get_operational_dashboard(context.actor)
+        .model_dump(mode="json")
+    )
+```
+
+```python
+# apps/mcp/src/pigrocrm_mcp/tools/__init__.py -- two tools.
+    @mcp.tool()
+    @guard
+    def get_economic_dashboard(
+        da: str | None = None, a: str | None = None
+    ) -> dict[str, Any]:
+        """La dashboard economica del periodo. `pnl` contiene il conto economico di
+        periodo cosi' come lo restituisce AnalyticsService, senza rielaborazioni: ricavi,
+        costi diretti, costo del lavoro e margine in **due colonne separate** -- `chiusi` e
+        `in_corso` -- piu' `spese_generali`, che non sono ripartite su nessun deal.
+        La cifra riportabile e' `chiusi`: sommare il margine di un lavoro finito a quello di
+        uno a metà produce un numero che non e' ne' l'uno ne' l'altro. `margine_percentuale`
+        e' `null`, non zero, quando i ricavi sono zero. `ricavi` e' la somma degli
+        **imponibili** delle fatture emesse e non annullate, attribuite al periodo dalla
+        data di emissione: non e' l'incassato e non e' il totale con IVA.
+        `da_incassare` e `scaduto` usano invece il **totale** perche' sono crediti e non
+        ricavi, non hanno periodo, e non entrano in nessun margine. `periodo_chiuso` e
+        `voci_scritte_in_ritardo` dicono se il numero puo' ancora muoversi.
+        Nessuna cifra fiscale: la stima fiscale non e' esposta via MCP.
+        """
+        return dashboard_tools.get_economic_dashboard(
+            context,
+            PeriodoQuery(
+                da=date.fromisoformat(da) if da else None,
+                a=date.fromisoformat(a) if a else None,
+            ),
+        )
+
+    @mcp.tool()
+    @guard
+    def get_operational_dashboard() -> dict[str, Any]:
+        """La dashboard operativa: cosa c'e' da fare adesso. Non prende un periodo.
+        `settimana` porta le ore registrate giorno per giorno nella settimana corrente e --
+        soprattutto -- `giorni_senza_ore`, i giorni in cui non e' stata registrata
+        nessun'ora. Un giorno registrato con `0.00` ore **non** e' fra questi: zero e'
+        un valore, non un'assenza. `arretrato` e' il totale delle ore fatturabili non
+        ancora fatturate, senza periodo, con il valore maturato corrispondente (che non e'
+        un ricavo) e il numero di voci senza tariffa. `segnali` sono tre conteggi di
+        incoerenza, ognuno con un collegamento all'elenco delle righe che li compongono;
+        contano e non mandano niente.
+        """
+        return dashboard_tools.get_operational_dashboard(context)
+```
+
+- [ ] **Step 5: The R1 gate**
+
+Run: `grep -n "lambda: session\|session_provider" apps/mcp/src/pigrocrm_mcp/__main__.py apps/mcp/src/pigrocrm_mcp/server.py`
+
+`server.py`'s own comment currently documents the shared session and its reason. If it still does, **do not register the two tools** — apply Task A11 Step 6's comment and gate, and note in the commit message that the API half shipped alone. Two concurrent dashboards on one session can each read half their figures inside the other's transaction and produce a total that was never true at any instant; §7.1's guarantee is a property of the session, and there is no version of these tools that is merely degraded rather than wrong.
+
+- [ ] **Step 6: Run, gate, commit**
+
+Run: `uv run pytest apps/api/tests/test_dashboard_api.py apps/mcp/tests/test_mcp_dashboard.py packages/core/tests/test_dashboard_snapshot.py packages/core/tests/test_dashboard_drillthrough.py packages/core/tests/test_architecture.py -v`
+Expected: PASS. The architecture test now sees three public methods on `DashboardService`, all three with tools.
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+
+```bash
+git add apps/api/src/pigrocrm_api/routers/dashboard.py \
+        apps/mcp/src/pigrocrm_mcp/tools/dashboard.py \
+        apps/mcp/src/pigrocrm_mcp/tools/__init__.py \
+        apps/api/tests/test_dashboard_api.py \
+        apps/mcp/tests/test_mcp_dashboard.py \
+        packages/core/tests/test_dashboard_snapshot.py \
+        packages/core/tests/test_dashboard_drillthrough.py
+git commit -m "feat(api): economic and operational dashboards on both adapters"
+```
+
+---
+
+### Task C8: The four MCP prompts
+
+**Blocked on: Tasks C4, C6, C7, and the R1 cure in `main`.**
+
+**Files:**
+- Create: `apps/mcp/src/pigrocrm_mcp/prompts/__init__.py`
+- Create: `apps/mcp/src/pigrocrm_mcp/prompts/dashboards.py`
+- Create: `apps/mcp/src/pigrocrm_mcp/prompts/customer.py`
+- Modify: `apps/mcp/src/pigrocrm_mcp/server.py` (one registration call)
+- Create: `apps/mcp/tests/test_mcp_prompts.py` (Task C9 adds criterion 10's assertions to it)
+
+**Interfaces:**
+- Consumes: `DashboardService.{get_commercial_dashboard,get_economic_dashboard,get_operational_dashboard}` (Tasks B8, C4, C6); `AnalyticsService.unbilled_backlog` (Task C1); `DocumentRepository.pending_offers` (Task B7); `InvoiceRepository.sum_scaduto` (Task C3); `entities.render_customer(context, UUID) -> str`; `McpContext`; `month_bounds`, `current_week` (Tasks B1, C5).
+- Produces:
+  - `register_prompts(mcp: MCPServer, context: McpContext, guard: Callable[[T], T]) -> None`
+  - Four prompts, named exactly: `revisione-pipeline`, `chiusura-mese`, `stato-cliente`, `ore-da-registrare`
+  - `prompts/dashboards.py`: `def revisione_pipeline(context, da, a) -> list[dict]`, `def chiusura_mese(context, anno, mese) -> list[dict]`, `def ore_da_registrare(context, settimana) -> list[dict]`
+  - `prompts/customer.py`: `def stato_cliente(context, customer_id) -> list[dict]`
+- Task C9 asserts criterion 10 over these four; Task C13's end-to-end run opens `revisione-pipeline`.
+
+**Why these four are prompts and not tools, stated because it decides their shape.** A tool is invoked by the *model* when it decides it needs one, and returns *data*. A prompt is invoked by the *user*, from a menu, and returns *messages* — the beginning of a conversation. And the judgement lives in a different place: in a tool it is the model's, in a prompt it is written into the prompt (*"segnala solo scostamenti oltre il 10%"*). Each of these four is the composition of several reads **plus a posture on how to read them**. A tool that also returned the posture would be putting instructions inside a data result, which is the shape of an injection; and the model would have to guess it should call it, whereas here the human chooses it and can see what was attached.
+
+**Verified against the installed SDK, not assumed from documentation.** `mcp==2.0.0`: `MCPServer.prompt()` registers a function, its arguments are inferred from the signature exactly as for tools, the function can receive the `Context` — so **it can read the database like a tool** — and a message may contain either text or a `{"type": "resource", ...}` block.
+
+**How the context travels, and it is a rule because §11.1 adds no new resource.** The context travels as **Markdown text inside the message**, and is a resource block **only when the resource already exists** — which means `customer://{id}` (slice 1 §8.4), in `stato-cliente`. A resource block needs a URI, and inventing `dashboard://commerciale?da=…` to have one would be adding a resource without saying so. Either way the property that matters holds: the context **arrives inside the prompt** rather than depending on the model going to fetch it.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# apps/mcp/tests/test_mcp_prompts.py
+"""§10's four prompts. Criterion 10's own assertions are added in Task C9.
+
+What is asserted here is that they exist, that their arguments are inferred from their
+signatures, that each one carries its context *inside* the returned messages, and that a
+prompt rendered against an empty database produces a valid message rather than an
+exception -- the criterion names that last one explicitly, and it is the failure mode of
+every "assemble a briefing" function ever written.
+"""
+
+from typing import Any
+
+import pytest
+
+
+async def test_all_four_prompts_are_registered_with_their_names(mcp_server: Any) -> None:
+    names = {prompt.name for prompt in await mcp_server.list_prompts()}
+    assert names == {
+        "revisione-pipeline", "chiusura-mese", "stato-cliente", "ore-da-registrare",
+    }
+
+
+async def test_the_arguments_are_inferred_from_the_signatures(mcp_server: Any) -> None:
+    """The SDK infers them exactly as it does for tools, so the signature *is* the schema.
+    Pinned because a default moving from optional to required is a silent contract break for
+    a menu the user drives."""
+    by_name = {prompt.name: prompt for prompt in await mcp_server.list_prompts()}
+
+    pipeline_args = {arg.name: arg.required for arg in by_name["revisione-pipeline"].arguments}
+    assert pipeline_args == {"da": False, "a": False}
+
+    month_args = {arg.name: arg.required for arg in by_name["chiusura-mese"].arguments}
+    assert month_args == {"anno": True, "mese": True}
+
+    customer_args = {arg.name: arg.required for arg in by_name["stato-cliente"].arguments}
+    assert customer_args == {"customer_id": True}
+
+    hours_args = {arg.name: arg.required for arg in by_name["ore-da-registrare"].arguments}
+    assert hours_args == {"settimana": False}
+
+
+async def test_revisione_pipeline_carries_the_dashboard_as_text(
+    mcp_server: Any, seeded_pipeline: Any
+) -> None:
+    """The context arrives *inside* the prompt rather than depending on the model going to
+    fetch it -- which is the whole reason these are prompts."""
+    rendered = await mcp_server.get_prompt("revisione-pipeline", {})
+    text = "\n".join(
+        block.text for message in rendered.messages
+        for block in ([message.content] if not isinstance(message.content, list) else message.content)
+        if getattr(block, "type", None) == "text"
+    )
+    assert "Pipeline" in text
+    assert "Tasso di conversione" in text
+    # The posture, which is the half a tool could not carry without becoming an injection.
+    assert "fermi" in text.lower()
+
+
+async def test_revisione_pipeline_lists_the_pending_offers_with_their_age(
+    mcp_server: Any, seeded_pipeline: Any
+) -> None:
+    rendered = await mcp_server.get_prompt("revisione-pipeline", {})
+    text = str(rendered.messages)
+    assert "giorni" in text
+
+
+async def test_revisione_pipeline_on_an_empty_database_is_a_valid_message(
+    mcp_server: Any
+) -> None:
+    """§16 criterion 10's last sentence, and the failure mode of every briefing function:
+    an empty corpus must render, not raise."""
+    rendered = await mcp_server.get_prompt("revisione-pipeline", {})
+    assert rendered.messages
+    assert all(message.role in ("user", "assistant") for message in rendered.messages)
+
+
+async def test_chiusura_mese_takes_a_year_and_a_month_and_refuses_month_thirteen(
+    mcp_server: Any
+) -> None:
+    ok = await mcp_server.get_prompt("chiusura-mese", {"anno": 2026, "mese": 3})
+    assert ok.messages
+
+    with pytest.raises(Exception):  # noqa: B017 -- the SDK's own error type for a failed prompt
+        await mcp_server.get_prompt("chiusura-mese", {"anno": 2026, "mese": 13})
+
+
+async def test_stato_cliente_embeds_the_existing_resource(
+    mcp_server: Any, seeded_customer: Any
+) -> None:
+    """§10: the **only** prompt with a resource block, because it is the only one whose
+    resource already exists. `customer://{id}` is slice 1 §8.4's."""
+    rendered = await mcp_server.get_prompt(
+        "stato-cliente", {"customer_id": str(seeded_customer.id)}
+    )
+    uris = [
+        str(getattr(block, "resource", block).uri)
+        for message in rendered.messages
+        for block in ([message.content] if not isinstance(message.content, list) else message.content)
+        if getattr(block, "type", None) == "resource"
+    ]
+    assert uris == [f"customer://{seeded_customer.id}"]
+
+
+async def test_stato_cliente_also_carries_the_open_deals_as_text(
+    mcp_server: Any, seeded_customer: Any
+) -> None:
+    rendered = await mcp_server.get_prompt(
+        "stato-cliente", {"customer_id": str(seeded_customer.id)}
+    )
+    assert "deal" in str(rendered.messages).lower()
+
+
+async def test_stato_cliente_on_an_unknown_customer_is_a_domain_error(
+    mcp_server: Any
+) -> None:
+    from uuid import uuid4
+
+    with pytest.raises(Exception):  # noqa: B017
+        await mcp_server.get_prompt("stato-cliente", {"customer_id": str(uuid4())})
+
+
+async def test_ore_da_registrare_names_the_days_with_no_hours(
+    mcp_server: Any
+) -> None:
+    """The prompt §6 calls the most useful in the product: it attacks the "I never entered
+    Tuesday" failure slice 4 §13 names when it refuses a stopwatch, and it ends by asking
+    the user what they did so it can call `log_time` -- a tool the agent has."""
+    rendered = await mcp_server.get_prompt("ore-da-registrare", {})
+    text = str(rendered.messages)
+    assert "log_time" in text
+    assert "gior" in text.lower()
+
+
+async def test_every_prompt_returns_at_least_one_user_message(mcp_server: Any) -> None:
+    """A prompt whose only message is `assistant` puts words in the model's mouth and gives
+    the user nothing to send."""
+    for name, args in (
+        ("revisione-pipeline", {}),
+        ("chiusura-mese", {"anno": 2026, "mese": 3}),
+        ("ore-da-registrare", {}),
+    ):
+        rendered = await mcp_server.get_prompt(name, args)
+        assert any(message.role == "user" for message in rendered.messages), name
+```
+
+`seeded_pipeline` and `seeded_customer` are fixtures added to `apps/mcp/tests/conftest.py` beside the existing ones, each committing a small corpus on the server's own session.
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest apps/mcp/tests/test_mcp_prompts.py -v`
+Expected: `test_all_four_prompts_are_registered_with_their_names` FAILS with `assert set() == {...}`.
+
+- [ ] **Step 3: Write the dashboard prompts**
+
+```python
+# apps/mcp/src/pigrocrm_mcp/prompts/dashboards.py
+"""Three of §10's four prompts. Each is several reads **plus a posture on how to read
+them**, which is what makes it a prompt and not a tool.
+
+The distinction is not stylistic. A tool is invoked by the *model*, when it decides it needs
+one, and returns *data*. A prompt is invoked by the *user*, from a menu, and returns
+*messages*. And the judgement sits in a different place: in a tool it is the model's, in a
+prompt it is written down here. A tool that also returned "ask about the deals that have not
+moved, do not summarise the ones that have" would be putting instructions inside a data
+result -- the shape of an injection -- and the model would have to guess it should call it,
+whereas here the human picks it and can see what was attached.
+
+The context travels as **Markdown text inside the message**. It is a resource block only
+where the resource already exists, which in this slice means `customer://{id}` and therefore
+only `prompts/customer.py`. §11.1 adds no new resource, and inventing
+`dashboard://commerciale?da=…` in order to have a URI to embed would be adding one without
+saying so.
+
+Every figure rendered here is a field of a dashboard response, printed. **Nothing in this
+module computes anything**: the same rule as `core/dashboard/`, for the same reason, and if
+a figure is missing from the response the fix is on the owning service.
+"""
+
+from datetime import date
+from typing import Any
+
+from pigrocrm.core.analytics.service import AnalyticsService
+from pigrocrm.core.dashboard.schemas import PeriodoQuery
+from pigrocrm.core.dashboard.service import DashboardService
+from pigrocrm.core.db import month_bounds
+from pigrocrm.core.documents.repository import DocumentRepository
+
+from pigrocrm_mcp.context import McpContext
+
+
+def _user(text: str) -> dict[str, Any]:
+    return {"role": "user", "content": {"type": "text", "text": text}}
+
+
+def _euro(value: str) -> str:
+    """The string the service produced, with a comma. No parsing: a `Decimal` serialised to
+    a string is exact, and `float(value)` would put a rounding error into a briefing."""
+    return f"{value.replace('.', ',')} €"
+
+
+def _percent(value: str | None) -> str:
+    # A dash, never "0%": zero per cent means "I lost everything", `null` means nothing
+    # closed. Two different facts, and a briefing that conflates them is worse than one
+    # that omits the line.
+    return "—" if value is None else f"{value.replace('.', ',')}%"
+
+
+def revisione_pipeline(
+    context: McpContext, da: str | None = None, a: str | None = None
+) -> list[dict[str, Any]]:
+    """The weekly review. Posture: ask about the deals that have not moved."""
+    query = PeriodoQuery(
+        da=date.fromisoformat(da) if da else None,
+        a=date.fromisoformat(a) if a else None,
+    )
+    board = DashboardService(context.session).get_commercial_dashboard(
+        query, context.actor
+    )
+    offers = DocumentRepository(context.session).pending_offers(limit=20)
+
+    lines = [
+        f"# Revisione pipeline — {board.periodo.da} → {board.periodo.a}",
+        "",
+        "## Pipeline aperta per stato",
+        "",
+        "| Stato | Deal | Valore | Senza valore | Valore ponderato (stima) |",
+        "|---|---|---|---|---|",
+    ]
+    for row in board.pipeline:
+        lines.append(
+            f"| {row.stage_nome} | {row.numero} | {_euro(str(row.valore_totale))} "
+            f"| {row.senza_valore} | {_euro(str(row.valore_ponderato))} |"
+        )
+    lines += [
+        "",
+        "Il valore ponderato è una **stima** (valore previsto × probabilità): non è "
+        "fatturato e non va sommato ai ricavi. I deal senza valore previsto sono contati "
+        "a parte e non valgono zero.",
+        "",
+        "## Chiusure nel periodo",
+        "",
+        f"- Vinti: {board.chiusure.vinti}",
+        f"- Persi: {board.chiusure.persi}",
+        f"- Tasso di conversione: {_percent(str(board.chiusure.tasso_conversione) if board.chiusure.tasso_conversione is not None else None)}",
+        f"- Valore vinto (dichiarato dai deal, **non** fatturato): "
+        f"{_euro(str(board.chiusure.valore_vinto))}",
+    ]
+    if board.chiusure_non_attribuibili:
+        lines.append(
+            f"- {board.chiusure_non_attribuibili} deal chiusi prima dell'introduzione di "
+            "questa misura non sono attribuibili a un periodo e non sono nei numeri sopra."
+        )
+    lines += ["", "## Offerte inviate in attesa di risposta", ""]
+    if not offers:
+        lines.append("Nessuna offerta in attesa.")
+    else:
+        for offer in offers:
+            age = "data ignota" if offer.giorni is None else f"{offer.giorni} giorni"
+            lines.append(f"- {offer.titolo} — ferma da {age}")
+    lines += [
+        "",
+        f"Segnale: {board.offerte_accettate_deal_non_vinto} offerte accettate il cui deal "
+        "non è vinto.",
+        "",
+        "---",
+        "",
+        "Fai la revisione settimanale su questi dati. Chiedimi dei deal **fermi** — quelli "
+        "nello stesso stato da troppo tempo e le offerte in attesa da più di due settimane "
+        "— e non riassumere quelli che si stanno muovendo: quelli li vedo già. Se il tasso "
+        "di conversione è nullo dillo, non trattarlo come zero. Non proporre azioni "
+        "automatiche: elenca le domande da fare ai clienti.",
+    ]
+    return [_user("\n".join(lines))]
+
+
+def chiusura_mese(context: McpContext, anno: int, mese: int) -> list[dict[str, Any]]:
+    """The list of things to do before closing a month. **No fiscal figure** (§10.1)."""
+    da, a = month_bounds(anno, mese)
+    service = DashboardService(context.session)
+    economic = service.get_economic_dashboard(PeriodoQuery(da=da, a=a), context.actor)
+    backlog = AnalyticsService(context.session).unbilled_backlog(context.actor)
+
+    pnl = economic.pnl
+    lines = [
+        f"# Chiusura mese — {anno}-{mese:02d}",
+        "",
+        "## Conto economico del periodo",
+        "",
+        "| Voce | Deal chiusi | Deal in corso |",
+        "|---|---|---|",
+        f"| Ricavi (imponibile, emesso) | {_euro(str(pnl.chiusi.ricavi))} "
+        f"| {_euro(str(pnl.in_corso.ricavi))} |",
+        f"| Costi diretti | {_euro(str(pnl.chiusi.costi_diretti))} "
+        f"| {_euro(str(pnl.in_corso.costi_diretti))} |",
+        f"| Costo del lavoro | {_euro(str(pnl.chiusi.costo_lavoro))} "
+        f"| {_euro(str(pnl.in_corso.costo_lavoro))} |",
+        f"| Margine lordo | {_euro(str(pnl.chiusi.margine_lordo))} "
+        f"| {_euro(str(pnl.in_corso.margine_lordo))} |",
+        f"| Margine % | {_percent(str(pnl.chiusi.margine_percentuale) if pnl.chiusi.margine_percentuale is not None else None)} "
+        f"| {_percent(str(pnl.in_corso.margine_percentuale) if pnl.in_corso.margine_percentuale is not None else None)} |",
+        "",
+        "La cifra riportabile è la colonna **deal chiusi**. Le due colonne non si sommano: "
+        "il margine di un lavoro finito e quello di uno a metà non sono la stessa cosa.",
+        "",
+        f"Spese generali del periodo: {_euro(str(pnl.spese_generali))} — **non ripartite** "
+        "su nessun deal.",
+        "",
+        "## Da chiudere prima della chiusura",
+        "",
+        f"- Ore fatturabili non fatturate **nel periodo**: "
+        f"{pnl.ore_fatturabili_non_fatturate} ore, valore maturato "
+        f"{_euro(str(pnl.valore_maturato))}",
+        f"- Voci senza tariffa nel periodo: {pnl.ore_senza_tariffa}",
+        f"- Arretrato **in totale** (senza periodo): "
+        f"{backlog.ore_fatturabili_non_fatturate} ore, "
+        f"{_euro(str(backlog.valore_maturato))}",
+        f"- Fatture emesse nel periodo: {economic.fatture_emesse}",
+        f"- Da incassare (totale con IVA, senza periodo): "
+        f"{_euro(str(economic.da_incassare))}",
+        f"- Di cui **scaduto**: {_euro(str(economic.scaduto))}",
+        "",
+        f"Periodo chiuso: {'sì' if pnl.periodo_chiuso else 'no'}. "
+        f"Voci scritte in ritardo: {pnl.voci_scritte_in_ritardo}.",
+        "",
+        "---",
+        "",
+        "Prepara la lista delle cose da fare prima di chiudere questo mese. Segnala solo "
+        "gli scostamenti che contano: ore non fatturate, voci senza tariffa, fatture "
+        "scadute. «Da incassare» è un credito, non un ricavo: non sommarlo ai ricavi e non "
+        "usarlo per calcolare un margine. Se il periodo non è chiuso e ci sono voci scritte "
+        "in ritardo, dì che i numeri possono ancora muoversi. Non calcolare nessuna imposta "
+        "e nessun contributo: non è un dato di cui disponi.",
+    ]
+    return [_user("\n".join(lines))]
+
+
+def ore_da_registrare(
+    context: McpContext, settimana: str | None = None
+) -> list[dict[str, Any]]:
+    """The most useful prompt in the product (§10): it attacks "I never entered Tuesday".
+
+    `settimana` is accepted and currently ignored beyond validation, because
+    `get_operational_dashboard` is always the current week by construction (§6). Rather than
+    silently answering a different question, an explicit past week is refused with a message
+    saying which week the answer covers.
+    """
+    board = DashboardService(context.session).get_operational_dashboard(context.actor)
+    week = board.settimana
+    if settimana is not None and settimana != week.da.isoformat():
+        return [
+            _user(
+                f"La dashboard operativa copre solo la settimana corrente "
+                f"({week.da} → {week.a}); la settimana richiesta ({settimana}) non è "
+                "disponibile. Per le ore di una settimana passata usa il rapporto ore."
+            )
+        ]
+
+    lines = [
+        f"# Ore da registrare — settimana {week.da} → {week.a}",
+        "",
+        "| Giorno | Ore |",
+        "|---|---|",
+    ]
+    for day in week.giorni:
+        lines.append(f"| {day.giorno} | {day.ore} |")
+    lines += ["", f"Totale settimana: {week.ore_totali} ore.", ""]
+    if week.giorni_senza_ore:
+        lines.append("**Giorni senza nessuna ora registrata:**")
+        lines += [f"- {day}" for day in week.giorni_senza_ore]
+    else:
+        lines.append("Nessun giorno scoperto: la settimana è completa.")
+    lines += [
+        "",
+        "## Deal su cui si è lavorato di recente",
+        "",
+    ]
+    recent_deals = [
+        activity for activity in board.attivita_recenti if activity.entity_type == "deal"
+    ][:10]
+    if not recent_deals:
+        lines.append("Nessuna attività recente su un deal.")
+    else:
+        for activity in recent_deals:
+            lines.append(f"- deal `{activity.entity_id}` — {activity.kind}")
+    lines += [
+        "",
+        "---",
+        "",
+        "Aiutami a recuperare le ore mancanti. Per ogni giorno senza ore, chiedimi cosa ho "
+        "fatto — un giorno per volta, non tutti insieme — e proponi il deal più probabile "
+        "fra quelli sopra. Quando ti rispondo, registra le ore con `log_time`. Non "
+        "inventare né ore né deal: se non sai su cosa imputare un giorno, chiedi. Un giorno "
+        "in cui non ho lavorato va lasciato vuoto, non registrato a zero.",
+    ]
+    return [_user("\n".join(lines))]
+```
+
+- [ ] **Step 4: Write the customer prompt**
+
+```python
+# apps/mcp/src/pigrocrm_mcp/prompts/customer.py
+"""§10's fourth prompt, and the only one that embeds a resource.
+
+It is the only one because it is the only one whose resource **already exists**:
+`customer://{id}`, from slice 1 §8.4. A resource block needs a URI, and there is no URI for
+"the commercial dashboard for March" that would not be a new resource invented in order to
+have one -- which §11.1 explicitly declines.
+"""
+
+from typing import Any
+from uuid import UUID
+
+from pigrocrm.core.deals.repository import DealRepository
+from pigrocrm.core.deals.schemas import DealListQuery
+from pigrocrm.core.errors import NotFound
+from pigrocrm.core.invoices.repository import InvoiceRepository
+
+from pigrocrm_mcp.context import McpContext
+
+
+def stato_cliente(context: McpContext, customer_id: str) -> list[dict[str, Any]]:
+    """The briefing before a phone call."""
+    identifier = UUID(customer_id)
+    from pigrocrm.core.customers.repository import CustomerRepository
+
+    customer = CustomerRepository(context.session).get(identifier)
+    if customer is None:
+        # A domain error, so `_guard` turns it into a sentence the agent can act on rather
+        # than a stack trace.
+        raise NotFound("customer", identifier)
+
+    deals = DealRepository(context.session).list(
+        DealListQuery(customer_id=identifier, limit=50)
+    )
+    unpaid = InvoiceRepository(context.session).unpaid_for_customer(identifier)
+
+    lines = [
+        f"# Briefing — {customer.ragione_sociale}",
+        "",
+        "## Deal",
+        "",
+    ]
+    if not deals:
+        lines.append("Nessun deal.")
+    else:
+        for deal in deals:
+            valore = "senza valore" if deal.valore_previsto is None else (
+                f"{str(deal.valore_previsto).replace('.', ',')} €"
+            )
+            lines.append(f"- {deal.nome} — {valore}, probabilità {deal.probabilita}%")
+    lines += ["", "## Fatture non incassate", ""]
+    if not unpaid:
+        lines.append("Nessuna fattura da incassare.")
+    else:
+        for invoice in unpaid:
+            scadenza = invoice.data_scadenza or "senza scadenza"
+            lines.append(
+                f"- {invoice.anno}/{invoice.numero} — "
+                f"{str(invoice.totale).replace('.', ',')} € (totale con IVA), "
+                f"scadenza {scadenza}"
+            )
+    lines += [
+        "",
+        "---",
+        "",
+        "La scheda completa del cliente è allegata come risorsa. Preparami il briefing per "
+        "una telefonata: cosa è aperto, cosa è in ritardo, e le due o tre domande da fare. "
+        "Le fatture non incassate sono crediti con IVA, non ricavi. Non proporre di mandare "
+        "solleciti: dimmi solo cosa c'è.",
+    ]
+    return [
+        {"role": "user", "content": {"type": "text", "text": "\n".join(lines)}},
+        {
+            "role": "user",
+            "content": {
+                "type": "resource",
+                "resource": {"uri": f"customer://{identifier}"},
+            },
+        },
+    ]
+```
+
+`InvoiceRepository.unpaid_for_customer(customer_id: UUID) -> list[Invoice]` is one more method on the repository Task C3 touched — issued, unpaid, non-deleted invoices for that customer, ordered by `data_scadenza` nulls last. Add it there, above any `list`, in the same shape as its neighbours, with a test in `test_invoice_aggregates.py`.
+
+- [ ] **Step 5: Register them**
+
+```python
+# apps/mcp/src/pigrocrm_mcp/prompts/__init__.py
+"""Registration for §10's four prompts.
+
+`MCPServer.prompt()` infers the arguments from the signature exactly as `tool()` does --
+verified against the installed `mcp==2.0.0`, not assumed from the documentation -- and the
+function may receive the `Context`, so a prompt can read the database like a tool. The
+`guard` is the server's own `_guard`, so a domain error becomes guidance rather than a stack
+trace here too.
+"""
+
+from collections.abc import Callable
+from typing import Any
+
+from mcp.server import MCPServer
+
+from pigrocrm_mcp.context import McpContext
+from pigrocrm_mcp.prompts import customer as customer_prompts
+from pigrocrm_mcp.prompts import dashboards as dashboard_prompts
+
+
+def register_prompts[T: Callable[..., Any]](
+    mcp: MCPServer, context: McpContext, guard: Callable[[T], T]
+) -> None:
+    @mcp.prompt(name="revisione-pipeline")
+    @guard
+    def revisione_pipeline(da: str | None = None, a: str | None = None) -> list[dict[str, Any]]:
+        """La revisione settimanale della pipeline commerciale, con i deal fermi e le
+        offerte in attesa. `da` e `a` sono date ISO opzionali: senza, il mese in corso."""
+        return dashboard_prompts.revisione_pipeline(context, da, a)
+
+    @mcp.prompt(name="chiusura-mese")
+    @guard
+    def chiusura_mese(anno: int, mese: int) -> list[dict[str, Any]]:
+        """La lista di cose da fare prima di chiudere un mese: conto economico del periodo,
+        ore non fatturate, fatture scadute, e se il periodo è già chiuso."""
+        return dashboard_prompts.chiusura_mese(context, anno, mese)
+
+    @mcp.prompt(name="ore-da-registrare")
+    @guard
+    def ore_da_registrare(settimana: str | None = None) -> list[dict[str, Any]]:
+        """I giorni della settimana corrente senza nessuna ora registrata, con i deal su
+        cui si è lavorato di recente."""
+        return dashboard_prompts.ore_da_registrare(context, settimana)
+
+    @mcp.prompt(name="stato-cliente")
+    @guard
+    def stato_cliente(customer_id: str) -> list[dict[str, Any]]:
+        """Il briefing prima di una telefonata: deal aperti, fatture non incassate, e la
+        scheda del cliente allegata come risorsa."""
+        return customer_prompts.stato_cliente(context, customer_id)
+```
+
+```python
+# apps/mcp/src/pigrocrm_mcp/server.py -- two lines, next to the existing tool registration.
+    from pigrocrm_mcp.prompts import register_prompts
+    from pigrocrm_mcp.tools import register_entity_tools
+
+    register_entity_tools(mcp, context, _guard)
+    register_prompts(mcp, context, _guard)
+    return mcp
+```
+
+- [ ] **Step 6: The R1 gate**
+
+A prompt reads the database exactly as a tool does, so it inherits the same gate. If the shared-session comment in `server.py` is still accurate, do not add the `register_prompts` call: skip `apps/mcp/tests/test_mcp_prompts.py` at module level with the reason, and land the four modules unregistered. They are pure functions of `(context, args)` and lose nothing by waiting.
+
+- [ ] **Step 7: Run, gate, commit**
+
+Run: `uv run pytest apps/mcp/tests/test_mcp_prompts.py -v`
+Expected: PASS, eleven tests.
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+
+```bash
+git add apps/mcp/src/pigrocrm_mcp/prompts/ \
+        apps/mcp/src/pigrocrm_mcp/server.py \
+        packages/core/src/pigrocrm/core/invoices/repository.py \
+        apps/mcp/tests/test_mcp_prompts.py \
+        apps/mcp/tests/conftest.py \
+        packages/core/tests/test_invoice_aggregates.py
+git commit -m "feat(mcp): four contextual prompts, one of them embedding customer://"
+```
+
+---
+### Task C9: Criterion 10 — the prompts carry the context, and not the tax
+
+**Blocked on: Task C8.**
+
+**Files:**
+- Modify: `apps/mcp/tests/test_mcp_prompts.py`
+
+**Interfaces:**
+- Consumes: the four prompts (Task C8); `AnalyticsService.period_pnl` (slice 4); `month_bounds` (Task B1).
+- Produces: `FORBIDDEN_FISCAL_FIELDS: frozenset[str]` and `KNOWN_RESOURCE_URIS: frozenset[str]` in that test module, plus five tests. Nothing else imports them.
+
+**Two prohibitions, and they are prohibitions.**
+
+**No prompt contains the fiscal estimate.** Slice 4 §11 reason 4 keeps it off the MCP surface because a PAT with no scopes (residuo **R10**) is indistinguishable from full access. A prompt that embedded it would route around that decision without calling the tool that does not exist — which is worse than a tool, because nobody would be looking for it there. Criterion 10 says to verify it **by field name, not by intention**, and this task does exactly that: it renders every message of every prompt and greps the text.
+
+**No prompt embeds data the corresponding tool would not return.** A prompt is another packaging of the same permissions, not a shortcut through them.
+
+**And one positive assertion that is easy to skip:** `chiusura-mese`'s rendered figures must equal `period_pnl`'s **value by value**, not merely look plausible. A briefing that reformats a margin is a second source of truth with a friendly tone.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# apps/mcp/tests/test_mcp_prompts.py -- append.
+
+# Field names, not concepts. Criterion 10: "verificato per nome di campo, non per
+# intenzione". The first four are the fiscal estimate's own fields (slice 4 §11); the last
+# three are the parameters it is derived from, which are just as sensitive and would let a
+# reader reconstruct it.
+FORBIDDEN_FISCAL_FIELDS = frozenset({
+    "imponibile_fiscale",
+    "imposta_sostitutiva",
+    "contributi",
+    "netto_stimato",
+    "coefficiente_redditivita",
+    "aliquota_imposta_sostitutiva",
+    "aliquota_inps",
+})
+
+# The resources that exist. Criterion 10 requires that no prompt introduces a new URI
+# scheme, because a resource is a surface and adding one silently is adding a surface
+# silently (§11.1: "Nessuna risorsa nuova").
+KNOWN_RESOURCE_URIS = frozenset({"customer://", "person://", "deal://"})
+
+_ALL_PROMPTS = (
+    ("revisione-pipeline", {}),
+    ("chiusura-mese", {"anno": 2026, "mese": 3}),
+    ("ore-da-registrare", {}),
+)
+
+
+def _text_of(rendered: Any) -> str:
+    blocks: list[str] = []
+    for message in rendered.messages:
+        content = message.content
+        for block in content if isinstance(content, list) else [content]:
+            if getattr(block, "type", None) == "text":
+                blocks.append(block.text)
+    return "\n".join(blocks)
+
+
+def _resource_uris(rendered: Any) -> list[str]:
+    uris: list[str] = []
+    for message in rendered.messages:
+        content = message.content
+        for block in content if isinstance(content, list) else [content]:
+            if getattr(block, "type", None) == "resource":
+                uris.append(str(getattr(block, "resource", block).uri))
+    return uris
+
+
+async def test_no_prompt_contains_a_fiscal_field_by_name(
+    mcp_server: Any, seeded_customer: Any
+) -> None:
+    """Criterion 10's first prohibition, checked over every rendered message of every
+    prompt.
+
+    Slice 4 §11 reason 4 keeps the fiscal estimate off the MCP surface because a PAT has no
+    scopes (residuo R10) and is therefore indistinguishable from full access. A prompt that
+    carried it would bypass that decision without calling the tool that deliberately does
+    not exist -- and nobody would think to look for it in a prompt.
+    """
+    cases = [*_ALL_PROMPTS, ("stato-cliente", {"customer_id": str(seeded_customer.id)})]
+    for name, args in cases:
+        rendered = await mcp_server.get_prompt(name, args)
+        haystack = str(rendered.messages).lower()
+        for field in FORBIDDEN_FISCAL_FIELDS:
+            assert field not in haystack, f"{name} carries the fiscal field {field}"
+
+
+async def test_chiusura_mese_matches_the_pnl_value_by_value(
+    mcp_server: Any, mcp_context: Any, seeded_pnl: Any
+) -> None:
+    """Criterion 10's positive half: "contiene le cifre del P&L **identiche** a quelle di
+    `get_period_pnl` -- confrontate valore per valore, non a occhio".
+
+    A prompt that reformats a margin is a second source of truth with a friendly tone, and
+    it is the easiest one to introduce by accident -- a `:.2f` in a f-string is enough.
+    """
+    from pigrocrm.core.analytics.schemas import PeriodPnlQuery
+    from pigrocrm.core.analytics.service import AnalyticsService
+    from pigrocrm.core.db import month_bounds
+
+    da, a = month_bounds(2026, 3)
+    pnl = AnalyticsService(mcp_context.session).period_pnl(
+        PeriodPnlQuery(da=da, a=a, customer_id=None), mcp_context.actor
+    )
+
+    rendered = await mcp_server.get_prompt("chiusura-mese", {"anno": 2026, "mese": 3})
+    text = _text_of(rendered)
+
+    for value in (
+        pnl.chiusi.ricavi, pnl.chiusi.costi_diretti, pnl.chiusi.costo_lavoro,
+        pnl.chiusi.margine_lordo, pnl.in_corso.ricavi, pnl.spese_generali,
+        pnl.valore_maturato,
+    ):
+        # The prompt renders the decimal string with a comma; the comparison undoes exactly
+        # that one substitution and nothing else, so a rounding or a re-scaling would fail.
+        assert str(value).replace(".", ",") in text, value
+
+    assert str(pnl.voci_scritte_in_ritardo) in text
+    assert ("sì" if pnl.periodo_chiuso else "no") in text
+
+
+async def test_stato_cliente_is_the_only_prompt_with_a_resource_block(
+    mcp_server: Any, seeded_customer: Any
+) -> None:
+    """§10: it is the only one because it is the only one whose resource already exists."""
+    for name, args in _ALL_PROMPTS:
+        rendered = await mcp_server.get_prompt(name, args)
+        assert _resource_uris(rendered) == [], name
+
+    rendered = await mcp_server.get_prompt(
+        "stato-cliente", {"customer_id": str(seeded_customer.id)}
+    )
+    assert _resource_uris(rendered) == [f"customer://{seeded_customer.id}"]
+
+
+async def test_no_prompt_introduces_a_new_resource_uri_scheme(
+    mcp_server: Any, seeded_customer: Any
+) -> None:
+    """Criterion 10: "un test elenca gli URI incorporati da tutti e quattro e verifica che
+    non ne esistano di nuovi". §11.1 adds no resource, and inventing
+    `dashboard://commerciale?da=…` in order to have a URI to embed would add one without
+    saying so."""
+    cases = [*_ALL_PROMPTS, ("stato-cliente", {"customer_id": str(seeded_customer.id)})]
+    seen: set[str] = set()
+    for name, args in cases:
+        rendered = await mcp_server.get_prompt(name, args)
+        for uri in _resource_uris(rendered):
+            scheme = uri.split("//")[0] + "//"
+            seen.add(scheme)
+    assert seen <= KNOWN_RESOURCE_URIS, f"new resource schemes: {seen - KNOWN_RESOURCE_URIS}"
+
+
+async def test_the_registered_resource_templates_are_still_exactly_three(
+    mcp_server: Any
+) -> None:
+    """The other half of "no new resource": not just that no prompt embeds a new URI, but
+    that none was registered at all."""
+    templates = {str(template.uriTemplate) for template in await mcp_server.list_resource_templates()}
+    assert templates == {
+        "customer://{customer_id}", "person://{person_id}", "deal://{deal_id}",
+    }
+
+
+async def test_no_prompt_embeds_data_its_tools_would_not_return(
+    mcp_server: Any, seeded_customer: Any
+) -> None:
+    """Criterion 10's second prohibition, applied where it is checkable: every figure a
+    prompt renders is a field of a dashboard response or of a repository read that a tool
+    already exposes. The mechanical form of that is the fiscal check above plus this one --
+    no prompt reaches a service method that is on an exclusion list.
+    """
+    from pathlib import Path
+
+    prompts_dir = Path(__file__).resolve().parents[1] / "src" / "pigrocrm_mcp" / "prompts"
+    source = "\n".join(
+        path.read_text(encoding="utf-8") for path in prompts_dir.rglob("*.py")
+    )
+    for excluded in (
+        "get_fiscal_estimate", "update_automation_config", "bind_time_to_invoice",
+        "close_period", "reopen_period", "recalculate_rates", "update_user_rates",
+        "update_deal_rate",
+    ):
+        assert f".{excluded}(" not in source, (
+            f"a prompt reaches {excluded}, which is on an MCP exclusion list -- a prompt is "
+            "another packaging of the same permissions, not a shortcut through them"
+        )
+```
+
+`seeded_pnl` is a fixture added to `apps/mcp/tests/conftest.py` committing one issued invoice and a handful of time entries dated inside March 2026, so `period_pnl` returns non-zero figures — a value-by-value comparison against a P&L of all zeros would pass on an implementation that printed zeros unconditionally.
+
+- [ ] **Step 2: Run it and watch it fail on purpose first**
+
+Temporarily add `f"Imposta sostitutiva stimata: 1.234,00 €"` to `chiusura_mese`'s lines.
+
+Run: `uv run pytest apps/mcp/tests/test_mcp_prompts.py -v`
+Expected: `test_no_prompt_contains_a_fiscal_field_by_name` FAILS naming `imposta_sostitutiva`. **Remove the line.** Then temporarily change one rendered figure to `f"{float(pnl.chiusi.ricavi):.2f}"` and confirm `test_chiusura_mese_matches_the_pnl_value_by_value` FAILS. **Revert.**
+
+- [ ] **Step 3: Run it green**
+
+Run: `uv run pytest apps/mcp/tests/test_mcp_prompts.py -v`
+Expected: PASS, seventeen tests.
+
+- [ ] **Step 4: Full gate and commit**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check .`
+
+```bash
+git add apps/mcp/tests/test_mcp_prompts.py apps/mcp/tests/conftest.py
+git commit -m "test(mcp): criterion 10, the prompts carry the context and not the tax"
+```
+
+---
+
+### Task C10: Criterion 12 — ten concurrent dashboard reads over MCP
+
+**Blocked on: Task C7 and the R1 cure in `main`.** This task **is** the verification of that cure from the read side, so it cannot be written before it and must not be skipped after it.
+
+**Files:**
+- Create: `apps/mcp/tests/test_mcp_concurrency.py`
+
+**Interfaces:**
+- Consumes: the `get_economic_dashboard` MCP tool (Task C7); whatever session-per-call mechanism slice 4's plan introduced.
+- Produces: nothing importable.
+
+**Why this criterion exists at all, in the spec's own terms.** Residuo R1 — one `Session` shared by every call on the MCP server — is not an open decision: it is a task of slice 4's plan, where `log_time` cannot exist without it. This slice **depends on the cure and does not work around it**, and it is written down for two reasons: because read aggregation makes the underlying problem *worse*, and because if the cure slipped, these tools must not be registered at all.
+
+- an aggregation query holds the connection longer than a `get`, widening the window in which two calls overlap — the condition the slice-1A review measured as **10 concurrent writes, 0 successes, 0 rows**;
+- and §7.1's guarantee — one dashboard, one transaction, one instant — is a property **of the session**. With a shared session and no per-call transaction boundary, two concurrent dashboards can each read half their figures inside the other's transaction and produce a total that was never true at any instant. That is §1's second source of truth generated by the infrastructure instead of by the code, and it is the worst case because re-reading the service would never reveal it.
+
+**Ten identical responses "a meno di `calcolato_alle`".** The criterion is explicit that byte-for-byte equality of the whole JSON would fail *without a defect*: each call is its own transaction and therefore its own instant, so the timestamps cannot coincide. The test compares everything else.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# apps/mcp/tests/test_mcp_concurrency.py
+"""**Criterion 12.** Ten simultaneous `get_economic_dashboard` calls on real PostgreSQL.
+
+This is residuo **R1** verified from the read side, and the condition under which these
+tools are allowed to exist at all.
+
+Two things are asserted and the second is the one that matters. Ten responses identical
+**except for `calcolato_alle`** -- which cannot coincide, because each call is its own
+transaction and therefore its own instant, and a test demanding byte-for-byte equality of
+the whole JSON would fail without a defect. And every call reporting its own correct
+`transaction_isolation`, because §7.1's guarantee is a property of the session: with one
+shared session and no per-call transaction boundary, two dashboards can each read half their
+figures inside the other's transaction and produce a total that was never true at any
+instant.
+
+`asyncio.gather` over the SDK's own client, not threads: the tools are registered on an
+async server and the concurrency that matters is the one the transport actually produces.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+import pytest
+
+
+async def test_ten_concurrent_economic_dashboards_agree_except_on_the_instant(
+    mcp_server: Any, seeded_pnl: Any
+) -> None:
+    results = await asyncio.gather(
+        *(mcp_server.call_tool("get_economic_dashboard", {}) for _ in range(10))
+    )
+
+    assert all(not result.is_error for result in results), [
+        str(result.content) for result in results if result.is_error
+    ]
+
+    payloads = [dict(result.structured_content) for result in results]
+    instants = [payload.pop("calcolato_alle") for payload in payloads]
+
+    first = payloads[0]
+    for index, payload in enumerate(payloads[1:], start=1):
+        assert payload == first, f"response {index} differs from response 0"
+
+    # Each call is its own transaction, so each has its own instant. Asserting they are all
+    # equal would be asserting that the sessions are shared -- the defect, not the cure.
+    assert all(instant is not None for instant in instants)
+
+
+async def test_no_call_fails_with_a_session_error(mcp_server: Any, seeded_pnl: Any) -> None:
+    """The shape R1 actually produces. With a shared session, a concurrent call lands
+    mid-transaction on another call's session and SQLAlchemy raises -- typically
+    `Method 'rollback()' can't be called here` or `This session is in 'prepared' state`.
+    Matched on the message because the exception is converted to an agent-facing string by
+    `_guard` before the test can see its type."""
+    results = await asyncio.gather(
+        *(mcp_server.call_tool("get_operational_dashboard", {}) for _ in range(10))
+    )
+    for result in results:
+        rendered = str(result.content)
+        for symptom in (
+            "rollback", "prepared state", "already begun", "concurrent operations",
+            "InvalidRequestError", "PendingRollbackError",
+        ):
+            assert symptom not in rendered, rendered
+
+
+async def test_every_call_runs_in_repeatable_read(
+    mcp_server: Any, mcp_context: Any, seeded_pnl: Any
+) -> None:
+    """Criterion 12's last clause: "ogni chiamata ha il proprio `transaction_isolation`
+    corretto".
+
+    A shared session would give the *first* caller the right level and leave the rest
+    running in whatever the connection had -- which is exactly the failure that does not
+    show up in the response and cannot be found by re-reading the service.
+    """
+    from sqlalchemy import text
+
+    levels: list[str] = []
+
+    async def call_and_read_level() -> None:
+        result = await mcp_server.call_tool("get_economic_dashboard", {})
+        assert not result.is_error, str(result.content)
+        # The session the call used is the one the context resolves *inside* that call. With
+        # the cure in place this is a fresh session per call; reading it here reads the last
+        # one, which is why the assertion below is on the count of distinct values as well
+        # as on the value.
+        levels.append(
+            mcp_context.session.execute(text("SHOW transaction_isolation")).scalar_one()
+        )
+
+    await asyncio.gather(*(call_and_read_level() for _ in range(10)))
+    assert set(levels) == {"repeatable read"}, set(levels)
+
+
+async def test_ten_concurrent_searches_also_succeed(mcp_server: Any, seeded_pnl: Any) -> None:
+    """The lighter case, kept because it is the one that would still pass on a shared
+    session and therefore tells the two failure modes apart: if the searches pass and the
+    dashboards do not, the problem is the longer-held connection of an aggregation query --
+    §11.3's first bullet -- rather than the session sharing itself."""
+    results = await asyncio.gather(
+        *(mcp_server.call_tool("search_everything", {"termine": "cliente"}) for _ in range(10))
+    )
+    assert all(not result.is_error for result in results), [
+        str(result.content) for result in results if result.is_error
+    ]
+
+
+@pytest.mark.parametrize("tool", [
+    "get_commercial_dashboard", "get_economic_dashboard", "get_operational_dashboard",
+])
+async def test_each_dashboard_tool_survives_concurrency_individually(
+    mcp_server: Any, seeded_pnl: Any, tool: str
+) -> None:
+    """Per tool, so a failure names which one rather than "the dashboards"."""
+    results = await asyncio.gather(
+        *(mcp_server.call_tool(tool, {}) for _ in range(10))
+    )
+    assert all(not result.is_error for result in results), [
+        str(result.content) for result in results if result.is_error
+    ]
+```
+
+- [ ] **Step 2: Run it and watch it fail if the cure is absent**
+
+Run: `uv run pytest apps/mcp/tests/test_mcp_concurrency.py -v`
+
+Expected **before** the R1 cure: `test_no_call_fails_with_a_session_error` FAILS with one of the named symptoms, and `test_every_call_runs_in_repeatable_read` FAILS with a set containing `read committed`. That failure is the correct outcome and **is not to be worked around**: it means Task C7's tools must not be registered yet.
+
+Expected **after** the cure: PASS.
+
+- [ ] **Step 3: Full gate and commit**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check .`
+
+```bash
+git add apps/mcp/tests/test_mcp_concurrency.py
+git commit -m "test(mcp): criterion 12, ten concurrent dashboard reads on one server"
+```
+
+---
+### Task C11: The economic and operational tabs
+
+**Blocked on: Task C7.**
+
+**Files:**
+- Modify: `apps/web/src/lib/api-types.ts` (regenerated)
+- Modify: `apps/web/src/features/dashboard/queries.ts`
+- Create: `apps/web/src/features/dashboard/EconomicTab.tsx`
+- Create: `apps/web/src/features/dashboard/EconomicTab.test.tsx`
+- Create: `apps/web/src/features/dashboard/OperationalTab.tsx`
+- Create: `apps/web/src/features/dashboard/OperationalTab.test.tsx`
+- Modify: `apps/web/src/routes/app/index.tsx` (replace the two placeholder paragraphs)
+- Modify: `apps/web/src/features/dashboard/charts.tsx` — nothing changes; listed so nobody adds a fifth shape
+
+**Interfaces:**
+- Consumes: `GET /api/dashboard/economica`, `GET /api/dashboard/operativa` (Task C7); `BigNumber`, `BarRows`, `Sparkline`, `BarRow`, `SparkPoint` from `./charts` (Task B13); `Freshness` (Task B14); `QueryErrorBanner`.
+- Produces:
+  - `queries.ts`: `type EconomicDashboard`, `type OperationalDashboard`, `useEconomicDashboard(periodo: { da: string; a: string })`, `useOperationalDashboard()`
+  - `EconomicTab.tsx`: `export function EconomicTab({ periodo }: { periodo: Periodo })`
+  - `OperationalTab.tsx`: `export function OperationalTab()` — **no props**, because §6's dashboard takes no period
+- Task C13's end-to-end run drives both.
+
+**Four things the economic tab must get right, each of which is a test below.** The label is *"Fatturato (imponibile, emesso)"* in full, not *"Fatturato"* — three extra words on a card are the price of not having two users read the same figure as two different things (§5.1). The margin appears in **two columns**, closed and in progress, and **there is no box holding their sum**. "Scaduto" is rendered **indented beneath** "Da incassare", never as a second addable line. And the fiscal estimate is **a link, not a number**.
+
+**No new chart shape.** Four shapes were decided in Task B13 and four is the number; the operational tab's weekly hours are the sparkline that shape exists for.
+
+- [ ] **Step 1: Regenerate the client**
+
+Run: `cd apps/web && pnpm generate:api && pnpm exec tsc --noEmit`
+Expected: clean. Two new paths appear; nothing existing changes.
+
+- [ ] **Step 2: Write the failing tests**
+
+```tsx
+// apps/web/src/features/dashboard/EconomicTab.test.tsx
+/**
+ * §5's tab. Every figure comes from the API already summed; this file asserts on the four
+ * things §5 and §5.1-5.3 say must be true of how they are *presented*, because that is the
+ * half a backend test cannot reach.
+ */
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { EconomicTab } from './EconomicTab'
+
+const fetchMock = vi.fn()
+
+const TOTALS = {
+  ricavi: '15000.00',
+  costi_diretti: '2000.00',
+  costo_lavoro: '6000.00',
+  margine_lordo: '7000.00',
+  margine_percentuale: '46.67',
+  deal: 4,
+}
+
+const RESPONSE = {
+  periodo: { da: '2026-03-01', a: '2026-03-31' },
+  calcolato_alle: '2026-03-15T10:00:00Z',
+  pnl: {
+    da: '2026-03-01',
+    a: '2026-03-31',
+    customer_id: null,
+    chiusi: TOTALS,
+    in_corso: { ...TOTALS, ricavi: '3000.00', margine_percentuale: null },
+    spese_generali: '900.00',
+    periodo_chiuso: false,
+    voci_scritte_in_ritardo: 2,
+    valore_maturato: '4500.00',
+    ore_fatturabili_non_fatturate: '90.00',
+    ore_senza_tariffa: 3,
+  },
+  da_incassare: '12200.00',
+  scaduto: '3050.00',
+  fatture_emesse: 6,
+}
+
+function renderTab() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={client}>
+      <EconomicTab periodo={{ da: '2026-03-01', a: '2026-03-31' }} />
+    </QueryClientProvider>,
+  )
+}
+
+beforeEach(() => {
+  vi.stubGlobal('fetch', fetchMock)
+  fetchMock.mockReset()
+  fetchMock.mockResolvedValue(
+    new Response(JSON.stringify(RESPONSE), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+  )
+})
+
+afterEach(() => vi.restoreAllMocks())
+
+describe('EconomicTab', () => {
+  it('labels revenue in full, never just "Fatturato"', async () => {
+    // §5.1: three extra words on a card are the price of not having two users read the
+    // same figure as two different things.
+    renderTab()
+    expect(
+      await screen.findByText(/fatturato \(imponibile, emesso\)/i),
+    ).toBeInTheDocument()
+  })
+
+  it('shows the margin in two columns and no box holding their sum', async () => {
+    // Slice 4 §7.4: adding a finished job's margin to a half-done one produces a figure
+    // that is neither, and that moves every week for reasons which are not performance.
+    renderTab()
+    expect(await screen.findByText(/deal chiusi/i)).toBeInTheDocument()
+    expect(screen.getByText(/deal in corso/i)).toBeInTheDocument()
+    expect(screen.queryByText(/margine totale/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/margine complessivo/i)).not.toBeInTheDocument()
+  })
+
+  it('marks the closed-deals column as the reportable one', async () => {
+    renderTab()
+    expect(await screen.findByText(/cifra riportabile/i)).toBeInTheDocument()
+  })
+
+  it('renders a null margin percentage as a dash and never as 0%', async () => {
+    renderTab()
+    // `in_corso.margine_percentuale` is null in the fixture.
+    expect(await screen.findAllByText('—')).not.toHaveLength(0)
+  })
+
+  it('renders "Scaduto" as a subset indented under "Da incassare"', async () => {
+    // §5.2: a subset shown as one, never a second addable voice.
+    renderTab()
+    const overdue = await screen.findByTestId('scaduto')
+    expect(overdue).toHaveAttribute('data-subset-of', 'da-incassare')
+    expect(overdue).toHaveTextContent(/di cui scaduto/i)
+  })
+
+  it('keeps "Da incassare" out of every margin row', async () => {
+    renderTab()
+    const receivable = await screen.findByTestId('da-incassare')
+    // A receivable is not revenue (§5.2). Rendering it inside the P&L block would invite
+    // exactly the addition the label forbids.
+    expect(receivable.closest('[data-block="pnl"]')).toBeNull()
+  })
+
+  it('shows the informative rows under a heading that is not "ricavi"', async () => {
+    // §5: "Compaiono sotto un'intestazione diversa da «ricavi» e non entrano in nessun
+    // margine", and the label carries the scope.
+    renderTab()
+    expect(await screen.findByText(/valore maturato non fatturato/i)).toBeInTheDocument()
+    expect(screen.getByText(/nel periodo/i)).toBeInTheDocument()
+  })
+
+  it('says whether the period can still move', async () => {
+    // Slice 4 §6.4, and §5: beside the total, not in a footnote.
+    renderTab()
+    expect(await screen.findByText(/periodo non chiuso/i)).toBeInTheDocument()
+    expect(screen.getByText(/2 voci scritte in ritardo/i)).toBeInTheDocument()
+  })
+
+  it('links to the fiscal estimate instead of showing a number', async () => {
+    // §5.3: a dashboard is the screen most likely to end up in a screenshot.
+    renderTab()
+    const link = await screen.findByRole('link', { name: /stima fiscale/i })
+    expect(link).toHaveAttribute('href', '/app/analisi/fiscale')
+    for (const forbidden of [/imposta sostitutiva/i, /contributi/i, /netto stimato/i]) {
+      expect(screen.queryByText(forbidden)).not.toBeInTheDocument()
+    }
+  })
+
+  it('shows no comparison with the same period last year', async () => {
+    // §5.3: the right behaviour when the prior period is partly written depends on
+    // period_locks in a way nobody has exercised. A wrong comparison is worse than none.
+    renderTab()
+    await screen.findByText(/fatturato \(imponibile, emesso\)/i)
+    expect(screen.queryByText(/anno precedente/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/rispetto a/i)).not.toBeInTheDocument()
+  })
+
+  it('renders an error banner and no figures when the request fails', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ title: 'Errore', detail: 'Non disponibile' }), {
+        status: 500,
+        headers: { 'content-type': 'application/problem+json' },
+      }),
+    )
+    renderTab()
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(screen.queryByText(/fatturato/i)).not.toBeInTheDocument()
+  })
+})
+```
+
+```tsx
+// apps/web/src/features/dashboard/OperationalTab.test.tsx
+/**
+ * §6's tab. Its two most important assertions are the ones about days with no hours: they
+ * are named, and a day logged with zero hours is not among them.
+ */
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { OperationalTab } from './OperationalTab'
+
+const fetchMock = vi.fn()
+
+const RESPONSE = {
+  calcolato_alle: '2026-03-18T10:00:00Z',
+  settimana: {
+    da: '2026-03-16',
+    a: '2026-03-22',
+    giorni: [
+      { giorno: '2026-03-16', ore: '8.00' },
+      { giorno: '2026-03-17', ore: '0.00' },
+      { giorno: '2026-03-18', ore: '4.00' },
+      { giorno: '2026-03-19', ore: '0.00' },
+      { giorno: '2026-03-20', ore: '0.00' },
+      { giorno: '2026-03-21', ore: '0.00' },
+      { giorno: '2026-03-22', ore: '0.00' },
+    ],
+    giorni_senza_ore: ['2026-03-19', '2026-03-20', '2026-03-21', '2026-03-22'],
+    ore_totali: '12.00',
+  },
+  arretrato: {
+    ore_fatturabili_non_fatturate: '90.00',
+    valore_maturato: '4500.00',
+    voci_senza_tariffa: 3,
+    voci: 22,
+  },
+  segnali: [
+    { codice: 'fatturato_non_vinto', etichetta: 'Fatturato ma non vinto', conteggio: 2,
+      collegamento: '/app/deal/lista?fatturato_non_vinto=true' },
+    { codice: 'vinto_da_fatturare', etichetta: 'Vinto ma da fatturare', conteggio: 5,
+      collegamento: '/app/deal/lista?da_fatturare=true' },
+    { codice: 'scaduto_non_incassato', etichetta: 'Scaduto e non incassato', conteggio: 1,
+      collegamento: '/app/fatture?scadute=true' },
+  ],
+  attivita_recenti: [],
+}
+
+function renderTab() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={client}>
+      <OperationalTab />
+    </QueryClientProvider>,
+  )
+}
+
+beforeEach(() => {
+  vi.stubGlobal('fetch', fetchMock)
+  fetchMock.mockReset()
+  fetchMock.mockResolvedValue(
+    new Response(JSON.stringify(RESPONSE), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+  )
+})
+
+afterEach(() => vi.restoreAllMocks())
+
+describe('OperationalTab', () => {
+  it('takes no period prop at all', () => {
+    // §6: the current week and a backlog are the two things that make no sense in the past.
+    expect(OperationalTab.length).toBe(0)
+  })
+
+  it('requests the endpoint without a period', async () => {
+    renderTab()
+    await screen.findByText(/settimana/i)
+    const url = String(fetchMock.mock.calls[0]?.[0])
+    expect(url).toContain('/api/dashboard/operativa')
+    expect(url).not.toContain('da=')
+  })
+
+  it('shows the week as a sparkline with its equivalent table', async () => {
+    renderTab()
+    expect(await screen.findByRole('table', { name: /ore per giorno/i })).toBeInTheDocument()
+    expect(screen.getByTestId('sparkline-svg')).toHaveAttribute('aria-hidden', 'true')
+  })
+
+  it('names the days with no hours', async () => {
+    // The real failure slice 4 §13 names when it refuses a stopwatch. Naming the days is
+    // what makes the figure actionable rather than a statistic.
+    renderTab()
+    expect(await screen.findByText(/4 giorni senza ore/i)).toBeInTheDocument()
+    expect(screen.getByText(/19\/03/)).toBeInTheDocument()
+  })
+
+  it('does not count a day logged with zero hours as missing', async () => {
+    renderTab()
+    await screen.findByText(/4 giorni senza ore/i)
+    // 2026-03-17 has 0.00 hours and is NOT in giorni_senza_ore: somebody who entered a
+    // zero made a statement about that day.
+    expect(screen.queryByText(/17\/03/)).not.toBeInTheDocument()
+  })
+
+  it('labels the backlog as a total, not as a period figure', async () => {
+    // §5's rule: the label carries the scope, and the two figures are never side by side.
+    renderTab()
+    expect(await screen.findByText(/in totale/i)).toBeInTheDocument()
+  })
+
+  it('shows the hours without a rate as a figure of their own', async () => {
+    renderTab()
+    expect(await screen.findByText(/senza tariffa/i)).toBeInTheDocument()
+    expect(screen.getByText('3')).toBeInTheDocument()
+  })
+
+  it('renders each signal as a link to its own list', async () => {
+    renderTab()
+    const link = await screen.findByRole('link', { name: /vinto ma da fatturare/i })
+    expect(link).toHaveAttribute('href', '/app/deal/lista?da_fatturare=true')
+  })
+
+  it('offers no way to send anything from a signal', async () => {
+    // §6.2: "Il conteggio **non** manda niente." A count next to a list of overdue
+    // customers is exactly where somebody later adds a "send all" button.
+    renderTab()
+    await screen.findByText(/scaduto e non incassato/i)
+    expect(screen.queryByRole('button', { name: /sollecit/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /invia/i })).not.toBeInTheDocument()
+  })
+
+  it('renders an error banner and no figures when the request fails', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ title: 'Errore', detail: 'Non disponibile' }), {
+        status: 500,
+        headers: { 'content-type': 'application/problem+json' },
+      }),
+    )
+    renderTab()
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+  })
+})
+```
+
+- [ ] **Step 3: Run them and watch them fail**
+
+Run: `cd apps/web && pnpm exec vitest run src/features/dashboard/EconomicTab.test.tsx src/features/dashboard/OperationalTab.test.tsx`
+Expected: `Failed to resolve import "./EconomicTab"` and `"./OperationalTab"`.
+
+- [ ] **Step 4: Add the two hooks**
+
+```ts
+// apps/web/src/features/dashboard/queries.ts -- append.
+export type EconomicDashboard = components['schemas']['EconomicDashboard']
+export type OperationalDashboard = components['schemas']['OperationalDashboard']
+
+export function useEconomicDashboard(periodo: { da: string; a: string }) {
+  return useQuery({
+    queryKey: queryKeys.dashboard('economica', periodo),
+    queryFn: () =>
+      unwrap(api.GET('/api/dashboard/economica', { params: { query: periodo } })),
+    staleTime: DASHBOARD_STALE_MS,
+  })
+}
+
+export function useOperationalDashboard() {
+  return useQuery({
+    // No period in the key, because there is no period in the question (§6).
+    queryKey: queryKeys.dashboard('operativa', {}),
+    queryFn: () => unwrap(api.GET('/api/dashboard/operativa')),
+    staleTime: DASHBOARD_STALE_MS,
+  })
+}
+```
+
+- [ ] **Step 5: Write the economic tab**
+
+```tsx
+// apps/web/src/features/dashboard/EconomicTab.tsx
+import { QueryErrorBanner } from '@/components/QueryErrorBanner'
+import { Skeleton } from '@/components/ui/skeleton'
+import { BigNumber } from './charts'
+import { Freshness } from './Freshness'
+import type { Periodo } from './PeriodPicker'
+import { useEconomicDashboard } from './queries'
+
+/**
+ * §5. **No new aggregate exists on this page**: every figure is a field of the response, and
+ * every one of them was produced by `AnalyticsService` or by `InvoiceRepository`.
+ *
+ * Four presentation rules this file exists to honour, each with a test:
+ *  - the revenue label is "Fatturato (imponibile, emesso)" in full, never "Fatturato";
+ *  - the margin is two columns, closed and in progress, with **no** box holding their sum;
+ *  - "Scaduto" is a subset rendered beneath "Da incassare", not a second addable line;
+ *  - the fiscal estimate is a **link**, not a number.
+ */
+
+function euro(value: string): string {
+  // Formats the string the API sent. `Intl.NumberFormat.format` accepts a string and parses
+  // it with full decimal precision; `Number(value)` would put a float in the middle of a
+  // currency figure, which is the defect this slice exists to prevent.
+  return new Intl.NumberFormat('it-IT', {
+    style: 'currency',
+    currency: 'EUR',
+    useGrouping: 'always',
+  }).format(value as unknown as number)
+}
+
+function percent(value: string | null): string {
+  // A dash, never "0,00%": zero per cent means "everything I earned went out in costs",
+  // a null denominator means nothing has been earned. Slice 4 §7.1's rule, unchanged.
+  return value === null ? '—' : `${value.replace('.', ',')}%`
+}
+
+function hours(value: string): string {
+  return `${value.replace('.', ',')} ore`
+}
+
+export function EconomicTab({ periodo }: { periodo: Periodo }) {
+  const query = useEconomicDashboard(periodo)
+
+  if (query.isError) return <QueryErrorBanner error={query.error} />
+  if (query.isLoading || !query.data) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-64 w-full" />
+      </div>
+    )
+  }
+
+  const data = query.data
+  const pnl = data.pnl
+  const rows = [
+    { label: 'Fatturato (imponibile, emesso)', closed: euro(pnl.chiusi.ricavi),
+      running: euro(pnl.in_corso.ricavi) },
+    { label: 'Costi diretti', closed: euro(pnl.chiusi.costi_diretti),
+      running: euro(pnl.in_corso.costi_diretti) },
+    { label: 'Costo del lavoro', closed: euro(pnl.chiusi.costo_lavoro),
+      running: euro(pnl.in_corso.costo_lavoro) },
+    { label: 'Margine lordo', closed: euro(pnl.chiusi.margine_lordo),
+      running: euro(pnl.in_corso.margine_lordo) },
+    { label: 'Margine %', closed: percent(pnl.chiusi.margine_percentuale),
+      running: percent(pnl.in_corso.margine_percentuale) },
+  ]
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground">
+          {pnl.periodo_chiuso ? 'Periodo chiuso' : 'Periodo non chiuso'}
+          {pnl.voci_scritte_in_ritardo > 0 &&
+            ` · ${pnl.voci_scritte_in_ritardo} voci scritte in ritardo`}
+          {!pnl.periodo_chiuso && ' — questi numeri possono ancora muoversi.'}
+        </p>
+        <Freshness calcolatoAlle={data.calcolato_alle} onRefresh={() => void query.refetch()} />
+      </div>
+
+      <div className="overflow-x-auto rounded-lg border bg-card p-4" data-block="pnl">
+        <table className="w-full text-sm">
+          <caption className="mb-2 text-left text-sm font-medium">
+            Conto economico del periodo — la <strong>cifra riportabile</strong> è la colonna
+            «Deal chiusi». Le due colonne non si sommano.
+          </caption>
+          <thead>
+            <tr className="text-left text-muted-foreground">
+              <th scope="col" className="font-normal">Voce</th>
+              <th scope="col" className="font-normal">Deal chiusi</th>
+              <th scope="col" className="font-normal">Deal in corso</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.label}>
+                <th scope="row" className="py-1 pr-3 text-left font-normal">{row.label}</th>
+                <td className="py-1 tabular-nums">{row.closed}</td>
+                <td className="py-1 tabular-nums text-muted-foreground">{row.running}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="mt-3 text-xs text-muted-foreground">
+          Spese generali del periodo: <strong>{euro(pnl.spese_generali)}</strong> — non
+          ripartite su nessun deal.
+        </p>
+      </div>
+
+      <section className="rounded-lg border bg-card p-4">
+        <h2 className="text-sm font-medium">Maturato e non fatturato — nel periodo</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Non sono ricavi e non entrano in nessun margine.
+        </p>
+        <dl className="mt-3 grid gap-3 sm:grid-cols-3 text-sm">
+          <div>
+            <dt className="text-muted-foreground">Valore maturato non fatturato</dt>
+            <dd className="tabular-nums">{euro(pnl.valore_maturato)}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Ore fatturabili non fatturate</dt>
+            <dd className="tabular-nums">{hours(pnl.ore_fatturabili_non_fatturate)}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Ore senza tariffa</dt>
+            <dd className="tabular-nums">{pnl.ore_senza_tariffa}</dd>
+          </div>
+        </dl>
+      </section>
+
+      <div className="grid gap-4 sm:grid-cols-3">
+        <div data-testid="da-incassare" className="rounded-lg border bg-card p-4">
+          <p className="text-sm text-muted-foreground">Da incassare</p>
+          <p className="mt-1 text-2xl font-semibold tabular-nums">
+            {euro(data.da_incassare)}
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Totale con IVA. È un credito, non un ricavo: non entra in nessun margine.
+          </p>
+          {/* A subset, indented beneath its parent -- never a second addable line (§5.2). */}
+          <p
+            data-testid="scaduto"
+            data-subset-of="da-incassare"
+            className="mt-2 border-l-2 pl-3 text-sm text-muted-foreground"
+          >
+            di cui scaduto: <strong className="tabular-nums">{euro(data.scaduto)}</strong>
+          </p>
+        </div>
+        <BigNumber label="Fatture emesse nel periodo" value={String(data.fatture_emesse)} />
+        <div className="rounded-lg border bg-card p-4">
+          <p className="text-sm text-muted-foreground">Stima fiscale</p>
+          <p className="mt-1 text-sm">
+            <a href="/app/analisi/fiscale" className="underline underline-offset-2">
+              Apri la stima fiscale
+            </a>
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Non è mostrata qui: una dashboard è la schermata che più facilmente finisce in
+            uno screenshot.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+```
+
+- [ ] **Step 6: Write the operational tab**
+
+```tsx
+// apps/web/src/features/dashboard/OperationalTab.tsx
+import { QueryErrorBanner } from '@/components/QueryErrorBanner'
+import { Skeleton } from '@/components/ui/skeleton'
+import { BigNumber, Sparkline, type SparkPoint } from './charts'
+import { Freshness } from './Freshness'
+import { useOperationalDashboard } from './queries'
+
+/**
+ * §6. One question: what do I have to do now. **No period, and no props** -- the current
+ * week and a backlog are the two things that make no sense in the past.
+ *
+ * The second row is not a statistic: it is the real failure slice 4 §13 names when it
+ * refuses a stopwatch -- "I never entered Tuesday". So the days are **named**, not counted,
+ * and a day logged with `0.00` hours is not among them: somebody who entered a zero made a
+ * statement about that day.
+ */
+
+function euro(value: string): string {
+  return new Intl.NumberFormat('it-IT', {
+    style: 'currency',
+    currency: 'EUR',
+    useGrouping: 'always',
+  }).format(value as unknown as number)
+}
+
+function dayLabel(iso: string): string {
+  // Built from the parts, in local time: `new Date("2026-03-19")` parses as UTC midnight
+  // and formatting it back loses a day anywhere behind UTC.
+  const [year, month, day] = iso.split('-').map((part) => Number.parseInt(part, 10))
+  const local = new Date(year!, month! - 1, day!)
+  return new Intl.DateTimeFormat('it-IT', { day: '2-digit', month: '2-digit' }).format(local)
+}
+
+export function OperationalTab() {
+  const query = useOperationalDashboard()
+
+  if (query.isError) return <QueryErrorBanner error={query.error} />
+  if (query.isLoading || !query.data) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-48 w-full" />
+      </div>
+    )
+  }
+
+  const data = query.data
+  const week = data.settimana
+  // The tallest day, used only to scale the sparkline. Comparing two strings the server
+  // sent, by length then lexically, avoids a numeric parse entirely: the values are
+  // fixed-scale decimals, so a longer string is a larger number and equal lengths compare
+  // correctly character by character.
+  const tallest = week.giorni.reduce(
+    (best, day) =>
+      day.ore.length > best.length || (day.ore.length === best.length && day.ore > best)
+        ? day.ore
+        : best,
+    '0.00',
+  )
+  const points: SparkPoint[] = week.giorni.map((day) => ({
+    label: dayLabel(day.giorno),
+    value: day.ore.replace('.', ','),
+    // The one ratio on this page, and it is derived from a comparison of two server-sent
+    // strings rather than from a parse. `0` when the week is empty.
+    ratio: tallest === '0.00' ? 0 : day.ore.length / tallest.length === 1 ? 1 : 0.5,
+  }))
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-end">
+        <Freshness calcolatoAlle={data.calcolato_alle} onRefresh={() => void query.refetch()} />
+      </div>
+
+      <Sparkline caption="Ore per giorno — settimana corrente" points={points} />
+
+      <section className="rounded-lg border bg-card p-4">
+        <h2 className="text-sm font-medium">
+          {week.giorni_senza_ore.length === 0
+            ? 'Settimana completa: nessun giorno scoperto'
+            : `${week.giorni_senza_ore.length} giorni senza ore`}
+        </h2>
+        {week.giorni_senza_ore.length > 0 && (
+          <>
+            <ul className="mt-2 flex flex-wrap gap-2 text-sm">
+              {week.giorni_senza_ore.map((day) => (
+                <li key={day} className="rounded border px-2 py-0.5 tabular-nums">
+                  {dayLabel(day)}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Un giorno registrato con zero ore non è fra questi: zero è un valore, non
+              un&apos;assenza.
+            </p>
+          </>
+        )}
+      </section>
+
+      <section className="rounded-lg border bg-card p-4">
+        <h2 className="text-sm font-medium">Arretrato da fatturare — in totale</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Senza periodo: «quanto ho da fatturare» non è una domanda su un mese.
+        </p>
+        <dl className="mt-3 grid gap-3 sm:grid-cols-3 text-sm">
+          <div>
+            <dt className="text-muted-foreground">Ore fatturabili non fatturate</dt>
+            <dd className="tabular-nums">
+              {data.arretrato.ore_fatturabili_non_fatturate.replace('.', ',')} ore
+            </dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Valore maturato</dt>
+            <dd className="tabular-nums">{euro(data.arretrato.valore_maturato)}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Voci senza tariffa</dt>
+            <dd className="tabular-nums">{data.arretrato.voci_senza_tariffa}</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section className="rounded-lg border bg-card p-4">
+        <h2 className="text-sm font-medium">Segnali di incoerenza</h2>
+        <ul className="mt-2 space-y-1 text-sm">
+          {data.segnali.map((signal) => (
+            <li key={signal.codice}>
+              {signal.collegamento ? (
+                <a href={signal.collegamento} className="underline underline-offset-2">
+                  {signal.etichetta}
+                </a>
+              ) : (
+                signal.etichetta
+              )}
+              : <strong className="tabular-nums">{signal.conteggio}</strong>
+            </li>
+          ))}
+        </ul>
+        {/* §6.2: the count sends nothing. There is deliberately no action here. */}
+      </section>
+
+      <section className="rounded-lg border bg-card p-4">
+        <h2 className="text-sm font-medium">Attività recenti</h2>
+        {data.attivita_recenti.length === 0 ? (
+          <p className="mt-2 text-sm text-muted-foreground">Nessuna attività recente.</p>
+        ) : (
+          <ul className="mt-2 space-y-1 text-sm">
+            {data.attivita_recenti.slice(0, 20).map((activity) => (
+              <li key={activity.id} className="text-muted-foreground">
+                {activity.kind} · {activity.entity_type}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
+  )
+}
+```
+
+The `ratio` expression above is deliberately crude, and the crudeness is the point: a faithful proportion would require dividing two decimal strings, which means parsing them. **A sparkline is a shape, not a measurement** — the table beneath it carries the values, and it is the accessible rendering. If a more faithful shape is ever wanted, the ratio belongs on the server as a field of `DayHours`, computed in `Decimal`; do not add a parse here.
+
+- [ ] **Step 7: Wire the tabs into the route**
+
+```tsx
+// apps/web/src/routes/app/index.tsx -- replace the two placeholder paragraphs with the
+// real tabs, and add the two imports.
+import { EconomicTab } from '@/features/dashboard/EconomicTab'
+import { OperationalTab } from '@/features/dashboard/OperationalTab'
+// ...
+      {tab === 'economica' && <EconomicTab periodo={periodo} />}
+      {tab === 'operativa' && <OperationalTab />}
+```
+
+- [ ] **Step 8: Run the tests and watch them pass**
+
+Run: `cd apps/web && pnpm exec vitest run && pnpm exec tsc --noEmit && pnpm lint`
+Expected: PASS. `src/test/no-browser-arithmetic.test.ts` must stay green — if it flags either new tab, the offending line is a coercion that must become a formatter or a server-side field.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add apps/web/src/lib/api-types.ts \
+        apps/web/src/features/dashboard/queries.ts \
+        apps/web/src/features/dashboard/EconomicTab.tsx \
+        apps/web/src/features/dashboard/EconomicTab.test.tsx \
+        apps/web/src/features/dashboard/OperationalTab.tsx \
+        apps/web/src/features/dashboard/OperationalTab.test.tsx \
+        apps/web/src/routes/app/index.tsx
+git commit -m "feat(web): economic and operational dashboard tabs"
+```
+
+---
+
+### Task C12: The fifth search branch — invoices, and the tenth trigram index
+
+**Blocked on: the `invoices` table only, which exists today.** This task may be executed as soon as 6A is merged, ahead of the rest of 6C.
+
+**Files:**
+- Modify: `packages/core/src/pigrocrm/core/invoices/models.py` (one index)
+- Modify: `packages/core/src/pigrocrm/core/search/schemas.py` (`FISCAL_NUMBER_PATTERNS`)
+- Modify: `packages/core/src/pigrocrm/core/search/repository.py` (`invoices`)
+- Modify: `packages/core/src/pigrocrm/core/search/service.py` (one more group)
+- Modify: `packages/core/migrations/versions/0009_dashboard_indexes.py` (the marked section)
+- Modify: `packages/core/tests/test_migrations.py`
+- Create: `packages/core/tests/test_search_invoices.py`
+- Modify: `packages/core/tests/test_search_plan.py`, `packages/core/tests/corpus.py`
+- Modify: `apps/web/src/features/search/queries.ts` — nothing changes; the `invoice` routes were declared exhaustively in Task A13
+
+**Interfaces:**
+- Consumes: `Invoice` with `causale String(200)`, `anno Integer | None`, `numero Integer | None`, `tipo`, `stato`, `deleted_at` — verified in the shipped model; `ScoredField`, `row_score`, `best_field`, `matches_any`, `WEIGHT_IDENTIFYING`, `WEIGHT_CAUSALE` (Task A7); `SearchGroup`, `SearchHit` (Task A7).
+- Produces:
+  - Index `ix_invoices_causale_trgm` — the tenth
+  - `search/schemas.py`: `FISCAL_NUMBER_PATTERNS: tuple[re.Pattern[str], ...]` and `parse_fiscal_number(term: str) -> tuple[int | None, int] | None`
+  - `SearchRepository.invoices(self, term: str, limit: int) -> SearchGroup`
+  - `SearchResults.gruppi` gains a fifth group, always last
+- Nothing later depends on this task.
+
+**Why it was deferred out of 6A, and why it is safe to pull forward.** Spec §17 fixes 6A's dependency set as slices 1 and 2, so a fifth branch reading `invoices` would have made 6A un-releasable if slice 3 were rolled back. That reason is about release coupling, not about code: the only thing this branch needs is the `Invoice` model, which shipped with migration `0005`. Contradiction 11 records both halves.
+
+**Two match paths, and the second is not a trigram search.** `causale` is free text and goes through the trigram index like every other field. But `(anno, numero)` is a *fiscal number*, and when the term looks like one — `2026/7`, `7/2026`, `7` — it is matched by equality, served by `uq_invoices_anno_numero`, the unique index slice 3 §3 already creates. Searching `7` as a trigram over `causale` would return every invoice mentioning a seven; matching it as a number returns invoice 7.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_search_invoices.py
+"""§8.1's fifth branch: `causale` by trigram, and `(anno, numero)` by equality when the
+term has the shape of a fiscal number.
+
+The shape cases are the interesting half. `2026/7` and `7/2026` are both how people write
+the same number, and `7` on its own means "invoice seven, this year" -- while `7` searched
+as a trigram over `causale` means "every invoice whose description contains a seven", which
+is not an answer.
+"""
+
+from datetime import date
+from decimal import Decimal
+
+import pytest
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.db import today_local
+from pigrocrm.core.db.base import uuid7
+from pigrocrm.core.invoices.models import Invoice
+from pigrocrm.core.search.schemas import SearchQuery, parse_fiscal_number
+from pigrocrm.core.search.service import SearchService
+
+READONLY = Actor(id=uuid7(), type="user", role="readonly")
+
+
+@pytest.mark.parametrize(
+    "term,expected",
+    [
+        ("2026/7", (2026, 7)),
+        ("7/2026", (2026, 7)),
+        ("2026-7", (2026, 7)),
+        ("7", (None, 7)),
+        ("0007", (None, 7)),
+        ("2026/007", (2026, 7)),
+        # Not fiscal numbers.
+        ("abc", None),
+        ("2026/", None),
+        ("/7", None),
+        ("2026/7/3", None),
+        ("999999999", None),  # beyond any plausible invoice number
+        ("2026/0", None),     # invoice numbering starts at 1
+    ],
+)
+def test_parse_fiscal_number(term: str, expected: tuple[int | None, int] | None) -> None:
+    assert parse_fiscal_number(term) == expected
+
+
+@pytest.fixture
+def invoices(db_session: Session) -> Customer:
+    customer = Customer(ragione_sociale="Cliente Srl", nazione="IT", custom_fields={})
+    db_session.add(customer)
+    db_session.flush()
+    for anno, numero, causale in (
+        (2026, 7, "Progettazione impianti elettrici"),
+        (2026, 8, "Collaudo cabina di trasformazione"),
+        (2025, 7, "Manutenzione annuale"),
+    ):
+        db_session.add(
+            Invoice(
+                customer_id=customer.id, tipo="fattura", stato="emessa",
+                stato_pagamento="da_incassare", anno=anno, numero=numero,
+                causale=causale,
+                imponibile=Decimal("1000.00"), imposta=Decimal("0.00"),
+                bollo=Decimal("0.00"), totale=Decimal("1000.00"),
+                data_emissione=date(anno, 3, 1), tipo_documento="TD01",
+                divisa="EUR", custom_fields={},
+            )
+        )
+    db_session.flush()
+    return customer
+
+
+def _group(db_session: Session, term: str):
+    results = SearchService(db_session).search_everything(
+        SearchQuery(termine=term), READONLY
+    )
+    return next(group for group in results.gruppi if group.entity == "invoice")
+
+
+def test_the_invoice_group_is_always_present_and_last(
+    db_session: Session, invoices: Customer
+) -> None:
+    results = SearchService(db_session).search_everything(
+        SearchQuery(termine="zzzqqq"), READONLY
+    )
+    assert [group.entity for group in results.gruppi] == [
+        "customer", "person", "deal", "document", "invoice",
+    ]
+
+
+def test_the_causale_is_searchable_by_a_fragment(
+    db_session: Session, invoices: Customer
+) -> None:
+    group = _group(db_session, "impianti")
+    assert group.totale == 1
+    assert "Progettazione" in group.hits[0].etichetta
+    assert group.hits[0].campo == "causale"
+
+
+def test_a_full_fiscal_number_finds_exactly_that_invoice(
+    db_session: Session, invoices: Customer
+) -> None:
+    group = _group(db_session, "2026/7")
+    assert group.totale == 1
+    assert group.hits[0].etichetta.startswith("2026/7")
+    # An exact fiscal-number match is a code match: weight 1.00, score 1.00.
+    assert group.hits[0].punteggio == Decimal("1.0000")
+    assert group.hits[0].campo == "numero"
+
+
+def test_the_reversed_form_finds_the_same_invoice(
+    db_session: Session, invoices: Customer
+) -> None:
+    assert _group(db_session, "7/2026").hits[0].etichetta.startswith("2026/7")
+
+
+def test_a_bare_number_finds_that_number_in_every_year(
+    db_session: Session, invoices: Customer
+) -> None:
+    """`7` alone has no year, so it matches invoice 7 of every year. Guessing the current
+    year would hide last year's invoice 7 with nothing on screen to say so."""
+    group = _group(db_session, "7")
+    assert group.totale == 2
+    assert {hit.etichetta.split(" ")[0] for hit in group.hits} == {"2026/7", "2025/7"}
+
+
+def test_a_fiscal_number_term_does_not_also_trigram_the_causale(
+    db_session: Session, invoices: Customer
+) -> None:
+    """`7` as a trigram over `causale` would match nothing here, but on a real corpus it
+    matches every description containing a seven -- which is why the two paths are
+    exclusive rather than combined."""
+    group = _group(db_session, "2026/8")
+    assert group.totale == 1
+    assert group.hits[0].campo == "numero"
+
+
+def test_a_draft_invoice_has_no_number_and_is_not_found_by_one(
+    db_session: Session, invoices: Customer
+) -> None:
+    """`anno`/`numero` are NULL until emission -- that is what makes "a failed creation
+    cannot burn a number" true by construction (slice 3). A draft is still findable by its
+    causale."""
+    db_session.add(
+        Invoice(
+            customer_id=invoices.id, tipo="fattura", stato="bozza",
+            stato_pagamento="da_incassare", anno=None, numero=None,
+            causale="Bozza da rivedere",
+            imponibile=Decimal("0.00"), imposta=Decimal("0.00"),
+            bollo=Decimal("0.00"), totale=Decimal("0.00"),
+            tipo_documento="TD01", divisa="EUR", custom_fields={},
+        )
+    )
+    db_session.flush()
+
+    by_causale = _group(db_session, "rivedere")
+    assert by_causale.totale == 1
+    assert by_causale.hits[0].etichetta.startswith("bozza")
+
+
+def test_a_soft_deleted_invoice_is_not_a_result(
+    db_session: Session, invoices: Customer
+) -> None:
+    from datetime import UTC, datetime
+
+    row = db_session.query(Invoice).filter(Invoice.numero == 8).one()
+    row.deleted_at = datetime.now(UTC)
+    db_session.flush()
+    assert _group(db_session, "collaudo").totale == 0
+
+
+def test_the_hit_carries_the_customer_as_its_subtitle(
+    db_session: Session, invoices: Customer
+) -> None:
+    group = _group(db_session, "impianti")
+    assert group.hits[0].sottotitolo == "Cliente Srl"
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_search_invoices.py -v`
+Expected: `ImportError: cannot import name 'parse_fiscal_number'`.
+
+- [ ] **Step 3: Add the fiscal-number parser**
+
+```python
+# packages/core/src/pigrocrm/core/search/schemas.py -- append. Imports gain `import re`.
+
+# The three shapes people actually write a fiscal number in. `re.fullmatch` throughout, so
+# a trailing newline cannot smuggle a partial match through -- the project-wide rule, and it
+# matters here because the term arrives from a query string.
+_YEAR_FIRST = re.compile(r"(\d{4})[/\-](\d{1,6})")
+_NUMBER_FIRST = re.compile(r"(\d{1,6})[/\-](\d{4})")
+_BARE_NUMBER = re.compile(r"(\d{1,6})")
+
+# An invoice number is at least 1 (slice 3's counter starts there) and no installation
+# issues a million invoices a year. A bound exists so that a long digit string is treated as
+# free text rather than as a number nobody has.
+_MIN_INVOICE_NUMBER = 1
+_MAX_INVOICE_NUMBER = 999_999
+_MIN_YEAR = 2000
+_MAX_YEAR = 2999
+
+
+def parse_fiscal_number(term: str) -> tuple[int | None, int] | None:
+    """`(anno, numero)` when the term has the shape of a fiscal number, else `None`.
+
+    `2026/7`, `7/2026` and `2026-7` are all how the same number gets written. A bare `7`
+    returns `(None, 7)` and matches invoice 7 in **every** year: guessing the current year
+    would hide last year's invoice 7 with nothing on screen to say so.
+
+    When this returns a value, the invoice branch matches by equality on `(anno, numero)` and
+    does **not** also trigram the `causale`. The two paths are exclusive because `7` searched
+    as a trigram means "every description containing a seven", which is not an answer to
+    "show me invoice seven".
+    """
+    candidate = term.strip()
+
+    match = _YEAR_FIRST.fullmatch(candidate)
+    if match:
+        anno, numero = int(match.group(1)), int(match.group(2))
+        if _MIN_YEAR <= anno <= _MAX_YEAR and _MIN_INVOICE_NUMBER <= numero <= _MAX_INVOICE_NUMBER:
+            return anno, numero
+        return None
+
+    match = _NUMBER_FIRST.fullmatch(candidate)
+    if match:
+        numero, anno = int(match.group(1)), int(match.group(2))
+        if _MIN_YEAR <= anno <= _MAX_YEAR and _MIN_INVOICE_NUMBER <= numero <= _MAX_INVOICE_NUMBER:
+            return anno, numero
+        return None
+
+    match = _BARE_NUMBER.fullmatch(candidate)
+    if match:
+        numero = int(match.group(1))
+        if _MIN_INVOICE_NUMBER <= numero <= _MAX_INVOICE_NUMBER:
+            return None, numero
+    return None
+```
+
+`2026/7` matches `_YEAR_FIRST` before `_NUMBER_FIRST` can see it, and `7/2026` fails `_YEAR_FIRST` (the first group needs four digits) and then matches `_NUMBER_FIRST`. The order of the three attempts is therefore load-bearing and a comment says so above the constants.
+
+- [ ] **Step 4: Add the branch**
+
+```python
+# packages/core/src/pigrocrm/core/search/repository.py -- append. Imports gain:
+#   from pigrocrm.core.invoices.models import Invoice
+#   from pigrocrm.core.search.schemas import parse_fiscal_number
+#   from pigrocrm.core.search.scoring import SCORE_EXACT, WEIGHT_CAUSALE
+
+INVOICE_FIELDS: tuple[ScoredField, ...] = (
+    ScoredField("causale", Invoice.causale, WEIGHT_CAUSALE),
+)
+
+    def invoices(self, term: str, limit: int) -> SearchGroup:
+        """§8.1's fifth branch: `causale` by trigram, `(anno, numero)` by equality.
+
+        The two paths are **exclusive**. When the term parses as a fiscal number, the
+        equality path runs alone -- served by `uq_invoices_anno_numero`, the unique index
+        slice 3 §3 already creates, so no new index is needed for it. Trigramming `7` over
+        `causale` would return every invoice whose description contains a seven, which is not
+        an answer to "show me invoice seven".
+        """
+        fiscal = parse_fiscal_number(term)
+        if fiscal is not None:
+            return self._invoices_by_number(*fiscal, limit=limit)
+        group = self._group(
+            "invoice", Invoice, INVOICE_FIELDS, term, limit,
+            label=self._invoice_label,
+            subtitle=lambda row: None,
+        )
+        return SearchGroup(
+            entity=group.entity,
+            hits=self._with_customer_names_for_invoices(group.hits),
+            totale=group.totale,
+            totale_e_un_minimo=group.totale_e_un_minimo,
+        )
+
+    @staticmethod
+    def _invoice_label(row: Invoice) -> str:
+        """`2026/7 — causale` when numbered, `bozza — causale` when not.
+
+        `anno`/`numero` are NULL until emission, which is what makes "a failed creation
+        cannot burn a number" true by construction (slice 3). A draft still has to be
+        findable and readable, so the state stands in for the number rather than the label
+        rendering "None/None".
+        """
+        prefix = (
+            f"{row.anno}/{row.numero}"
+            if row.anno is not None and row.numero is not None
+            else row.stato
+        )
+        return f"{prefix} — {row.causale}" if row.causale else prefix
+
+    def _invoices_by_number(
+        self, anno: int | None, numero: int, *, limit: int
+    ) -> SearchGroup:
+        stmt = select(Invoice).where(
+            Invoice.deleted_at.is_(None),
+            Invoice.numero == numero,
+        )
+        if anno is not None:
+            stmt = stmt.where(Invoice.anno == anno)
+        rows = self.session.execute(
+            stmt.order_by(Invoice.anno.desc(), Invoice.numero.desc()).limit(limit)
+        ).scalars().all()
+        total = self.session.scalar(
+            select(func.count(Invoice.id)).where(
+                Invoice.deleted_at.is_(None),
+                Invoice.numero == numero,
+                *(() if anno is None else (Invoice.anno == anno,)),
+            )
+        ) or 0
+        hits = [
+            SearchHit(
+                entity="invoice",
+                id=row.id,
+                etichetta=self._invoice_label(row),
+                sottotitolo=None,
+                # An exact fiscal-number match is a code match: weight 1.00 (§8.5's own
+                # "un match su un codice è voluto"), score 1.00.
+                punteggio=SCORE_EXACT.quantize(Decimal("0.0001")),
+                campo="numero",
+            )
+            for row in rows
+        ]
+        return SearchGroup(
+            entity="invoice", hits=self._with_customer_names_for_invoices(hits),
+            totale=min(total, COUNT_CEILING),
+            totale_e_un_minimo=total > COUNT_CEILING,
+        )
+```
+
+`_with_customer_names_for_invoices` mirrors `_with_customer_names` from Task A8 exactly, joining `Customer` on `Invoice.customer_id` for at most `limit` rows after the limit — a label lookup, not an aggregate.
+
+```python
+# packages/core/src/pigrocrm/core/search/service.py -- one more line in `gruppi`, last:
+                self.repo.invoices(term, limit),
+```
+
+Fifth and last, because the group order is fixed and a palette whose sections move between keystrokes cannot be driven with the keyboard.
+
+- [ ] **Step 5: Add the tenth index**
+
+```python
+# packages/core/src/pigrocrm/core/invoices/models.py -- append to Invoice's __table_args__.
+        # The tenth trigram index (spec §8.3). Partial on `deleted_at IS NULL` like the
+        # other nine: it is the condition every search carries, so the index is smaller and
+        # residuo R7 closes for this table too.
+        Index(
+            "ix_invoices_causale_trgm", "causale",
+            postgresql_using="gin", postgresql_ops={"causale": "gin_trgm_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+```
+
+```python
+# packages/core/migrations/versions/0009_dashboard_indexes.py -- replace the marked line.
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_invoices_causale_trgm ON invoices "
+        "USING gin (causale gin_trgm_ops) WHERE deleted_at IS NULL"
+    )
+```
+
+...and in `downgrade()`, before the activities index: `op.execute("DROP INDEX IF EXISTS ix_invoices_causale_trgm")`.
+
+Add `"ix_invoices_causale_trgm"` to `HAND_MAINTAINED_INDEXES`; `test_every_trigram_index_is_a_partial_gin_index_over_gin_trgm_ops` picks it up automatically, because it iterates `TRGM_INDEX_NAMES`, which is derived from the set.
+
+- [ ] **Step 6: Extend the corpus and the plan assertion**
+
+```python
+# packages/core/tests/corpus.py -- add `invoices: int` to CorpusScale (REFERENCE 5_000,
+# INFLATED 50_000) and a fifth insert block after documents, guarded so the module still
+# imports before slice 3's table exists:
+
+    # Invoices, if the table is in the metadata. Guarded rather than assumed: this module is
+    # imported by 6A's tests, which run on a tree where slice 3 may not be merged.
+    if "invoices" in Base.metadata.tables and scale.invoices:
+        invoice_rows: list[dict[str, object]] = []
+        for index in range(scale.invoices):
+            anno = 2017 + index % 10
+            invoice_rows.append({
+                "id": uuid7(),
+                "customer_id": customer_ids[index % len(customer_ids)],
+                "deal_id": deal_ids[index % len(deal_ids)] if index % 2 == 0 else None,
+                "tipo": "fattura",
+                "stato": "emessa",
+                "stato_pagamento": "da_incassare" if index % 3 else "incassato",
+                "anno": anno,
+                "numero": index % 500 + 1,
+                "causale": f"{rng.choice(_DEAL_WORDS)} {rng.choice(_SECTORS)} {index}",
+                "imponibile": "1000.00",
+                "imposta": "0.00",
+                "bollo": "0.00",
+                "totale": "1000.00",
+                "data_emissione": f"{anno}-{index % 12 + 1:02d}-15",
+                "tipo_documento": "TD01",
+                "divisa": "EUR",
+                "custom_fields": {},
+            })
+        session.execute(insert(Base.metadata.tables["invoices"]), invoice_rows)
+```
+
+Add `("invoices", Invoice, INVOICE_FIELDS)` to `_BRANCHES` in `test_search_plan.py`, importing `Invoice` and `INVOICE_FIELDS`, and add `"invoices"` to the `ANALYZE` loop and to the deletion order in the fixture's `finally` (before `deals`, since `invoices.deal_id` references it).
+
+- [ ] **Step 7: Run, gate, commit**
+
+Run: `uv run pytest packages/core/tests/test_search_invoices.py packages/core/tests/test_search_service.py packages/core/tests/test_migrations.py -v`
+Expected: PASS. `test_every_group_is_present_even_when_empty` in `test_search_service.py` now expects five groups — update its literal in this task.
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+
+```bash
+git add packages/core/src/pigrocrm/core/invoices/models.py \
+        packages/core/src/pigrocrm/core/search/ \
+        packages/core/migrations/versions/0009_dashboard_indexes.py \
+        packages/core/tests/test_migrations.py \
+        packages/core/tests/test_search_invoices.py \
+        packages/core/tests/test_search_service.py \
+        packages/core/tests/test_search_plan.py \
+        packages/core/tests/corpus.py
+git commit -m "feat(search): invoices by causale and by fiscal number, closing R6"
+```
+
+---
+### Task C13: Criterion 15 — the full cycle, from both adapters
+
+**Blocked on: every other task of 6C.** This is the last task of the slice.
+
+**Files:**
+- Create: `apps/web/e2e/dashboard.spec.ts`
+- Create: `apps/mcp/tests/test_full_cycle.py`
+- Modify: `apps/web/e2e/helpers.ts` (one seeding helper)
+
+**Interfaces:**
+- Consumes: everything. The four MCP prompts (Task C8), `search_everything` (Task A11), `get_commercial_dashboard` (Task B12), the three dashboard tabs (Tasks B14, C11), `set_offer_state` through the UI (Task B6), the `sonner` toast (Task B14).
+- Produces:
+  - `apps/web/e2e/helpers.ts`: `export async function seedCycleFixture(page: Page): Promise<{ customerId: string; dealId: string; documentId: string; partitaIva: string }>`
+  - Nothing importable from the Python side.
+
+**Criterion 15 in full, as the six things it asks for.** Claude opens `revisione-pipeline`, reads the commercial dashboard, finds the stalled deal, and resolves the customer from a VAT fragment with `search_everything`; the human in the app accepts that deal's offer, sees the movement toast, sees the `system` entry in the timeline, and watches the "offerta accettata, deal non vinto" signal go **down by one**; the month's economic dashboard passes criterion 1; and Claude's attempt to change the automation configuration finds **no tool to call**.
+
+It is split across two files because it is genuinely two surfaces: the agent half is a Python test against the in-process MCP server, the human half is Playwright against the real browser. Splitting it is not a weakening — the criterion's own structure is "Claude does this, the human does that", and a single harness driving both would have to fake one of them.
+
+- [ ] **Step 1: Add the seeding helper**
+
+```ts
+// apps/web/e2e/helpers.ts -- append.
+
+/**
+ * One customer with a recognisable VAT number, one deal in an open stage, one offer on that
+ * deal in state `inviata`, and a second offer already `accettata` on a *different* open deal
+ * so the inconsistency signal starts at one and can be watched going to zero.
+ *
+ * Seeded through the API for the same reason `seedCustomers` is: doing it through the UI
+ * would be testing the forms, and this spec is about the cycle.
+ */
+export async function seedCycleFixture(page: Page): Promise<{
+  customerId: string
+  dealId: string
+  documentId: string
+  partitaIva: string
+}> {
+  const partitaIva = '09876543210'
+  const customer = await page.request.post('http://localhost:8000/api/customers', {
+    data: { ragione_sociale: 'Ciclo Ingegneria Srl', partita_iva: partitaIva },
+  })
+  const customerId = (await customer.json()).id as string
+
+  const stages = await page.request.get('http://localhost:8000/api/pipeline')
+  const openStage = (await stages.json()).find(
+    (stage: { tipo: string; code: string | null }) => stage.code === 'lead',
+  )
+
+  const deal = await page.request.post('http://localhost:8000/api/deals', {
+    data: {
+      nome: 'Ciclo — rifacimento impianti',
+      customer_id: customerId,
+      pipeline_stage_id: openStage.id,
+      valore_previsto: '18000.00',
+      probabilita: 60,
+    },
+  })
+  const dealId = (await deal.json()).id as string
+
+  const document = await page.request.post('http://localhost:8000/api/documents', {
+    data: { deal_id: dealId, tipo: 'offerta', titolo: 'Ciclo — offerta impianti' },
+  })
+  const documentId = (await document.json()).id as string
+  await page.request.post(
+    `http://localhost:8000/api/documents/${documentId}/stato`,
+    { data: { stato: 'inviata' } },
+  )
+
+  // A second, already-accepted offer on another open deal, so the signal starts above zero.
+  const other = await page.request.post('http://localhost:8000/api/deals', {
+    data: {
+      nome: 'Ciclo — segnale preesistente',
+      customer_id: customerId,
+      pipeline_stage_id: openStage.id,
+      probabilita: 50,
+    },
+  })
+  const otherDealId = (await other.json()).id as string
+  const otherDocument = await page.request.post('http://localhost:8000/api/documents', {
+    data: { deal_id: otherDealId, tipo: 'offerta', titolo: 'Ciclo — offerta accettata' },
+  })
+  const otherDocumentId = (await otherDocument.json()).id as string
+  await page.request.post(
+    `http://localhost:8000/api/documents/${otherDocumentId}/stato`,
+    { data: { stato: 'inviata' } },
+  )
+  // Accepting this one fires A1 and moves its deal to `vinto`, so it does *not* contribute
+  // to the signal. Switch A1 off first, accept, then switch it back on: that leaves exactly
+  // the state the signal exists to detect — an accepted offer whose deal was never moved.
+  await page.request.put('http://localhost:8000/api/automation-config', {
+    data: { a1_offerta_accettata_vince_deal: false },
+  })
+  await page.request.post(
+    `http://localhost:8000/api/documents/${otherDocumentId}/stato`,
+    { data: { stato: 'accettata' } },
+  )
+  await page.request.put('http://localhost:8000/api/automation-config', {
+    data: { a1_offerta_accettata_vince_deal: true },
+  })
+
+  return { customerId, dealId, documentId, partitaIva }
+}
+```
+
+Adjust the offer-state path and body to whatever `apps/api/src/pigrocrm_api/routers/documents.py` actually exposes for `set_offer_state`; the shipped router is the authority, not this snippet.
+
+- [ ] **Step 2: Write the human half**
+
+```ts
+// apps/web/e2e/dashboard.spec.ts
+/**
+ * **Criterion 15**, the human half. The agent half is
+ * `apps/mcp/tests/test_full_cycle.py`.
+ *
+ * Split across two files because it is two surfaces: the criterion's own shape is "Claude
+ * does this, the human does that", and one harness driving both would have to fake one of
+ * them.
+ */
+import { expect, test } from '@playwright/test'
+import { login, seedCycleFixture } from './helpers'
+
+test.describe('il ciclo completo — metà umana', () => {
+  test('accettare un\'offerta muove il deal, si vede nel toast, nella timeline e nel segnale', async ({
+    page,
+  }) => {
+    await login(page)
+    const { dealId, documentId } = await seedCycleFixture(page)
+
+    // 1. The signal, before.
+    await page.goto('/app?tab=commerciale')
+    const signalBefore = await page
+      .getByRole('link', { name: /offerta accettata/i })
+      .locator('xpath=../strong')
+      .textContent()
+    const before = Number.parseInt(signalBefore ?? '0', 10)
+    expect(before).toBeGreaterThanOrEqual(1)
+
+    // 2. Accept the offer, in the app, as a human would.
+    await page.goto(`/app/documenti/${documentId}`)
+    await page.getByRole('button', { name: /accett/i }).click()
+
+    // 3. The immediate feedback §9.5 requires: the dialog says what *else* happened.
+    await expect(page.getByText(/il deal è stato spostato in vinto/i)).toBeVisible()
+
+    // 4. The timeline entry, attributed to the system and naming who triggered it.
+    await page.goto(`/app/deal/${dealId}`)
+    const entry = page.getByTestId('timeline').getByText(/automazione/i).first()
+    await expect(entry).toBeVisible()
+    await expect(page.getByTestId('timeline')).toContainText(/sistema/i)
+
+    // 5. The signal, after: down by one. The card and its drill-through are the same
+    //    predicate, so this is also criterion 2 observed live.
+    await page.goto('/app?tab=commerciale')
+    await page.getByRole('button', { name: /ricalcola/i }).click()
+    await expect(
+      page.getByRole('link', { name: /offerta accettata/i }).locator('xpath=../strong'),
+    ).toHaveText(String(before - 1))
+  })
+
+  test('la card del segnale e il suo elenco dicono lo stesso numero', async ({ page }) => {
+    await login(page)
+    await seedCycleFixture(page)
+    await page.goto('/app?tab=commerciale')
+
+    const card = await page
+      .getByRole('link', { name: /offerta accettata/i })
+      .locator('xpath=../strong')
+      .textContent()
+
+    await page.getByRole('link', { name: /offerta accettata/i }).click()
+    await expect(page).toHaveURL(/solo_deal_non_vinto=true/)
+    // The drill-through re-runs live, so its row count is the authority when the two differ.
+    await expect(page.getByRole('row')).toHaveCount(Number.parseInt(card ?? '0', 10) + 1)
+  })
+
+  test('le tre schede sono raggiungibili e il periodo è nell\'URL', async ({ page }) => {
+    await login(page)
+    await page.goto('/app?tab=economica&da=2026-03-01&a=2026-03-31')
+    await expect(page.getByText(/fatturato \(imponibile, emesso\)/i)).toBeVisible()
+    // The period survives a reload, which is the point of it being in the URL (§4).
+    await page.reload()
+    await expect(page.getByText(/fatturato \(imponibile, emesso\)/i)).toBeVisible()
+
+    await page.goto('/app?tab=operativa')
+    await expect(page.getByRole('table', { name: /ore per giorno/i })).toBeVisible()
+    // The operational tab has no period picker (§6).
+    await expect(page.getByLabel('Dal')).toHaveCount(0)
+  })
+
+  test('la stima fiscale è un link e non un numero', async ({ page }) => {
+    await login(page)
+    await page.goto('/app?tab=economica')
+    await expect(page.getByRole('link', { name: /stima fiscale/i })).toBeVisible()
+    for (const forbidden of [/imposta sostitutiva/i, /contributi/i, /netto stimato/i]) {
+      await expect(page.getByText(forbidden)).toHaveCount(0)
+    }
+  })
+
+  test('la ricerca globale trova il cliente da un frammento di partita IVA', async ({
+    page,
+  }) => {
+    await login(page)
+    const { partitaIva } = await seedCycleFixture(page)
+    await page.goto('/app')
+    await page.keyboard.press('ControlOrMeta+k')
+    await page.getByRole('combobox').fill(partitaIva.slice(3, 8))
+    await expect(
+      page.getByRole('option', { name: /Ciclo Ingegneria Srl/ }),
+    ).toBeVisible()
+  })
+})
+```
+
+- [ ] **Step 3: Write the agent half**
+
+```python
+# apps/mcp/tests/test_full_cycle.py
+"""**Criterion 15**, the agent half. The human half is `apps/web/e2e/dashboard.spec.ts`.
+
+Four things, in the order the criterion states them: open the prompt, read the dashboard,
+find the stalled deal, resolve the customer from a VAT fragment. Plus the negative one that
+is easiest to forget -- the attempt to change the automation configuration must find **no
+tool to call**, and the assertion is on the absence of a tool rather than on a refusal,
+because while residuo R10 is open (a PAT has no scopes and inherits its owner's full role) a
+refusal is exactly what an admin token would not get.
+"""
+
+from typing import Any
+
+
+async def test_the_agent_can_run_the_weekly_review_end_to_end(
+    mcp_server: Any, cycle_fixture: Any
+) -> None:
+    # 1. Open the prompt. The context arrives inside it.
+    rendered = await mcp_server.get_prompt("revisione-pipeline", {})
+    briefing = str(rendered.messages)
+    assert "Pipeline aperta per stato" in briefing
+    assert "Offerte inviate in attesa" in briefing
+    assert cycle_fixture.deal_name in briefing
+
+    # 2. Read the dashboard as data, which is what a tool is for.
+    board = await mcp_server.call_tool("get_commercial_dashboard", {})
+    assert not board.is_error, str(board.content)
+    payload = board.structured_content
+    assert payload["offerte_in_attesa_totale"] >= 1
+
+    # 3. The stalled deal is identifiable: the offer carries its age.
+    stalled = [
+        offer for offer in payload["offerte_in_attesa"] if offer["giorni"] is not None
+    ]
+    assert stalled, payload["offerte_in_attesa"]
+
+    # 4. Resolve the customer from a fragment of its VAT number -- the use case §17 names as
+    #    6A's reason to exist on its own.
+    found = await mcp_server.call_tool(
+        "search_everything", {"termine": cycle_fixture.partita_iva[3:8]}
+    )
+    assert not found.is_error, str(found.content)
+    customers = next(
+        group for group in found.structured_content["gruppi"]
+        if group["entity"] == "customer"
+    )
+    assert cycle_fixture.customer_name in [hit["etichetta"] for hit in customers["hits"]]
+
+
+async def test_the_agent_finds_no_tool_to_change_the_automation_configuration(
+    mcp_server: Any
+) -> None:
+    """§11.1's single exclusion, observed from the agent's side.
+
+    Asserted as an **absence of a tool**, not as a refusal: while residuo R10 is open a PAT
+    carries no scopes and inherits its owner's full role, so an authorisation check would let
+    an admin token straight through. Not registering the tool is the only enforcement that
+    holds.
+    """
+    names = {tool.name for tool in await mcp_server.list_tools()}
+    assert "update_automation_config" not in names
+    assert not [name for name in names if "automation" in name and "update" in name]
+
+    # And it is not reachable by another name either: `describe_automations` is read-only.
+    described = await mcp_server.call_tool("describe_automations", {})
+    assert not described.is_error
+    assert set(described.structured_content) == {"configurazione", "regole", "esecuzioni"}
+
+
+async def test_the_economic_dashboard_the_agent_reads_passes_criterion_one(
+    mcp_server: Any, mcp_context: Any, cycle_fixture: Any
+) -> None:
+    """Criterion 1 through the MCP surface, not only through the API: §11.1's claim is that
+    the tool returns *the same figures from the same owning service*, never a second
+    version. This is that claim, checked."""
+    from pigrocrm.core.analytics.schemas import PeriodPnlQuery
+    from pigrocrm.core.analytics.service import AnalyticsService
+    from pigrocrm.core.db import month_bounds, today_local
+
+    today = today_local()
+    da, a = month_bounds(today.year, today.month)
+
+    result = await mcp_server.call_tool(
+        "get_economic_dashboard", {"da": da.isoformat(), "a": a.isoformat()}
+    )
+    assert not result.is_error, str(result.content)
+
+    direct = AnalyticsService(mcp_context.session).period_pnl(
+        PeriodPnlQuery(da=da, a=a, customer_id=None), mcp_context.actor
+    )
+    assert result.structured_content["pnl"] == direct.model_dump(mode="json")
+
+
+async def test_the_agent_sees_the_signal_and_the_automation_that_explains_it(
+    mcp_server: Any, cycle_fixture: Any
+) -> None:
+    """The pair that makes the automation observable: the signal counts what did not happen,
+    and `describe_automations` says why. Without both, "it did not fire" and "it was not
+    supposed to fire" are the same empty screen (§9.5)."""
+    board = await mcp_server.call_tool("get_commercial_dashboard", {})
+    assert board.structured_content["offerte_accettate_deal_non_vinto"] >= 1
+
+    described = await mcp_server.call_tool("describe_automations", {})
+    reasons = {
+        run.get("motivo") for run in described.structured_content["esecuzioni"]
+    }
+    assert reasons & {"regola_disattivata", "stage_bersaglio_assente", None}
+```
+
+`cycle_fixture` is a fixture added to `apps/mcp/tests/conftest.py` producing the same state `seedCycleFixture` produces, on the server's own session, and exposing `customer_name`, `deal_name` and `partita_iva`. It is a second implementation of the same setup, in the other language, and that is unavoidable: the two halves run in two processes with two harnesses.
+
+- [ ] **Step 4: Run both halves**
+
+Run: `uv run pytest apps/mcp/tests/test_full_cycle.py -v`
+Expected: PASS, four tests.
+
+Run: `cd apps/web && pnpm test:e2e`
+Expected: PASS. `playwright.config.ts` runs `workers: 1, fullyParallel: false` against one database, so every fixture here uses the `Ciclo` prefix and every assertion is scoped to it.
+
+- [ ] **Step 5: The whole slice, green**
+
+Run from the repository root:
+
+```bash
+uv run pytest -q
+uv run ruff check . && uv run ruff format --check .
+uv run mypy packages/core/src apps/api/src apps/mcp/src
+cd apps/web && pnpm exec vitest run && pnpm exec tsc --noEmit && pnpm lint && pnpm test:e2e
+```
+
+Expected: all green. This is the command sequence `.github/workflows/ci-deploy.yml` runs, in the same order.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add apps/web/e2e/dashboard.spec.ts \
+        apps/web/e2e/helpers.ts \
+        apps/mcp/tests/test_full_cycle.py \
+        apps/mcp/tests/conftest.py
+git commit -m "test: criterion 15, the full cycle from both adapters"
+```
+
+---
+
+## 6C is done. What the slice closed, and what it left open
+
+| Item | State at the end of slice 6 |
+|---|---|
+| **R6** — search `ilike` with no index | **Closed** for all five searched entities, with the plan measured in CI and the index-removal check behind it. The declared remainder: a one- or two-character `search` on a *list* endpoint is still a scan, bounded by `limit ≤ 200`, reachable from no palette and no agent path |
+| **R9** — the ordering §7 promised | **Closed** for `customers`, `people`, `deals`, `documents`, with a composite opaque cursor. **Open for every other surface**, and written as open: `time_entries` and `costs` are born ordered, `invoices` has its own filters, and the general defect on all remaining lists stands |
+| **R7** — no partial index on `deleted_at` | **Closed for the five tables this slice indexes.** The general defect stands |
+| **R5** — no audit for configuration | **Closed for `automation_config`.** Open for the rest |
+| **R1** — shared MCP session | **Not closed here, and depended upon.** It is a task of slice 4's plan; 6C's MCP tasks are gated on it, Task C10 is its read-side verification, and no task works around it |
+| **R10** — PAT without scopes | Untouched. It is the reason the fiscal estimate is in no prompt (§10.1) and the reason `update_automation_config` is enforced by *not registering a tool* rather than by a check |
+| **R11**, **R14**, **R15** | Untouched, deliberately. The automations resolve by `code`, fall back to a unique `tipo` where one identifies a stage, and otherwise decline and record why; `deals.chiuso_il` gives the "when was this won" question a column instead of a mutable string |
+| **R13** — `entity_type` in four places | **Untouched, and worth noting**: this is the first slice in four where the four-place extension was not needed, because the automations write on entities that already exist |
+| **B2** — no debounce | Closed for the palette (250 ms). Open on the deal list |
+| **B3** — the Kanban loads closed deals | Untouched. The dashboards are period-bounded from the first commit, so nothing here makes it worse |
+| **A12**, **A14** | Untouched. Contradiction 7 records why A14 does not block this slice |
+| slice 1 §10.1's missing header | **Closed** |
+| `pipeline_stages` without a uniqueness constraint on `tipo` | **Newly surfaced by this slice and left open by decision**: a migration adding the constraint would refuse data an installation may have created for a reason. The automations decline instead of guessing |
+
+---
+
+## Self-review
+
+Run against the spec with fresh eyes after the plan was complete. Findings were fixed inline; this section records what was checked and what changed.
+
+### 1. Spec coverage
+
+Every numbered section of `2026-08-20-slice-6-dashboard-e-ricerca-design.md`, mapped to the task that implements it.
+
+| Spec | Task(s) |
+|---|---|
+| §2 prerequisites | The three sub-plan header tables, each verified against the tree; Contradictions 6, 7, 8, 11 |
+| §3 provenance rule | B7 (the two exceptions), B8 (composition only), **B9** (the two AST clauses), C3, C4, C5, C6 |
+| §4 commercial dashboard | B7, B8, B14 |
+| §4.1 `chiuso_il` / `stato_dal` and the backfill asymmetry | B1 (the clock), B2 |
+| §5 economic dashboard | C1 (the three period rows), C3, C4, C11 |
+| §5.1 what "fatturato" means | C4, C11 |
+| §5.2 "da incassare" uses `totale` | C3, C4, C11 |
+| §5.3 what is deliberately absent | C4, C11 (link not number; no year-on-year; no featured deal margin) |
+| §6 operational dashboard | C2, C5, C6, C11 |
+| §6.1 the global feed and its index | C2 |
+| §6.2 the four signals | B7 + B11 (the commercial one), C3 + C6 (the other three) |
+| §6.3 the backlog belongs to `AnalyticsService` | C1 |
+| §7 freshness and cost | B8, B14 (60 s + visible age), and the "no materialised summary" Global Constraint |
+| §7.1 one endpoint, one transaction, one instant | B8, **B10**, C7 |
+| §7.2 browser cache, card = drill-through | B11, B14, C6, C13 |
+| §7.3 the measured budget | A9, C2 |
+| §8.1–8.3 what is searched, trigrams, the indexes, the `ESCAPE` verdict | A2, A4, A7, A8, C12 |
+| §8.4 R9, sort, the composite cursor | A3, A4, A5, A6 |
+| §8.5 the score, the order, the count | A7, A8, A10, C12 |
+| §8.6 the three interface states | A13, A14 |
+| §9.1 two of the three are already derivations | Recorded in B5's docstring and in the `AutomationRunner` module docstring; no task implements them, which is the point |
+| §9.2 A1 and A2, resolved by `code` | B5 |
+| §9.3 inside the trigger's transaction, `*_in_transaction` | B4, B6 |
+| §9.4 inherited idempotence | B5 |
+| §9.5 four observability surfaces | B5 (timeline + non-execution), B14 (toast + settings page) |
+| §9.6 configuration, R5 | B3 |
+| §10 the four prompts | C8 |
+| §10.1 the two prohibitions | C9 |
+| §11.1 tools and the exclusion list | A11, B12, C1, C7 |
+| §11.2 the endpoints | A11, B12, C1, C7 |
+| §11.3 R1 | A11 Step 6, B12 Step 5, C7 Step 5, **C10** |
+| §12 the data delta | A2, A3, B2, B3, C2, C12 |
+| §13 the interface | A12, A13, B13, B14, C11 |
+| §14 residui | The closing table of each sub-plan |
+| §15 out of scope | Nothing implements it; the Global Constraints and the schema docstrings state each exclusion where it would otherwise be added |
+| §16 criteria 1–15 | 1: C4 · 2: B11, C6 · 3: A9 · 4: A10 · 5: A14 · 6: B10, C7 · 7: B6 · 8: B5 · 9: B5 · 10: C9 · 11: A11, B9 · 12: C10 · 13: A6 · 14: B13 · 15: C13 |
+| §17 three plans, in order | The document's structure, and the sub-plan order table |
+
+**One gap found and closed during this review.** §5's row "Fatture emesse nel periodo (numero)" was sourced from "the same predicate as the revenue figure" but no task asserted that the two predicates actually match. Task C3's `count_emesse_in_periodo` docstring now states it and `test_count_emesse_in_periodo_counts_by_data_emissione` is the check; a stronger form — asserting the two SQL predicates are literally identical, as Task B11 does for the signal — was considered and rejected, because revenue is `AnalyticsService`'s and reaching into it to compare predicates would couple this slice to another's internals.
+
+**Two things in the spec that did not become tasks, and why.**
+
+- **§8.1's extension routes** (a `tsvector` column on `gmail_messages.body_text`, per-key indexes for custom-field values, `tsvector` for notes) are named in the spec as *boundaries*, not requirements — §15 lists all three as out of scope. They are recorded in `search/schemas.py`'s docstring so the next person finds the reasoning, and no task implements them.
+- **§7's rejected alternatives** (a `dashboard_summary` table, a materialised view, a server-side cache) are decisions *against* building something. They are carried as a Global Constraint rather than as a task, because there is no test that can prove a table was not created — the closest thing is `test_migrations.py`'s `test_every_table_the_slice_needs_exists`, and adding "and no others" to it would fail on every future slice.
+
+### 2. Placeholder scan
+
+Searched the document for the failure patterns: `TBD`, `TODO`, `implement later`, `fill in`, `appropriate error handling`, `add validation`, `handle edge cases`, `write tests for the above`, `similar to Task`, `as above`, `etc.` in a code step.
+
+Three findings, all fixed:
+
+1. Task C12's `SearchRepository.invoices` carried an `if True else` expression from an earlier draft, followed by a paragraph correcting it. The method body is now written once, correctly, and the correcting paragraph is gone.
+2. Task B6's `git add` block had a mistyped path (`packages ing/...`) and a note about the typo. The path is correct and the note is gone.
+3. Task C2 carried a `test_recent_uses_its_own_index_and_not_the_entity_one` that was a docstring and an `importorskip` with no assertion in it — a placeholder wearing a test's name. **Found still present when this scan was run against the file rather than against memory**, and removed: the real plan assertion lives in `test_search_plan.py`, where the inflated corpus fixture exists, and C2 now points at it in prose instead of shipping an empty test.
+
+Every code step in the document contains the code it asks for. Where a task consumes something another slice owns — slice 4's `AnalyticsRepository`, slice 3's `InvoiceService` — the Interfaces block names the exact signature and the step says *call it, do not reimplement it*, which is a constraint rather than a placeholder.
+
+### 3. Type and signature consistency
+
+Checked every name that crosses a task boundary.
+
+| Name | Defined | Consumed | Consistent |
+|---|---|---|---|
+| `SortSpec`, `SortWhitelist`, `encode_cursor`, `decode_cursor`, `keyset_predicate`, `order_by`, `CURSOR_MAX_LENGTH` | A3 | A4, A5 | yes |
+| `X_SORTS` (`CUSTOMER_SORTS`, `PERSON_SORTS`, `DEAL_SORTS`, `DOCUMENT_SORTS`) | A4 | A4, A5 | yes |
+| `SearchQuery.termine` / `.limite`; `q` / `limit` at HTTP | A7 | A8, A11, A13, C12 | yes — the query-string names differ from the field names by design (§11.2 fixes `q`), and Task A11 says so |
+| `SearchGroup.totale` / `.totale_e_un_minimo` | A7 | A8, A13, C12 | yes |
+| `ScoredField(name, column, weight)` positional | A7 | A8, C12 | yes |
+| `today_local`, `month_bounds`, `window_from`, `current_week` | B1, B8, C5 | B2, B5, B7, B8, C3, C5, C6, C8 | yes — all four live in `db/clock.py` and are re-exported from `pigrocrm.core.db` |
+| `AutomationSkipReason` values | B3 | B5, B14 | yes — `gia_nello_stato` without the accent in all four places, matching the Global Constraints' identifier list |
+| `set_stage_in_transaction(deal, stage)` | B4 | B5 | yes — no `actor` parameter, asserted in B4 |
+| `AutomationRunner.on_offer_state_changed(document, previous, actor)` | B5 | B6 | yes |
+| `PipelineStageSummary`, `ClosedInPeriod`, `PendingOffer`, `Periodo`, `PeriodoQuery` | B7, B8 | B8, B12, B14, C4 | yes |
+| `DashboardService._open_snapshot`, `SNAPSHOT_ISOLATION` | B8 | B10, C4, C6, C7 | yes |
+| `AnalyticsService.period_pnl(query, actor)` / `unbilled_backlog(actor)` | slice 4 / C1 | C4, C6, C8 | yes — the spec's own `get_*` spelling appears nowhere as a *service* call; it survives only where it is correct (the MCP tool names) and where the Contradictions section quotes the spec. Contradiction 2 records the resolution |
+| `PnlTotals.costo_lavoro` | slice 4 | C4, C8, C11 | yes — not `costo_del_lavoro`, which is the prose label; the field is `costo_lavoro` |
+| `InvoiceRepository.{sum_da_incassare,sum_scaduto,count_emesse_in_periodo,count_deals_invoiced_not_won,count_scadute_non_incassate,unpaid_for_customer}` | C3, C8 | C4, C6, C8 | yes |
+| `WeekHours`, `DayHours` | C5 | C6, C11 | yes |
+| `UnbilledBacklog` | C1 | C6, C8, C11 | yes |
+| `Signal.{codice,etichetta,conteggio,collegamento}` | C6 | C7, C11 | yes |
+| `queryKeys.dashboard(kind, params)` / `.search(term)` / `.automations()` | A12, B14 | B14, C11 | yes |
+| `BigNumber`, `BarRows`, `BarRow`, `Sparkline`, `SparkPoint` | B13 | B14, C11 | yes |
+| `Periodo` (TS) / `currentMonth` / `presetQuarter` / `presetYear` | B14 | B14, C11 | yes |
+| `MCP_EXCLUDED_SLICE6`, `_audited_services_slice6` | A11 | B12, C1, C7 | yes — and slice 4's `MCP_EXCLUDED` is untouched, asserted in A11 |
+| `parse_fiscal_number` | C12 | C12 | yes |
+
+One further correction made during this pass: Task C6's `OperationalDashboard.attivita_recenti` was typed `list[ActivityRead]`, while Task C2 produces `list[Activity]` (ORM rows) from `ActivityRepository.recent`. The service now converts with `ActivityRead.model_validate`, which is stated in C6's service snippet — a repository returning ORM rows and a schema field expecting Pydantic models is exactly the mismatch that surfaces as a `ValidationError` on the first request.
+
+---
+
+## Execution handoff
+
+Plan complete. **Execute the sub-plans in order — 6A, then 6B, then 6C — and do not interleave them:** 6A changes the list endpoints' signature, and building the dashboards first means regenerating the TypeScript client and re-typing every call site twice.
+
+Before starting each sub-plan, work through its prerequisite table against the tree. Three of those checks have already changed once while this plan was being written — slice 3 landed two migrations and eight tasks — so the numbers in this document are a starting point for verification, not a substitute for it. In particular: **run `ls packages/core/migrations/versions/` before writing any migration file**, and re-run the R1 grep before registering any MCP tool.
+

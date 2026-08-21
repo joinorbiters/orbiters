@@ -2874,7 +2874,7 @@ _TIPO_PAGAMENTO_RE = re.compile(r"(TP|MP)\d{2}")
 # The schema's `String*LatinType` family admits Basic Latin and Latin-1 Supplement
 # only. A code point outside that is an SdI rejection, so it is refused here with the
 # field named instead.
-_LATIN_RE = re.compile(r"[ -ÿ]*")
+_LATIN_RE = re.compile(r"[\x00-\xff]*")
 # Punctuation and the "IT" prefix are stripped before a fiscal identifier is matched,
 # exactly as the previous system's own normalisation did.
 _FISCAL_ID_NOISE = re.compile(r"[^0-9A-Za-z]")
