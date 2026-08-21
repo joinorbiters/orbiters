@@ -51,3 +51,198 @@
   font-display: swap;
   src: url('../src/assets/fonts/outfit-variable-latin.woff2') format('woff2');
 }
+
+* {
+  box-sizing: border-box;
+  /* The app draws --border on everything (tokens.css @layer base). The landing
+     draws nothing: relief comes from --landing-shadow plus --landing-lightline,
+     separation from surface tint and from space. */
+  border-width: 0;
+  border-style: solid;
+  margin: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  --rise-stagger: 60ms;
+  background-color: var(--landing-surface);
+  color: var(--landing-ink);
+  font-family: var(--font-sans);
+  font-weight: 300;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* --- Grain: two stacked layers, zero bytes, zero requests, no binary asset. That
+   is why this beats an feTurbulence in a data: URI. Carried from Acme
+   (App.css:52-77), re-tinted: the blooms take the landing veils instead of its
+   burnt orange and sage, and the hatching is Prussian Blue rather than black. */
+.grain {
+  position: relative;
+  isolation: isolate;
+  overflow-x: clip;
+}
+
+.grain::before {
+  content: '';
+  position: absolute;
+  inset: -20% 0 0;
+  background:
+    radial-gradient(circle at 8% 4%, var(--landing-veil-warm), transparent 55%),
+    radial-gradient(circle at 82% 18%, var(--landing-veil-gold), transparent 55%),
+    radial-gradient(circle at 24% 72%, var(--landing-surface), transparent 55%);
+  pointer-events: none;
+  z-index: -2;
+}
+
+.grain::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    120deg,
+    var(--landing-grain-line) 0,
+    var(--landing-grain-line) 1px,
+    transparent 1px,
+    transparent 10px
+  );
+  opacity: 0.12;
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* The hatching lies above the background and below the text. A reader who asked
+   for more contrast is asking for less of exactly this. */
+@media (prefers-contrast: more) {
+  .grain::before,
+  .grain::after {
+    display: none;
+  }
+}
+
+/* --- Rhythm, wider than the app's: the calm comes from the space, and space is
+   the cheapest thing on the page to get right. */
+.wrap {
+  max-width: 72rem;
+  margin-inline: auto;
+}
+
+.section {
+  padding-block: clamp(4rem, 10vw, 9rem);
+  padding-inline: clamp(1.25rem, 5vw, 3rem);
+}
+
+.measure {
+  max-width: 62ch;
+}
+
+/* --- Type: fluid, one family. */
+h1 {
+  font-size: clamp(2.4rem, 3vw + 1.6rem, 4rem);
+  font-weight: 300;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+h2 {
+  font-size: clamp(1.6rem, 1.5vw + 1.1rem, 2.4rem);
+  font-weight: 400;
+  line-height: 1.2;
+}
+
+p,
+li {
+  font-size: clamp(1rem, 0.3vw + 0.95rem, 1.125rem);
+  color: var(--landing-ink-quiet);
+}
+
+.lead {
+  font-size: clamp(1.15rem, 0.6vw + 1rem, 1.4rem);
+  color: var(--landing-ink);
+}
+
+.overline {
+  text-transform: uppercase;
+  letter-spacing: 0.24em;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--landing-ink-quiet);
+  margin-bottom: 0.6rem;
+}
+
+/* --- Surfaces: translucent white, relief from shadow plus a light edge, no blur. */
+.card {
+  background-color: rgba(255, 255, 255, 0.85);
+  border-radius: var(--radius-4xl);
+  box-shadow: var(--landing-shadow), var(--landing-lightline);
+  padding: clamp(1.5rem, 3vw, 2.5rem);
+}
+
+.hairline {
+  border-top-width: 1px;
+  border-top-color: var(--landing-hairline);
+}
+
+/* --- The one saturated element on the page. */
+.cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background-color: var(--landing-cta);
+  color: var(--landing-cta-ink);
+  font-size: 1.0625rem;
+  font-weight: 500;
+  text-decoration: none;
+  padding: 0.9rem 1.75rem;
+  border-radius: var(--landing-radius-pill);
+  box-shadow: var(--landing-shadow);
+}
+
+.quiet-link {
+  color: var(--landing-ink-quiet);
+  text-decoration: none;
+  border-radius: var(--radius-md);
+  padding: 0.4rem 0.75rem;
+}
+
+.quiet-link:hover,
+.cta:hover {
+  text-decoration: underline;
+}
+
+:where(a, button):focus-visible {
+  outline: 3px solid var(--landing-focus);
+  outline-offset: 3px;
+}
+
+/* --- Motion: Acme's rise (App.css:1233-1242), shortened from 0.6s -- on a page
+   that scrolls, 0.6s per element accumulates. No parallax and nothing tied to
+   scroll position.
+
+   The initial state is VISIBLE. reveal.js adds [data-hidden] and then removes it;
+   CSS that hides and JS that reveals is a blank page whenever the script fails. */
+.rise {
+  transition:
+    opacity 320ms cubic-bezier(0.2, 0.7, 0.2, 1),
+    transform 320ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  transition-delay: calc(var(--rise-index, 0) * var(--rise-stagger));
+}
+
+.rise[data-hidden] {
+  opacity: 0;
+  transform: translateY(12px);
+}
+
+/* Acme's guard covered only .panel and .button (App.css:1289-1297). This one
+   covers everything that moves, because everything that moves is .rise. */
+@media (prefers-reduced-motion: reduce) {
+  .rise,
+  .rise[data-hidden] {
+    transition: none;
+    transform: none;
+    opacity: 1;
+  }
+}
