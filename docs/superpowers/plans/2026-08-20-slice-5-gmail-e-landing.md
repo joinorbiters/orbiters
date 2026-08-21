@@ -2405,3 +2405,3004 @@ git commit -m "test(landing): axe on all three pages, with the grain switched on
 **5A is done here. Before starting 5B-1:** deploy, confirm `https://<domain>/`, `/privacy` and `/termini` are publicly reachable, put the real contact address in `privacy.html`, then create the Google Cloud OAuth client, set its homepage and privacy-policy URLs to those pages, and **submit it for verification**. Verification is calendar time. Build 5B-1 while it runs, and expect the 7-day refresh-token expiry until it clears — Task B1-12 makes that expiry visible rather than mysterious.
 
 ---
+
+# 5B-1 — OAuth and synchronisation
+
+**What must exist before 5B-1 can start.** All four, and the first two are not negotiable:
+
+1. **5A deployed**, with `/`, `/privacy` and `/termini` publicly reachable on the verified domain, and the OAuth client **submitted for verification**. Without it the client stays in Testing and a consumer refresh token expires every 7 days — Google's own behaviour, not something this plan can code around.
+2. **The R10 + R5 minimum cut, closed.** PAT scopes with `gmail:*` off by default; a mandatory `expires_at` on any token carrying a `gmail:*` scope; an `activities` row on token create and on token revoke. See *The blocking prerequisite outside this slice* above. **This plan consumes that work in Task B1-14 and does not implement it.** If `gmail:read` does not exist as a PAT scope when B1-14 is reached, stop and close the prerequisite — do not invent a local substitute.
+3. Slice 1 in `main` (it is) and slice 2 complete (it is: `documents/`, `templates/`, `render/`, `storage/`, `emitter/` are all in the tree with their tests green).
+4. A Google Cloud project with an OAuth client of type *Web application*, its single authorised redirect URI set to `{PIGROCRM_PUBLIC_URL}/api/gmail/oauth/callback`. Google compares that string exactly.
+
+**What 5B-1 does not need:** slice 3. Nothing in 5B-1 touches an invoice.
+
+**Tasks:** 17. Migrations land at revisions `0004` (B1-1), `0005` (B1-3) and `0006` (B1-8).
+
+---
+
+### Task B1-1: The address roster, and the index the relevance query needs
+
+Relevance is decided by the data. That makes the roster query the hottest query in the slice, and it currently sequential-scans half of what it reads.
+
+**Files:**
+- Modify: `packages/core/src/pigrocrm/core/customers/models.py:36`
+- Create: `packages/core/src/pigrocrm/core/gmail/__init__.py`
+- Create: `packages/core/src/pigrocrm/core/gmail/roster.py`
+- Create: `packages/core/migrations/versions/0004_customers_email_index.py`
+- Modify: `packages/core/tests/test_migrations.py:139,161` (`"0003"` → `"0004"`)
+- Create: `packages/core/tests/test_gmail_roster.py`
+
+**Interfaces:**
+- Consumes: `Customer` (`customers/models.py`), `Person` (`people/models.py`), `Deal` (`deals/models.py`), the `db_session` fixture from `packages/core/tests/conftest.py`.
+- Produces:
+  ```python
+  @dataclass(frozen=True)
+  class EntityRef:
+      entity_type: str   # "customer" | "person" | "deal"
+      entity_id: UUID
+
+  class AddressRoster:
+      def __init__(self, session: Session) -> None: ...
+      def known_addresses(self) -> tuple[str, ...]: ...
+      def resolve(self, address: str) -> tuple[EntityRef, ...]: ...
+  ```
+  Consumed by B1-7 (`known_addresses`), B1-9 (`resolve`), B1-11 (both).
+
+- [ ] **Step 1: Write the failing test**
+
+`packages/core/tests/test_gmail_roster.py`:
+
+```python
+from datetime import UTC, datetime
+
+from sqlalchemy import inspect
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.gmail.roster import AddressRoster, EntityRef
+from pigrocrm.core.people.models import Person
+
+
+def _customer(session: Session, *, ragione_sociale: str, email: str | None) -> Customer:
+    customer = Customer(ragione_sociale=ragione_sociale, email=email)
+    session.add(customer)
+    session.flush()
+    return customer
+
+
+def test_roster_collects_both_tables_lowercased_and_deduplicated(db_session: Session) -> None:
+    customer = _customer(db_session, ragione_sociale="Acme", email="Info@Acme.IT")
+    db_session.add(Person(nome="Ada", cognome="Byron", email="ada@acme.it", customer_id=customer.id))
+    # The same address on a person and on a customer is one address, not two: a `q`
+    # that repeats a clause wastes the length budget the 20-address batch depends on.
+    db_session.add(Person(nome="Bob", cognome="Rossi", email="info@acme.it", customer_id=customer.id))
+    db_session.flush()
+
+    assert AddressRoster(db_session).known_addresses() == ("ada@acme.it", "info@acme.it")
+
+
+def test_roster_ignores_soft_deleted_and_null_addresses(db_session: Session) -> None:
+    kept = _customer(db_session, ragione_sociale="Kept", email="kept@example.it")
+    gone = _customer(db_session, ragione_sociale="Gone", email="gone@example.it")
+    gone.deleted_at = datetime.now(UTC)
+    _customer(db_session, ragione_sociale="Blank", email=None)
+    db_session.add(
+        Person(nome="Via", cognome="Via", email="via@example.it", customer_id=kept.id, deleted_at=datetime.now(UTC))
+    )
+    db_session.flush()
+
+    assert AddressRoster(db_session).known_addresses() == ("kept@example.it",)
+
+
+def test_resolve_returns_every_entity_the_address_touches(db_session: Session) -> None:
+    customer = _customer(db_session, ragione_sociale="Acme", email="info@acme.it")
+    person = Person(nome="Ada", cognome="Byron", email="ada@acme.it", customer_id=customer.id)
+    db_session.add(person)
+    db_session.flush()
+    deal = Deal(titolo="Rinnovo", customer_id=customer.id)
+    db_session.add(deal)
+    db_session.flush()
+
+    # One email concerns the person, her customer, and that customer's open deals at
+    # once. This is why gmail_message_links is many-to-many and not three nullable
+    # foreign keys: a single FK would force a choice the data does not support.
+    assert set(AddressRoster(db_session).resolve("Ada@Acme.it")) == {
+        EntityRef("person", person.id),
+        EntityRef("customer", customer.id),
+        EntityRef("deal", deal.id),
+    }
+
+
+def test_resolve_is_empty_for_an_address_nobody_owns(db_session: Session) -> None:
+    assert AddressRoster(db_session).resolve("stranger@example.com") == ()
+
+
+def test_customers_email_is_indexed_like_people_email(db_session: Session) -> None:
+    """people.email has had an index since slice 1; customers.email has not, and the
+    relevance resolution queries both on every message. Same query shape, same cost,
+    so the same index."""
+    columns = {
+        tuple(index["column_names"])
+        for index in inspect(db_session.get_bind()).get_indexes("customers")
+    }
+    assert ("email",) in columns
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_gmail_roster.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'pigrocrm.core.gmail'`.
+
+- [ ] **Step 3: Index the column and write the roster**
+
+`packages/core/src/pigrocrm/core/customers/models.py:36` — add `index=True`, matching `people/models.py:36` exactly:
+
+```python
+    # Indexed for the same reason people.email is: Gmail relevance resolution
+    # (gmail/roster.py) looks an address up in both tables on every message it
+    # considers, and an unindexed lookup there is a sequential scan per message.
+    email: Mapped[str | None] = mapped_column(String(320), default=None, index=True)
+```
+
+`packages/core/src/pigrocrm/core/gmail/__init__.py`: empty file.
+
+`packages/core/src/pigrocrm/core/gmail/roster.py`:
+
+```python
+"""Who the CRM already knows, by email address.
+
+This module *is* the relevance rule of spec 4.2. There are no rules to configure, no
+filters to maintain and no domain lists to curate: the set of relevant addresses is
+the address book, and keeping it current is work the user was doing anyway. The good
+consequence is that making a conversation appear means adding the person to the CRM,
+which is the action they wanted to take regardless.
+
+The rule this module must never break: an address discovered *inside* a thread does
+not enter the roster (spec 4.3). If it did, relevance would widen by itself on every
+cycle, which is exactly the failure mode spec 4 exists to prevent.
+"""
+
+from dataclasses import dataclass
+from uuid import UUID
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.people.models import Person
+
+
+@dataclass(frozen=True)
+class EntityRef:
+    """A CRM entity an email concerns. `entity_type` is a plain `str` and not
+    `fields.EntityType`: that literal is the *custom-field* entity type and Gmail adds
+    no custom fields to anything. Widening it here would offer administrators custom
+    fields on a credential row."""
+
+    entity_type: str
+    entity_id: UUID
+
+
+class AddressRoster:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def known_addresses(self) -> tuple[str, ...]:
+        """Every non-null email on a live Person or Customer, lowercased, deduplicated
+        and sorted. Sorted because the batching in `gmail/query.py` must be stable: an
+        unstable order means two consecutive syncs issue different `q` strings for the
+        same data, and the request-inspecting test in B1-7 could then pass by luck."""
+        people = select(func.lower(Person.email)).where(
+            Person.email.is_not(None), Person.deleted_at.is_(None)
+        )
+        customers = select(func.lower(Customer.email)).where(
+            Customer.email.is_not(None), Customer.deleted_at.is_(None)
+        )
+        rows = self.session.execute(people.union(customers)).scalars().all()
+        return tuple(sorted(address for address in rows if address))
+
+    def resolve(self, address: str) -> tuple[EntityRef, ...]:
+        """Every entity one address touches: the person, that person's customer, the
+        customer itself, and that customer's live deals."""
+        needle = address.strip().lower()
+        if not needle:
+            return ()
+
+        refs: list[EntityRef] = []
+        customer_ids: set[UUID] = set()
+
+        person_rows = self.session.execute(
+            select(Person.id, Person.customer_id).where(
+                func.lower(Person.email) == needle, Person.deleted_at.is_(None)
+            )
+        ).all()
+        for person_id, customer_id in person_rows:
+            refs.append(EntityRef("person", person_id))
+            if customer_id is not None:
+                customer_ids.add(customer_id)
+
+        direct = self.session.execute(
+            select(Customer.id).where(
+                func.lower(Customer.email) == needle, Customer.deleted_at.is_(None)
+            )
+        ).scalars().all()
+        customer_ids.update(direct)
+
+        for customer_id in customer_ids:
+            refs.append(EntityRef("customer", customer_id))
+
+        if customer_ids:
+            deal_ids = self.session.execute(
+                select(Deal.id).where(
+                    Deal.customer_id.in_(customer_ids), Deal.deleted_at.is_(None)
+                )
+            ).scalars().all()
+            refs.extend(EntityRef("deal", deal_id) for deal_id in deal_ids)
+
+        # Deduplicated because a customer reached through two of its own people is one
+        # customer. Order is not part of the contract; the test compares as a set.
+        return tuple(dict.fromkeys(refs))
+```
+
+- [ ] **Step 4: Write the migration**
+
+`packages/core/migrations/versions/0004_customers_email_index.py`:
+
+```python
+"""customers.email index for Gmail relevance resolution
+
+Revision ID: 0004
+Revises: 0003
+"""
+
+from alembic import op
+
+revision = "0004"
+down_revision = "0003"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.create_index("ix_customers_email", "customers", ["email"])
+
+
+def downgrade() -> None:
+    op.drop_index("ix_customers_email", table_name="customers")
+```
+
+The index name is `ix_customers_email` because that is what SQLAlchemy's default naming convention produces for `index=True` on that column — `test_migrations_produce_exactly_the_models_schema` compares migrations against models and will reject any other name.
+
+- [ ] **Step 5: Bump the applied-revision assertions**
+
+`packages/core/tests/test_migrations.py:139` and `:161` — `assert revision == "0003"` becomes `assert revision == "0004"` in both places. Leave `HAND_MAINTAINED_INDEXES` alone: `ix_customers_email` comes from the model's `index=True`, so the model-versus-migration comparison already covers it, and adding a declarative index to a set documented as holding the *hand-maintained* ones would make that set mean two things.
+
+- [ ] **Step 6: Register the module and run**
+
+`packages/core/src/pigrocrm/core/models_registry.py` — nothing to add yet (this task adds no model). Then:
+
+Run: `uv run pytest packages/core/tests/test_gmail_roster.py packages/core/tests/test_migrations.py -v`
+Expected: PASS.
+
+Run: `uv run mypy && uv run ruff check .`
+Expected: clean.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/gmail packages/core/src/pigrocrm/core/customers/models.py \
+        packages/core/migrations/versions/0004_customers_email_index.py \
+        packages/core/tests/test_gmail_roster.py packages/core/tests/test_migrations.py
+git commit -m "feat(gmail): the address roster, and the index its lookups needed"
+```
+
+---
+
+### Task B1-2: Configuration, and Gmail being absent rather than broken
+
+**Files:**
+- Modify: `packages/core/src/pigrocrm/core/config.py`
+- Create: `packages/core/tests/test_gmail_config.py`
+
+**Interfaces:**
+- Consumes: `Settings` and `get_settings()` from `config.py`, and the `_jwt_secret_must_be_long_enough` validator as the precedent for failing at startup.
+- Produces, on `Settings`:
+  ```python
+  google_client_id: str = ""
+  google_client_secret: str = ""
+  google_token_key: str = ""            # 32 raw bytes, base64-encoded
+  public_url: str = ""                  # PIGROCRM_PUBLIC_URL
+  google_app_unverified: bool = False
+  gmail_sync_address_batch_size: int = 20
+  gmail_backfill_days: int = 90
+  gmail_watermark_overlap_hours: int = 24
+  gmail_body_max_bytes: int = 262_144
+  gmail_attachment_max_bytes: int = 20_971_520
+  gmail_send_grace_minutes: int = 15
+  ```
+  and, module level:
+  ```python
+  GOOGLE_TOKEN_KEY_BYTES = 32
+  def gmail_configured(settings: Settings) -> bool: ...
+  def require_gmail_configured(settings: Settings) -> None: ...   # raises Conflict
+  def decode_google_token_key(settings: Settings) -> bytes: ...   # raises ValueError
+  ```
+  Consumed by B1-3 (`decode_google_token_key`), B1-6, B1-7, B1-13 (`require_gmail_configured`), B1-14 (`gmail_configured`).
+
+- [ ] **Step 1: Write the failing test**
+
+`packages/core/tests/test_gmail_config.py`:
+
+```python
+import base64
+
+import pytest
+
+from pigrocrm.core.config import (
+    GOOGLE_TOKEN_KEY_BYTES,
+    Settings,
+    decode_google_token_key,
+    gmail_configured,
+    require_gmail_configured,
+)
+from pigrocrm.core.errors import Conflict
+
+VALID_KEY = base64.b64encode(b"k" * GOOGLE_TOKEN_KEY_BYTES).decode()
+
+
+def _settings(**overrides: object) -> Settings:
+    # _env_file=None so a developer's own .env cannot make this suite pass or fail.
+    base: dict[str, object] = {"jwt_secret": "x" * 32, "_env_file": None}
+    return Settings(**{**base, **overrides})  # type: ignore[arg-type]
+
+
+def test_gmail_is_absent_when_no_client_id_is_set() -> None:
+    assert gmail_configured(_settings()) is False
+
+
+def test_gmail_needs_all_four_values_not_just_the_client_id() -> None:
+    partial = _settings(google_client_id="cid", google_client_secret="secret")
+    assert gmail_configured(partial) is False
+    whole = _settings(
+        google_client_id="cid",
+        google_client_secret="secret",
+        google_token_key=VALID_KEY,
+        public_url="https://crm.example.it",
+    )
+    assert gmail_configured(whole) is True
+
+
+def test_an_unconfigured_install_gets_a_sentence_not_a_stack_trace() -> None:
+    with pytest.raises(Conflict) as caught:
+        require_gmail_configured(_settings())
+    assert "Gmail non è configurato su questa installazione" in caught.value.message
+    assert caught.value.code == "conflict"
+
+
+def test_the_token_key_must_be_thirty_two_bytes_of_base64() -> None:
+    for bad, why in [
+        ("", "missing"),
+        ("not-base64!!", "not base64"),
+        (base64.b64encode(b"short").decode(), "wrong length"),
+    ]:
+        with pytest.raises(ValueError, match="PIGROCRM_GOOGLE_TOKEN_KEY") as caught:
+            decode_google_token_key(_settings(google_token_key=bad))
+        # The message names the variable and the requirement, and never the value:
+        # a key that reached a log or an exception message is a leaked key.
+        assert bad not in str(caught.value), why
+
+
+def test_a_valid_token_key_decodes_to_exactly_thirty_two_bytes() -> None:
+    assert len(decode_google_token_key(_settings(google_token_key=VALID_KEY))) == 32
+
+
+def test_the_batch_size_is_configurable_without_touching_code() -> None:
+    # Spec 4.1: twenty addresses with two clauses each fit Gmail's practical `q`
+    # length with margin, but the number has to be correctable from the environment.
+    assert _settings().gmail_sync_address_batch_size == 20
+    assert _settings(gmail_sync_address_batch_size=8).gmail_sync_address_batch_size == 8
+
+
+def test_the_documented_defaults_are_the_documented_values() -> None:
+    settings = _settings()
+    assert settings.gmail_backfill_days == 90
+    assert settings.gmail_watermark_overlap_hours == 24
+    assert settings.gmail_body_max_bytes == 262_144
+    assert settings.gmail_attachment_max_bytes == 20 * 1024 * 1024
+    assert settings.gmail_send_grace_minutes == 15
+    assert settings.google_app_unverified is False
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_gmail_config.py -v`
+Expected: FAIL — `ImportError: cannot import name 'GOOGLE_TOKEN_KEY_BYTES'`.
+
+- [ ] **Step 3: Extend `config.py`**
+
+Add to `Settings`, after the render settings:
+
+```python
+    # --- Gmail (slice 5). Absent, not broken: if `google_client_id` is unset, Gmail
+    # does not exist on this installation. The UI hides the section, the endpoints
+    # answer Conflict, and the MCP tools are never registered. That is what lets
+    # someone who self-hosts precisely in order not to have Google not have Google.
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    # 32 raw bytes, base64-encoded. Encrypts `google_accounts.refresh_token_ciphertext`
+    # at rest. The key lives outside the database on purpose: a dump, a backup or a
+    # pg_dump attached to a bug report are different exposure surfaces from the running
+    # system, and this credential opens a *third-party* account, not just this app.
+    google_token_key: str = ""
+    # The public origin, used to build the one redirect_uri Google compares exactly:
+    # {public_url}/api/gmail/oauth/callback.
+    public_url: str = ""
+    # Google exposes no API for "is my OAuth client verified", so the operator states
+    # it. True means Testing, which means a consumer refresh token expires 7 days after
+    # consent -- so `consent_expires_at` gets set and the UI warns 48 hours ahead.
+    google_app_unverified: bool = False
+
+    gmail_sync_address_batch_size: int = 20
+    gmail_backfill_days: int = 90
+    gmail_watermark_overlap_hours: int = 24
+    gmail_body_max_bytes: int = 262_144
+    gmail_attachment_max_bytes: int = 20_971_520
+    gmail_send_grace_minutes: int = 15
+```
+
+And at module level, below `MIN_JWT_SECRET_LENGTH`:
+
+```python
+GOOGLE_TOKEN_KEY_BYTES = 32
+```
+
+Below `get_settings()`:
+
+```python
+def gmail_configured(settings: Settings) -> bool:
+    """All four or none. A client id with no token key would connect an account and
+    then be unable to store its refresh token, which is a worse failure than not
+    offering the feature."""
+    return bool(
+        settings.google_client_id
+        and settings.google_client_secret
+        and settings.google_token_key
+        and settings.public_url
+    )
+
+
+def require_gmail_configured(settings: Settings) -> None:
+    if not gmail_configured(settings):
+        raise Conflict("gmail", "Gmail non è configurato su questa installazione")
+
+
+def decode_google_token_key(settings: Settings) -> bytes:
+    """Raises `ValueError` naming the variable, never quoting the value.
+
+    Called at startup when `google_accounts` has at least one row (apps/api deps),
+    so a missing or malformed key fails the boot rather than the first sync -- the
+    same discipline as `_jwt_secret_must_be_long_enough`. Not a pydantic validator,
+    because the empty default has to stay legal for every install that has no Gmail.
+    """
+    if not settings.google_token_key:
+        raise ValueError(
+            "PIGROCRM_GOOGLE_TOKEN_KEY is not set, but google_accounts holds at least "
+            "one stored refresh token. Without the key those rows cannot be decrypted."
+        )
+    try:
+        key = base64.b64decode(settings.google_token_key, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(
+            "PIGROCRM_GOOGLE_TOKEN_KEY is not valid base64"
+        ) from exc
+    if len(key) != GOOGLE_TOKEN_KEY_BYTES:
+        raise ValueError(
+            f"PIGROCRM_GOOGLE_TOKEN_KEY must decode to exactly {GOOGLE_TOKEN_KEY_BYTES} "
+            f"bytes for AES-256-GCM, got {len(key)}"
+        )
+    return key
+```
+
+Add `import base64`, `import binascii` and `from pigrocrm.core.errors import Conflict` to the imports.
+
+Note the `raise ValueError(...) from exc` — `binascii.Error` carries the offending input in some Python builds, so the chained cause must never be formatted into a user-facing message. The API's error handler renders `DomainError` only; a `ValueError` at startup goes to the process log, which is the one place this belongs.
+
+- [ ] **Step 4: Run it and watch it pass**
+
+Run: `uv run pytest packages/core/tests/test_gmail_config.py -v`
+Expected: PASS (7 tests).
+
+- [ ] **Step 5: Document the variables**
+
+Append to `.env.example` (create the block; keep every value empty so a checkout is an install without Gmail):
+
+```
+# --- Gmail (slice 5). Leave PIGROCRM_GOOGLE_CLIENT_ID empty to run without Gmail.
+PIGROCRM_GOOGLE_CLIENT_ID=
+PIGROCRM_GOOGLE_CLIENT_SECRET=
+# openssl rand -base64 32
+PIGROCRM_GOOGLE_TOKEN_KEY=
+# The public origin. Google compares {PIGROCRM_PUBLIC_URL}/api/gmail/oauth/callback
+# against the authorised redirect URI character for character.
+PIGROCRM_PUBLIC_URL=
+# true while the OAuth client is unverified (Testing): consumer refresh tokens then
+# expire 7 days after consent, and the UI warns 48 hours before that.
+PIGROCRM_GOOGLE_APP_UNVERIFIED=false
+```
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/config.py packages/core/tests/test_gmail_config.py .env.example
+git commit -m "feat(gmail): configuration, with Gmail absent rather than broken when unset"
+```
+
+---
+
+### Task B1-3: `google_accounts`, `google_oauth_states`, and the refresh token encrypted at rest
+
+**Files:**
+- Create: `packages/core/src/pigrocrm/core/gmail/crypto.py`
+- Create: `packages/core/src/pigrocrm/core/gmail/models.py`
+- Create: `packages/core/src/pigrocrm/core/gmail/schemas.py`
+- Modify: `packages/core/src/pigrocrm/core/models_registry.py`
+- Modify: `packages/core/pyproject.toml` (declare `cryptography`)
+- Create: `packages/core/migrations/versions/0005_google_accounts.py`
+- Modify: `packages/core/tests/test_migrations.py:139,161` (`"0004"` → `"0005"`)
+- Create: `packages/core/tests/test_gmail_crypto.py`
+- Create: `packages/core/tests/test_gmail_models.py`
+
+**Interfaces:**
+- Consumes: `decode_google_token_key` from B1-2; `Base`, `PrimaryKeyMixin`, `TimestampMixin` from `pigrocrm.core.db`.
+- Produces:
+  ```python
+  # crypto.py
+  def seal(plaintext: str, key: bytes) -> tuple[bytes, bytes]:    # (ciphertext, nonce)
+  def unseal(ciphertext: bytes, nonce: bytes, key: bytes) -> str  # raises Conflict
+
+  # models.py
+  class GoogleAccount(Base, PrimaryKeyMixin, TimestampMixin)
+  class GoogleOAuthState(Base, PrimaryKeyMixin, TimestampMixin)
+
+  # schemas.py
+  GmailStatus = Literal["active", "expired", "revoked"]
+  SCOPE_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
+  SCOPE_SEND = "https://www.googleapis.com/auth/gmail.send"
+  REQUESTED_SCOPES: tuple[str, ...] = ("openid", "email", SCOPE_READONLY, SCOPE_SEND)
+  class GoogleAccountRead(BaseModel)
+  ```
+  Consumed by B1-5, B1-6, B1-12, B1-13, and by 5B-2's send gate.
+
+- [ ] **Step 1: Write the failing crypto test**
+
+`packages/core/tests/test_gmail_crypto.py`:
+
+```python
+import pytest
+
+from pigrocrm.core.errors import Conflict
+from pigrocrm.core.gmail.crypto import seal, unseal
+
+KEY = b"k" * 32
+OTHER_KEY = b"j" * 32
+TOKEN = "1//0gSecretRefreshTokenValue-XYZ"
+
+
+def test_a_sealed_token_comes_back_identical() -> None:
+    ciphertext, nonce = seal(TOKEN, KEY)
+    assert unseal(ciphertext, nonce, KEY) == TOKEN
+
+
+def test_the_ciphertext_never_contains_the_plaintext() -> None:
+    ciphertext, _ = seal(TOKEN, KEY)
+    assert TOKEN.encode() not in ciphertext
+
+
+def test_two_seals_of_the_same_token_differ() -> None:
+    """A fresh nonce per seal. Reusing a nonce with AES-GCM is a catastrophic
+    failure, not a weakness: two messages under one nonce leak their XOR and forge
+    the authenticator."""
+    first, first_nonce = seal(TOKEN, KEY)
+    second, second_nonce = seal(TOKEN, KEY)
+    assert first_nonce != second_nonce
+    assert first != second
+
+
+def test_the_wrong_key_is_refused_not_garbled() -> None:
+    ciphertext, nonce = seal(TOKEN, KEY)
+    with pytest.raises(Conflict) as caught:
+        unseal(ciphertext, nonce, OTHER_KEY)
+    assert "PIGROCRM_GOOGLE_TOKEN_KEY" in caught.value.message
+
+
+def test_a_tampered_ciphertext_is_refused() -> None:
+    ciphertext, nonce = seal(TOKEN, KEY)
+    tampered = bytes([ciphertext[0] ^ 0x01]) + ciphertext[1:]
+    with pytest.raises(Conflict):
+        unseal(tampered, nonce, KEY)
+
+
+def test_no_failure_path_puts_the_token_or_the_key_in_the_message() -> None:
+    ciphertext, nonce = seal(TOKEN, KEY)
+    for args in [(ciphertext, nonce, OTHER_KEY), (b"\x00" * len(ciphertext), nonce, KEY)]:
+        with pytest.raises(Conflict) as caught:
+            unseal(*args)
+        rendered = f"{caught.value.message} {caught.value.details}"
+        assert TOKEN not in rendered
+        assert KEY.hex() not in rendered
+        assert ciphertext.hex() not in rendered
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_gmail_crypto.py -v`
+Expected: FAIL — `No module named 'pigrocrm.core.gmail.crypto'`.
+
+- [ ] **Step 3: Declare the dependency, then write the module**
+
+`packages/core/pyproject.toml`, under `[project].dependencies`, add `"cryptography"` pinned to the version `uv.lock` already resolves for `pyjwt[crypto]`. Read it, do not guess:
+
+```bash
+uv run python -c "import cryptography; print(cryptography.__version__)"
+```
+
+The architecture test (`packages/core/tests/test_architecture.py`) is an allowlist built from that `dependencies` list, so an undeclared import fails it — which is the point: `cryptography` arrives here as a transitive edge of `pyjwt[crypto]` today, and a transitive edge is not a contract.
+
+`packages/core/src/pigrocrm/core/gmail/crypto.py`:
+
+```python
+"""AES-256-GCM for the one secret this slice stores at rest.
+
+Why encrypt at all, when the database belongs to the user: not to protect them from
+themselves, but because a dump, a backup, or a `pg_dump` attached to a bug report are
+different exposure surfaces from the running system -- and this credential grants
+access to a *third-party* account, not merely to this application. The key lives
+outside the database. That is the entire point.
+
+Access tokens are never stored, here or anywhere: they live in memory for the duration
+of one sync or one send. An access token is valid for an hour; persisting it would add
+a second secret to protect for no gain. `storage/gdrive.py` already made that call.
+"""
+
+import os
+
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+from pigrocrm.core.errors import Conflict
+
+# 96 bits, the size AES-GCM is specified for. A longer nonce is hashed down and a
+# shorter one narrows the space needlessly.
+NONCE_BYTES = 12
+
+
+def seal(plaintext: str, key: bytes) -> tuple[bytes, bytes]:
+    """Returns `(ciphertext, nonce)`. A fresh nonce per call, from `os.urandom`."""
+    nonce = os.urandom(NONCE_BYTES)
+    ciphertext = AESGCM(key).encrypt(nonce, plaintext.encode("utf-8"), None)
+    return ciphertext, nonce
+
+
+def unseal(ciphertext: bytes, nonce: bytes, key: bytes) -> str:
+    """Raises `Conflict` naming the environment variable and nothing else.
+
+    Never the ciphertext, never the key, never a partial decryption: an authentication
+    failure means either the key is wrong or the row was altered, and both are the
+    same instruction to the operator. Distinguishing them in the message would leak
+    which one, and an oracle on 'is this the right key' is the one thing GCM's
+    authenticator exists to withhold.
+    """
+    try:
+        return AESGCM(key).decrypt(nonce, ciphertext, None).decode("utf-8")
+    except (InvalidTag, ValueError) as exc:
+        raise Conflict(
+            "google_account",
+            "il refresh token memorizzato non è decifrabile: verifica "
+            "PIGROCRM_GOOGLE_TOKEN_KEY, oppure ricollega la casella",
+        ) from exc
+```
+
+- [ ] **Step 4: Run the crypto test and watch it pass**
+
+Run: `uv run pytest packages/core/tests/test_gmail_crypto.py packages/core/tests/test_architecture.py -v`
+Expected: PASS (6 crypto tests, architecture green).
+
+- [ ] **Step 5: Write the failing model test**
+
+`packages/core/tests/test_gmail_models.py`:
+
+```python
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
+import pytest
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.auth.models import User
+from pigrocrm.core.gmail.models import GoogleAccount, GoogleOAuthState
+from pigrocrm.core.gmail.schemas import REQUESTED_SCOPES, SCOPE_READONLY, SCOPE_SEND
+
+
+def _user(session: Session, email: str) -> User:
+    user = User(email=email, nome="Tester", password_hash="x", role="admin", attivo=True)
+    session.add(user)
+    session.flush()
+    return user
+
+
+def _account(session: Session, user: User, **overrides: object) -> GoogleAccount:
+    defaults: dict[str, object] = {
+        "user_id": user.id,
+        "google_sub": f"sub-{user.email}",
+        "email_address": user.email,
+        "refresh_token_ciphertext": b"\x01\x02",
+        "refresh_token_nonce": b"\x03" * 12,
+        "scopes_granted": list(REQUESTED_SCOPES),
+        "status": "active",
+    }
+    account = GoogleAccount(**{**defaults, **overrides})  # type: ignore[arg-type]
+    session.add(account)
+    session.flush()
+    return account
+
+
+def test_one_mailbox_per_user_is_enforced_by_the_database(db_session: Session) -> None:
+    """Two mailboxes double the relevance question without anyone having asked it."""
+    user = _user(db_session, "one@example.it")
+    _account(db_session, user)
+    with pytest.raises(IntegrityError):
+        _account(db_session, user, google_sub="sub-other", email_address="other@example.it")
+    db_session.rollback()
+
+
+def test_status_and_granted_scopes_are_two_separate_facts(db_session: Session) -> None:
+    """Spec 5.1: a valid credential missing a scope is healthy; it is the *feature*
+    that is unavailable. Conflating them is the contradiction every other OAuth
+    integration falls into."""
+    user = _user(db_session, "partial@example.it")
+    account = _account(db_session, user, scopes_granted=["openid", "email", SCOPE_SEND])
+    assert account.status == "active"
+    assert SCOPE_READONLY not in account.scopes_granted
+    assert SCOPE_SEND in account.scopes_granted
+
+
+def test_bodies_are_stored_by_default_and_the_switch_is_per_account(db_session: Session) -> None:
+    user = _user(db_session, "bodies@example.it")
+    account = _account(db_session, user)
+    assert account.gmail_store_bodies is True
+
+
+def test_a_state_jti_can_only_exist_once(db_session: Session) -> None:
+    """The registry that makes the JWT's `jti` single-use for real rather than in
+    principle. It also holds the PKCE code_verifier, which must stay server-side: put
+    it in the signed state and the browser can read it, which cancels PKCE."""
+    user = _user(db_session, "state@example.it")
+    expires = datetime.now(UTC) + timedelta(minutes=5)
+    db_session.add(
+        GoogleOAuthState(jti="j1", code_verifier="v" * 43, user_id=user.id, expires_at=expires)
+    )
+    db_session.flush()
+    db_session.add(
+        GoogleOAuthState(jti="j1", code_verifier="w" * 43, user_id=user.id, expires_at=expires)
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_a_fresh_state_row_has_not_been_consumed(db_session: Session) -> None:
+    user = _user(db_session, "fresh@example.it")
+    state = GoogleOAuthState(
+        jti=str(uuid4()),
+        code_verifier="v" * 43,
+        user_id=user.id,
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    db_session.add(state)
+    db_session.flush()
+    assert state.consumed_at is None
+```
+
+- [ ] **Step 6: Write the models and the schemas**
+
+`packages/core/src/pigrocrm/core/gmail/schemas.py`:
+
+```python
+from datetime import datetime
+from typing import Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict
+
+# Mirror the column widths in gmail/models.py exactly.
+GOOGLE_SUB_MAX_LENGTH = 255
+EMAIL_ADDRESS_MAX_LENGTH = 320
+STATUS_MAX_LENGTH = 10
+LAST_ERROR_MAX_LENGTH = 500
+JTI_MAX_LENGTH = 64
+CODE_VERIFIER_MAX_LENGTH = 128
+
+GmailStatus = Literal["active", "expired", "revoked"]
+
+SCOPE_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
+SCOPE_SEND = "https://www.googleapis.com/auth/gmail.send"
+# `openid` + `email` identify *which* mailbox was connected: without the stable `sub`
+# there is no way to refuse a reconnection that points at a different mailbox by
+# mistake and silently relabels the entire history.
+REQUESTED_SCOPES: tuple[str, ...] = ("openid", "email", SCOPE_READONLY, SCOPE_SEND)
+
+
+class GoogleAccountRead(BaseModel):
+    """What the settings page and `describe_gmail_account` show. No token, in either
+    form: not the plaintext, not the ciphertext, not the nonce."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    email_address: str
+    scopes_granted: list[str]
+    status: GmailStatus
+    consent_expires_at: datetime | None
+    last_error: str | None
+    last_error_at: datetime | None
+    last_sync_at: datetime | None
+    sync_watermark: datetime | None
+    gmail_store_bodies: bool
+    connected_at: datetime
+    disconnected_at: datetime | None
+```
+
+`packages/core/src/pigrocrm/core/gmail/models.py`:
+
+```python
+from datetime import datetime
+from uuid import UUID
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, LargeBinary, String, func
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
+
+from pigrocrm.core.db import Base, PrimaryKeyMixin, TimestampMixin
+
+
+class GoogleAccount(Base, PrimaryKeyMixin, TimestampMixin):
+    """One connected mailbox, per CRM user.
+
+    `status` has three values and not four, and the distinction is load-bearing:
+    `expired` is what we *predicted* (the consent window has passed with no successful
+    refresh since), `revoked` is what Google *told us* (`invalid_grant`). They call for
+    different reactions -- the first is a warning to show early, the second a fact to
+    record -- so they are two states.
+
+    `scopes_granted` deliberately does not feed `status`. Capability is derived from it
+    at the point of use; the health of the credential is `status`. Google may grant a
+    subset, and an account with `gmail.send` but not `gmail.readonly` is a healthy
+    credential on which sync is unavailable.
+    """
+
+    __tablename__ = "google_accounts"
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    google_sub: Mapped[str] = mapped_column(String(255), nullable=False)
+    email_address: Mapped[str] = mapped_column(String(320), nullable=False)
+    # AES-256-GCM, key from PIGROCRM_GOOGLE_TOKEN_KEY. Never logged, never returned by
+    # any schema, never in an exception message.
+    refresh_token_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    refresh_token_nonce: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    scopes_granted: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="active")
+    # When the *consent* must be renewed, not when an access token expires. Set to
+    # connected_at + 7 days while PIGROCRM_GOOGLE_APP_UNVERIFIED is true, because that
+    # is Google's Testing-mode behaviour and Google exposes no API to detect it.
+    consent_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    # The sentence the user reads, in Italian. Never a stack trace, never an upstream
+    # body, never a token.
+    last_error: Mapped[str | None] = mapped_column(String(500), default=None)
+    last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    sync_watermark: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    # Off means headers and Gmail's snippet only, with the read-through degradation of
+    # spec 5.4 point 2 as a declared consequence rather than a hidden one.
+    gmail_store_bodies: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    connected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    disconnected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+
+
+class GoogleOAuthState(Base, PrimaryKeyMixin, TimestampMixin):
+    """One in-flight authorisation.
+
+    It exists because **PKCE's `code_verifier` has to stay server-side** between
+    `/start` and `/callback`: putting it inside the signed `state` would make it
+    readable by the browser and cancel PKCE entirely. It is also the registry that
+    makes the JWT's `jti` single-use in fact rather than in principle.
+
+    Expired rows are pruned on each sync cycle -- unlike `refresh_tokens`, which
+    residuo R8 records as never pruned at all.
+    """
+
+    __tablename__ = "google_oauth_states"
+
+    jti: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    code_verifier: Mapped[str] = mapped_column(String(128), nullable=False)
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+```
+
+`packages/core/src/pigrocrm/core/models_registry.py` — add:
+
+```python
+from pigrocrm.core.gmail.models import GoogleAccount, GoogleOAuthState  # noqa: F401
+```
+
+Follow whatever pattern that file already uses for the slice-2 models; the point is that Alembic's autogenerate and `test_migrations` both see the metadata.
+
+- [ ] **Step 7: Write the migration and bump the revision assertions**
+
+`packages/core/migrations/versions/0005_google_accounts.py` — generate it, then read it:
+
+```bash
+uv run alembic -c packages/core/alembic.ini revision --autogenerate -m "google accounts and oauth states"
+```
+
+Rename the file to `0005_google_accounts.py`, set `revision = "0005"` and `down_revision = "0004"`, and check that it created `google_accounts` with the unique constraint on `user_id` and `google_oauth_states` with the unique constraint on `jti`. Autogenerate does not always emit `LargeBinary` as `sa.LargeBinary()`; if it emitted `sa.BLOB()`, fix it by hand — Postgres needs `BYTEA`.
+
+`packages/core/tests/test_migrations.py:139,161` — `"0004"` → `"0005"`.
+
+- [ ] **Step 8: Run everything and watch it pass**
+
+Run: `uv run pytest packages/core/tests/test_gmail_models.py packages/core/tests/test_gmail_crypto.py packages/core/tests/test_migrations.py packages/core/tests/test_module_imports.py -v`
+Expected: PASS.
+
+Run: `uv run mypy && uv run ruff check .`
+Expected: clean.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/gmail packages/core/src/pigrocrm/core/models_registry.py \
+        packages/core/pyproject.toml uv.lock packages/core/migrations/versions/0005_google_accounts.py \
+        packages/core/tests/test_gmail_crypto.py packages/core/tests/test_gmail_models.py \
+        packages/core/tests/test_migrations.py
+git commit -m "feat(gmail): google_accounts, PKCE state, and the refresh token sealed at rest"
+```
+
+---
+
+### Task B1-4: The HTTP seam, `FakeGmail`, and the rule that no test opens a socket
+
+This is the task the other Gmail tasks are testable *because of*. the previous system's two live production defects are both in code no test ever executed, and both are in exactly this layer.
+
+**Files:**
+- Create: `packages/core/src/pigrocrm/core/gmail/errors.py`
+- Create: `packages/core/src/pigrocrm/core/gmail/transport.py`
+- Create: `packages/core/tests/fakes/fake_gmail.py`
+- Create: `packages/core/tests/test_gmail_transport.py`
+- Create: `packages/core/tests/test_no_network.py`
+
+**Interfaces:**
+- Consumes: the shape of `storage/gdrive.py`'s seam (`HttpCall`, `NETWORK_ERROR_STATUS = 599`, `_RETRYABLE_STATUSES`, `_MAX_HTTP_ATTEMPTS = 4`, `_RETRY_BASE_DELAY_SECONDS = 0.5`) as the precedent to follow — and to widen, deliberately.
+- Produces:
+  ```python
+  # gmail/transport.py
+  NETWORK_ERROR_STATUS = 599
+  HTTP_TIMEOUT_SECONDS = 30
+  MAX_HTTP_ATTEMPTS = 4
+  GmailCall = Callable[[str, str, dict[str, str], bytes | None], tuple[int, bytes, dict[str, str]]]
+  SleepFn = Callable[[float], None]
+
+  class GmailTransport:
+      def __init__(self, *, http: GmailCall | None = None, sleep: SleepFn | None = None) -> None: ...
+      def json(self, method: str, url: str, *, token: str, body: dict[str, Any] | None = None,
+               what: str) -> dict[str, Any]: ...
+      def form(self, url: str, fields: dict[str, str], *, what: str) -> dict[str, Any]: ...
+
+  # gmail/errors.py
+  @dataclass(frozen=True)
+  class UpstreamFailure:
+      status: int
+      error_code: str
+      retry_after: float | None
+
+  class GoogleCallFailed(Exception):
+      failure: UpstreamFailure
+      what: str
+
+  class CredentialRevoked(Conflict): ...
+  class ScopeMissing(Conflict): ...
+  class GmailUnavailable(Conflict): ...
+  ```
+- Produces, for tests: `FakeGmail`, whose `.requests: list[RecordedRequest]` is what B1-7's adversarial test asserts against.
+
+- [ ] **Step 1: Write the failing transport test**
+
+`packages/core/tests/test_gmail_transport.py`:
+
+```python
+import json
+
+import pytest
+
+from pigrocrm.core.gmail.errors import GoogleCallFailed
+from pigrocrm.core.gmail.transport import NETWORK_ERROR_STATUS, GmailTransport
+
+TOKEN = "ya29.a0-ACCESS-TOKEN-VALUE"
+URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
+
+
+def _responder(*responses: tuple[int, bytes, dict[str, str]]):
+    queue = list(responses)
+    calls: list[tuple[str, str, dict[str, str], bytes | None]] = []
+
+    def http(
+        method: str, url: str, headers: dict[str, str], body: bytes | None
+    ) -> tuple[int, bytes, dict[str, str]]:
+        calls.append((method, url, headers, body))
+        return queue.pop(0) if queue else (200, b"{}", {})
+
+    return http, calls
+
+
+def test_a_successful_call_returns_parsed_json_and_carries_the_bearer() -> None:
+    http, calls = _responder((200, json.dumps({"messages": []}).encode(), {}))
+    result = GmailTransport(http=http).json("GET", URL, token=TOKEN, what="elenco messaggi")
+    assert result == {"messages": []}
+    assert calls[0][2]["Authorization"] == f"Bearer {TOKEN}"
+
+
+def test_a_429_is_retried_and_honours_the_servers_own_retry_after() -> None:
+    """gdrive.py's seam cannot read response headers, so its backoff is a fixed
+    exponential schedule and it says so in a comment. This seam is widened to carry
+    them, because a 429 from Gmail names the delay and guessing is worse."""
+    slept: list[float] = []
+    http, calls = _responder(
+        (429, json.dumps({"error": {"status": "RESOURCE_EXHAUSTED"}}).encode(), {"Retry-After": "3"}),
+        (200, b"{}", {}),
+    )
+    GmailTransport(http=http, sleep=slept.append).json("GET", URL, token=TOKEN, what="elenco")
+    assert slept == [3.0]
+    assert len(calls) == 2
+
+
+def test_a_401_is_not_retried_because_it_will_not_heal() -> None:
+    body = json.dumps(
+        {"error": {"code": 401, "status": "UNAUTHENTICATED", "message": "Invalid Credentials"}}
+    ).encode()
+    http, calls = _responder((401, body, {}))
+    with pytest.raises(GoogleCallFailed) as caught:
+        GmailTransport(http=http, sleep=lambda _: None).json("GET", URL, token=TOKEN, what="elenco")
+    assert len(calls) == 1
+    assert caught.value.failure.status == 401
+    assert caught.value.failure.error_code == "UNAUTHENTICATED"
+
+
+def test_a_network_failure_becomes_a_synthetic_status_and_is_retried() -> None:
+    slept: list[float] = []
+    http, calls = _responder(
+        (NETWORK_ERROR_STATUS, b'{"error":{"message":"timed out"}}', {}),
+        (200, b"{}", {}),
+    )
+    GmailTransport(http=http, sleep=slept.append).json("GET", URL, token=TOKEN, what="elenco")
+    assert len(calls) == 2
+    assert slept == [0.5]
+
+
+def test_it_gives_up_after_four_attempts_rather_than_forever() -> None:
+    slept: list[float] = []
+    http, calls = _responder(*[(503, b"{}", {})] * 6)
+    with pytest.raises(GoogleCallFailed):
+        GmailTransport(http=http, sleep=slept.append).json("GET", URL, token=TOKEN, what="elenco")
+    assert len(calls) == 4
+    assert slept == [0.5, 1.0, 2.0]
+
+
+def test_the_token_endpoint_surfaces_invalid_grant_as_a_machine_readable_code() -> None:
+    """the previous system's parseGoogleError truncated the message to 400 characters and returned
+    500, so a revoked token and a flaky network produced the same screen and therefore
+    the same wrong reaction: retry. The code is what makes them distinguishable."""
+    body = json.dumps({"error": "invalid_grant", "error_description": "Token has been expired or revoked."}).encode()
+    http, calls = _responder((400, body, {}))
+    with pytest.raises(GoogleCallFailed) as caught:
+        GmailTransport(http=http, sleep=lambda _: None).form(
+            "https://oauth2.googleapis.com/token", {"grant_type": "refresh_token"}, what="refresh"
+        )
+    assert caught.value.failure.error_code == "invalid_grant"
+    assert len(calls) == 1, "invalid_grant is terminal: retrying it is a bug"
+
+
+def test_no_failure_path_puts_the_token_in_the_exception() -> None:
+    http, _ = _responder((403, b'{"error":{"status":"PERMISSION_DENIED"}}', {}))
+    with pytest.raises(GoogleCallFailed) as caught:
+        GmailTransport(http=http, sleep=lambda _: None).json("GET", URL, token=TOKEN, what="elenco")
+    assert TOKEN not in str(caught.value)
+    assert TOKEN not in repr(caught.value.failure)
+
+
+def test_a_malformed_retry_after_does_not_crash_the_backoff() -> None:
+    slept: list[float] = []
+    http, _ = _responder((429, b"{}", {"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}), (200, b"{}", {}))
+    GmailTransport(http=http, sleep=slept.append).json("GET", URL, token=TOKEN, what="elenco")
+    # An HTTP-date Retry-After is legal and Gmail does not send it, but a parser that
+    # crashes on a legal header is a parser that turns a retry into an outage.
+    assert slept == [0.5]
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_gmail_transport.py -v`
+Expected: FAIL — `No module named 'pigrocrm.core.gmail.errors'`.
+
+- [ ] **Step 3: Write the error taxonomy**
+
+`packages/core/src/pigrocrm/core/gmail/errors.py`:
+
+```python
+"""The distinction the previous system did not make.
+
+`parseGoogleError` + `truncateMessage(400)` -> 500 gave a revoked token and a flaky
+network the same screen, so they got the same wrong reaction: retry. Retrying an
+`invalid_grant` is a bug -- it will never succeed. These types exist so that the
+difference survives the trip from the socket to the user.
+"""
+
+from dataclasses import dataclass
+from uuid import UUID
+
+from pigrocrm.core.errors import Conflict
+
+
+@dataclass(frozen=True)
+class UpstreamFailure:
+    """What Google actually said. `error_code` is the machine-readable one --
+    `invalid_grant`, `UNAUTHENTICATED`, `RESOURCE_EXHAUSTED` -- and never the prose,
+    because the prose is what got truncated and thrown away last time. Empty string
+    when the body carried none.
+
+    Nothing here can hold a secret: the status is an integer, the code comes from a
+    fixed vocabulary Google publishes, and `retry_after` is a number.
+    """
+
+    status: int
+    error_code: str
+    retry_after: float | None
+
+
+class GoogleCallFailed(Exception):
+    """Internal to `pigrocrm.core.gmail`. Never crosses the package boundary: every
+    public method converts it into a `DomainError` first, because a caller outside
+    this package cannot be expected to know what an `UpstreamFailure` is."""
+
+    def __init__(self, failure: UpstreamFailure, what: str) -> None:
+        super().__init__(f"{what} fallita ({failure.status}/{failure.error_code or 'n/d'})")
+        self.failure = failure
+        self.what = what
+
+
+class CredentialRevoked(Conflict):
+    """`invalid_grant`. Terminal. Do not retry, and do not skip silently."""
+
+    def __init__(self, account_id: UUID, email_address: str) -> None:
+        super().__init__(
+            "google_account",
+            f"il consenso Google per {email_address} è stato revocato: "
+            "ricollega la casella da Impostazioni → Gmail",
+            account_id=str(account_id),
+            email_address=email_address,
+        )
+
+
+class ScopeMissing(Conflict):
+    """A healthy credential that was granted less than was asked for. `status` stays
+    `active` -- it is the feature that is unavailable, not the credential."""
+
+    def __init__(self, scope: str, feature: str) -> None:
+        super().__init__(
+            "google_account",
+            f"{feature} non è disponibile: manca l'autorizzazione {scope}. "
+            "Usa «ri-autorizza» da Impostazioni → Gmail",
+            scope=scope,
+            feature=feature,
+        )
+
+
+class GmailUnavailable(Conflict):
+    """Transient, after every retry was spent. Distinct from `CredentialRevoked`
+    precisely because the reaction differs: wait and try again, versus re-consent."""
+
+    def __init__(self, what: str, status: int) -> None:
+        super().__init__(
+            "gmail",
+            f"{what}: Gmail non ha risposto correttamente (codice {status}). Riprova più tardi",
+            status=status,
+        )
+```
+
+- [ ] **Step 4: Write the transport**
+
+`packages/core/src/pigrocrm/core/gmail/transport.py`:
+
+```python
+"""The only module in this slice that knows a socket exists.
+
+Shaped after `storage/gdrive.py`: `urllib.request`, no Google client library, and an
+injectable seam that the fake transport replaces. What is faked is the *network*, so
+URL construction, `q` construction, RFC822 assembly and error classification all run
+for real in the tests -- which matters because those are precisely the parts the previous system got
+wrong, in code no test ever executed.
+
+One deliberate widening over `gdrive.py`'s `HttpCall`: this seam carries **response
+headers**. `gdrive.py` says in its own comment that not carrying them means Google's
+`Retry-After` on a 429 is unreadable and its backoff is therefore a fixed schedule,
+and that widening the type "would fix that properly" but was out of scope there. Here
+it is in scope, and this is a new type rather than a change to that one, so nothing
+`gdrive.py` was reviewed against moves.
+"""
+
+import json
+import urllib.error
+import urllib.request
+from collections.abc import Callable
+from typing import Any
+from urllib.parse import urlencode
+
+from pigrocrm.core.gmail.errors import GoogleCallFailed, UpstreamFailure
+
+HTTP_TIMEOUT_SECONDS = 30
+# Same synthetic status and the same reasoning as gdrive.py: "no HTTP response was
+# ever received" needs to travel through the one channel every other status uses,
+# rather than a second failure path only the urllib adapter knows about.
+NETWORK_ERROR_STATUS = 599
+_RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504, NETWORK_ERROR_STATUS})
+# First attempt plus up to three retries: 0.5s, 1s, 2s.
+MAX_HTTP_ATTEMPTS = 4
+_RETRY_BASE_DELAY_SECONDS = 0.5
+# A server-supplied Retry-After is honoured, but not unboundedly: a synchronous sync
+# holding a request open for an hour because a header said so is an outage with extra
+# steps.
+_MAX_HONOURED_RETRY_AFTER_SECONDS = 30.0
+
+# (method, url, headers, body) -> (status, body, response headers).
+GmailCall = Callable[[str, str, dict[str, str], bytes | None], tuple[int, bytes, dict[str, str]]]
+SleepFn = Callable[[float], None]
+
+
+def _retry_delay_seconds(attempt: int) -> float:
+    # `1 << attempt`, not `2 ** attempt`: typeshed types `int.__pow__` as returning
+    # `Any`, which would make this function's return type `Any` under mypy strict.
+    return _RETRY_BASE_DELAY_SECONDS * (1 << attempt)
+
+
+def _urllib_call(
+    method: str, url: str, headers: dict[str, str], body: bytes | None
+) -> tuple[int, bytes, dict[str, str]]:
+    request = urllib.request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+            return int(response.status), response.read(), dict(response.headers.items())
+    except urllib.error.HTTPError as exc:
+        return int(exc.code), exc.read(), dict(exc.headers.items()) if exc.headers else {}
+    except (urllib.error.URLError, OSError) as exc:
+        # `str(exc)` names the failure reason and possibly the target host -- always a
+        # googleapis.com address, never sensitive -- but never the request's headers or
+        # body, so no bearer token can reach it.
+        return (
+            NETWORK_ERROR_STATUS,
+            json.dumps({"error": {"message": str(exc)}}).encode(),
+            {},
+        )
+
+
+def _parse_retry_after(headers: dict[str, str]) -> float | None:
+    """Seconds only. An HTTP-date is legal and Gmail does not send one, but a parser
+    that raises on a legal header turns a retry into an outage."""
+    for name, value in headers.items():
+        if name.lower() != "retry-after":
+            continue
+        try:
+            seconds = float(value.strip())
+        except ValueError:
+            return None
+        if seconds <= 0:
+            return None
+        return min(seconds, _MAX_HONOURED_RETRY_AFTER_SECONDS)
+    return None
+
+
+def _error_code(payload: bytes) -> str:
+    """Google speaks two dialects and this slice touches both. The OAuth token
+    endpoint answers `{"error": "invalid_grant"}` -- a bare string. The Gmail API
+    answers `{"error": {"status": "UNAUTHENTICATED", ...}}` -- an object. Reading only
+    one of them is how `invalid_grant` gets lost, which is the the previous system defect."""
+    try:
+        parsed = json.loads(payload.decode())
+    except (ValueError, UnicodeDecodeError):
+        return ""
+    error = parsed.get("error") if isinstance(parsed, dict) else None
+    if isinstance(error, str):
+        return error
+    if isinstance(error, dict):
+        status = error.get("status")
+        if isinstance(status, str):
+            return status
+        errors = error.get("errors")
+        if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+            reason = errors[0].get("reason")
+            if isinstance(reason, str):
+                return reason
+    return ""
+
+
+class GmailTransport:
+    def __init__(self, *, http: GmailCall | None = None, sleep: SleepFn | None = None) -> None:
+        self._http: GmailCall = http or _urllib_call
+        # Injectable so the retry tests do not actually block for seconds.
+        self._sleep: SleepFn = sleep or __import__("time").sleep
+
+    def _call(
+        self, method: str, url: str, headers: dict[str, str], body: bytes | None, what: str
+    ) -> dict[str, Any]:
+        for attempt in range(MAX_HTTP_ATTEMPTS):
+            status, payload, response_headers = self._http(method, url, headers, body)
+            if status < 400:
+                return json.loads(payload.decode()) if payload else {}
+
+            failure = UpstreamFailure(
+                status=status,
+                error_code=_error_code(payload),
+                retry_after=_parse_retry_after(response_headers),
+            )
+            last = attempt == MAX_HTTP_ATTEMPTS - 1
+            if status not in _RETRYABLE_STATUSES or last:
+                raise GoogleCallFailed(failure, what)
+            # The server's own hint wins over our guess when it gave one.
+            self._sleep(
+                failure.retry_after
+                if failure.retry_after is not None
+                else _retry_delay_seconds(attempt)
+            )
+        raise AssertionError("unreachable: the loop either returns or raises")
+
+    def json(
+        self,
+        method: str,
+        url: str,
+        *,
+        token: str,
+        body: dict[str, Any] | None = None,
+        what: str,
+    ) -> dict[str, Any]:
+        headers = {"Authorization": f"Bearer {token}"}
+        encoded: bytes | None = None
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+            encoded = json.dumps(body).encode()
+        return self._call(method, url, headers, encoded, what)
+
+    def form(self, url: str, fields: dict[str, str], *, what: str) -> dict[str, Any]:
+        """POST `application/x-www-form-urlencoded`, for the OAuth token endpoint and
+        nothing else. No `Authorization` header: the credentials are in the body, and
+        this is the one call that carries the client secret. Nothing here logs."""
+        return self._call(
+            "POST",
+            url,
+            {"Content-Type": "application/x-www-form-urlencoded"},
+            urlencode(fields).encode(),
+            what,
+        )
+```
+
+Replace `__import__("time").sleep` with a module-level `import time` and `time.sleep` — the inline import is written above only to keep the snippet self-contained; use the normal import.
+
+- [ ] **Step 5: Write `FakeGmail`**
+
+`packages/core/tests/fakes/fake_gmail.py`:
+
+```python
+"""An in-memory Gmail that speaks the same HTTP surface `GmailTransport` uses.
+
+A fake of the *transport*, on the model of `fakes/fake_drive.py`, and for the same
+reason: URL building, the `q` string, the RFC822 body and the error handling are the
+parts most likely to be wrong, so they must run for real. What is replaced is the
+network, nothing above it.
+
+`requests` is the point of this class. Every request is recorded with its parsed query
+string, so a test can assert on **what was asked of Google** and not merely on what
+ended up in the database. Spec 4.1 requires exactly that: "a `list` without a `q` is a
+bug, and it is verified by a test that inspects the requests received by the fake
+transport -- not by a convention written in a comment."
+"""
+
+import json
+from dataclasses import dataclass, field
+from typing import Any
+from urllib.parse import parse_qs, urlparse
+
+TOKEN_HOST = "oauth2.googleapis.com"
+API_HOST = "gmail.googleapis.com"
+
+
+@dataclass(frozen=True)
+class RecordedRequest:
+    method: str
+    host: str
+    path: str
+    query: dict[str, list[str]]
+    body: bytes | None
+
+    @property
+    def q(self) -> str | None:
+        """The Gmail search expression, if this was a listing."""
+        values = self.query.get("q")
+        return values[0] if values else None
+
+    @property
+    def is_messages_list(self) -> bool:
+        return self.method == "GET" and self.path.endswith("/messages")
+
+    @property
+    def is_messages_send(self) -> bool:
+        return self.method == "POST" and self.path.endswith("/messages/send")
+
+
+@dataclass
+class FakeMessage:
+    id: str
+    thread_id: str
+    headers: dict[str, str]
+    body_text: str = ""
+    body_html: str = ""
+    internal_date_ms: int = 0
+    label_ids: list[str] = field(default_factory=lambda: ["INBOX"])
+    attachments: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class FakeGmail:
+    """Configure the mailbox, then hand `self` to `GmailTransport(http=fake)`."""
+
+    messages: dict[str, FakeMessage] = field(default_factory=dict)
+    requests: list[RecordedRequest] = field(default_factory=list)
+    token_requests: int = 0
+    # A refresh token that Google has revoked. When set, the token endpoint answers
+    # the real 400 body, once per call, forever -- because that is what a revoked
+    # grant does. It never heals.
+    revoked: bool = False
+    access_token: str = "ya29.fake-access-token"
+    expires_in: int = 3599
+    granted_scopes: tuple[str, ...] = ()
+    # A queue of (status, body, headers) consumed FIFO before normal handling. One
+    # transient failure is `fail_with=[(503, b"{}", {})]`; a rate limit that names its
+    # delay is `[(429, b"{}", {"Retry-After": "2"})]`.
+    fail_with: list[tuple[int, bytes, dict[str, str]]] = field(default_factory=list)
+    # Set to raise a socket-level failure instead of answering, for the "unknown
+    # outcome" path of spec 6.3(b).
+    timeout_on_send: bool = False
+
+    # ---- the seam ---------------------------------------------------------------
+
+    def __call__(
+        self, method: str, url: str, headers: dict[str, str], body: bytes | None
+    ) -> tuple[int, bytes, dict[str, str]]:
+        parsed = urlparse(url)
+        recorded = RecordedRequest(
+            method=method,
+            host=parsed.netloc,
+            path=parsed.path,
+            query=parse_qs(parsed.query),
+            body=body,
+        )
+        self.requests.append(recorded)
+
+        if self.fail_with:
+            return self.fail_with.pop(0)
+
+        if parsed.netloc == TOKEN_HOST:
+            return self._token()
+        if recorded.is_messages_send:
+            return self._send()
+        if recorded.is_messages_list:
+            return self._list(recorded)
+        if "/threads/" in parsed.path:
+            return self._thread(parsed.path.rsplit("/", 1)[-1])
+        if "/messages/" in parsed.path:
+            return self._message(parsed.path.rsplit("/", 1)[-1])
+        return 404, json.dumps({"error": {"status": "NOT_FOUND"}}).encode(), {}
+
+    # ---- endpoints --------------------------------------------------------------
+
+    def _token(self) -> tuple[int, bytes, dict[str, str]]:
+        self.token_requests += 1
+        if self.revoked:
+            # The exact shape Google returns for a revoked or expired grant. A bare
+            # string under "error", not an object -- the dialect that gets lost when a
+            # parser only reads the API's shape.
+            return (
+                400,
+                json.dumps(
+                    {
+                        "error": "invalid_grant",
+                        "error_description": "Token has been expired or revoked.",
+                    }
+                ).encode(),
+                {},
+            )
+        payload: dict[str, Any] = {
+            "access_token": self.access_token,
+            "expires_in": self.expires_in,
+            "token_type": "Bearer",
+        }
+        if self.granted_scopes:
+            payload["scope"] = " ".join(self.granted_scopes)
+        return 200, json.dumps(payload).encode(), {}
+
+    def _send(self) -> tuple[int, bytes, dict[str, str]]:
+        if self.timeout_on_send:
+            # The synthetic status `_urllib_call` produces when no HTTP response was
+            # ever received. This is the "we do not know" case of spec 6.3(b).
+            return 599, json.dumps({"error": {"message": "timed out"}}).encode(), {}
+        message_id = f"sent-{len([r for r in self.requests if r.is_messages_send])}"
+        return (
+            200,
+            json.dumps({"id": message_id, "threadId": f"thread-{message_id}"}).encode(),
+            {},
+        )
+
+    def _list(self, recorded: RecordedRequest) -> tuple[int, bytes, dict[str, str]]:
+        """Matches on the `q` the way Gmail does for the operators this slice uses:
+        `from:`, `to:`, `after:` and `rfc822msgid:`. Deliberately not a full Gmail
+        query engine -- but deliberately *not* a stub that ignores `q` either, because
+        a fake that returns everything regardless would make the relevance test
+        vacuous."""
+        from tests.fakes.gmail_query import matches  # local import: test-only helper
+
+        query = recorded.q or ""
+        hits = [message for message in self.messages.values() if matches(message, query)]
+        hits.sort(key=lambda message: message.internal_date_ms)
+        return (
+            200,
+            json.dumps(
+                {
+                    "messages": [{"id": m.id, "threadId": m.thread_id} for m in hits],
+                    "resultSizeEstimate": len(hits),
+                }
+            ).encode(),
+            {},
+        )
+
+    def _thread(self, thread_id: str) -> tuple[int, bytes, dict[str, str]]:
+        members = [m for m in self.messages.values() if m.thread_id == thread_id]
+        if not members:
+            return 404, json.dumps({"error": {"status": "NOT_FOUND"}}).encode(), {}
+        members.sort(key=lambda message: message.internal_date_ms)
+        return (
+            200,
+            json.dumps(
+                {"id": thread_id, "messages": [self._as_api(m) for m in members]}
+            ).encode(),
+            {},
+        )
+
+    def _message(self, message_id: str) -> tuple[int, bytes, dict[str, str]]:
+        message = self.messages.get(message_id)
+        if message is None:
+            return 404, json.dumps({"error": {"status": "NOT_FOUND"}}).encode(), {}
+        return 200, json.dumps(self._as_api(message)).encode(), {}
+
+    # ---- shaping ----------------------------------------------------------------
+
+    def _as_api(self, message: FakeMessage) -> dict[str, Any]:
+        """Gmail's own `format=full` shape: base64url parts, headers as a list of
+        name/value pairs, `multipart/alternative` when both a text and an HTML part
+        exist. The parser under test has to cope with the real shape."""
+        import base64
+
+        def b64(text: str) -> str:
+            return base64.urlsafe_b64encode(text.encode()).decode().rstrip("=")
+
+        parts: list[dict[str, Any]] = []
+        if message.body_text:
+            parts.append(
+                {
+                    "mimeType": "text/plain",
+                    "body": {"data": b64(message.body_text), "size": len(message.body_text)},
+                }
+            )
+        if message.body_html:
+            parts.append(
+                {
+                    "mimeType": "text/html",
+                    "body": {"data": b64(message.body_html), "size": len(message.body_html)},
+                }
+            )
+        for attachment in message.attachments:
+            parts.append(
+                {
+                    "mimeType": attachment["mime"],
+                    "filename": attachment["filename"],
+                    "body": {"attachmentId": "att-1", "size": attachment["size"]},
+                }
+            )
+        return {
+            "id": message.id,
+            "threadId": message.thread_id,
+            "labelIds": message.label_ids,
+            "snippet": (message.body_text or message.body_html)[:120],
+            "internalDate": str(message.internal_date_ms),
+            "payload": {
+                "mimeType": "multipart/mixed" if len(parts) > 1 else "text/plain",
+                "headers": [{"name": k, "value": v} for k, v in message.headers.items()],
+                "parts": parts if len(parts) > 1 else [],
+                "body": parts[0]["body"] if len(parts) == 1 else {"size": 0},
+            },
+        }
+```
+
+And the query matcher it imports, `packages/core/tests/fakes/gmail_query.py`:
+
+```python
+"""Just enough of Gmail's `q` to make the relevance test meaningful.
+
+Supports `from:`, `to:`, `after:`, `rfc822msgid:`, parenthesised groups and `OR`.
+Everything else raises, on purpose: a fake that silently ignores an operator the
+production code relies on turns a passing test into a false statement.
+"""
+
+import re
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tests.fakes.fake_gmail import FakeMessage
+
+_TERM = re.compile(r"(from|to|after|rfc822msgid):(\S+)")
+
+
+def matches(message: "FakeMessage", query: str) -> bool:
+    if not query.strip():
+        raise AssertionError(
+            "FakeGmail received a messages.list with an empty q. Spec 4.1: a listing "
+            "without an address filter is a bug, not a broad search."
+        )
+
+    groups = re.findall(r"\(([^)]*)\)", query)
+    outside = re.sub(r"\([^)]*\)", " ", query)
+
+    unknown = [
+        token
+        for token in outside.split()
+        if ":" in token and not _TERM.fullmatch(token)
+    ]
+    if unknown:
+        raise AssertionError(f"FakeGmail does not implement the Gmail operator(s) {unknown}")
+
+    # Terms outside any group are ANDed; a parenthesised group is ORed internally.
+    for group in groups:
+        if not any(_term_matches(message, term) for term in _TERM.findall(group)):
+            return False
+    for term in _TERM.findall(outside):
+        if not _term_matches(message, term):
+            return False
+    return True
+
+
+def _term_matches(message: "FakeMessage", term: tuple[str, str]) -> bool:
+    operator, value = term
+    if operator == "from":
+        return value.lower() in message.headers.get("From", "").lower()
+    if operator == "to":
+        haystack = " ".join(
+            message.headers.get(name, "") for name in ("To", "Cc", "Bcc")
+        ).lower()
+        return value.lower() in haystack
+    if operator == "after":
+        return message.internal_date_ms >= int(value) * 1000
+    if operator == "rfc822msgid":
+        return message.headers.get("Message-ID", "").strip("<>") == value.strip("<>")
+    raise AssertionError(f"unreachable operator {operator}")
+```
+
+- [ ] **Step 6: Write the no-network guard**
+
+`packages/core/tests/test_no_network.py`:
+
+```python
+"""No test in this slice may open a socket.
+
+A suite that skips when credentials are absent proves nothing: it is green on a
+developer's laptop, green in CI, and has never executed the code it claims to cover.
+The seam is at the HTTP boundary precisely so that everything above it can be
+exercised for real without a network -- so a socket opening during the suite means
+something bypassed the seam, which is the one thing that must not happen quietly.
+"""
+
+import socket
+
+import pytest
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _no_sockets() -> None:
+    original = socket.socket.connect
+
+    def refuse(self: socket.socket, address: object) -> None:
+        # testcontainers and psycopg legitimately connect to the Postgres container on
+        # localhost. Anything else is a test reaching the internet.
+        host = address[0] if isinstance(address, tuple) else ""
+        if host in {"127.0.0.1", "::1", "localhost"}:
+            original(self, address)  # type: ignore[arg-type]
+            return
+        raise AssertionError(
+            f"a test tried to open a socket to {address!r}. Slice 5 tests drive "
+            "FakeGmail through the GmailTransport seam; they never touch the network."
+        )
+
+    socket.socket.connect = refuse  # type: ignore[method-assign]
+
+
+def test_the_guard_is_installed_and_actually_refuses() -> None:
+    with pytest.raises(AssertionError, match="never touch the network"):
+        socket.create_connection(("gmail.googleapis.com", 443), timeout=0.1)
+
+
+def test_no_slice_five_test_is_skipped_on_a_missing_credential() -> None:
+    """`skipif` on an environment variable is how a Gmail suite comes to prove
+    nothing. Checked as text, over the slice's own test files."""
+    from pathlib import Path
+
+    tests = Path(__file__).parent
+    offenders = [
+        path.name
+        for path in tests.glob("test_gmail*.py")
+        if "PIGROCRM_GOOGLE_CLIENT_ID" in path.read_text() and "skipif" in path.read_text()
+    ]
+    assert offenders == []
+```
+
+Move the `_no_sockets` fixture into `packages/core/tests/conftest.py` if the session-scoped autouse fixture does not apply across files from here — a fixture defined in a test module only applies to that module. The guard belongs in `conftest.py`; `test_no_network.py` keeps only the two tests that prove the guard is live.
+
+- [ ] **Step 7: Run it and watch it pass**
+
+Run: `uv run pytest packages/core/tests/test_gmail_transport.py packages/core/tests/test_no_network.py -v`
+Expected: PASS (8 transport tests + 2 guard tests).
+
+Run: `uv run pytest packages/core/tests -q`
+Expected: the whole existing suite still green. If the socket guard breaks testcontainers, widen the localhost allowlist to include the container's mapped address — never to include a public host.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/gmail/errors.py packages/core/src/pigrocrm/core/gmail/transport.py \
+        packages/core/tests/fakes/fake_gmail.py packages/core/tests/fakes/gmail_query.py \
+        packages/core/tests/test_gmail_transport.py packages/core/tests/test_no_network.py \
+        packages/core/tests/conftest.py
+git commit -m "feat(gmail): the HTTP seam, a recording fake, and no socket in the suite"
+```
+
+---
+### Task B1-5: Token exchange, refresh, and the cache the previous system did not have
+
+the previous system discarded `expires_in`, had six call sites, and performed **two OAuth exchanges to send one invoice email**. That is not a missed optimisation: it is why a transient network error showed up twice per send.
+
+**Files:**
+- Create: `packages/core/src/pigrocrm/core/gmail/tokens.py`
+- Create: `packages/core/tests/test_gmail_tokens.py`
+
+**Interfaces:**
+- Consumes: `GmailTransport` and `GoogleCallFailed` from B1-4; `CredentialRevoked` from B1-4; `seal`/`unseal` from B1-3; `Settings` from B1-2.
+- Produces:
+  ```python
+  GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+  GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+  GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
+
+  @dataclass(frozen=True)
+  class TokenGrant:
+      access_token: str
+      refresh_token: str
+      scopes: tuple[str, ...]
+      subject: str
+      email_address: str
+      expires_in: int
+
+  class GoogleTokenClient:
+      def __init__(self, *, client_id: str, client_secret: str, transport: GmailTransport,
+                   clock: Callable[[], float] = time.monotonic) -> None: ...
+      def exchange_code(self, *, code: str, code_verifier: str, redirect_uri: str) -> TokenGrant: ...
+      def access_token(self, *, account_id: UUID, email_address: str, refresh_token: str) -> str: ...
+  ```
+  Consumed by B1-6 (`exchange_code`), B1-7/B1-8/B1-11 and 5B-2's send path (`access_token`).
+
+- [ ] **Step 1: Write the failing test**
+
+`packages/core/tests/test_gmail_tokens.py`:
+
+```python
+import base64
+import json
+from uuid import uuid4
+
+import pytest
+
+from pigrocrm.core.gmail.errors import CredentialRevoked
+from pigrocrm.core.gmail.schemas import REQUESTED_SCOPES
+from pigrocrm.core.gmail.tokens import GoogleTokenClient
+from pigrocrm.core.gmail.transport import GmailTransport
+from tests.fakes.fake_gmail import FakeGmail
+
+ACCOUNT = uuid4()
+REFRESH = "1//0gRefreshTokenValue"
+
+
+def _client(fake: FakeGmail, clock: object | None = None) -> GoogleTokenClient:
+    return GoogleTokenClient(
+        client_id="cid.apps.googleusercontent.com",
+        client_secret="the-client-secret",
+        transport=GmailTransport(http=fake, sleep=lambda _: None),
+        clock=clock or (lambda: 1000.0),  # type: ignore[arg-type]
+    )
+
+
+def test_one_exchange_serves_every_call_within_the_token_lifetime() -> None:
+    """the previous system performed two OAuth exchanges to send a single invoice email, because it
+    threw `expires_in` away. The cache is not an optimisation: it is why a flaky
+    network stops presenting itself twice per operation."""
+    fake = FakeGmail(expires_in=3599)
+    client = _client(fake)
+    tokens = {
+        client.access_token(account_id=ACCOUNT, email_address="a@b.it", refresh_token=REFRESH)
+        for _ in range(5)
+    }
+    assert tokens == {fake.access_token}
+    assert fake.token_requests == 1
+
+
+def test_the_cache_expires_on_the_servers_own_expires_in() -> None:
+    now = [1000.0]
+    fake = FakeGmail(expires_in=3599)
+    client = _client(fake, clock=lambda: now[0])
+    client.access_token(account_id=ACCOUNT, email_address="a@b.it", refresh_token=REFRESH)
+    now[0] += 3000  # still inside the window, minus the safety margin
+    client.access_token(account_id=ACCOUNT, email_address="a@b.it", refresh_token=REFRESH)
+    assert fake.token_requests == 1
+    now[0] += 1000  # past it
+    client.access_token(account_id=ACCOUNT, email_address="a@b.it", refresh_token=REFRESH)
+    assert fake.token_requests == 2
+
+
+def test_two_accounts_do_not_share_a_cache_entry() -> None:
+    fake = FakeGmail()
+    client = _client(fake)
+    client.access_token(account_id=ACCOUNT, email_address="a@b.it", refresh_token=REFRESH)
+    client.access_token(account_id=uuid4(), email_address="c@d.it", refresh_token="1//other")
+    assert fake.token_requests == 2
+
+
+def test_invalid_grant_is_terminal_and_is_never_retried() -> None:
+    fake = FakeGmail(revoked=True)
+    client = _client(fake)
+    with pytest.raises(CredentialRevoked) as caught:
+        client.access_token(account_id=ACCOUNT, email_address="ada@acme.it", refresh_token=REFRESH)
+    assert "ada@acme.it" in caught.value.message
+    assert "revocato" in caught.value.message
+    # Exactly one attempt. Retrying an invalid_grant is a bug: it will never succeed,
+    # and retrying only delays telling the user something they must act on.
+    assert fake.token_requests == 1
+
+
+def test_a_revoked_grant_is_not_cached_as_a_failure_either() -> None:
+    """A second call must ask again rather than replay a cached exception: the user may
+    have re-consented between the two."""
+    fake = FakeGmail(revoked=True)
+    client = _client(fake)
+    for _ in range(2):
+        with pytest.raises(CredentialRevoked):
+            client.access_token(account_id=ACCOUNT, email_address="a@b.it", refresh_token=REFRESH)
+    assert fake.token_requests == 2
+
+
+def test_no_error_path_leaks_the_refresh_token_or_the_client_secret() -> None:
+    fake = FakeGmail(revoked=True)
+    client = _client(fake)
+    with pytest.raises(CredentialRevoked) as caught:
+        client.access_token(account_id=ACCOUNT, email_address="a@b.it", refresh_token=REFRESH)
+    rendered = f"{caught.value.message} {caught.value.details}"
+    assert REFRESH not in rendered
+    assert "the-client-secret" not in rendered
+
+
+def test_exchange_code_reads_the_granted_scopes_and_the_subject() -> None:
+    """Google may grant a subset of what was asked. What was *granted* is what gets
+    recorded, because every feature checks the granted set, never the requested one."""
+    claims = base64.urlsafe_b64encode(
+        json.dumps({"sub": "104729", "email": "ada@acme.it"}).encode()
+    ).decode().rstrip("=")
+    fake = FakeGmail(granted_scopes=REQUESTED_SCOPES)
+    fake.id_token = f"header.{claims}.signature"
+    grant = _client(fake).exchange_code(
+        code="4/0A-code", code_verifier="v" * 43, redirect_uri="https://crm.example.it/api/gmail/oauth/callback"
+    )
+    assert grant.subject == "104729"
+    assert grant.email_address == "ada@acme.it"
+    assert grant.scopes == REQUESTED_SCOPES
+    assert grant.refresh_token
+
+
+def test_a_grant_without_a_refresh_token_is_rejected_loudly() -> None:
+    """Google omits the refresh token when `prompt=consent` was not sent and the user
+    had already consented. Storing the row anyway would produce an account that can
+    never refresh, failing only on the second day."""
+    fake = FakeGmail(granted_scopes=REQUESTED_SCOPES)
+    fake.omit_refresh_token = True
+    with pytest.raises(CredentialRevoked):
+        _client(fake).exchange_code(
+            code="4/0A-code", code_verifier="v" * 43, redirect_uri="https://crm.example.it/x"
+        )
+```
+
+`FakeGmail` needs three more fields for this task: `id_token: str = ""`, `omit_refresh_token: bool = False`, and `refresh_token: str = "1//0gFakeRefresh"`. Add them, and make `_token()` include `"refresh_token"` (unless `omit_refresh_token`) and `"id_token"` (when set) in the 200 body.
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_gmail_tokens.py -v`
+Expected: FAIL — `No module named 'pigrocrm.core.gmail.tokens'`.
+
+- [ ] **Step 3: Write the module**
+
+`packages/core/src/pigrocrm/core/gmail/tokens.py`:
+
+```python
+"""Access tokens: obtained, cached in memory, never stored.
+
+Three things the previous system got wrong and this module exists to get right:
+
+1. It discarded `expires_in` and re-exchanged on every call site -- two OAuth
+   round-trips to send one invoice email.
+2. Its Gmail refresh token fell back to the Drive one (`effectiveGmailRefresh`),
+   putting two different capabilities on one credential.
+3. It could not tell `invalid_grant` from a transient failure, so a revoked token and
+   a flaky network produced the same screen and the same wrong reaction.
+
+Only the refresh token is persisted, and only encrypted (`gmail/crypto.py`). An access
+token is valid for an hour; persisting it would add a second secret to protect for no
+gain.
+"""
+
+import base64
+import binascii
+import json
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from uuid import UUID
+
+from pigrocrm.core.gmail.errors import CredentialRevoked, GmailUnavailable, GoogleCallFailed
+from pigrocrm.core.gmail.transport import GmailTransport
+
+GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
+
+# Google's `invalid_grant` covers revoked, expired and never-issued grants alike. All
+# three are terminal for us, and all three mean the same thing to the user: re-consent.
+_INVALID_GRANT = "invalid_grant"
+# Refresh a minute early rather than discovering expiry mid-sync.
+_EXPIRY_MARGIN_SECONDS = 60
+
+
+@dataclass(frozen=True)
+class TokenGrant:
+    access_token: str
+    refresh_token: str
+    scopes: tuple[str, ...]
+    subject: str
+    email_address: str
+    expires_in: int
+
+
+@dataclass(frozen=True)
+class _CachedToken:
+    value: str
+    expires_at: float
+
+
+def _decode_id_token_claims(id_token: str) -> dict[str, str]:
+    """Reads the payload of the ID token *without* verifying its signature, and that
+    is correct here: the token arrived over TLS directly from Google's token endpoint
+    in response to a request carrying our client secret, which is precisely the case
+    OpenID Connect exempts from signature verification. It is never accepted from a
+    browser, a redirect, or any other party."""
+    parts = id_token.split(".")
+    if len(parts) != 3:
+        return {}
+    padded = parts[1] + "=" * (-len(parts[1]) % 4)
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(padded).decode())
+    except (binascii.Error, ValueError, UnicodeDecodeError):
+        return {}
+    if not isinstance(claims, dict):
+        return {}
+    return {k: str(v) for k, v in claims.items() if isinstance(k, str)}
+
+
+class GoogleTokenClient:
+    def __init__(
+        self,
+        *,
+        client_id: str,
+        client_secret: str,
+        transport: GmailTransport,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._transport = transport
+        # Monotonic, not wall clock: an NTP step backwards must not extend a token's
+        # apparent life.
+        self._clock = clock
+        self._cache: dict[UUID, _CachedToken] = {}
+
+    def exchange_code(self, *, code: str, code_verifier: str, redirect_uri: str) -> TokenGrant:
+        payload = self._post(
+            {
+                "grant_type": "authorization_code",
+                "code": code,
+                "code_verifier": code_verifier,
+                "redirect_uri": redirect_uri,
+                "client_id": self._client_id,
+                "client_secret": self._client_secret,
+            },
+            what="scambio del codice di autorizzazione",
+            account_id=None,
+            email_address="",
+        )
+        refresh_token = str(payload.get("refresh_token") or "")
+        claims = _decode_id_token_claims(str(payload.get("id_token") or ""))
+        email_address = claims.get("email", "")
+        if not refresh_token:
+            # Without `prompt=consent`, Google omits the refresh token when the user has
+            # already consented once. Storing the row anyway builds an account that can
+            # never refresh and fails on day two instead of now.
+            raise CredentialRevoked(
+                UUID(int=0),
+                email_address or "la casella selezionata",
+            )
+        granted = str(payload.get("scope") or "").split()
+        return TokenGrant(
+            access_token=str(payload.get("access_token") or ""),
+            refresh_token=refresh_token,
+            scopes=tuple(granted),
+            subject=claims.get("sub", ""),
+            email_address=email_address,
+            expires_in=int(payload.get("expires_in") or 0),
+        )
+
+    def access_token(self, *, account_id: UUID, email_address: str, refresh_token: str) -> str:
+        cached = self._cache.get(account_id)
+        now = self._clock()
+        if cached is not None and cached.expires_at > now:
+            return cached.value
+
+        payload = self._post(
+            {
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": self._client_id,
+                "client_secret": self._client_secret,
+            },
+            what="rinnovo del token di accesso",
+            account_id=account_id,
+            email_address=email_address,
+        )
+        token = str(payload.get("access_token") or "")
+        expires_in = int(payload.get("expires_in") or 0)
+        self._cache[account_id] = _CachedToken(
+            value=token,
+            expires_at=now + max(0, expires_in - _EXPIRY_MARGIN_SECONDS),
+        )
+        return token
+
+    def forget(self, account_id: UUID) -> None:
+        """Drop a cached token, on disconnect or on re-authorisation."""
+        self._cache.pop(account_id, None)
+
+    def _post(
+        self,
+        fields: dict[str, str],
+        *,
+        what: str,
+        account_id: UUID | None,
+        email_address: str,
+    ) -> dict[str, object]:
+        try:
+            return self._transport.form(GOOGLE_TOKEN_URL, fields, what=what)
+        except GoogleCallFailed as failed:
+            if failed.failure.error_code == _INVALID_GRANT:
+                # Terminal. Not cached as a failure either: the user may re-consent
+                # between two calls, and a cached refusal would hide that.
+                raise CredentialRevoked(
+                    account_id or UUID(int=0), email_address or "la casella collegata"
+                ) from failed
+            raise GmailUnavailable(what, failed.failure.status) from failed
+```
+
+Note `UUID(int=0)` in the two paths where no account row exists yet: `CredentialRevoked` carries an id for the problem document, and the all-zero UUID is the honest value for "there is no row" — better than inventing one or making the parameter optional and letting every consumer branch on `None`.
+
+- [ ] **Step 4: Run it and watch it pass**
+
+Run: `uv run pytest packages/core/tests/test_gmail_tokens.py -v`
+Expected: PASS (8 tests). `fake.token_requests == 1` in the first test is the assertion that matters most; if it is 5, the cache key is wrong.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/gmail/tokens.py packages/core/tests/fakes/fake_gmail.py \
+        packages/core/tests/test_gmail_tokens.py
+git commit -m "feat(gmail): token refresh with an in-process cache, and invalid_grant as terminal"
+```
+
+---
+
+### Task B1-6: The OAuth flow — PKCE, a single-use state, and refusing the wrong mailbox
+
+**Files:**
+- Create: `packages/core/src/pigrocrm/core/gmail/oauth.py`
+- Create: `packages/core/src/pigrocrm/core/gmail/repository.py`
+- Create: `packages/core/tests/test_gmail_oauth.py`
+
+**Interfaces:**
+- Consumes: `GoogleTokenClient.exchange_code` and `GOOGLE_AUTH_URL` from B1-5; `GoogleAccount`/`GoogleOAuthState` from B1-3; `seal` from B1-3; `decode_google_token_key`/`require_gmail_configured` from B1-2; `ActivityService.record` (`activities/service.py`); `Actor`.
+- Produces:
+  ```python
+  class GmailRepository:
+      def __init__(self, session: Session) -> None: ...
+      def account_for_user(self, user_id: UUID) -> GoogleAccount | None: ...
+      def account(self, account_id: UUID) -> GoogleAccount | None: ...
+      def add_state(self, state: GoogleOAuthState) -> GoogleOAuthState: ...
+      def consume_state(self, jti: str, now: datetime) -> GoogleOAuthState | None: ...
+      def prune_states(self, now: datetime) -> int: ...
+      # `list`-named methods, if any are added later, go LAST in this class.
+
+  class GmailOAuthService:
+      def __init__(self, session: Session, *, settings: Settings, tokens: GoogleTokenClient) -> None: ...
+      def start(self, actor: Actor) -> str: ...
+      def complete(self, *, code: str, state: str, actor: Actor) -> GoogleAccountRead: ...
+      def disconnect(self, *, delete_messages: bool, actor: Actor) -> None: ...
+  ```
+  Consumed by B1-13 (the router) and B1-15 (the settings panel).
+
+- [ ] **Step 1: Write the failing test**
+
+`packages/core/tests/test_gmail_oauth.py`:
+
+```python
+import base64
+import json
+from datetime import UTC, datetime, timedelta
+from urllib.parse import parse_qs, urlparse
+
+import pytest
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.activities.models import Activity
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.auth.models import User
+from pigrocrm.core.config import Settings
+from pigrocrm.core.errors import Conflict
+from pigrocrm.core.gmail.crypto import unseal
+from pigrocrm.core.gmail.models import GoogleAccount, GoogleOAuthState
+from pigrocrm.core.gmail.oauth import GmailOAuthService
+from pigrocrm.core.gmail.schemas import REQUESTED_SCOPES, SCOPE_SEND
+from pigrocrm.core.gmail.tokens import GoogleTokenClient
+from pigrocrm.core.gmail.transport import GmailTransport
+from tests.fakes.fake_gmail import FakeGmail
+
+KEY_B64 = base64.b64encode(b"k" * 32).decode()
+
+
+def _settings(**overrides: object) -> Settings:
+    base: dict[str, object] = {
+        "jwt_secret": "x" * 32,
+        "google_client_id": "cid.apps.googleusercontent.com",
+        "google_client_secret": "the-secret",
+        "google_token_key": KEY_B64,
+        "public_url": "https://crm.example.it",
+        "_env_file": None,
+    }
+    return Settings(**{**base, **overrides})  # type: ignore[arg-type]
+
+
+def _id_token(sub: str, email: str) -> str:
+    claims = base64.urlsafe_b64encode(json.dumps({"sub": sub, "email": email}).encode())
+    return f"h.{claims.decode().rstrip('=')}.s"
+
+
+def _service(session: Session, fake: FakeGmail, settings: Settings | None = None) -> GmailOAuthService:
+    resolved = settings or _settings()
+    return GmailOAuthService(
+        session,
+        settings=resolved,
+        tokens=GoogleTokenClient(
+            client_id=resolved.google_client_id,
+            client_secret=resolved.google_client_secret,
+            transport=GmailTransport(http=fake, sleep=lambda _: None),
+        ),
+    )
+
+
+def _user(session: Session, email: str = "owner@example.it") -> User:
+    user = User(email=email, nome="Owner", password_hash="x", role="admin", attivo=True)
+    session.add(user)
+    session.flush()
+    return user
+
+
+def _actor(user: User) -> Actor:
+    return Actor(id=user.id, type="user", role="admin")
+
+
+def test_start_asks_for_offline_access_and_forces_the_consent_screen(db_session: Session) -> None:
+    user = _user(db_session)
+    url = _service(db_session, FakeGmail()).start(_actor(user))
+    query = parse_qs(urlparse(url).query)
+    assert query["access_type"] == ["offline"]
+    # Without prompt=consent a repeat authorisation returns no refresh token at all.
+    assert query["prompt"] == ["consent"]
+    assert query["code_challenge_method"] == ["S256"]
+    assert set(query["scope"][0].split()) == set(REQUESTED_SCOPES)
+    assert query["redirect_uri"] == ["https://crm.example.it/api/gmail/oauth/callback"]
+
+
+def test_start_keeps_the_code_verifier_server_side(db_session: Session) -> None:
+    """PKCE is worth nothing if the verifier travels through the browser. It lives in
+    google_oauth_states; the signed `state` carries only a jti."""
+    user = _user(db_session)
+    url = _service(db_session, FakeGmail()).start(_actor(user))
+    query = parse_qs(urlparse(url).query)
+    row = db_session.execute(select(GoogleOAuthState)).scalars().one()
+    assert row.code_verifier not in url
+    assert row.code_verifier != query["code_challenge"][0]
+    assert len(row.code_verifier) >= 43
+
+
+def test_complete_stores_the_refresh_token_encrypted_and_records_the_connection(
+    db_session: Session,
+) -> None:
+    user = _user(db_session)
+    fake = FakeGmail(granted_scopes=REQUESTED_SCOPES)
+    fake.id_token = _id_token("104729", "ada@acme.it")
+    fake.refresh_token = "1//0gTheRealRefresh"
+    service = _service(db_session, fake)
+    url = service.start(_actor(user))
+    state = parse_qs(urlparse(url).query)["state"][0]
+
+    read = service.complete(code="4/0A-code", state=state, actor=_actor(user))
+    db_session.commit()
+
+    assert read.email_address == "ada@acme.it"
+    assert read.status == "active"
+    account = db_session.execute(select(GoogleAccount)).scalars().one()
+    assert b"1//0gTheRealRefresh" not in account.refresh_token_ciphertext
+    assert unseal(account.refresh_token_ciphertext, account.refresh_token_nonce, b"k" * 32) == (
+        "1//0gTheRealRefresh"
+    )
+    kinds = db_session.execute(select(Activity.kind)).scalars().all()
+    assert "gmail.account_collegato" in kinds
+
+
+def test_a_state_can_only_be_used_once(db_session: Session) -> None:
+    user = _user(db_session)
+    fake = FakeGmail(granted_scopes=REQUESTED_SCOPES)
+    fake.id_token = _id_token("104729", "ada@acme.it")
+    service = _service(db_session, fake)
+    state = parse_qs(urlparse(service.start(_actor(user))).query)["state"][0]
+    service.complete(code="4/0A-code", state=state, actor=_actor(user))
+    db_session.commit()
+
+    with pytest.raises(Conflict) as caught:
+        service.complete(code="4/0A-code", state=state, actor=_actor(user))
+    # Deliberately does not say which check failed: signature, expiry, replay and
+    # user mismatch all answer the same way.
+    assert caught.value.message.count("autorizzazione") >= 1
+
+
+def test_a_state_belonging_to_another_user_is_refused(db_session: Session) -> None:
+    owner = _user(db_session, "owner@example.it")
+    other = _user(db_session, "other@example.it")
+    fake = FakeGmail(granted_scopes=REQUESTED_SCOPES)
+    fake.id_token = _id_token("104729", "ada@acme.it")
+    service = _service(db_session, fake)
+    state = parse_qs(urlparse(service.start(_actor(owner))).query)["state"][0]
+    with pytest.raises(Conflict):
+        service.complete(code="4/0A-code", state=state, actor=_actor(other))
+
+
+def test_an_expired_state_is_refused(db_session: Session) -> None:
+    user = _user(db_session)
+    fake = FakeGmail(granted_scopes=REQUESTED_SCOPES)
+    fake.id_token = _id_token("104729", "ada@acme.it")
+    service = _service(db_session, fake)
+    state = parse_qs(urlparse(service.start(_actor(user))).query)["state"][0]
+    row = db_session.execute(select(GoogleOAuthState)).scalars().one()
+    row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    db_session.flush()
+    with pytest.raises(Conflict):
+        service.complete(code="4/0A-code", state=state, actor=_actor(user))
+
+
+def test_reconnecting_a_different_mailbox_is_refused_and_names_both(db_session: Session) -> None:
+    """Silently relabelling the whole stored history because someone picked the wrong
+    Google account in the chooser is the failure this refusal exists to prevent."""
+    user = _user(db_session)
+    fake = FakeGmail(granted_scopes=REQUESTED_SCOPES)
+    fake.id_token = _id_token("104729", "ada@acme.it")
+    service = _service(db_session, fake)
+    service.complete(
+        code="c1", state=parse_qs(urlparse(service.start(_actor(user))).query)["state"][0], actor=_actor(user)
+    )
+    db_session.commit()
+
+    fake.id_token = _id_token("999999", "someone.else@gmail.com")
+    with pytest.raises(Conflict) as caught:
+        service.complete(
+            code="c2",
+            state=parse_qs(urlparse(service.start(_actor(user))).query)["state"][0],
+            actor=_actor(user),
+        )
+    assert "ada@acme.it" in caught.value.message
+    assert "someone.else@gmail.com" in caught.value.message
+
+
+def test_a_partial_grant_is_stored_as_granted_and_stays_active(db_session: Session) -> None:
+    """Spec 5.1: status describes the credential, capability is derived from the
+    granted scopes at the point of use. Only gmail.send was granted here, so the
+    account is healthy and it is *sync* that will refuse."""
+    user = _user(db_session)
+    fake = FakeGmail(granted_scopes=("openid", "email", SCOPE_SEND))
+    fake.id_token = _id_token("104729", "ada@acme.it")
+    service = _service(db_session, fake)
+    read = service.complete(
+        code="c", state=parse_qs(urlparse(service.start(_actor(user))).query)["state"][0], actor=_actor(user)
+    )
+    assert read.status == "active"
+    assert SCOPE_SEND in read.scopes_granted
+    assert "https://www.googleapis.com/auth/gmail.readonly" not in read.scopes_granted
+
+
+def test_consent_expiry_is_set_only_while_the_client_is_unverified(db_session: Session) -> None:
+    user = _user(db_session)
+    fake = FakeGmail(granted_scopes=REQUESTED_SCOPES)
+    fake.id_token = _id_token("104729", "ada@acme.it")
+    service = _service(db_session, fake, _settings(google_app_unverified=True))
+    read = service.complete(
+        code="c", state=parse_qs(urlparse(service.start(_actor(user))).query)["state"][0], actor=_actor(user)
+    )
+    assert read.consent_expires_at is not None
+    # Testing mode: Google expires a consumer refresh token seven days after consent.
+    assert 6 < (read.consent_expires_at - datetime.now(UTC)).days <= 7
+
+
+def test_an_unconfigured_installation_refuses_to_start(db_session: Session) -> None:
+    user = _user(db_session)
+    bare = _settings(google_client_id="")
+    with pytest.raises(Conflict, match="non è configurato"):
+        _service(db_session, FakeGmail(), bare).start(_actor(user))
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_gmail_oauth.py -v`
+Expected: FAIL — `No module named 'pigrocrm.core.gmail.oauth'`.
+
+- [ ] **Step 3: Write the repository**
+
+`packages/core/src/pigrocrm/core/gmail/repository.py`:
+
+```python
+"""Queries only. Never commits -- the service owns the transaction."""
+
+from datetime import datetime
+from uuid import UUID
+
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.gmail.models import GoogleAccount, GoogleOAuthState
+
+
+class GmailRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def account_for_user(self, user_id: UUID) -> GoogleAccount | None:
+        return self.session.execute(
+            select(GoogleAccount).where(GoogleAccount.user_id == user_id)
+        ).scalar_one_or_none()
+
+    def account(self, account_id: UUID) -> GoogleAccount | None:
+        return self.session.get(GoogleAccount, account_id)
+
+    def add_state(self, state: GoogleOAuthState) -> GoogleOAuthState:
+        self.session.add(state)
+        self.session.flush()
+        return state
+
+    def consume_state(self, jti: str, now: datetime) -> GoogleOAuthState | None:
+        """Marks the row consumed and returns it, or returns `None` if it does not
+        exist, has expired, or was already consumed. One statement, so two concurrent
+        callbacks carrying the same jti cannot both win: the second updates zero rows.
+        """
+        row = self.session.execute(
+            select(GoogleOAuthState)
+            .where(
+                GoogleOAuthState.jti == jti,
+                GoogleOAuthState.consumed_at.is_(None),
+                GoogleOAuthState.expires_at > now,
+            )
+            .with_for_update(skip_locked=True)
+        ).scalar_one_or_none()
+        if row is None:
+            return None
+        row.consumed_at = now
+        self.session.flush()
+        return row
+
+    def prune_states(self, now: datetime) -> int:
+        """Called at the start of every sync. `refresh_tokens` has this same problem
+        and, per residuo R8, no pruning at all -- this table does not repeat it."""
+        result = self.session.execute(
+            delete(GoogleOAuthState).where(GoogleOAuthState.expires_at < now)
+        )
+        return int(result.rowcount or 0)
+```
+
+- [ ] **Step 4: Write the service**
+
+`packages/core/src/pigrocrm/core/gmail/oauth.py`:
+
+```python
+"""Authorization-code flow with PKCE, server-side.
+
+The `code_verifier` lives in `google_oauth_states`, not in the signed state: putting it
+in the state would make it readable by the browser and cancel PKCE. The state itself is
+a five-minute JWT carrying a single-use `jti` and the CRM user's id, minted with the
+machinery already in `auth/tokens.py` -- no new cryptography.
+"""
+
+import base64
+import hashlib
+import os
+from datetime import UTC, datetime, timedelta
+from urllib.parse import urlencode
+
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.activities.service import ActivityService
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.config import Settings, decode_google_token_key, require_gmail_configured
+from pigrocrm.core.errors import Conflict
+from pigrocrm.core.gmail.crypto import seal
+from pigrocrm.core.gmail.models import GoogleAccount, GoogleOAuthState
+from pigrocrm.core.gmail.repository import GmailRepository
+from pigrocrm.core.gmail.schemas import REQUESTED_SCOPES, GoogleAccountRead
+from pigrocrm.core.gmail.tokens import GOOGLE_AUTH_URL, GoogleTokenClient
+
+STATE_TTL_MINUTES = 5
+# Testing-mode consumer refresh tokens expire seven days after consent. Google exposes
+# no API to detect verification status, so the operator declares it.
+UNVERIFIED_CONSENT_DAYS = 7
+_VERIFIER_BYTES = 48  # 64 base64url characters, inside PKCE's 43-128 range
+
+
+def _b64url(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+class GmailOAuthService:
+    def __init__(
+        self, session: Session, *, settings: Settings, tokens: GoogleTokenClient
+    ) -> None:
+        self.session = session
+        self.settings = settings
+        self.tokens = tokens
+        self.repo = GmailRepository(session)
+        self.activities = ActivityService(session)
+
+    @property
+    def redirect_uri(self) -> str:
+        # One fixed, configured string. Google compares it character for character.
+        return f"{self.settings.public_url.rstrip('/')}/api/gmail/oauth/callback"
+
+    def start(self, actor: Actor) -> str:
+        require_gmail_configured(self.settings)
+        actor.require_write("collegare un account Google")
+        if actor.id is None:
+            raise Conflict("google_account", "solo un utente può collegare una casella Google")
+
+        verifier = _b64url(os.urandom(_VERIFIER_BYTES))
+        challenge = _b64url(hashlib.sha256(verifier.encode()).digest())
+        jti = _b64url(os.urandom(24))
+        now = datetime.now(UTC)
+        self.repo.add_state(
+            GoogleOAuthState(
+                jti=jti,
+                code_verifier=verifier,
+                user_id=actor.id,
+                expires_at=now + timedelta(minutes=STATE_TTL_MINUTES),
+            )
+        )
+        self.session.commit()
+
+        return f"{GOOGLE_AUTH_URL}?" + urlencode(
+            {
+                "client_id": self.settings.google_client_id,
+                "redirect_uri": self.redirect_uri,
+                "response_type": "code",
+                "scope": " ".join(REQUESTED_SCOPES),
+                "access_type": "offline",
+                # Without this, a repeat authorisation returns no refresh token.
+                "prompt": "consent",
+                "include_granted_scopes": "false",
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "state": jti,
+            }
+        )
+
+    def complete(self, *, code: str, state: str, actor: Actor) -> GoogleAccountRead:
+        require_gmail_configured(self.settings)
+        actor.require_write("collegare un account Google")
+        now = datetime.now(UTC)
+
+        row = self.repo.consume_state(state, now)
+        # One message for every failure -- unknown jti, expired, replayed, or belonging
+        # to another session. Saying which one leaked would tell an attacker which half
+        # of the attack worked.
+        if row is None or row.user_id != actor.id:
+            self.session.rollback()
+            raise Conflict(
+                "google_account",
+                "questa autorizzazione non è più valida: ricomincia da "
+                "Impostazioni → Gmail",
+            )
+
+        grant = self.tokens.exchange_code(
+            code=code, code_verifier=row.code_verifier, redirect_uri=self.redirect_uri
+        )
+
+        existing = self.repo.account_for_user(actor.id) if actor.id else None
+        if existing is not None and existing.google_sub != grant.subject:
+            self.session.rollback()
+            raise Conflict(
+                "google_account",
+                f"questa installazione è collegata a {existing.email_address}, non a "
+                f"{grant.email_address}: scollega prima l'account attuale",
+                connected=existing.email_address,
+                offered=grant.email_address,
+            )
+
+        ciphertext, nonce = seal(grant.refresh_token, decode_google_token_key(self.settings))
+        consent_expires_at = (
+            now + timedelta(days=UNVERIFIED_CONSENT_DAYS)
+            if self.settings.google_app_unverified
+            else None
+        )
+
+        if existing is None:
+            account = GoogleAccount(
+                user_id=actor.id,
+                google_sub=grant.subject,
+                email_address=grant.email_address,
+                refresh_token_ciphertext=ciphertext,
+                refresh_token_nonce=nonce,
+                scopes_granted=list(grant.scopes),
+                status="active",
+                consent_expires_at=consent_expires_at,
+            )
+            self.session.add(account)
+            self.session.flush()
+        else:
+            account = existing
+            account.refresh_token_ciphertext = ciphertext
+            account.refresh_token_nonce = nonce
+            account.scopes_granted = list(grant.scopes)
+            account.status = "active"
+            account.consent_expires_at = consent_expires_at
+            account.last_error = None
+            account.last_error_at = None
+            account.disconnected_at = None
+            self.session.flush()
+
+        self.tokens.forget(account.id)
+        # Last thing before the commit: ActivityService.record flushes and joins this
+        # transaction, so nothing may commit after it on this session.
+        self.activities.record(
+            "google_account",
+            account.id,
+            "gmail.account_collegato",
+            actor,
+            {"email_address": account.email_address, "scopes_granted": list(grant.scopes)},
+        )
+        self.session.commit()
+        return GoogleAccountRead.model_validate(account)
+
+    def disconnect(self, *, delete_messages: bool, actor: Actor) -> None:
+        """Offers to delete the stored messages; never does it on its own. Deleting a
+        customer's correspondence because a token expired would be a disaster, so the
+        choice is recorded in the timeline."""
+        actor.require_write("scollegare un account Google")
+        if actor.id is None:
+            raise Conflict("google_account", "solo un utente può scollegare una casella Google")
+        account = self.repo.account_for_user(actor.id)
+        if account is None:
+            raise Conflict("google_account", "nessuna casella Google collegata")
+
+        if delete_messages:
+            self.repo.delete_messages_for(account.id)  # added in Task B1-8
+
+        account.status = "revoked"
+        account.disconnected_at = datetime.now(UTC)
+        # Overwritten, not merely dereferenced: leaving the ciphertext behind means the
+        # credential is still in every backup taken after the disconnect.
+        account.refresh_token_ciphertext = b""
+        account.refresh_token_nonce = b""
+        self.tokens.forget(account.id)
+        self.activities.record(
+            "google_account",
+            account.id,
+            "gmail.account_scollegato",
+            actor,
+            {"email_address": account.email_address, "messaggi_cancellati": delete_messages},
+        )
+        self.session.commit()
+```
+
+`disconnect` calls `self.repo.delete_messages_for`, which Task B1-8 adds along with the `gmail_messages` table. Until B1-8 lands, `disconnect` is exercised only with `delete_messages=False`; B1-8's step 6 adds the method and the test for `True`.
+
+- [ ] **Step 5: Run it and watch it pass**
+
+Run: `uv run pytest packages/core/tests/test_gmail_oauth.py -v`
+Expected: PASS (10 tests).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/gmail/oauth.py packages/core/src/pigrocrm/core/gmail/repository.py \
+        packages/core/tests/test_gmail_oauth.py
+git commit -m "feat(gmail): PKCE OAuth with a single-use state and a mailbox-identity check"
+```
+
+---
+
+### Task B1-7: Relevance as a mechanism — every listing carries an address filter
+
+**The first hard part.** Spec §4.1 is not a policy, it is a constraint that must be impossible to violate: *"Every call to `users.messages.list` carries a `q` containing at least one email address known to the CRM. A `list` without a `q` is a bug"* — proven by inspecting the fake transport's recorded requests, not by a comment.
+
+Two independent guards, because either alone can be defeated by a future edit:
+1. The only function that can build a `messages.list` URL **refuses** to build one whose `q` has no address clause.
+2. A test reads `FakeGmail.requests` after a full sync and asserts the property over every recorded request.
+
+**Files:**
+- Create: `packages/core/src/pigrocrm/core/gmail/query.py`
+- Create: `packages/core/tests/test_gmail_query.py`
+
+**Interfaces:**
+- Consumes: `AddressRoster.known_addresses()` from B1-1; `Settings.gmail_sync_address_batch_size` from B1-2.
+- Produces:
+  ```python
+  GMAIL_API_ROOT = "https://gmail.googleapis.com/gmail/v1/users/me"
+  ADDRESS_BATCH_DEFAULT = 20
+  MAX_RESULTS_PER_PAGE = 100
+
+  def build_address_clause(addresses: Sequence[str]) -> str: ...
+  def build_list_queries(addresses: Sequence[str], *, after_epoch: int,
+                         batch_size: int = ADDRESS_BATCH_DEFAULT) -> tuple[str, ...]: ...
+  def messages_list_url(query: str, *, page_token: str | None = None,
+                        max_results: int = MAX_RESULTS_PER_PAGE) -> str: ...
+  def thread_get_url(thread_id: str) -> str: ...
+  def message_get_url(message_id: str) -> str: ...
+  def rfc822msgid_query(message_id_header: str) -> str: ...
+  ```
+  Consumed by B1-8, B1-11 and 5B-2's reconciliation.
+
+- [ ] **Step 1: Write the failing test**
+
+`packages/core/tests/test_gmail_query.py`:
+
+```python
+from urllib.parse import parse_qs, urlparse
+
+import pytest
+
+from pigrocrm.core.errors import ValidationFailed
+from pigrocrm.core.gmail.query import (
+    ADDRESS_BATCH_DEFAULT,
+    build_address_clause,
+    build_list_queries,
+    messages_list_url,
+    rfc822msgid_query,
+    thread_get_url,
+)
+
+
+def test_the_default_batch_is_twenty_addresses() -> None:
+    # Twenty, because Gmail's `q` has a practical length limit and twenty addresses
+    # with two clauses each fit inside it with margin.
+    assert ADDRESS_BATCH_DEFAULT == 20
+
+
+def test_each_address_contributes_both_directions() -> None:
+    clause = build_address_clause(["ada@acme.it", "bob@acme.it"])
+    assert clause == "(from:ada@acme.it OR to:ada@acme.it OR from:bob@acme.it OR to:bob@acme.it)"
+
+
+def test_an_empty_roster_produces_no_query_at_all() -> None:
+    """Not an empty query -- no query. A sync with nothing to look for must issue zero
+    requests, never one unfiltered request."""
+    assert build_list_queries([], after_epoch=1_700_000_000) == ()
+
+
+def test_addresses_are_batched_and_every_batch_keeps_the_filter() -> None:
+    addresses = [f"user{n}@acme.it" for n in range(45)]
+    queries = build_list_queries(addresses, after_epoch=1_700_000_000, batch_size=20)
+    assert len(queries) == 3
+    for query in queries:
+        assert query.startswith("(from:")
+        assert " after:1700000000" in query
+        assert query.count("from:") == query.count("to:")
+    # Every address appears exactly once across the batches: a dropped address is a
+    # silently missing conversation.
+    for address in addresses:
+        assert sum(query.count(f"from:{address} ") + query.count(f"from:{address})") for query in queries) == 1
+
+
+def test_after_is_epoch_seconds_and_never_a_date() -> None:
+    """A date loses the hours and forces re-reading a whole day every cycle."""
+    query = build_list_queries(["ada@acme.it"], after_epoch=1_723_766_400)
+    assert "after:1723766400" in query[0]
+    assert "after:2024/" not in query[0]
+
+
+def test_an_address_that_could_break_out_of_the_query_is_refused() -> None:
+    for hostile in ["ada@acme.it OR from:ceo@rival.com", "ada@acme.it)", 'ada"@acme.it', "ada acme@it"]:
+        with pytest.raises(ValidationFailed) as caught:
+            build_address_clause([hostile])
+        assert caught.value.details["field"] == "address"
+
+
+def test_the_list_url_refuses_a_query_without_an_address_clause() -> None:
+    """Guard one of two. The only function that can build a messages.list URL will not
+    build one that does not filter by a known address -- so the bug spec 4.1 names is
+    not merely discouraged, it is unconstructible."""
+    for bad in ["", "   ", "after:1700000000", "is:unread", "subject:fattura"]:
+        with pytest.raises(ValidationFailed, match="senza un filtro"):
+            messages_list_url(bad)
+
+
+def test_the_list_url_accepts_a_query_that_does_filter() -> None:
+    url = messages_list_url("(from:ada@acme.it OR to:ada@acme.it) after:1700000000", page_token="tok")
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query)
+    assert parsed.netloc == "gmail.googleapis.com"
+    assert parsed.path == "/gmail/v1/users/me/messages"
+    assert query["q"] == ["(from:ada@acme.it OR to:ada@acme.it) after:1700000000"]
+    assert query["pageToken"] == ["tok"]
+    assert query["maxResults"] == ["100"]
+
+
+def test_the_reconciliation_query_is_the_one_exception_and_is_still_specific() -> None:
+    """rfc822msgid: names one exact message we ourselves generated. It is not a search
+    of the mailbox, which is why it is allowed past the address-filter guard."""
+    query = rfc822msgid_query("<abc.123@crm.example.it>")
+    assert query == "rfc822msgid:abc.123@crm.example.it"
+    assert messages_list_url(query)
+
+
+def test_no_helper_can_build_a_url_that_takes_a_caller_supplied_search_string() -> None:
+    """Spec 8.2 and 12: no surface in this slice accepts a Gmail search string. The
+    module exposes exactly these builders, and none of them takes free text."""
+    import inspect
+
+    from pigrocrm.core.gmail import query as module
+
+    exported = [
+        name
+        for name, value in vars(module).items()
+        if not name.startswith("_") and inspect.isfunction(value)
+    ]
+    assert sorted(exported) == [
+        "build_address_clause",
+        "build_list_queries",
+        "message_get_url",
+        "messages_list_url",
+        "rfc822msgid_query",
+        "thread_get_url",
+    ]
+
+
+def test_thread_get_asks_for_the_full_format() -> None:
+    url = thread_get_url("thread-1")
+    assert url.endswith("/threads/thread-1?format=full")
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_gmail_query.py -v`
+Expected: FAIL — `No module named 'pigrocrm.core.gmail.query'`.
+
+- [ ] **Step 3: Write the module**
+
+`packages/core/src/pigrocrm/core/gmail/query.py`:
+
+```python
+"""The relevance mechanism, as pure functions.
+
+Spec 4 names the failure mode to avoid: synchronising a mailbox. A mailbox holds the
+newsletters, the Amazon receipts, the messages from the children's school, and the
+conversations with clients. Ingesting all of it and filtering afterwards means all of
+it went through the process -- a broken promise even if 98% is then discarded.
+
+So the filter is applied *server-side*, inside the `q`, and this module is the only
+place a `messages.list` URL can be built. `messages_list_url` refuses a query with no
+address clause, which makes the bug spec 4.1 names unconstructible rather than merely
+forbidden. `tests/test_gmail_sync.py` then asserts the same property over the requests
+the fake transport actually received, because one guard in the code is one edit away
+from being removed.
+"""
+
+import re
+from collections.abc import Sequence
+from urllib.parse import urlencode
+
+from pigrocrm.core.errors import ValidationFailed
+
+GMAIL_API_ROOT = "https://gmail.googleapis.com/gmail/v1/users/me"
+# Twenty: Gmail's `q` has a practical length limit, and twenty addresses at two clauses
+# each fit with margin. Configurable via PIGROCRM_GMAIL_SYNC_ADDRESS_BATCH_SIZE so the
+# number can be corrected without touching code.
+ADDRESS_BATCH_DEFAULT = 20
+MAX_RESULTS_PER_PAGE = 100
+
+# Deliberately stricter than RFC 5322: this string is interpolated into a Gmail query
+# expression, so anything that could terminate a clause or introduce an operator has to
+# be impossible, not merely unusual. re.fullmatch, never re.match with `$`.
+_SAFE_ADDRESS = re.compile(r"[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,63}")
+# What makes a query legitimate: at least one address-bearing clause.
+_HAS_ADDRESS_CLAUSE = re.compile(r"\b(?:from|to|cc|bcc|rfc822msgid):\S")
+
+
+def _checked(address: str) -> str:
+    normalised = address.strip().lower()
+    if not _SAFE_ADDRESS.fullmatch(normalised):
+        raise ValidationFailed(
+            "gmail_query",
+            "address",
+            "non è un indirizzo email interpolabile in una query Gmail",
+            expected="local@dominio.tld, senza spazi, parentesi o virgolette",
+        )
+    return normalised
+
+
+def build_address_clause(addresses: Sequence[str]) -> str:
+    """`(from:a OR to:a OR from:b OR to:b …)` -- both directions per address, because a
+    conversation is relevant whoever started it."""
+    if not addresses:
+        raise ValidationFailed(
+            "gmail_query", "addresses", "una clausola di indirizzi non può essere vuota"
+        )
+    terms: list[str] = []
+    for address in addresses:
+        safe = _checked(address)
+        terms.append(f"from:{safe}")
+        terms.append(f"to:{safe}")
+    return "(" + " OR ".join(terms) + ")"
+
+
+def build_list_queries(
+    addresses: Sequence[str], *, after_epoch: int, batch_size: int = ADDRESS_BATCH_DEFAULT
+) -> tuple[str, ...]:
+    """One query per batch of addresses. An empty roster yields **no** queries -- not
+    one unfiltered query, which is the whole point.
+
+    `after:` takes epoch seconds, not a date: a date loses the hours and forces
+    re-reading an entire day on every cycle.
+    """
+    if batch_size < 1:
+        raise ValidationFailed(
+            "gmail_query", "batch_size", "deve essere almeno 1", expected=">= 1"
+        )
+    if after_epoch < 0:
+        raise ValidationFailed("gmail_query", "after_epoch", "non può essere negativo")
+    unique = list(dict.fromkeys(_checked(address) for address in addresses))
+    return tuple(
+        f"{build_address_clause(unique[start:start + batch_size])} after:{after_epoch}"
+        for start in range(0, len(unique), batch_size)
+    )
+
+
+def messages_list_url(
+    query: str, *, page_token: str | None = None, max_results: int = MAX_RESULTS_PER_PAGE
+) -> str:
+    """The only way to build a `users.messages.list` URL in this codebase.
+
+    It refuses a `q` with no address-bearing clause. That refusal is the mechanism of
+    spec 4.1: a listing without an address filter cannot be constructed, so it cannot
+    be shipped by accident.
+    """
+    if not _HAS_ADDRESS_CLAUSE.search(query):
+        raise ValidationFailed(
+            "gmail_query",
+            "q",
+            "un elenco di messaggi senza un filtro su un indirizzo noto è un bug, "
+            "non una ricerca ampia",
+            expected="una clausola from:, to: o rfc822msgid:",
+        )
+    params: dict[str, str] = {"q": query, "maxResults": str(max_results)}
+    if page_token:
+        params["pageToken"] = page_token
+    return f"{GMAIL_API_ROOT}/messages?{urlencode(params)}"
+
+
+def thread_get_url(thread_id: str) -> str:
+    return f"{GMAIL_API_ROOT}/threads/{_checked_id(thread_id)}?format=full"
+
+
+def message_get_url(message_id: str) -> str:
+    return f"{GMAIL_API_ROOT}/messages/{_checked_id(message_id)}?format=full"
+
+
+def rfc822msgid_query(message_id_header: str) -> str:
+    """Finds one exact message by the `Message-ID` we generated ourselves. This is the
+    one query in the slice that is not built from the address roster, and it is allowed
+    because it is *more* specific, not less: it names a single message, and one we
+    created. Used only by the send reconciliation of spec 6.3."""
+    stripped = message_id_header.strip().strip("<>")
+    if not _SAFE_ADDRESS.fullmatch(stripped):
+        raise ValidationFailed(
+            "gmail_query", "message_id_header", "non è un Message-ID interpolabile"
+        )
+    return f"rfc822msgid:{stripped}"
+
+
+_SAFE_ID = re.compile(r"[A-Za-z0-9_\-]{1,128}")
+
+
+def _checked_id(value: str) -> str:
+    if not _SAFE_ID.fullmatch(value):
+        raise ValidationFailed(
+            "gmail_query", "id", "un id Gmail contiene solo lettere, cifre, - e _"
+        )
+    return value
+```
+
+`_checked_id` and `_checked` are private, so they do not appear in the exported-functions test. Keep them private: that test is what stops a future free-text search helper from being added quietly.
+
+- [ ] **Step 4: Run it and watch it pass**
+
+Run: `uv run pytest packages/core/tests/test_gmail_query.py -v`
+Expected: PASS (11 tests).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/gmail/query.py packages/core/tests/test_gmail_query.py
+git commit -m "feat(gmail): a listing without an address filter is unconstructible"
+```
+
+---
+<!-- PLAN-CURSOR: 5B-1 continues at B1-8 -->
+
+
