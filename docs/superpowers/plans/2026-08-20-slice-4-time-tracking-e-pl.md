@@ -13131,4 +13131,1472 @@ git commit -m "feat(analytics): the annual fiscal estimate, labelled a stima, ne
 
 ---
 
-<!--PLAN-CONTINUES-->
+## Phase 4B-2 — Adapters and interface
+
+### Task 4B-9: The analytics REST surface, three MCP tools, and the ban still mechanical
+
+**Files:**
+- Create: `apps/api/src/pigrocrm_api/routers/analytics.py`
+- Modify: `apps/api/src/pigrocrm_api/routers/deals.py` (`/pnl` and `/budget`)
+- Modify: `apps/api/src/pigrocrm_api/main.py` (register the router)
+- Modify: `apps/mcp/src/pigrocrm_mcp/tools/timetracking.py` (three read call-throughs)
+- Modify: `apps/mcp/src/pigrocrm_mcp/tools/__init__.py` (register the three tools)
+- Modify: `apps/mcp/src/pigrocrm_mcp/resources/entities.py` (`deal://` gains revenue and margin)
+- Modify: `packages/core/tests/test_architecture.py` (**one line**: add `AnalyticsService` to the audited tuple)
+- Test: `apps/api/tests/test_analytics_api.py`
+- Test: `apps/mcp/tests/test_analytics_tools.py`
+
+**Interfaces:**
+- Consumes: `AnalyticsService` and every schema from Tasks 4B-4 … 4B-8; `SessionDep`, `ActorDep`, `PROBLEM_RESPONSES`.
+- Produces:
+  ```
+  GET  /api/deals/{deal_id}/pnl                        -> DealPnl
+  GET  /api/deals/{deal_id}/budget                     -> BudgetVsActualRow
+  POST /api/deals/{deal_id}/time-entries/to-invoice-draft  (admin) -> InvoiceRead
+  GET  /api/analytics/pnl?from=&to=&customer_id=        -> PeriodPnl
+  GET  /api/analytics/budget?from=&to=                 -> BudgetPage
+  GET  /api/analytics/fiscale?anno=            (admin)  -> FiscalEstimate
+  ```
+  MCP tools added: `get_deal_pnl`, `get_period_pnl`, `get_budget_vs_actual` — and **nothing else**. `bind_time_to_invoice` and `get_fiscal_estimate` get no tool, which is what the architecture test now enforces for them as well as for the eight it already covered.
+- **The exclusion list does not change.** Task 4A-13 declared it as exactly the ten names the spec fixes, including these two, precisely so that this task is a one-line change to `AUDITED_SERVICES` and nothing else.
+
+Note the endpoint spellings: the spec's §11 writes `?from=&to=`, and `from` is a Python keyword. The router therefore declares `da`/`a` as the *parameter names* with `alias="from"`/`alias="to"` so the wire matches the spec while the code stays valid — recorded here rather than silently diverging.
+
+- [ ] **Step 1: Write the failing architecture and API tests**
+
+```python
+# packages/core/tests/test_architecture.py -- the ONLY change: AnalyticsService joins the
+# audited tuple. The ten-name list is untouched, which is the payoff of declaring it in
+# full in Task 4A-13.
+        ("pigrocrm.core.analytics.service", "AnalyticsService"),
+```
+
+```python
+# apps/api/tests/test_analytics_api.py
+from decimal import Decimal
+
+from fastapi.testclient import TestClient
+
+
+def test_deal_pnl_serialises_decimals_as_strings_and_null_percentage(
+    api_client: TestClient, admin_cookies, deal_with_hours_no_invoice
+) -> None:
+    response = api_client.get(
+        f"/api/deals/{deal_with_hours_no_invoice}/pnl", cookies=admin_cookies
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ricavi"] == "0.00"
+    # `null`, never `"0.00"`: two different facts, and the wire keeps them apart.
+    assert body["margine_percentuale"] is None
+    assert body["stato"] == "in corso"
+    assert body["valore_maturato"] != body["ricavi"]
+
+
+def test_the_period_report_uses_the_spec_query_names(
+    api_client: TestClient, admin_cookies
+) -> None:
+    """`from` and `to` on the wire, as §11 writes them; `da`/`a` in the code, because
+    `from` is a Python keyword. The alias is what keeps both true."""
+    response = api_client.get(
+        "/api/analytics/pnl",
+        cookies=admin_cookies,
+        params={"from": "2026-03-01", "to": "2026-03-31"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) >= {"chiusi", "in_corso", "spese_generali", "periodo_chiuso",
+                         "voci_scritte_in_ritardo"}
+    assert "totale" not in body
+
+
+def test_the_period_filter_is_mandatory(api_client: TestClient, admin_cookies) -> None:
+    """Residual B3: paginated with a mandatory period filter from the first commit, because
+    a margins view is by nature a list of closed deals and unbounded growth stops being
+    invisible here."""
+    assert api_client.get("/api/analytics/pnl", cookies=admin_cookies).status_code == 422
+    assert api_client.get("/api/analytics/budget", cookies=admin_cookies).status_code == 422
+
+
+def test_the_budget_list_is_bounded(api_client: TestClient, admin_cookies) -> None:
+    over = api_client.get(
+        "/api/analytics/budget",
+        cookies=admin_cookies,
+        params={"from": "2026-01-01", "to": "2026-12-31", "limit": 500},
+    )
+    assert over.status_code == 422
+
+
+def test_the_fiscal_report_is_admin_only(api_client: TestClient, collaborator_cookies) -> None:
+    response = api_client.get(
+        "/api/analytics/fiscale", cookies=collaborator_cookies, params={"anno": 2026}
+    )
+    assert response.status_code == 403
+
+
+def test_to_invoice_draft_is_admin_only(
+    api_client: TestClient, collaborator_cookies, deal_with_hours_no_invoice
+) -> None:
+    response = api_client.post(
+        f"/api/deals/{deal_with_hours_no_invoice}/time-entries/to-invoice-draft",
+        cookies=collaborator_cookies,
+        json={"entry_ids": ["11111111-1111-7111-8111-111111111111"]},
+    )
+    assert response.status_code == 403
+
+
+def test_the_openapi_document_describes_every_analytics_route(api_client: TestClient) -> None:
+    paths = api_client.get("/openapi.json").json()["paths"]
+    for path in (
+        "/api/deals/{deal_id}/pnl",
+        "/api/deals/{deal_id}/budget",
+        "/api/deals/{deal_id}/time-entries/to-invoice-draft",
+        "/api/analytics/pnl",
+        "/api/analytics/budget",
+        "/api/analytics/fiscale",
+    ):
+        assert path in paths, path
+```
+
+```python
+# apps/mcp/tests/test_analytics_tools.py
+"""**Criterion 9**, completed: an agent can read the economics and cannot change what
+already-recorded numbers mean, and the two most sensitive operations have no tool at
+all."""
+
+from mcp import Client
+
+
+async def test_the_three_read_tools_exist_and_the_two_excluded_do_not(server) -> None:
+    async with Client(server) as client:
+        names = {tool.name for tool in (await client.list_tools()).tools}
+    assert {"get_deal_pnl", "get_period_pnl", "get_budget_vs_actual"} <= names
+    assert "bind_time_to_invoice" not in names
+    assert "get_fiscal_estimate" not in names
+
+
+async def test_get_deal_pnl_returns_the_service_figures_verbatim(
+    server, deal_with_hours_no_invoice
+) -> None:
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "get_deal_pnl", {"deal_id": str(deal_with_hours_no_invoice)}
+        )
+    pnl = result.structured_content
+    assert pnl["ricavi"] == "0.00"
+    assert pnl["margine_percentuale"] is None
+
+
+async def test_the_deal_resource_now_carries_revenue_and_margin(
+    server, deal_with_hours_no_invoice
+) -> None:
+    async with Client(server) as client:
+        rendered = (
+            await client.read_resource(f"deal://{deal_with_hours_no_invoice}")
+        ).contents[0].text
+    assert "## Economia" in rendered
+    assert "Ricavi fatturati: 0,00" in rendered or "Ricavi fatturati: 0.00" in rendered
+    # An open deal's margin is provisional and the resource says so, rather than handing
+    # an agent a figure it will quote as final.
+    assert "provvisorio" in rendered
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+Run: `uv run pytest packages/core/tests/test_architecture.py apps/api/tests/test_analytics_api.py apps/mcp/tests/test_analytics_tools.py -v`
+Expected: FAIL — `test_every_other_public_method_has_a_tool` now lists `AnalyticsService.deal_pnl`, `.period_pnl` and `.budget_vs_actual`; the API paths 404; the tools do not exist.
+
+- [ ] **Step 3: Write the analytics router**
+
+```python
+# apps/api/src/pigrocrm_api/routers/analytics.py
+from datetime import date
+from typing import Annotated
+from uuid import UUID
+
+from fastapi import APIRouter, Query
+
+from pigrocrm.core.analytics.schemas import (
+    BudgetPage,
+    BudgetQuery,
+    FiscalEstimate,
+    PeriodPnl,
+    PeriodPnlQuery,
+)
+from pigrocrm.core.analytics.service import AnalyticsService
+from pigrocrm_api.deps import ActorDep, SessionDep
+from pigrocrm_api.errors import PROBLEM_RESPONSES
+
+router = APIRouter(prefix="/api/analytics", tags=["analytics"], responses=PROBLEM_RESPONSES)
+
+# `from` and `to` on the wire, as spec §11 writes them; `da`/`a` as the parameter names,
+# because `from` is a Python keyword. The alias is what keeps both true, and it is
+# recorded rather than silently diverging from the spec.
+FromDate = Annotated[date, Query(alias="from", description="Inizio del periodo, YYYY-MM-DD")]
+ToDate = Annotated[date, Query(alias="to", description="Fine del periodo, YYYY-MM-DD")]
+
+
+@router.get("/pnl", response_model=PeriodPnl)
+def period_pnl(
+    session: SessionDep,
+    actor: ActorDep,
+    da: FromDate,
+    a: ToDate,
+    customer_id: Annotated[UUID | None, Query()] = None,
+) -> PeriodPnl:
+    """Two columns, closed deals and deals in progress. There is deliberately no combined
+    total: adding a finished job's margin to a half-done one produces a figure that is
+    neither."""
+    return AnalyticsService(session).period_pnl(
+        PeriodPnlQuery(da=da, a=a, customer_id=customer_id), actor
+    )
+
+
+@router.get("/budget", response_model=BudgetPage)
+def budget_vs_actual(
+    session: SessionDep,
+    actor: ActorDep,
+    da: FromDate,
+    a: ToDate,
+    customer_id: Annotated[UUID | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    cursor: Annotated[UUID | None, Query()] = None,
+) -> BudgetPage:
+    """The period filter is mandatory and the list is paginated from the first commit
+    (residual B3): a margins view is by its nature a list of closed deals, so unbounded
+    growth stops being invisible here."""
+    return AnalyticsService(session).budget_vs_actual(
+        BudgetQuery(da=da, a=a, customer_id=customer_id, limit=limit, cursor=cursor), actor
+    )
+
+
+@router.get("/fiscale", response_model=FiscalEstimate)
+def fiscal_estimate(
+    session: SessionDep, actor: ActorDep, anno: Annotated[int, Query(ge=2000, le=2200)]
+) -> FiscalEstimate:
+    """`admin` — enforced by the service, not here. A router containing an authorisation
+    `if` is a router the MCP adapter cannot reuse."""
+    return AnalyticsService(session).get_fiscal_estimate(anno, actor)
+```
+
+```python
+# apps/api/src/pigrocrm_api/routers/deals.py -- append, with the imports.
+from pigrocrm.core.analytics.schemas import BindTimeRequest, BudgetQuery, BudgetVsActualRow, DealPnl
+from pigrocrm.core.analytics.service import AnalyticsService
+from pigrocrm.core.invoices.schemas import InvoiceRead
+
+
+@router.get("/{deal_id}/pnl", response_model=DealPnl)
+def deal_pnl(deal_id: UUID, session: SessionDep, actor: ActorDep) -> DealPnl:
+    return AnalyticsService(session).deal_pnl(deal_id, actor)
+
+
+@router.get("/{deal_id}/budget", response_model=BudgetVsActualRow)
+def deal_budget(
+    deal_id: UUID,
+    session: SessionDep,
+    actor: ActorDep,
+    da: Annotated[date, Query(alias="from")],
+    a: Annotated[date, Query(alias="to")],
+) -> BudgetVsActualRow:
+    """One deal's row of the estimate-versus-actual report. Served from the same method as
+    the list so the two can never disagree: a per-deal reimplementation is how the detail
+    page and the report start showing different variances."""
+    page = AnalyticsService(session).budget_vs_actual(
+        BudgetQuery(da=da, a=a, limit=200), actor
+    )
+    for row in page.items:
+        if row.deal_id == deal_id:
+            return row
+    raise NotFound("deal_budget", deal_id)
+
+
+@router.post("/{deal_id}/time-entries/to-invoice-draft", response_model=InvoiceRead)
+def to_invoice_draft(
+    deal_id: UUID, data: BindTimeRequest, session: SessionDep, actor: ActorDep
+) -> InvoiceRead:
+    """Builds a draft; issues nothing. `InvoiceService` stays the sole owner of numbering,
+    fiscal validation, rounding and freezing."""
+    return AnalyticsService(session).bind_time_to_invoice(deal_id, data, actor)
+```
+
+Add `from pigrocrm.core.errors import NotFound` to that router's imports, and register `analytics.router` in `main.py`'s router tuple.
+
+- [ ] **Step 4: Add the three MCP tools and the resource block**
+
+```python
+# apps/mcp/src/pigrocrm_mcp/tools/timetracking.py -- append.
+# Three reads, and only three. `bind_time_to_invoice` and `get_fiscal_estimate` are
+# absent by decision, not by omission -- see tools/__init__.py's block comment and
+# packages/core/tests/test_architecture.py, which fails the build if either appears here.
+from pigrocrm.core.analytics.schemas import BudgetQuery, PeriodPnlQuery
+from pigrocrm.core.analytics.service import AnalyticsService
+
+
+def get_deal_pnl(context: McpContext, deal_id: str) -> dict[str, Any]:
+    return (
+        AnalyticsService(context.session)
+        .deal_pnl(UUID(deal_id), context.actor)
+        .model_dump(mode="json")
+    )
+
+
+def get_period_pnl(context: McpContext, query: PeriodPnlQuery) -> dict[str, Any]:
+    return (
+        AnalyticsService(context.session).period_pnl(query, context.actor).model_dump(mode="json")
+    )
+
+
+def get_budget_vs_actual(context: McpContext, query: BudgetQuery) -> dict[str, Any]:
+    return (
+        AnalyticsService(context.session)
+        .budget_vs_actual(query, context.actor)
+        .model_dump(mode="json")
+    )
+```
+
+```python
+# apps/mcp/src/pigrocrm_mcp/tools/__init__.py -- append to register_entity_tools.
+
+    # ---- analytics ---------------------------------------------------------
+    # Reads only. `bind_time_to_invoice` has no tool because binding hours to a draft is
+    # the step that determines their freezing at issue, and choosing *which* hours to
+    # invoice is a commercial decision -- slice 3 §11 withdrew `issue_invoice` with the
+    # same reasoning and this is the rung below it. `get_fiscal_estimate` has no tool for
+    # a different reason: taxable income, contributions and estimated net for a real
+    # person are the most sensitive data this product holds, and residual R10 leaves a PAT
+    # indistinguishable from full account access.
+
+    @mcp.tool()
+    @guard
+    def get_deal_pnl(deal_id: str) -> dict[str, Any]:
+        """Conto economico di un deal: ricavi fatturati, costi diretti, costo del lavoro,
+        margine e stato. `margine_percentuale` è `null` quando i ricavi sono zero — non
+        zero per cento: significa che non è ancora stato incassato niente, non che tutto
+        se n'è andato in costi. `valore_maturato` non è un ricavo: è una stima."""
+        return timetracking.get_deal_pnl(context, deal_id)
+
+    @mcp.tool()
+    @guard
+    def get_period_pnl(
+        da: str, a: str, customer_id: str | None = None
+    ) -> dict[str, Any]:
+        """Conto economico di periodo, in due colonne: deal chiusi e deal in corso. Il
+        numero riportabile è il primo. `periodo_chiuso` e `voci_scritte_in_ritardo` dicono
+        se la cifra può ancora muoversi. Le spese generali stanno in una riga a parte e non
+        vengono ripartite su nessun deal."""
+        return timetracking.get_period_pnl(
+            context,
+            PeriodPnlQuery(da=da, a=a, customer_id=UUID(customer_id) if customer_id else None),
+        )
+
+    @mcp.tool()
+    @guard
+    def get_budget_vs_actual(
+        da: str, a: str, customer_id: str | None = None, limit: BoundedLimit = 50,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        """Preventivo contro consuntivo per deal. Lo scostamento di valore è calcolato
+        contro il preventivo **pro-rata** (preventivo × avanzamento ore), non contro quello
+        pieno. Una riga con `non_preventivato = true` non ha alcun preventivo: non è un
+        preventivo di zero, ed è esclusa dagli aggregati."""
+        return timetracking.get_budget_vs_actual(
+            context,
+            BudgetQuery(
+                da=da, a=a,
+                customer_id=UUID(customer_id) if customer_id else None,
+                limit=cast(int, limit),
+                cursor=UUID(cursor) if cursor else None,
+            ),
+        )
+```
+
+```python
+# apps/mcp/src/pigrocrm_mcp/resources/entities.py -- inside render_deal, after the
+# "## Ore" block Task 4A-13 added.
+    pnl = AnalyticsService(context.session).deal_pnl(deal.id, context.actor)
+    lines.append("")
+    lines.append("## Economia")
+    lines.append(f"- Ricavi fatturati: {pnl.ricavi} EUR ({pnl.fatture_emesse} fatture emesse)")
+    lines.append(f"- Costi diretti: {pnl.costi_diretti} EUR")
+    lines.append(f"- Costo del lavoro: {pnl.costo_lavoro} EUR")
+    if pnl.stato == "chiuso":
+        lines.append(f"- Margine lordo: {pnl.margine_lordo} EUR (definitivo)")
+    else:
+        # Never called a margin without the qualifier on an unfinished deal: the figure is
+        # provisional, and an agent handed a bare number will quote it as final.
+        lines.append(f"- Margine lordo: {pnl.margine_lordo} EUR — **provvisorio**")
+        lines.append(f"- Valore maturato (stima, non un ricavo): {pnl.valore_maturato} EUR")
+    if pnl.margine_percentuale is None:
+        lines.append("- Margine %: non calcolabile, nessun ricavo fatturato")
+    else:
+        lines.append(f"- Margine %: {pnl.margine_percentuale}")
+```
+
+- [ ] **Step 5: Run everything**
+
+Run: `uv run pytest -q`
+Expected: PASS, `test_every_other_public_method_has_a_tool` included.
+
+Run: `pnpm -C apps/web generate:api`
+Expected: `api-types.ts` gains `DealPnl`, `PeriodPnl`, `BudgetPage`, `BudgetVsActualRow`, `FiscalEstimate` and the six paths. Commit it with this task.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/core apps/api apps/mcp apps/web/src/lib/api-types.ts
+git commit -m "feat(analytics): REST and MCP surface, with bind_time_to_invoice and the fiscal estimate off MCP"
+```
+
+---
+
+### Task 4B-10: The «Economia» tab, on a deal and on a customer
+
+**Files:**
+- Create: `apps/web/src/features/analytics/queries.ts`
+- Create: `apps/web/src/features/analytics/EconomicsTab.tsx`
+- Create: `apps/web/src/features/analytics/PnlRows.tsx`
+- Create: `apps/web/src/features/analytics/ToInvoiceDialog.tsx`
+- Modify: `apps/web/src/routes/app/deal/$dealId.tsx` (`economics=`)
+- Modify: `apps/web/src/routes/app/clienti/$customerId.tsx` (`economics=`)
+- Modify: `apps/web/src/lib/query.ts` (analytics keys)
+- Test: `apps/web/src/features/analytics/EconomicsTab.test.tsx`
+
+**Interfaces:**
+- Consumes: the regenerated `components['schemas'][…]` types (4B-9); `EntityDetailLayout`'s `economics?: ReactNode` prop added in Task 4A-17; `formatMoneyValue`, `formatHoursValue` (4A-17); `QueryErrorBanner`; `useTimeEntries` (4A-16).
+- Produces:
+  ```ts
+  // features/analytics/queries.ts
+  export type DealPnl = components['schemas']['DealPnl']
+  export type PeriodPnl = components['schemas']['PeriodPnl']
+  export type BudgetVsActualRow = components['schemas']['BudgetVsActualRow']
+  export type BudgetPage = components['schemas']['BudgetPage']
+  export type FiscalEstimate = components['schemas']['FiscalEstimate']
+  export function useDealPnl(dealId: string): UseQueryResult<DealPnl>
+  export function useDealBudget(dealId: string, da: string, a: string): UseQueryResult<BudgetVsActualRow>
+  export function usePeriodPnl(params: { from: string; to: string; customer_id?: string }): UseQueryResult<PeriodPnl>
+  export function useBudget(params: { from: string; to: string; customer_id?: string; limit?: number; cursor?: string }): UseQueryResult<BudgetPage>
+  export function useFiscalEstimate(anno: number): UseQueryResult<FiscalEstimate>
+  export function useToInvoiceDraft(dealId: string): UseMutationResult<unknown, unknown, { entry_ids: string[]; raggruppa_per_mese: boolean }>
+
+  // components
+  export function EconomicsTab(props: { dealId: string } | { customerId: string }): JSX.Element
+  export function PnlRows({ pnl }: { pnl: DealPnl }): JSX.Element
+  export function ToInvoiceDialog(props: ToInvoiceDialogProps): JSX.Element
+  export function formatPercent(value: string | null): string
+  ```
+  `EconomicsTab` takes a **discriminated** argument — `{dealId: string} | {customerId: string}` — never two optional props, for the reason `useDocuments` already establishes: there is then no "empty string" spelling to get wrong, which is the defect residual B1 names.
+
+- [ ] **Step 1: Write the failing test**
+
+```tsx
+// apps/web/src/features/analytics/EconomicsTab.test.tsx
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { render, screen } from '@testing-library/react'
+import { http, HttpResponse } from 'msw'
+import { setupServer } from 'msw/node'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { EconomicsTab } from './EconomicsTab'
+
+const DEAL = 'aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa'
+const server = setupServer()
+beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
+afterEach(() => server.resetHandlers())
+afterAll(() => server.close())
+
+const pnl = (overrides = {}) => ({
+  deal_id: DEAL, stato: 'in corso', ricavi: '0.00', costi_diretti: '500.00',
+  costo_lavoro: '600.00', margine_lordo: '-1100.00', margine_percentuale: null,
+  ore_totali: '20.00', ore_fatturabili_non_fatturate: '20.00',
+  valore_maturato: '2000.00', ore_senza_tariffa: 0, fatture_emesse: 0, ...overrides,
+})
+
+function renderTab() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={client}>
+      <EconomicsTab dealId={DEAL} />
+    </QueryClientProvider>,
+  )
+}
+
+describe('EconomicsTab', () => {
+  it('never prints a bare margin for a deal in progress', async () => {
+    server.use(http.get(`/api/deals/${DEAL}/pnl`, () => HttpResponse.json(pnl())))
+    renderTab()
+    // §7.3: on an `in corso` deal the margin is provisional and the accrued value sits
+    // beside it under a different heading. The word "margine" must never appear alone.
+    expect(await screen.findByText(/provvisorio/i)).toBeInTheDocument()
+    expect(await screen.findByText(/valore maturato/i)).toBeInTheDocument()
+    expect(await screen.findByText(/non è un ricavo/i)).toBeInTheDocument()
+    expect(await screen.findByText('2.000,00 €')).toBeInTheDocument()
+  })
+
+  it('shows a null margin percentage as "non calcolabile", not as zero per cent', async () => {
+    server.use(http.get(`/api/deals/${DEAL}/pnl`, () => HttpResponse.json(pnl())))
+    renderTab()
+    expect(await screen.findByText(/non calcolabile/i)).toBeInTheDocument()
+    expect(screen.queryByText('0,00 %')).not.toBeInTheDocument()
+  })
+
+  it('calls a closed deal figure definitive', async () => {
+    server.use(
+      http.get(`/api/deals/${DEAL}/pnl`, () =>
+        HttpResponse.json(
+          pnl({
+            stato: 'chiuso', ricavi: '10000.00', margine_lordo: '8900.00',
+            margine_percentuale: '89.00', ore_fatturabili_non_fatturate: '0.00',
+            valore_maturato: '10000.00', fatture_emesse: 2,
+          }),
+        ),
+      ),
+    )
+    renderTab()
+    expect(await screen.findByText(/definitivo/i)).toBeInTheDocument()
+    expect(await screen.findByText('89,00 %')).toBeInTheDocument()
+    expect(await screen.findByText('8.900,00 €')).toBeInTheDocument()
+  })
+
+  it('names the unpriced hours with their count', async () => {
+    server.use(
+      http.get(`/api/deals/${DEAL}/pnl`, () => HttpResponse.json(pnl({ ore_senza_tariffa: 6 }))),
+    )
+    renderTab()
+    expect(await screen.findByText(/6 voci senza tariffa/i)).toBeInTheDocument()
+  })
+
+  it('renders a banner and no figures when the request fails', async () => {
+    server.use(
+      http.get(`/api/deals/${DEAL}/pnl`, () =>
+        HttpResponse.json({ detail: 'Boom' }, { status: 500 }),
+      ),
+    )
+    renderTab()
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(screen.queryByText(/margine/i)).not.toBeInTheDocument()
+  })
+})
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `pnpm -C apps/web exec vitest run src/features/analytics`
+Expected: FAIL — `Failed to resolve import "./EconomicsTab"`.
+
+- [ ] **Step 3: Write the queries and the tab**
+
+```ts
+// apps/web/src/features/analytics/queries.ts
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { api, unwrap } from '@/lib/api'
+import type { components } from '@/lib/api-types'
+import { queryKeys } from '@/lib/query'
+
+export type DealPnl = components['schemas']['DealPnl']
+export type PeriodPnl = components['schemas']['PeriodPnl']
+export type BudgetVsActualRow = components['schemas']['BudgetVsActualRow']
+export type BudgetPage = components['schemas']['BudgetPage']
+export type FiscalEstimate = components['schemas']['FiscalEstimate']
+
+export function useDealPnl(dealId: string) {
+  return useQuery({
+    queryKey: queryKeys.dealPnl(dealId),
+    queryFn: () =>
+      unwrap(api.GET('/api/deals/{deal_id}/pnl', { params: { path: { deal_id: dealId } } })),
+  })
+}
+
+export function useDealBudget(dealId: string, da: string, a: string) {
+  return useQuery({
+    queryKey: queryKeys.dealBudget(dealId, da, a),
+    queryFn: () =>
+      unwrap(
+        api.GET('/api/deals/{deal_id}/budget', {
+          params: { path: { deal_id: dealId }, query: { from: da, to: a } },
+        }),
+      ),
+  })
+}
+
+export function usePeriodPnl(params: { from: string; to: string; customer_id?: string }) {
+  return useQuery({
+    queryKey: queryKeys.periodPnl(params),
+    queryFn: () => unwrap(api.GET('/api/analytics/pnl', { params: { query: params } })),
+  })
+}
+
+export function useBudget(params: {
+  from: string
+  to: string
+  customer_id?: string
+  limit?: number
+  cursor?: string
+}) {
+  return useQuery({
+    queryKey: queryKeys.budget(params),
+    queryFn: () => unwrap(api.GET('/api/analytics/budget', { params: { query: params } })),
+  })
+}
+
+export function useFiscalEstimate(anno: number) {
+  return useQuery({
+    queryKey: queryKeys.fiscalEstimate(anno),
+    queryFn: () => unwrap(api.GET('/api/analytics/fiscale', { params: { query: { anno } } })),
+  })
+}
+
+/** Invalidates the P&L, the hours and the deal's timeline: binding hours to a draft
+ *  changes what is left to invoice, which all three screens report. */
+export function useToInvoiceDraft(dealId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { entry_ids: string[]; raggruppa_per_mese: boolean }) =>
+      unwrap(
+        api.POST('/api/deals/{deal_id}/time-entries/to-invoice-draft', {
+          params: { path: { deal_id: dealId } },
+          body,
+        }),
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dealPnl(dealId) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dealTimeSummary(dealId) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.timeEntries() })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.timeline('deal', dealId) })
+    },
+  })
+}
+```
+
+```ts
+// apps/web/src/lib/query.ts -- append.
+  dealPnl: (dealId: string) => ['deal-pnl', dealId] as const,
+  dealBudget: (dealId: string, da: string, a: string) =>
+    ['deal-budget', dealId, da, a] as const,
+  periodPnl: (params: unknown) => ['period-pnl', params ?? {}] as const,
+  budget: (params: unknown) => ['budget', params ?? {}] as const,
+  fiscalEstimate: (anno: number) => ['fiscal-estimate', anno] as const,
+```
+
+```tsx
+// apps/web/src/features/analytics/PnlRows.tsx
+import { formatHoursValue, formatMoneyValue } from '@/features/time/columns'
+import type { DealPnl } from './queries'
+
+const percent = new Intl.NumberFormat('it-IT', {
+  style: 'percent',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+  useGrouping: 'always',
+})
+
+/**
+ * `null` renders as «non calcolabile», never as `0,00 %`.
+ *
+ * Zero per cent means "everything I earned went out in costs"; a null denominator means
+ * nothing has been earned yet. Two different facts, and this is the last place they could
+ * be flattened after the backend took care to keep them apart (§7.1, criterion 6).
+ */
+export function formatPercent(value: string | null): string {
+  return value === null ? 'non calcolabile' : percent.format(Number(value) / 100)
+}
+
+function Row({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-4 border-b py-2 last:border-0">
+      <span className="text-muted-foreground">
+        {label}
+        {hint && <span className="ml-2 text-xs">{hint}</span>}
+      </span>
+      <span className="text-right font-medium tabular-nums">{value}</span>
+    </div>
+  )
+}
+
+export function PnlRows({ pnl }: { pnl: DealPnl }) {
+  const definitive = pnl.stato === 'chiuso'
+  return (
+    <div>
+      <Row
+        label="Ricavi fatturati"
+        value={formatMoneyValue(pnl.ricavi)}
+        hint={`${pnl.fatture_emesse} fatture emesse`}
+      />
+      <Row label="Costi diretti" value={formatMoneyValue(pnl.costi_diretti)} />
+      <Row label="Costo del lavoro" value={formatMoneyValue(pnl.costo_lavoro)} />
+      <Row
+        label="Margine lordo"
+        value={formatMoneyValue(pnl.margine_lordo)}
+        // The qualifier is never optional on an unfinished deal: a deal with 20 hours and
+        // no invoice has a negative margin, and that is not a loss -- it is unfinished
+        // work. The report shows a *state* rather than the bare number (§7.3).
+        hint={definitive ? '(definitivo)' : '(provvisorio)'}
+      />
+      <Row label="Margine %" value={formatPercent(pnl.margine_percentuale)} />
+      {!definitive && (
+        <Row
+          label="Valore maturato"
+          value={formatMoneyValue(pnl.valore_maturato)}
+          hint="stima — non è un ricavo"
+        />
+      )}
+      <Row label="Ore consuntivate" value={formatHoursValue(pnl.ore_totali)} />
+      <Row
+        label="Ore da fatturare"
+        value={formatHoursValue(pnl.ore_fatturabili_non_fatturate)}
+      />
+      {pnl.ore_senza_tariffa > 0 && (
+        <Row
+          label="Voci senza tariffa"
+          value={String(pnl.ore_senza_tariffa)}
+          hint="escluse dal valore maturato e dal margine"
+        />
+      )}
+    </div>
+  )
+}
+```
+
+```tsx
+// apps/web/src/features/analytics/EconomicsTab.tsx
+import { QueryErrorBanner } from '@/components/QueryErrorBanner'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
+import { useCanWrite, useIsAdmin } from '@/lib/auth'
+import { useState } from 'react'
+import { PnlRows } from './PnlRows'
+import { ToInvoiceDialog } from './ToInvoiceDialog'
+import { useDealPnl, usePeriodPnl } from './queries'
+
+/**
+ * A discriminated argument, never two optional props: there is then no "empty string"
+ * spelling to get wrong, which is the defect residual B1 names and the same shape
+ * `useDocuments` already uses for `{customerId} | {dealId}`.
+ */
+type EconomicsTabProps = { dealId: string } | { customerId: string }
+
+function DealEconomics({ dealId }: { dealId: string }) {
+  const pnl = useDealPnl(dealId)
+  const isAdmin = useIsAdmin()
+  const [invoicing, setInvoicing] = useState(false)
+
+  if (pnl.isError) return <QueryErrorBanner error={pnl.error} />
+  if (pnl.isLoading || !pnl.data) return <Skeleton className="h-64 w-full" />
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardContent className="pt-6">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="font-semibold">Conto economico</h2>
+            <Badge variant={pnl.data.stato === 'chiuso' ? 'default' : 'secondary'}>
+              {pnl.data.stato}
+            </Badge>
+          </div>
+          <PnlRows pnl={pnl.data} />
+        </CardContent>
+      </Card>
+
+      {isAdmin && Number(pnl.data.ore_fatturabili_non_fatturate) > 0 && (
+        <div>
+          <Button onClick={() => setInvoicing(true)}>Genera bozza di fattura</Button>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Crea una bozza raggruppando le ore per tariffa e mese. Non emette niente:
+            l&apos;emissione resta un passaggio a parte.
+          </p>
+        </div>
+      )}
+
+      {invoicing && (
+        <ToInvoiceDialog dealId={dealId} open onOpenChange={() => setInvoicing(false)} />
+      )}
+    </div>
+  )
+}
+
+function CustomerEconomics({ customerId }: { customerId: string }) {
+  // A customer's economics is the sum of their deals (§7.4), served by the same period
+  // endpoint with a `customer_id` filter -- never a second aggregation written here,
+  // which is how two totals begin to disagree. The window defaults to the current year
+  // because the endpoint requires one.
+  const year = new Date().getFullYear()
+  const pnl = usePeriodPnl({
+    from: `${year}-01-01`,
+    to: `${year}-12-31`,
+    customer_id: customerId,
+  })
+
+  if (pnl.isError) return <QueryErrorBanner error={pnl.error} />
+  if (pnl.isLoading || !pnl.data) return <Skeleton className="h-48 w-full" />
+
+  return (
+    <Card>
+      <CardContent className="pt-6">
+        <h2 className="mb-1 font-semibold">Conto economico {year}</h2>
+        <p className="mb-3 text-xs text-muted-foreground">
+          Somma dei deal di questo cliente. Le spese generali non sono ripartite su
+          nessun cliente e non compaiono qui.
+        </p>
+        <PeriodTotals pnl={pnl.data} />
+      </CardContent>
+    </Card>
+  )
+}
+
+export function EconomicsTab(props: EconomicsTabProps) {
+  return 'dealId' in props ? (
+    <DealEconomics dealId={props.dealId} />
+  ) : (
+    <CustomerEconomics customerId={props.customerId} />
+  )
+}
+```
+
+`PeriodTotals` is a small shared component rendering the `chiusi` / `in_corso` pair as two columns with the reportable one marked; it lives in `PnlRows.tsx` beside `PnlRows` and is exported from there. `ToInvoiceDialog` lists the deal's billable unbilled entries from `useTimeEntries({deal_id, fatturabile: true, fatturato: false})` with a checkbox each (all pre-selected), a «Raggruppa per mese» toggle, and a Genera button calling `useToInvoiceDraft`; when the mutation fails with a `ValidationFailed` naming unpriced entries it renders the server's own sentence — the response is an instruction, so it is shown as one.
+
+- [ ] **Step 4: Wire both tabs**
+
+```tsx
+// apps/web/src/routes/app/deal/$dealId.tsx -- add the prop.
+        economics={<EconomicsTab dealId={dealId} />}
+
+// apps/web/src/routes/app/clienti/$customerId.tsx -- add the prop.
+        economics={<EconomicsTab customerId={customerId} />}
+```
+
+with `import { EconomicsTab } from '@/features/analytics/EconomicsTab'` in both. In the deal route, the «Preventivo» card's note becomes a link to the new report rather than a promise:
+
+```tsx
+                <p className="mt-3 text-xs text-muted-foreground">
+                  Il confronto con il consuntivo è nella tab «Economia» e in{' '}
+                  <Link to="/app/analisi/preventivo-consuntivo" className="underline">
+                    Analisi › Preventivo/consuntivo
+                  </Link>
+                  .
+                </p>
+```
+
+- [ ] **Step 5: Run the frontend suite**
+
+Run: `pnpm -C apps/web exec vitest run` and `pnpm -C apps/web tsc --noEmit`
+Expected: PASS. The AST guard from Task 4A-16 must stay green: `EconomicsTab` applies `Number()` to `ore_fatturabili_non_fatturate` in the `> 0` test, which the guard forbids — replace that check with `pnl.data.ore_fatturabili_non_fatturate !== '0.00'`, comparing the string the API sent, and note in the guard's `ECONOMIC_FIELDS` docstring that this is exactly the kind of accidental arithmetic it exists to catch.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add apps/web
+git commit -m "feat(web): the Economia tab on deals and customers, with a provisional margin named as such"
+```
+
+---
+
+### Task 4B-11: `/analisi` — margins, estimate-versus-actual, fiscal
+
+**Files:**
+- Create: `apps/web/src/features/analytics/MarginsTable.tsx`
+- Create: `apps/web/src/features/analytics/BudgetTable.tsx`
+- Create: `apps/web/src/features/analytics/FiscalPanel.tsx`
+- Create: `apps/web/src/features/analytics/PeriodPicker.tsx`
+- Create: `apps/web/src/features/analytics/columns.tsx`
+- Create: `apps/web/src/routes/app/analisi.tsx` (layout with three tabs)
+- Create: `apps/web/src/routes/app/analisi/{margini,preventivo-consuntivo,fiscale}.tsx`
+- Modify: `apps/web/src/components/AppShell.tsx` (sidebar entry)
+- Test: `apps/web/src/features/analytics/BudgetTable.test.tsx`
+- Test: `apps/web/src/features/analytics/FiscalPanel.test.tsx`
+
+**Interfaces:**
+- Consumes: `usePeriodPnl`, `useBudget`, `useFiscalEstimate` (4B-10); `DataTable` with `DataTableFeatures`; `formatMoneyValue`, `formatHoursValue` (4A-17); `formatPercent` (4B-10); `useIsAdmin`; `QueryErrorBanner`.
+- Produces:
+  ```tsx
+  export function MarginsTable(): JSX.Element
+  export function BudgetTable(): JSX.Element
+  export function FiscalPanel(): JSX.Element
+  export function PeriodPicker(props: { value: { from: string; to: string }; onChange: (value: { from: string; to: string }) => void }): JSX.Element
+  export function buildBudgetColumns(): ColumnDef<DataTableFeatures, BudgetVsActualRow>[]
+  export function AnalyticsLayout(): JSX.Element   // in features/analytics/, not the route file
+  ```
+  `AnalyticsLayout` lives in `features/analytics/` and not in `routes/app/analisi.tsx`, so it can be imported by a plain component test — a route file exporting anything beyond `Route` opts that route out of the router plugin's code-splitting, the same reason `SettingsLayout` sits where it does.
+
+- [ ] **Step 1: Write the failing tests**
+
+```tsx
+// apps/web/src/features/analytics/BudgetTable.test.tsx
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { render, screen } from '@testing-library/react'
+import { http, HttpResponse } from 'msw'
+import { setupServer } from 'msw/node'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { BudgetTable } from './BudgetTable'
+
+const server = setupServer()
+beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
+afterEach(() => server.resetHandlers())
+afterAll(() => server.close())
+
+const row = (overrides = {}) => ({
+  deal_id: 'aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa', nome: 'Progetto Alfa',
+  ore_preventivate: '100.00', ore_consuntivate: '40.00',
+  valore_preventivato: '10000.00', ricavi: '4000.00',
+  avanzamento_ore: '40.00', budget_pro_rata: '4000.00',
+  scostamento_valore: '0.00', scostamento_ore: '-60.00',
+  tariffa_media_preventivata: '100.00', tariffa_media_consuntivata: '100.00',
+  non_preventivato: false, pro_rata_non_calcolabile: false, ...overrides,
+})
+
+function renderTable() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={client}>
+      <BudgetTable />
+    </QueryClientProvider>,
+  )
+}
+
+describe('BudgetTable', () => {
+  it('shows the full budget and the pro-rata side by side', async () => {
+    server.use(
+      http.get('/api/analytics/budget', () =>
+        HttpResponse.json({
+          items: [row()], next_cursor: null, totale_preventivato: '10000.00',
+          totale_ricavi: '4000.00', deal_preventivati: 1, deal_non_preventivati: 0,
+        }),
+      ),
+    )
+    renderTable()
+    // The full budget is shown *beside* the pro-rata, never instead of it (§9.2).
+    expect(await screen.findByText('10.000,00 €')).toBeInTheDocument()
+    expect(await screen.findByText('4.000,00 €')).toBeInTheDocument()
+    expect(await screen.findByText('40,00 %')).toBeInTheDocument()
+  })
+
+  it('says "non preventivato" instead of showing a 100% overrun', async () => {
+    server.use(
+      http.get('/api/analytics/budget', () =>
+        HttpResponse.json({
+          items: [
+            row({
+              ore_preventivate: null, valore_preventivato: null, avanzamento_ore: null,
+              budget_pro_rata: null, scostamento_valore: null, scostamento_ore: null,
+              tariffa_media_preventivata: null, non_preventivato: true,
+            }),
+          ],
+          next_cursor: null, totale_preventivato: '0.00', totale_ricavi: '0.00',
+          deal_preventivati: 0, deal_non_preventivati: 1,
+        }),
+      ),
+    )
+    renderTable()
+    expect(await screen.findByText(/non preventivato/i)).toBeInTheDocument()
+    expect(screen.queryByText('100,00 %')).not.toBeInTheDocument()
+    expect(await screen.findByText(/1 deal senza preventivo/i)).toBeInTheDocument()
+  })
+
+  it('marks a row whose pro-rata cannot be computed', async () => {
+    server.use(
+      http.get('/api/analytics/budget', () =>
+        HttpResponse.json({
+          items: [
+            row({
+              ore_preventivate: null, avanzamento_ore: null, budget_pro_rata: null,
+              scostamento_valore: null, pro_rata_non_calcolabile: true,
+            }),
+          ],
+          next_cursor: null, totale_preventivato: '10000.00', totale_ricavi: '4000.00',
+          deal_preventivati: 1, deal_non_preventivati: 0,
+        }),
+      ),
+    )
+    renderTable()
+    expect(await screen.findByText(/pro-rata non calcolabile/i)).toBeInTheDocument()
+  })
+
+  it('renders a banner, never an empty table, when the request fails', async () => {
+    server.use(
+      http.get('/api/analytics/budget', () =>
+        HttpResponse.json({ detail: 'Boom' }, { status: 500 }),
+      ),
+    )
+    renderTable()
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(screen.queryByText(/nessun deal/i)).not.toBeInTheDocument()
+  })
+})
+```
+
+```tsx
+// apps/web/src/features/analytics/FiscalPanel.test.tsx
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { render, screen } from '@testing-library/react'
+import { http, HttpResponse } from 'msw'
+import { setupServer } from 'msw/node'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { FiscalPanel } from './FiscalPanel'
+
+const server = setupServer()
+beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
+afterEach(() => server.resetHandlers())
+afterAll(() => server.close())
+
+function renderPanel() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={client}>
+      <FiscalPanel />
+    </QueryClientProvider>,
+  )
+}
+
+describe('FiscalPanel', () => {
+  it('puts the word "stima" at the top of the page, not at the bottom', async () => {
+    server.use(
+      http.get('/api/analytics/fiscale', () =>
+        HttpResponse.json({
+          anno: 2026, stima: true,
+          avvertenza: 'Stima indicativa. Non tiene conto del minimale e del massimale contributivo, di altri redditi, degli acconti già versati né di deduzioni e detrazioni. Per la dichiarazione fai riferimento al tuo commercialista.',
+          ricavi: '100000.00', coefficiente_redditivita: '67.00', imponibile: '67000.00',
+          aliquota_imposta_sostitutiva: '5.00', imposta_sostitutiva: '3350.00',
+          aliquota_inps: '26.07', contributi: '16593.56',
+          reddito_netto_stimato: '80056.44',
+        }),
+      ),
+    )
+    const { container } = renderPanel()
+    const warning = await screen.findByRole('note')
+    const figures = await screen.findByText('80.056,44 €')
+    // §8: the label goes at the head of the page. Asserted by document order, because
+    // "at the top" is the requirement and a footnote satisfies the word and not the point.
+    expect(
+      warning.compareDocumentPosition(figures) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(warning).toHaveTextContent(/stima/i)
+    expect(container.textContent).toMatch(/minimale/)
+  })
+
+  it('shows a line as not computable when its parameter is missing', async () => {
+    server.use(
+      http.get('/api/analytics/fiscale', () =>
+        HttpResponse.json({
+          anno: 2026, stima: true, avvertenza: 'Stima indicativa.',
+          ricavi: '1000.00', coefficiente_redditivita: null, imponibile: null,
+          aliquota_imposta_sostitutiva: null, imposta_sostitutiva: null,
+          aliquota_inps: null, contributi: null, reddito_netto_stimato: null,
+        }),
+      ),
+    )
+    renderPanel()
+    expect(await screen.findAllByText(/non calcolabile/i)).not.toHaveLength(0)
+    expect(await screen.findByText(/imposta i parametri fiscali/i)).toBeInTheDocument()
+  })
+})
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+Run: `pnpm -C apps/web exec vitest run src/features/analytics`
+Expected: FAIL — both imports unresolved.
+
+- [ ] **Step 3: Write the columns and the three panels**
+
+```tsx
+// apps/web/src/features/analytics/columns.tsx
+import type { ColumnDef } from '@tanstack/react-table'
+import type { DataTableFeatures } from '@/components/DataTable'
+import { formatHoursValue, formatMoneyValue } from '@/features/time/columns'
+import { formatPercent } from './PnlRows'
+import type { BudgetVsActualRow } from './queries'
+
+const NOT_BUDGETED = 'non preventivato'
+const NO_PRO_RATA = 'pro-rata non calcolabile'
+
+export function buildBudgetColumns(): ColumnDef<DataTableFeatures, BudgetVsActualRow>[] {
+  return [
+    { header: 'Deal', accessorKey: 'nome' },
+    {
+      header: 'Ore prev. / cons.',
+      id: 'ore',
+      accessorFn: (row) =>
+        row.non_preventivato
+          ? `— / ${formatHoursValue(row.ore_consuntivate)}`
+          : `${formatHoursValue(row.ore_preventivate)} / ${formatHoursValue(row.ore_consuntivate)}`,
+    },
+    {
+      header: 'Avanzamento',
+      id: 'avanzamento_ore',
+      // `null` is "not comparable", never "0%" -- an absent estimate is not an estimate
+      // of zero, and a row marked 0% would read as a deal that has done nothing.
+      accessorFn: (row) =>
+        row.non_preventivato ? NOT_BUDGETED : formatPercent(row.avanzamento_ore),
+    },
+    {
+      header: 'Preventivo pieno',
+      id: 'valore_preventivato',
+      // Shown BESIDE the pro-rata, never instead of it (§9.2).
+      accessorFn: (row) => formatMoneyValue(row.valore_preventivato),
+    },
+    {
+      header: 'Preventivo pro-rata',
+      id: 'budget_pro_rata',
+      accessorFn: (row) =>
+        row.pro_rata_non_calcolabile ? NO_PRO_RATA : formatMoneyValue(row.budget_pro_rata),
+    },
+    { header: 'Fatturato', id: 'ricavi', accessorFn: (row) => formatMoneyValue(row.ricavi) },
+    {
+      header: 'Scostamento',
+      id: 'scostamento_valore',
+      accessorFn: (row) =>
+        row.scostamento_valore === null ? '—' : formatMoneyValue(row.scostamento_valore),
+    },
+    {
+      header: 'Tariffa media prev. / cons.',
+      id: 'tariffa_media',
+      // The row that serves most: how much was realised per hour worked against how much
+      // was expected. Comparable even between deals of very different sizes, and the only
+      // form in which "is this client worth it?" has a numeric answer.
+      accessorFn: (row) =>
+        `${formatMoneyValue(row.tariffa_media_preventivata)} / ${formatMoneyValue(
+          row.tariffa_media_consuntivata,
+        )}`,
+    },
+  ]
+}
+```
+
+`PeriodPicker` is two `<input type="month">`-backed date fields defaulting to the current month, emitting `{from, to}` as `YYYY-MM-DD` built from local parts — never `toISOString()`. `MarginsTable` calls `usePeriodPnl` with that window, renders the `chiusi` / `in_corso` pair with the reportable column marked and the general-expenses row beneath, shows `periodo_chiuso` as a badge and `voci_scritte_in_ritardo` as a note («N voci scritte dopo la fine del periodo: questo numero può ancora muoversi»), and lists the deals through `DataTable`. `BudgetTable` calls `useBudget` with the same window, renders `buildBudgetColumns()`, and shows `deal_non_preventivati` as a footnote. `FiscalPanel` renders the `avvertenza` in a `role="note"` block **first**, then the figures, with every `null` line as «non calcolabile» plus a link to `/app/impostazioni/tariffe` reading «imposta i parametri fiscali».
+
+- [ ] **Step 4: Add the layout, the routes and the sidebar entry**
+
+```tsx
+// apps/web/src/features/analytics/AnalyticsLayout.tsx
+import { Link, Outlet, useRouterState } from '@tanstack/react-router'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+
+const TABS = [
+  { value: 'margini', label: 'Margini' },
+  { value: 'preventivo-consuntivo', label: 'Preventivo/consuntivo' },
+  { value: 'fiscale', label: 'Fiscale' },
+] as const
+
+/**
+ * Lives here rather than in `routes/app/analisi.tsx` so it can be imported by a plain
+ * component test -- a route file exporting anything beyond `Route` opts that route out of
+ * the router plugin's automatic code-splitting, which `routeTree.gen.ts` warns about. The
+ * same reason `SettingsLayout` sits in `features/settings/`.
+ *
+ * No `useIsAdmin` gate on the layout: Margini and Preventivo/consuntivo are ordinary
+ * reads available to any authenticated actor, and only Fiscale is admin-only -- enforced
+ * by the service, surfaced by that panel as a 403 problem document rather than by hiding
+ * the tab, so a non-admin gets an explanation instead of a missing feature.
+ */
+export function AnalyticsLayout() {
+  const { location } = useRouterState()
+  const active =
+    TABS.find((tab) => location.pathname.endsWith(tab.value))?.value ?? 'margini'
+  return (
+    <div className="p-8">
+      <h1 className="mb-4 text-2xl font-semibold tracking-tight">Analisi</h1>
+      <Tabs value={active}>
+        <TabsList>
+          {TABS.map((tab) => (
+            <TabsTrigger key={tab.value} value={tab.value} asChild>
+              <Link to={`/app/analisi/${tab.value}`}>{tab.label}</Link>
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
+      <div className="mt-6">
+        <Outlet />
+      </div>
+    </div>
+  )
+}
+```
+
+```tsx
+// apps/web/src/routes/app/analisi.tsx
+import { createFileRoute } from '@tanstack/react-router'
+import { AnalyticsLayout } from '@/features/analytics/AnalyticsLayout'
+
+export const Route = createFileRoute('/app/analisi')({ component: AnalyticsLayout })
+```
+
+```tsx
+// apps/web/src/routes/app/analisi/margini.tsx
+import { createFileRoute } from '@tanstack/react-router'
+import { MarginsTable } from '@/features/analytics/MarginsTable'
+
+export const Route = createFileRoute('/app/analisi/margini')({ component: MarginsTable })
+```
+
+```tsx
+// apps/web/src/routes/app/analisi/preventivo-consuntivo.tsx
+import { createFileRoute } from '@tanstack/react-router'
+import { BudgetTable } from '@/features/analytics/BudgetTable'
+
+export const Route = createFileRoute('/app/analisi/preventivo-consuntivo')({
+  component: BudgetTable,
+})
+```
+
+```tsx
+// apps/web/src/routes/app/analisi/fiscale.tsx
+import { createFileRoute } from '@tanstack/react-router'
+import { FiscalPanel } from '@/features/analytics/FiscalPanel'
+
+export const Route = createFileRoute('/app/analisi/fiscale')({ component: FiscalPanel })
+```
+
+```tsx
+// apps/web/src/components/AppShell.tsx -- add after the Ore entry.
+  { to: '/app/analisi/margini', label: 'Analisi', icon: TrendingUp },
+```
+
+with `TrendingUp` added to the icon imports.
+
+- [ ] **Step 5: Run the frontend suite**
+
+Run: `pnpm -C apps/web exec vitest run` and `pnpm -C apps/web tsc --noEmit`
+Expected: PASS, and the AST guard green — every figure on these three screens is rendered from the API's own string.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add apps/web
+git commit -m "feat(web): the /analisi reports for margins, budget versus actual and the fiscal estimate"
+```
+
+---
+
+### Task 4B-12: End-to-end — the full cycle, from both adapters
+
+**Files:**
+- Create: `apps/web/e2e/economics.spec.ts`
+- Modify: `apps/web/e2e/fixtures.ts` (reuse `seedDealWithRate` from Task 4A-20)
+- Create: `apps/mcp/tests/test_full_cycle.py`
+
+**Interfaces:**
+- Consumes: `seedDealWithRate` (4A-20); the Playwright `login` fixture; the in-process MCP `server` fixture and the `Client` used by 4A-13's tool tests.
+- Produces: no new exported name — this is the last gate, and **criterion 12** in full.
+
+- [ ] **Step 1: Write the failing MCP-side test**
+
+```python
+# apps/mcp/tests/test_full_cycle.py
+"""**Criterion 12.** The whole cycle, driven from both adapters, ending on the one thing
+an agent must not be able to do.
+
+Claude logs 8 hours through MCP and reads `deal://{id}`; the human generates the invoice
+draft and issues it through the API; the deal's P&L then satisfies criterion 1; the
+timeline distinguishes `mcp` from `user`; and Claude's attempt to recalculate the rates
+finds no tool to call.
+"""
+
+from decimal import Decimal
+
+from mcp import Client
+from sqlalchemy import text
+
+
+async def test_the_full_cycle_from_both_adapters(
+    server, mcp_session, api_client, admin_cookies, seeded_deal_id, seeded_user_id
+) -> None:
+    # 1. Claude records the hours and reads the deal back.
+    async with Client(server) as client:
+        logged = await client.call_tool(
+            "log_time",
+            {
+                "deal_id": str(seeded_deal_id),
+                "user_id": str(seeded_user_id),
+                "data": "2026-03-10",
+                "ore": 8,
+                "descrizione": "Analisi e sviluppo",
+            },
+        )
+        entry_id = logged.structured_content["id"]
+        rendered = (await client.read_resource(f"deal://{seeded_deal_id}")).contents[0].text
+        assert "Ore consuntivate: 8.00" in rendered
+        assert "## Economia" in rendered
+        assert "provvisorio" in rendered
+
+        # 2. And the tool it must not find, is not there.
+        names = {tool.name for tool in (await client.list_tools()).tools}
+        assert "recalculate_rates" not in names
+        assert "bind_time_to_invoice" not in names
+        assert "get_fiscal_estimate" not in names
+
+    # 3. The human turns those hours into a draft and issues it.
+    draft = api_client.post(
+        f"/api/deals/{seeded_deal_id}/time-entries/to-invoice-draft",
+        cookies=admin_cookies,
+        json={"entry_ids": [entry_id], "raggruppa_per_mese": True},
+    )
+    assert draft.status_code == 200
+    invoice_id = draft.json()["id"]
+    issued = api_client.post(f"/api/invoices/{invoice_id}/issue", cookies=admin_cookies)
+    assert issued.status_code == 200
+    assert issued.json()["numero"] is not None
+
+    # 4. The P&L now satisfies criterion 1, against direct SQL.
+    pnl = api_client.get(f"/api/deals/{seeded_deal_id}/pnl", cookies=admin_cookies).json()
+    expected = mcp_session.execute(
+        text(
+            "SELECT COALESCE(SUM(imponibile), 0) FROM invoices "
+            "WHERE deal_id = :id AND tipo = 'fattura' AND stato = 'emessa' "
+            "  AND deleted_at IS NULL"
+        ),
+        {"id": seeded_deal_id},
+    ).scalar_one()
+    assert Decimal(pnl["ricavi"]) == Decimal(expected)
+    assert pnl["stato"] == "chiuso"
+    # The hours are invoiced, so the accrued value no longer carries them separately.
+    assert Decimal(pnl["valore_maturato"]) == Decimal(pnl["ricavi"])
+
+    # 5. The hour is frozen, and the timeline tells the two actors apart.
+    frozen = api_client.patch(
+        f"/api/time-entries/{entry_id}", cookies=admin_cookies, json={"ore": "9.00"}
+    )
+    assert frozen.status_code == 409
+    assert frozen.json()["code"] == "immutable_field"
+
+    timeline = api_client.get(
+        f"/api/deals/{seeded_deal_id}/timeline", cookies=admin_cookies
+    ).json()
+    actor_types = {entry["actor_type"] for entry in timeline}
+    assert {"mcp", "user"} <= actor_types
+```
+
+- [ ] **Step 2: Write the failing browser-side spec**
+
+```ts
+// apps/web/e2e/economics.spec.ts
+import { expect, test } from './fixtures'
+import { seedDealWithRate } from './fixtures'
+
+test.describe('economics', () => {
+  test('hours become an invoice, and the margin becomes reportable', async ({
+    page,
+    request,
+    login,
+  }) => {
+    await login('admin')
+    const { dealId } = await seedDealWithRate(request, {
+      nome: 'Progetto Economia',
+      tariffa: '100.000000',
+    })
+    await request.patch(`/api/deals/${dealId}`, {
+      data: { ore_preventivate: '100.00', valore_preventivato: '10000.00' },
+    })
+    await request.post('/api/time-entries', {
+      data: {
+        deal_id: dealId,
+        user_id: (await (await request.get('/api/auth/me')).json()).id,
+        data: '2026-03-10',
+        ore: '40.00',
+        descrizione: 'Sviluppo',
+      },
+    })
+
+    // 1. Before invoicing: provisional, and the accrued value is not called revenue.
+    await page.goto(`/app/deal/${dealId}`)
+    await page.getByRole('tab', { name: 'Economia' }).click()
+    await expect(page.getByText(/provvisorio/i)).toBeVisible()
+    await expect(page.getByText(/non calcolabile/i)).toBeVisible()
+    await expect(page.getByText(/valore maturato/i)).toBeVisible()
+    await expect(page.getByText(/non è un ricavo/i)).toBeVisible()
+
+    // 2. Generate the draft from those hours.
+    await page.getByRole('button', { name: /genera bozza di fattura/i }).click()
+    await page.getByRole('button', { name: /^genera$/i }).click()
+    await expect(page.getByText(/bozza creata/i)).toBeVisible()
+
+    // 3. Issue it, then read the margin back as definitive.
+    const invoiceId = new URL(page.url()).searchParams.get('invoice') ?? ''
+    if (invoiceId) {
+      await request.post(`/api/invoices/${invoiceId}/issue`)
+    } else {
+      const invoices = await (await request.get(`/api/invoices?deal_id=${dealId}`)).json()
+      await request.post(`/api/invoices/${invoices.items[0].id}/issue`)
+    }
+    await page.reload()
+    await page.getByRole('tab', { name: 'Economia' }).click()
+    await expect(page.getByText(/definitivo/i)).toBeVisible()
+    await expect(page.getByText('4.000,00 €')).toBeVisible()
+
+    // 4. The estimate-versus-actual report shows the pro-rata comparison.
+    await page.goto('/app/analisi/preventivo-consuntivo')
+    await page.getByLabel(/dal/i).fill('2026-03-01')
+    await page.getByLabel(/al/i).fill('2026-03-31')
+    await expect(page.getByText('40,00 %')).toBeVisible()
+    // Against the pro-rata, so the variance is zero rather than -6.000,00 €.
+    await expect(page.getByText('0,00 €')).toBeVisible()
+    await expect(page.getByText('10.000,00 €')).toBeVisible()
+
+    // 5. The margins report puts it in the reportable column.
+    await page.goto('/app/analisi/margini')
+    await page.getByLabel(/dal/i).fill('2026-03-01')
+    await page.getByLabel(/al/i).fill('2026-03-31')
+    await expect(page.getByTestId('totale-chiusi')).toContainText('4.000,00 €')
+    await expect(page.getByTestId('totale-in-corso')).toContainText('0,00 €')
+
+    // 6. The fiscal page leads with the word "stima".
+    await page.goto('/app/analisi/fiscale')
+    await expect(page.getByRole('note')).toContainText(/stima/i)
+  })
+
+  test('a failed request never looks like a zero margin', async ({ page, login, request }) => {
+    await login('admin')
+    const { dealId } = await seedDealWithRate(request, {
+      nome: 'Progetto Errore',
+      tariffa: '100.000000',
+    })
+    await page.route('**/api/deals/*/pnl', (route) => route.abort('failed'))
+    await page.goto(`/app/deal/${dealId}`)
+    await page.getByRole('tab', { name: 'Economia' }).click()
+    await expect(page.getByRole('alert')).toBeVisible()
+    await expect(page.getByText(/margine/i)).toHaveCount(0)
+  })
+})
+```
+
+- [ ] **Step 3: Run both and watch them fail**
+
+Run: `uv run pytest apps/mcp/tests/test_full_cycle.py -v` and `pnpm -C apps/web exec playwright test e2e/economics.spec.ts`
+Expected: FAIL until every earlier 4B task is merged. This task is last and adds no production code of its own — anything it exposes is a defect in one of Tasks 4B-1 … 4B-11 and is fixed there, in that task's own file, not patched here.
+
+- [ ] **Step 4: Run every suite, both plans**
+
+Run: `uv run pytest -q && uv run mypy && uv run ruff check .`
+Run: `pnpm -C apps/web exec vitest run && pnpm -C apps/web tsc --noEmit && pnpm -C apps/web exec playwright test`
+Expected: all green, no skips.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add apps/web apps/mcp
+git commit -m "test(e2e): the full cycle from both adapters, ending on the tool an agent cannot find"
+```
+
+---
+
+## Definition of done for plan 4B
+
+- Every suite green, both plans: `uv run pytest`, `uv run mypy`, `uv run ruff check .`, `pnpm -C apps/web exec vitest run`, `pnpm -C apps/web tsc --noEmit`, `pnpm -C apps/web exec playwright test`.
+- Spec criteria met by 4B: **1** (exact reconciliation, and `imponibile` over `totale` under a synthetic `RF01` — Task 4B-4), **4's third part** (no path lets the same expense in twice — Task 4B-4), **5** (grouped lines, `Σ quantita` = `Σ ore`, freezing at issue, and the derived value ceasing to count — Tasks 4B-3, 4B-7), **6** (an incomplete deal does not lie — Tasks 4B-4, 4B-10), **7** (the pro-rata budget, and `NULL` behaving like `0` — Task 4B-6), **12** (the full cycle — Task 4B-12). Criterion **2's second half** is completed here by `periodo_chiuso` / `voci_scritte_in_ritardo` (Task 4B-5).
+- Residual **A14** closed (Task 4B-1). **R5** closed for the fiscal columns (Task 4B-2). **B3** answered for the margins and budget views (Tasks 4B-6, 4B-9).
+- The MCP exclusion list is still exactly the ten declared names, and `AnalyticsService` is now audited against it (Task 4B-9).
+
+---
+
+## Self-review
+
+Run against the spec with fresh eyes, section by section.
+
+**1. Spec coverage.** Every section maps to at least one task: §1–§3 (the three decisions) → 4A-7, 4A-8, 4B-4, 4B-7; §2.1 carried knowledge → 4A-14, 4A-15; §2.2's thirteen rewritten defects → 4A-5 (FK, Postgres row-per-entry, UUIDv7, soft delete, `ore > 0`), 4A-9 (raw multi-line description, `Date` not UTC instant, required `user_id`), 4A-4 (Decimal not float), 4A-7 (rates exist at all), 4B-4 (revenue from invoices not offers; uninvoiced deals visible; no dispersed buckets), 4B-8 (personal taxation out of the deal margin), 4B-1 (`PUT` that cannot clear); §4.1–§4.6 → 4A-2, 4A-3, 4A-5, 4A-6, 4B-3; §5 → 4A-7, 4A-9, 4A-11; §6 → 4A-4, 4A-5, 4A-16; §6.3 → 4A-9; §6.4 → 4A-8, 4B-5; §7 → 4B-4, 4B-5; §8 → 4B-2, 4B-8; §9 → 4B-1, 4B-6; §10.1 → 4B-7; §10.2 → 4A-14, 4A-15; §10.3 → 4A-10; §11 → 4A-12, 4A-13, 4B-9; §12's residual table → the Blocking-prerequisites table plus 4A-1, 4A-2, 4B-1; §13's exclusions are honoured by omission and each is named in the task that would otherwise have drifted into it; §14's twelve criteria → mapped explicitly in the two Definition-of-done sections; §15 → 4A-17, 4A-18, 4A-19, 4B-10, 4B-11; §16 → the 4A/4B split itself.
+
+**Two things I could not turn into a concrete task, and both are deliberate.** §11's `deal://{id}` acquiring "ore consuntivate, valore maturato e stato" is split across 4A-13 and 4B-9 because `valore maturato` in §7.3's full sense needs invoices — 4A's resource block carries hours, state and the unbilled estimate, 4B's adds revenue and margin. And §10.1's "il raggruppamento è modificabile nel dialogo prima di generare la bozza" is implemented as a single `raggruppa_per_mese` toggle rather than a free-form line editor: a full editor is slice 3's `replace_lines` surface, already shipped there, and duplicating it here would create a second place invoice lines are composed.
+
+**2. Placeholder scan.** One real placeholder found and fixed inline: Task 4A-18's `WeekGridRow` first drafted the cell-update branch as a raw `fetch`, which the Global Constraints forbid — the task now carries the `useUpdateHours()` mutation and an explicit instruction to replace the `fetch` before committing. Task 4B-7's `activities_for_binding` was named without a leading underscore, which would have made the architecture test demand an MCP tool for it; the task now says to name it `_activities_for_binding`. Task 4B-10 noted that `Number(pnl.data.ore_fatturabili_non_fatturate)` trips 4A-16's own AST guard and gives the string comparison to use instead. Prose descriptions stand in for full component bodies in three places — `CostCategoriesPanel`/`RatesPanel` (4A-19), `PeriodTotals`/`ToInvoiceDialog` (4B-10), `PeriodPicker`/`MarginsTable`/`FiscalPanel` (4B-11) — but each names the exact hook, prop types, formatter and copy to use and points at the shipped file it mirrors, so no decision is left to the implementer.
+
+**3. Type consistency.** Checked across tasks: `billed_entry_ids(session, entries) -> set[UUID]` keeps its signature between 4A-9 and 4B-3 (only the body changes, which is why all four call sites route through it); `to_read(entry) -> TimeEntryRead` is the single producer of `valore_riga`/`costo_riga` and is used by 4A-9, 4A-12 and 4A-14; `DealTimeSummary` (4A-5) deliberately omits `ricavi`/`valore_maturato` and `DealPnl` (4B-4) adds them, so no field means two things; `period_label(anno, mese)` is defined once in 4A-8 and reused by 4A-14 and 4B-7; `month_bounds` lives in 4A-9's repository and is used by 4A-14; `formatMoneyValue`/`formatHoursValue`/`formatRateValue`/`formatIsoDate` are defined once in 4A-17 and imported by 4A-19, 4B-10 and 4B-11; `formatPercent` is defined once in 4B-10; `scaledFromDecimalString`/`sumDecimalStrings` are defined once in 4A-16 and the private `centsFromDecimalString` in `features/deals/columns.tsx` is deleted in that same task rather than left as a second copy. The ten excluded MCP names are spelled identically in 4A-13's `MCP_EXCLUDED`, in `CostCategoryService`'s method names (4A-6), in `PeriodLockService`'s (4A-8), in `TimeEntryService`'s (4A-9, 4A-11) and in `AnalyticsService`'s (4B-7, 4B-8) — which is exactly what makes the architecture test's name matching work.
+
+
