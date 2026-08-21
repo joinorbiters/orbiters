@@ -60,6 +60,8 @@ These apply to **every** task in all three sub-plans. They are not repeated per 
 - **Escape LIKE metacharacters in every search filter.** Use the shared `pigrocrm.core.db.escape_like` helper, escape `\`, `%` and `_` (backslash first), and pass `escape="\\"` — **unless Task A2's `EXPLAIN` measurement says otherwise**, in which case that task removes the clause everywhere at once and records the measurement. Never remove it in one call site only.
 - **Pagination `limit` must be bounded** — `Field(ge=1, le=200)` on the query schema, not only on the router.
 - **On update, validate only the custom-field keys the caller supplies**, not the merge of stored and supplied. A supplied key with value `None` removes that entry — and must work even when its definition is archived, no longer exists, or is optional. It must **not** work when the key's current definition is active and `required=True`. Untouched stored keys pass through unchanged, archived ones included. *(No task in this slice writes a custom field; carried so no task introduces one that skips it.)*
+- **A column holding a closed set is declared wider than that set, never exactly as wide.** `String(20)` for a set whose longest legal value is 8 characters, not `String(8)`. Sized exactly, the column width rejects an illegal value *before* the `CHECK` constraint beside it can, and Postgres answers with a raw `StringDataRightTruncation` — a `DataError`, not an `IntegrityError`, so no handler catches it and the session is poisoned — instead of the named violation the `CHECK` exists to produce. This cost slice 3 a real defect on `invoices.tipo`; in this slice it governs `automation_config`'s columns and every `motivo`/`regola` value.
+- **Every schema object is reachable from `Base.metadata`.** An index, a constraint or a sequence declared only as raw `op.execute(...)` in a migration exists in production and is **absent under test**, because `packages/core/tests/conftest.py` builds the schema with `Base.metadata.create_all` and runs no migration. This cost slice 3 a real defect on `proforma_riferimento_seq`. Declare it in `__table_args__` (or as a `Sequence(..., metadata=Base.metadata)`) and let the migration mirror it; `test_migrations_produce_exactly_the_models_schema` is what then keeps the two honest.
 - **Errors are RFC 9457 problem details with structured `details`.** Raise `pigrocrm.core.errors.{NotFound, ValidationFailed, Conflict, PermissionDenied, ImmutableField}` and never a pre-formatted sentence; `apps/api/src/pigrocrm_api/errors.py::domain_error_handler` renders them. `ValidationFailed(entity, field, reason, expected=…)` must always name the real offending field, because both `fieldErrorFrom` in the web client and an MCP agent read `field`. **There is no class called `ValidationError` in this codebase.**
 
 ### Carried from plan 1B (frontend)
@@ -194,21 +196,23 @@ Resolved **in favour of the shipped code**, as instructed. Each was verified aga
 
 10. **There is no timezone mechanism to reuse.** §4.1 requires the calendar-day computation for `chiuso_il` to use "lo stesso meccanismo di fuso che lo slice 3 §6.2 impone a `data_emissione`, non un secondo". Slice 3 §6.2 imposes a **rule** — a `date` is not an instant, never project a `timestamptz` through `toISOString()` — not a mechanism; for an invoice, `data_emissione` is supplied by the caller and validated, never derived from "now". `Settings` (`packages/core/src/pigrocrm/core/config.py`) has no timezone field, and `zoneinfo` is not imported anywhere in core. **Resolution (Task B1):** introduce the mechanism once, here — `Settings.timezone: str = "Europe/Rome"` and a single `pigrocrm.core.db.clock.today_local(settings)` using stdlib `zoneinfo` — and state in its docstring that it is the project's only clock, so that slice 3's `data_emissione` validation adopts it rather than growing a second one. One clock, introduced once, is exactly what §4.1 asks for; the spec's mistake is only about which slice introduces it.
 
-11. **`invoices` has no table, no model and no service.** `packages/core/src/pigrocrm/core/invoices/` contains `schemas.py` and `totals.py` only; `packages/core/src/pigrocrm/core/fiscal/` contains `regime.py` and `schemas.py`. There is no `invoices/models.py`, no `InvoiceService`, no `analytics` package, no `timetracking` package, and the migration chain ends at `0003` (`packages/core/migrations/versions/`, confirmed by two `assert revision == "0003"` in `test_migrations.py`). Slice 3 is partially in flight; slice 4 is absent. **Resolution:** §17 puts the whole of §8 in 6A, but §8.1's fifth branch is `invoices.causale` plus `(anno, numero)`. That branch cannot exist in a sub-plan whose stated dependencies are slices 1 and 2. **The invoice search branch and the tenth trigram index move to 6C as Task C13**, and 6A closes R6 for the four entities that exist. This is a scope correction to §17, not to §8: the branch is built exactly as §8.1 and §8.5 specify, one sub-plan later.
+11. **`invoices` exists now; `InvoiceService` does not.** Verified in the tree rather than in slice 3's plan text, and it changed while this plan was being written: `packages/core/src/pigrocrm/core/invoices/` now ships `models.py` (`Invoice`, `InvoiceLine`, `InvoiceCounter`), `fatturapa.py`, `naming.py`, `schemas.py` and `totals.py`, `packages/core/src/pigrocrm/core/fiscal/` ships the full `models`/`repository`/`service` set, and the migration chain runs to `0005_invoices.py`. What is still absent is `invoices/repository.py` and `invoices/service.py` — eight of slice 3's twenty-one tasks are merged, not all of them. `packages/core/src/pigrocrm/core/timetracking/` and `analytics/` do not exist at all, so slice 4 is entirely absent. **Resolution, in two parts.** (a) Task C3's aggregates go in a **new** `invoices/repository.py` if slice 3 has still not created one when 6C starts, and are **appended** to it if it has — the file is slice 3's to own, and this task adds methods to it rather than a parallel module. (b) The invoice search branch of §8.1 stays in **Task C13**, not in 6A. The tables now exist, so the branch is technically buildable in 6A, and it is still deferred on purpose: spec §17 fixes 6A's dependency set as slices 1 and 2, and pulling in a fifth branch would make 6A un-releasable if slice 3 were rolled back. C13's only real precondition is the `Invoice` model, which is satisfied today — so it may be executed as soon as 6A is merged, ahead of the rest of 6C, and its task header says so.
 
-12. **`pipeline_stages` has `code`, and it has no uniqueness constraint on `tipo`.** Both matter and both check out: `pipeline/models.py` declares `code: Mapped[str | None] = mapped_column(String(30), default=None)` with `Index("uq_pipeline_stage_code", "code", unique=True)`, and `DEFAULT_STAGES` in `pipeline/service.py:18-25` seeds `code='offerta'` (`tipo='open'`) and `code='vinto'` (`tipo='won'`) — the two the automations resolve by. Nothing forbids two stages with `tipo='won'` (**R14**). The core design §5.4 still does not mention `code` (**R11**). **Resolution (Task B6):** A1 resolves by `code='vinto'`, then falls back to the unique stage with `tipo='won'`, then does nothing and records `motivo='stage_bersaglio_ambiguo'` or `'stage_bersaglio_assente'`. A2 resolves by `code='offerta'` **only** — there is no `tipo` fallback, because "Offerta" is `open` like every other open stage. No migration adds a constraint: it would refuse data an installation may already have for a reason. R11 and R14 stay open and are not closed by this plan.
+12. **Two defect precedents from slice 3, carried because this plan defines columns and could repeat either.** Both were fixed in `invoices` days ago and both are shapes this slice's own migrations could reproduce. (a) `invoices.tipo` shipped as `String(10)`, exactly wide enough for its legal values `fattura` and `proforma` — so a longer *wrong* value hit the column width first and Postgres answered with a raw `StringDataRightTruncation` instead of the named `CHECK` violation sitting next to it. It is now `String(20)`. **A column sized exactly to its closed set makes the `CHECK` beside it unreachable**, and this slice's `automation_config` and the `motivo` values of Task B6 are exactly that shape. (b) `proforma_riferimento_seq` was declared only as raw `op.execute("CREATE SEQUENCE …")` in the migration, so it existed in production and was **absent under test**, because `packages/core/tests/conftest.py` builds the schema with `Base.metadata.create_all` and never runs a migration. It is now `Sequence(PROFORMA_SEQUENCE_NAME, start=1, increment=1, metadata=Base.metadata)` in `invoices/models.py`. **Any schema object this slice adds must be reachable from `Base.metadata`**, which for the indexes of Tasks A2, A3 and B2 means declaring them in `__table_args__` and letting the migration mirror them — the order those tasks already follow, and now the reason is on the record.
 
-13. **The timeline records stage changes by user-renamable name (R15), and this plan does not fix it.** `deals/service.py:236-238` writes `{"from": previous.nome, "to": target.nome}`. **Resolution (Task B2):** `deals.chiuso_il` is the new authoritative column and is **not** backfilled; the dashboards exclude `chiuso_il IS NULL` from period figures and declare how many rows they excluded. `documents.stato_dal` **is** backfilled, because the offer timeline's payload is `{"da": "inviata", "a": "accettata"}` — literals of `OfferState`, not user text (`documents/service.py:544-546`). Enriching the `stage_changed` payload with the stage id and `code` is the right fix for R15 and is **out of scope here**: it would not make the timeline authoritative (the payload is sanitised, not validated), and this plan already gives the question a column that is.
+13. **`pipeline_stages` has `code`, and it has no uniqueness constraint on `tipo`.** Both matter and both check out: `pipeline/models.py` declares `code: Mapped[str | None] = mapped_column(String(30), default=None)` with `Index("uq_pipeline_stage_code", "code", unique=True)`, and `DEFAULT_STAGES` in `pipeline/service.py:18-25` seeds `code='offerta'` (`tipo='open'`) and `code='vinto'` (`tipo='won'`) — the two the automations resolve by. Nothing forbids two stages with `tipo='won'` (**R14**). The core design §5.4 still does not mention `code` (**R11**). **Resolution (Task B6):** A1 resolves by `code='vinto'`, then falls back to the unique stage with `tipo='won'`, then does nothing and records `motivo='stage_bersaglio_ambiguo'` or `'stage_bersaglio_assente'`. A2 resolves by `code='offerta'` **only** — there is no `tipo` fallback, because "Offerta" is `open` like every other open stage. No migration adds a constraint: it would refuse data an installation may already have for a reason. R11 and R14 stay open and are not closed by this plan.
 
-14. **The exception type is `ValidationFailed`, not `ValidationError`.** `packages/core/src/pigrocrm/core/errors.py` exports `DomainError`, `NotFound`, `ValidationFailed`, `Conflict`, `PermissionDenied`, `ImmutableField`. Every task in this plan uses those names.
+14. **The timeline records stage changes by user-renamable name (R15), and this plan does not fix it.** `deals/service.py:236-238` writes `{"from": previous.nome, "to": target.nome}`. **Resolution (Task B2):** `deals.chiuso_il` is the new authoritative column and is **not** backfilled; the dashboards exclude `chiuso_il IS NULL` from period figures and declare how many rows they excluded. `documents.stato_dal` **is** backfilled, because the offer timeline's payload is `{"da": "inviata", "a": "accettata"}` — literals of `OfferState`, not user text (`documents/service.py:544-546`). Enriching the `stage_changed` payload with the stage id and `code` is the right fix for R15 and is **out of scope here**: it would not make the timeline authoritative (the payload is sanitised, not validated), and this plan already gives the question a column that is.
 
-15. **`packages/core/tests/conftest.py` builds the schema with `Base.metadata.create_all`, not with migrations.** A trigram `Index(...)` declared in `__table_args__` therefore reaches `create_all` before any migration has run `CREATE EXTENSION`, and `create_all` fails with `operator class "gin_trgm_ops" does not exist`. **Resolution (Task A2):** the `db_engine` fixture issues `CREATE EXTENSION IF NOT EXISTS pg_trgm` on its own connection **before** `create_all`. Without this the whole suite goes red on the first task of the slice, for a reason that looks nothing like its cause.
+15. **The exception type is `ValidationFailed`, not `ValidationError`.** `packages/core/src/pigrocrm/core/errors.py` exports `DomainError`, `NotFound`, `ValidationFailed`, `Conflict`, `PermissionDenied`, `ImmutableField`. Every task in this plan uses those names.
 
-16. **`packages/core/tests/conftest.py`'s `db_session` fixture cannot host a `REPEATABLE READ` test.** It hands out a session bound to a connection with an already-open outer transaction (`connection.begin()` plus `join_transaction_mode="create_savepoint"`), and Postgres refuses `SET TRANSACTION ISOLATION LEVEL` once a transaction has begun. **Resolution (Task B13):** the isolation tests build their own sessions straight from `db_engine`, clean up their own rows in a `finally`, and are marked in their docstring as the two tests in the suite that deliberately do not use `db_session`. Criterion 6 is unwritable without this, and discovering it as a red test costs an afternoon.
+16. **`packages/core/tests/conftest.py` builds the schema with `Base.metadata.create_all`, not with migrations.** A trigram `Index(...)` declared in `__table_args__` therefore reaches `create_all` before any migration has run `CREATE EXTENSION`, and `create_all` fails with `operator class "gin_trgm_ops" does not exist`. **Resolution (Task A2):** the `db_engine` fixture issues `CREATE EXTENSION IF NOT EXISTS pg_trgm` on its own connection **before** `create_all`. Without this the whole suite goes red on the first task of the slice, for a reason that looks nothing like its cause.
 
-17. **`apps/web/src/lib/query.ts` exposes `queryKeys` and no invalidation helpers.** §7.2 says "le chiavi di invalidazione sono quelle che `lib/query.ts` già espone". It exposes the key factory; invalidation is inlined in each feature's mutation `onSuccess`. **Resolution (Task B17):** add `queryKeys.dashboard(kind, params)` and `queryKeys.search(term)` to the same object and invalidate inline, matching the shipped idiom rather than introducing a helper module the codebase does not have.
+17. **`packages/core/tests/conftest.py`'s `db_session` fixture cannot host a `REPEATABLE READ` test.** It hands out a session bound to a connection with an already-open outer transaction (`connection.begin()` plus `join_transaction_mode="create_savepoint"`), and Postgres refuses `SET TRANSACTION ISOLATION LEVEL` once a transaction has begun. **Resolution (Task B13):** the isolation tests build their own sessions straight from `db_engine`, clean up their own rows in a `finally`, and are marked in their docstring as the two tests in the suite that deliberately do not use `db_session`. Criterion 6 is unwritable without this, and discovering it as a red test costs an afternoon.
 
-18. **No route in the app uses URL search params.** §4 requires the period to be in the URL. `validateSearch`, `useSearch` and `Route.useSearch` appear nowhere in `apps/web/src`; list filters are component-local `useState`. **Resolution (Task B17):** `/app/` is the first route in this codebase with `validateSearch`. That is a new pattern, so the task spells out the whole route definition rather than pointing at a neighbour.
+18. **`apps/web/src/lib/query.ts` exposes `queryKeys` and no invalidation helpers.** §7.2 says "le chiavi di invalidazione sono quelle che `lib/query.ts` già espone". It exposes the key factory; invalidation is inlined in each feature's mutation `onSuccess`. **Resolution (Task B17):** add `queryKeys.dashboard(kind, params)` and `queryKeys.search(term)` to the same object and invalidate inline, matching the shipped idiom rather than introducing a helper module the codebase does not have.
+
+19. **No route in the app uses URL search params.** §4 requires the period to be in the URL. `validateSearch`, `useSearch` and `Route.useSearch` appear nowhere in `apps/web/src`; list filters are component-local `useState`. **Resolution (Task B17):** `/app/` is the first route in this codebase with `validateSearch`. That is a new pattern, so the task spells out the whole route definition rather than pointing at a neighbour.
 
 ---
 
@@ -242,8 +246,8 @@ packages/core/src/pigrocrm/core/{customers,people,deals,documents}/service.py
 packages/core/src/pigrocrm/core/{customers,people,deals,documents}/models.py
                               MOD  the trigram and B-tree __table_args__ entries
 packages/core/migrations/versions/
-  0004_pg_trgm_search_indexes.py   NEW  the extension and the nine partial GIN indexes
-  0005_sort_indexes.py             NEW  the thirteen B-tree (column, id) indexes
+  0006_pg_trgm_search_indexes.py   NEW  the extension and the nine partial GIN indexes
+  0007_sort_indexes.py             NEW  the thirteen B-tree (column, id) indexes
 packages/core/tests/
   conftest.py                 MOD  CREATE EXTENSION pg_trgm before create_all
   corpus.py                   NEW  the §16 reference corpus and its inflated variant
@@ -306,7 +310,7 @@ packages/core/src/pigrocrm/core/documents/repository.py MOD pending_offers,
 packages/core/src/pigrocrm/core/activities/repository.py MOD by_kind
 packages/core/src/pigrocrm/core/models_registry.py MOD  AutomationConfig
 packages/core/migrations/versions/
-  0006_automations_and_dates.py    NEW  chiuso_il, stato_dal + backfill, automation_config
+  0008_automations_and_dates.py    NEW  chiuso_il, stato_dal + backfill, automation_config
 packages/core/tests/
   test_clock.py               NEW  the one clock
   test_automation_runner.py   NEW  criteria 7, 8, 9
@@ -356,7 +360,7 @@ packages/core/src/pigrocrm/core/dashboard/schemas.py MOD  EconomicDashboard, Ope
 packages/core/src/pigrocrm/core/dashboard/service.py MOD  the two new compositions
 packages/core/src/pigrocrm/core/search/{repository,service}.py MOD the invoice branch
 packages/core/migrations/versions/
-  0007_dashboard_indexes.py        NEW  ix_activities_recent, the invoice trigram index
+  0009_dashboard_indexes.py        NEW  ix_activities_recent, the invoice trigram index
 packages/core/tests/
   test_dashboard_economic.py  NEW  criterion 1, both directions
   test_dashboard_operational.py NEW
@@ -386,7 +390,7 @@ apps/web/e2e/dashboard.spec.ts NEW  criterion 15
 | Prerequisite | How to check | If it is missing |
 |---|---|---|
 | Slice 1 and slice 2 in `main` | `packages/core/src/pigrocrm/core/{customers,people,deals,documents,templates,emitter}/service.py` all exist | Stop. 6A has no substitute for them |
-| The migration chain head is `0003` | `ls packages/core/migrations/versions/` shows `0001`, `0002`, `0003` and nothing later | If something later exists, another slice landed; renumber 6A's migrations to follow the real head and update the `down_revision` values |
+| The migration chain head is `0005` | `ls packages/core/migrations/versions/` shows `0001` … `0005_invoices.py` and nothing later | **Slice 3 landed eight of its twenty-one tasks while this plan was being written**, adding `0004_fiscal_profile.py` and `0005_invoices.py`. If the head has moved again, renumber 6A's two migrations to follow the real head and update their `down_revision` values in the same edit. Run `ls packages/core/migrations/versions/` before writing a migration file, every time — never trust a number written in a plan |
 | The suite is green | `uv run pytest -q` | Fix that first. A red baseline makes every "watch it fail" step meaningless |
 | PostgreSQL 17 with contrib | `packages/core/tests/conftest.py` uses `PostgresContainer("postgres:17-alpine", …)` | `pg_trgm` ships in that image's contrib set; a stripped image would fail Task A2 loudly, which is the intended behaviour |
 
@@ -716,7 +720,7 @@ git commit -m "test(core): reference and inflated search corpora, deterministic 
 - Modify: `packages/core/src/pigrocrm/core/people/models.py` (`__table_args__`)
 - Modify: `packages/core/src/pigrocrm/core/deals/models.py` (`__table_args__`)
 - Modify: `packages/core/src/pigrocrm/core/documents/models.py` (`__table_args__`)
-- Create: `packages/core/migrations/versions/0004_pg_trgm_search_indexes.py`
+- Create: `packages/core/migrations/versions/0006_pg_trgm_search_indexes.py`
 - Modify: `packages/core/tests/conftest.py` (create the extension before `create_all`)
 - Modify: `packages/core/tests/test_migrations.py` (`HAND_MAINTAINED_INDEXES`)
 - Create: `packages/core/tests/test_trgm_escape.py`
@@ -958,11 +962,11 @@ Add `text` to the `from sqlalchemy import ...` line in both files.
 - [ ] **Step 5: Write migration 0004**
 
 ```python
-# packages/core/migrations/versions/0004_pg_trgm_search_indexes.py
+# packages/core/migrations/versions/0006_pg_trgm_search_indexes.py
 """pg_trgm and the partial trigram search indexes
 
-Revision ID: 0004
-Revises: 0003
+Revision ID: 0006
+Revises: 0005
 Create Date: 2026-08-21
 
 Closes residuo R6 for customers, people, deals and documents, and residuo R7 for those
@@ -985,8 +989,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "0004"
-down_revision: str | Sequence[str] | None = "0003"
+revision: str = "0006"
+down_revision: str | Sequence[str] | None = "0005"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -1037,6 +1041,10 @@ HAND_MAINTAINED_INDEXES = {
     "ix_customers_custom_fields",
     "ix_people_custom_fields",
     "ix_deals_custom_fields",
+    # Added by slice 3 (migration 0005). Present in the shipped set -- do not drop them
+    # while rewriting this literal.
+    "uq_invoices_anno_numero",
+    "ix_invoices_custom_fields",
     "ix_customers_ragione_sociale_trgm",
     "ix_customers_partita_iva_trgm",
     "ix_customers_codice_fiscale_trgm",
@@ -1085,7 +1093,7 @@ def test_every_trigram_index_is_a_partial_gin_index_over_gin_trgm_ops() -> None:
         )
 ```
 
-Also change the two `assert revision == "0003"` occurrences in that file to `"0004"`, since the head has moved.
+Also change the two `assert revision == "0005"` occurrences in that file to `"0006"`, since the head has moved. There are exactly two, at `packages/core/tests/test_migrations.py:155` and `:177`; `grep -n '"0005"' packages/core/tests/test_migrations.py` finds them.
 
 - [ ] **Step 7: Run the tests and watch them pass**
 
@@ -1131,7 +1139,7 @@ git add packages/core/src/pigrocrm/core/customers/models.py \
         packages/core/src/pigrocrm/core/people/models.py \
         packages/core/src/pigrocrm/core/deals/models.py \
         packages/core/src/pigrocrm/core/documents/models.py \
-        packages/core/migrations/versions/0004_pg_trgm_search_indexes.py \
+        packages/core/migrations/versions/0006_pg_trgm_search_indexes.py \
         packages/core/tests/conftest.py \
         packages/core/tests/test_migrations.py \
         packages/core/tests/test_trgm_escape.py \
@@ -1146,7 +1154,7 @@ git commit -m "feat(search): pg_trgm and nine partial trigram indexes, closing R
 - Create: `packages/core/src/pigrocrm/core/db/sort.py`
 - Modify: `packages/core/src/pigrocrm/core/db/__init__.py` (re-export)
 - Modify: `packages/core/src/pigrocrm/core/{customers,people,deals,documents}/models.py` (`__table_args__`)
-- Create: `packages/core/migrations/versions/0005_sort_indexes.py`
+- Create: `packages/core/migrations/versions/0007_sort_indexes.py`
 - Create: `packages/core/tests/test_sort_cursor.py`
 - Modify: `packages/core/tests/test_migrations.py` (`HAND_MAINTAINED_INDEXES`, head revision)
 
@@ -1629,11 +1637,11 @@ Append these entries to the `__table_args__` tuples changed in Task A2. Nothing 
 - [ ] **Step 6: Write migration 0005**
 
 ```python
-# packages/core/migrations/versions/0005_sort_indexes.py
+# packages/core/migrations/versions/0007_sort_indexes.py
 """B-tree (column, id) indexes for the sort whitelist
 
-Revision ID: 0005
-Revises: 0004
+Revision ID: 0007
+Revises: 0006
 Create Date: 2026-08-21
 
 Residuo R9's other half. Without these, `ORDER BY ragione_sociale, id` on 50 000 rows is
@@ -1650,8 +1658,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "0005"
-down_revision: str | Sequence[str] | None = "0004"
+revision: str = "0007"
+down_revision: str | Sequence[str] | None = "0006"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -1712,7 +1720,7 @@ def downgrade() -> None:
     "ix_documents_titolo_id",
 ```
 
-And change the two head assertions from `"0004"` to `"0005"`. Then append:
+And change the two head assertions from `"0006"` to `"0007"`. Then append:
 
 ```python
 def test_the_nullable_sort_column_has_a_descending_nulls_last_index() -> None:
@@ -1757,7 +1765,7 @@ git add packages/core/src/pigrocrm/core/db/sort.py \
         packages/core/src/pigrocrm/core/people/models.py \
         packages/core/src/pigrocrm/core/deals/models.py \
         packages/core/src/pigrocrm/core/documents/models.py \
-        packages/core/migrations/versions/0005_sort_indexes.py \
+        packages/core/migrations/versions/0007_sort_indexes.py \
         packages/core/tests/test_sort_cursor.py \
         packages/core/tests/test_migrations.py
 git commit -m "feat(core): sort whitelist and opaque composite keyset cursor"
@@ -5351,6 +5359,8928 @@ git add apps/web/package.json apps/web/pnpm-lock.yaml \
         apps/web/src/components/AppShell.tsx \
         apps/web/eslint.config.js
 git commit -m "feat(web): cmdk command palette with four distinct states and a debounce"
+```
+
+---
+### Task A14: Criterion 5 — no silent partial result, in a real browser
+
+**Files:**
+- Create: `apps/web/e2e/search.spec.ts`
+- Modify: `apps/web/e2e/helpers.ts` (a helper that seeds N customers through the API)
+
+**Interfaces:**
+- Consumes: the running stack `apps/web/scripts/e2e.sh` starts (API on `:8000`, Vite on `:5173`, its own Postgres on `:55433`); the existing `login` helper in `apps/web/e2e/helpers.ts`; the palette from Task A13.
+- Produces: `apps/web/e2e/helpers.ts` gains `export async function seedCustomers(page: Page, prefix: string, count: number): Promise<void>`.
+
+**The three assertions this task exists for**, straight out of §16 criterion 5: with 500 matching rows the palette shows five per class, the real count and the link to the full list; with the database refusing the query the error state appears and the string `Nessun risultato` is **not present in the DOM**; with a two-character term **no HTTP request is issued**. The last two are the ones a unit test cannot honestly make — one needs a real failing backend, the other needs a real network.
+
+- [ ] **Step 1: Add the seeding helper**
+
+```ts
+// apps/web/e2e/helpers.ts -- append. Follow the file's existing import of `Page`.
+
+/**
+ * Seeds `count` customers through the real API, in parallel batches.
+ *
+ * Through the API and not through the UI: 500 rows via forms would take minutes and would
+ * be testing the form, not the palette. Through the page's own context so the auth cookie
+ * travels — `page.request` shares the browser's cookie jar, `request` from the fixture
+ * does not.
+ */
+export async function seedCustomers(page: Page, prefix: string, count: number): Promise<void> {
+  const BATCH = 25
+  for (let start = 0; start < count; start += BATCH) {
+    const size = Math.min(BATCH, count - start)
+    await Promise.all(
+      Array.from({ length: size }, (_, offset) =>
+        page.request.post('http://localhost:8000/api/customers', {
+          data: { ragione_sociale: `${prefix} ${String(start + offset).padStart(4, '0')} Srl` },
+        }),
+      ),
+    )
+  }
+}
+```
+
+- [ ] **Step 2: Write the failing spec**
+
+```ts
+// apps/web/e2e/search.spec.ts
+/**
+ * **Criterion 5.** No silent partial result, and no empty list drawn after a failure.
+ *
+ * Three of these four assertions cannot be made honestly anywhere else: one needs a real
+ * network to observe that no request was issued, one needs a real backend that refuses the
+ * query, and one needs 500 real rows to make truncation happen rather than be simulated.
+ */
+import { expect, test } from '@playwright/test'
+import { login, seedCustomers } from './helpers'
+
+test.describe('ricerca globale', () => {
+  test.beforeEach(async ({ page }) => {
+    await login(page)
+    await page.goto('/app')
+  })
+
+  test('si apre con Cmd/Ctrl+K da qualunque schermata', async ({ page }) => {
+    await page.goto('/app/clienti')
+    await page.keyboard.press('ControlOrMeta+k')
+    await expect(page.getByRole('combobox')).toBeFocused()
+  })
+
+  test('sotto i tre caratteri invita a scrivere e non emette nessuna richiesta', async ({
+    page,
+  }) => {
+    const searchRequests: string[] = []
+    page.on('request', (request) => {
+      if (request.url().includes('/api/search')) searchRequests.push(request.url())
+    })
+
+    await page.keyboard.press('ControlOrMeta+k')
+    await page.getByRole('combobox').fill('ro')
+    // Well past the 250 ms debounce: the assertion is that nothing was ever sent, not
+    // that nothing had been sent yet.
+    await page.waitForTimeout(1500)
+
+    await expect(page.getByText(/continua a scrivere/i)).toBeVisible()
+    expect(searchRequests).toEqual([])
+    await expect(page.getByText(/nessun risultato/i)).toHaveCount(0)
+  })
+
+  test('con 500 corrispondenze mostra 5 per classe, il conteggio reale e «vedi tutti»', async ({
+    page,
+  }) => {
+    await seedCustomers(page, 'Truncato', 500)
+    await page.keyboard.press('ControlOrMeta+k')
+    await page.getByRole('combobox').fill('Truncato')
+
+    // "oltre 200": the count is exact to 200 and declared as a minimum beyond it (§8.5).
+    // The palette must never render the bare number 200, which would be a lie.
+    await expect(page.getByText(/oltre 200/i)).toBeVisible()
+
+    const options = page.getByRole('option')
+    // Five hits plus the "vedi tutti" row, in the one group that matched.
+    await expect(options).toHaveCount(6)
+    await expect(page.getByRole('option', { name: /vedi tutti/i })).toBeVisible()
+  })
+
+  test('«vedi tutti» porta all\'elenco filtrato con lo stesso termine', async ({ page }) => {
+    await seedCustomers(page, 'Elenco', 12)
+    await page.keyboard.press('ControlOrMeta+k')
+    await page.getByRole('combobox').fill('Elenco')
+    await page.getByRole('option', { name: /vedi tutti/i }).click()
+
+    await expect(page).toHaveURL(/\/app\/clienti\?search=Elenco/)
+  })
+
+  test('un termine senza corrispondenze lo dice, e nomina il termine', async ({ page }) => {
+    await page.keyboard.press('ControlOrMeta+k')
+    await page.getByRole('combobox').fill('zzzqqqwww')
+
+    await expect(page.getByText(/nessun risultato per/i)).toBeVisible()
+    await expect(page.getByText(/zzzqqqwww/)).toBeVisible()
+  })
+
+  test('con la ricerca che fallisce mostra l\'errore e NON «Nessun risultato»', async ({
+    page,
+  }) => {
+    // The database refusing the query, simulated at the only boundary a browser test can
+    // reach: the response. A 500 with a problem document is exactly what
+    // `domain_error_handler` produces when a query fails, so the client sees the real
+    // shape and not an invented one.
+    await page.route('**/api/search**', async (route) => {
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/problem+json',
+        body: JSON.stringify({
+          type: 'about:blank',
+          title: 'Errore interno',
+          status: 500,
+          detail: 'Ricerca non disponibile',
+        }),
+      })
+    })
+
+    await page.keyboard.press('ControlOrMeta+k')
+    await page.getByRole('combobox').fill('Rossi')
+
+    // `lib/query.ts` retries twice with backoff on anything that is not a 401/403, so the
+    // banner takes a moment. `playwright.config.ts` already raises the expect timeout to
+    // 8 s for exactly this reason (see its own comment).
+    await expect(page.getByRole('alert')).toContainText(/ricerca non disponibile/i)
+
+    // The assertion §8.6 exists for. An empty list drawn after an error *is* a wrong
+    // answer: it says "there is none" when the truth is "I do not know".
+    await expect(page.getByText(/nessun risultato/i)).toHaveCount(0)
+    await expect(page.getByRole('option')).toHaveCount(0)
+  })
+
+  test('un frammento di partita IVA trova il cliente', async ({ page }) => {
+    await page.request.post('http://localhost:8000/api/customers', {
+      data: { ragione_sociale: 'Rossi Ingegneria Srl', partita_iva: '01234567890' },
+    })
+    await page.keyboard.press('ControlOrMeta+k')
+    await page.getByRole('combobox').fill('34567')
+
+    await expect(page.getByRole('option', { name: /Rossi Ingegneria Srl/ })).toBeVisible()
+  })
+})
+```
+
+- [ ] **Step 3: Run it and watch it fail**
+
+Run: `cd apps/web && pnpm test:e2e`
+
+Expected before Tasks A12 and A13 are merged: every test FAILS at `page.keyboard.press('ControlOrMeta+k')` because no combobox appears. After them: PASS, seven tests.
+
+`playwright.config.ts` runs `workers: 1` and `fullyParallel: false` against one shared database, so the 500 seeded rows persist into later specs in the same run. That is why every prefix here is distinctive (`Truncato`, `Elenco`) and every assertion is scoped to its own prefix — a spec that searched for a generic term would pass or fail depending on which other spec ran first.
+
+- [ ] **Step 4: Full frontend gate**
+
+Run: `cd apps/web && pnpm exec vitest run && pnpm exec tsc --noEmit && pnpm lint && pnpm test:e2e`
+Expected: all green.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add apps/web/e2e/search.spec.ts apps/web/e2e/helpers.ts
+git commit -m "test(web): criterion 5, the palette's three states in a real browser"
+```
+
+---
+
+## 6A is done. What it closed, and what it did not
+
+| Residuo | State after 6A |
+|---|---|
+| **R6** — search `ilike` with no index | **Closed** for `customers`, `people`, `deals`, `documents`, with the plan measured in CI (Task A9) and the index-removal check that makes the measurement mean something. Open for `invoices` until Task C13. **What remains, and it is written rather than declared closed:** a one- or two-character `search` on a *list* endpoint is still a sequential scan. It has a known upper bound (`limit` is at most 200) and no path from the palette or from an agent reaches it |
+| **R9** — the ordering §7 promised | **Closed** for those same four entities, with a composite opaque cursor and thirteen B-tree indexes. **Open for every other surface**, and that is the honest statement: `time_entries` and `costs` are born ordered (slice 4 §12), `invoices` has its own filters (slice 3 §11), and the general defect on all remaining lists stands |
+| **R7** — no partial index on `deleted_at` | **Closed for the four tables 6A indexes**, as a side effect of the trigram indexes being partial. The general defect stands |
+| **B2** — no debounce | **Closed for the palette** (250 ms, Task A13). Still open on the deal list, which this slice does not touch |
+| slice 1 §10.1's missing header | **Closed** (Task A12) |
+| **R1** — shared MCP session | **Untouched.** Task A11's Step 6 gates the MCP half of the search tool on it and ships the API half regardless |
+| **A14**, **R10**, **R11**, **R14**, **R15**, **A12**, **B3** | Untouched, deliberately. Contradictions 7, 13 and 14 above give the reasoning for each |
+
+---
+# Sub-plan 6B — Automazioni, segnali e dashboard commerciale
+
+**Before 6B can start, all of this must already be true.** Verify, do not assume:
+
+| Prerequisite | How to check | If it is missing |
+|---|---|---|
+| **Sub-plan 6A merged** | `packages/core/src/pigrocrm/core/search/service.py` exists and `uv run pytest -q` is green | Stop. 6B's dashboard page mounts inside the `AppShell` header 6A builds, and 6B's migrations follow 6A's in the chain |
+| Slice 2 in `main` | `packages/core/src/pigrocrm/core/documents/service.py` defines `OFFER_TRANSITIONS` and `set_offer_state` | Stop. `set_offer_state` is the **only** trigger the automations have; without it §9 has nothing to hook onto |
+| `pipeline_stages` seeds `code='vinto'` and `code='offerta'` | `DEFAULT_STAGES` in `packages/core/src/pigrocrm/core/pipeline/service.py` | Stop and fix the seed. The automations resolve by `code` and refuse to guess by name — that is the point of R11's column existing |
+| The migration chain head | `ls packages/core/migrations/versions/` | 6B's migration follows whatever the real head is. This plan writes `0008` because 6A adds `0006` and `0007` on top of slice 3's `0005`; check, do not trust the number |
+| The suite is green | `uv run pytest -q` | Fix that first |
+
+**6B needs nothing from slices 3, 4 or 5.** The commercial dashboard reads `deals`, `pipeline_stages` and `documents` and nothing else — that is precisely why it is the dashboard that ships first (§4, §17).
+
+**6B executes §16 criteria 7, 8 and 9, plus 2, 6 and 14 on the commercial dashboard.** Those last three are criteria for *every* dashboard, and they fall due with the first one rather than waiting for 6C.
+
+---
+
+### Task B1: One clock
+
+**Files:**
+- Modify: `packages/core/src/pigrocrm/core/config.py`
+- Create: `packages/core/src/pigrocrm/core/db/clock.py`
+- Modify: `packages/core/src/pigrocrm/core/db/__init__.py`
+- Create: `packages/core/tests/test_clock.py`
+
+**Interfaces:**
+- Consumes: `pigrocrm.core.config.Settings`, `get_settings`.
+- Produces, importable from `pigrocrm.core.db`:
+  - `today_local(settings: Settings | None = None) -> date`
+  - `month_bounds(anno: int, mese: int) -> tuple[date, date]`
+  - `Settings.timezone: str = "Europe/Rome"`, validated at construction against `zoneinfo.available_timezones()`.
+- Tasks B2, B5, B7, B8 and C7 all call `today_local`. Nothing else in the project may call `date.today()` or `datetime.now(UTC).date()`, and Task B9's AST test is extended to say so.
+
+**Why this exists at all.** Spec §4.1 requires the calendar-day computation for `chiuso_il` to use "lo stesso meccanismo di fuso che lo slice 3 §6.2 impone a `data_emissione`, non un secondo". There is no such mechanism to reuse: slice 3 §6.2 states a *rule* (a `date` is not an instant; never project a `timestamptz` through UTC), and for an invoice the date is supplied by the caller and validated rather than derived from "now". So the mechanism is introduced once, here, and its docstring says it is the project's only clock.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_clock.py
+"""The project's only clock.
+
+`datetime.now(UTC).date()` is wrong for every figure in this slice, and wrong in a way
+that is invisible for twenty-three hours a day: at 00:30 on 1 April in Rome it is still
+31 March in UTC, so a deal won just after midnight lands in the previous month's
+conversion rate. `deals.chiuso_il`, `documents.stato_dal`, `invoices.data_emissione`,
+`costs.data` and `time_entries.data` are all calendar dates in the *emitter's* day, not
+instants, and slice 3 §6.2 already fixed that rule — this module is the mechanism.
+
+Two clocks in one product is a bug that shows up on 31 December, which is the worst
+possible day to find it.
+"""
+
+from datetime import UTC, date, datetime
+
+import pytest
+from pydantic import ValidationError
+
+from pigrocrm.core.config import Settings
+from pigrocrm.core.db import month_bounds, today_local
+
+
+def test_the_default_timezone_is_rome() -> None:
+    assert Settings().timezone == "Europe/Rome"
+
+
+def test_an_unknown_timezone_is_refused_at_construction() -> None:
+    """A typo in an environment variable must fail at start-up, not silently fall back to
+    UTC and shift every date by an hour for the life of the deployment."""
+    with pytest.raises(ValidationError):
+        Settings(timezone="Europe/Atlantis")
+
+
+def test_today_local_is_the_emitter_day_not_the_utc_day(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """00:30 on 1 April in Rome is 22:30 on 31 March in UTC. The clock must answer
+    1 April."""
+    import pigrocrm.core.db.clock as clock
+
+    frozen = datetime(2026, 3, 31, 22, 30, tzinfo=UTC)
+    monkeypatch.setattr(clock, "_now", lambda: frozen)
+
+    assert today_local(Settings(timezone="Europe/Rome")) == date(2026, 4, 1)
+    assert today_local(Settings(timezone="UTC")) == date(2026, 3, 31)
+
+
+def test_today_local_handles_the_dst_transition(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The 2026 spring-forward in Rome is 29 March. 00:30 UTC on that day is 01:30 CET,
+    still 29 March -- the date must not jump."""
+    import pigrocrm.core.db.clock as clock
+
+    monkeypatch.setattr(clock, "_now", lambda: datetime(2026, 3, 29, 0, 30, tzinfo=UTC))
+    assert today_local(Settings(timezone="Europe/Rome")) == date(2026, 3, 29)
+
+
+def test_today_local_with_no_argument_uses_the_cached_settings() -> None:
+    """Callers deep in a repository should not have to thread `Settings` through four
+    layers to learn what day it is."""
+    assert isinstance(today_local(), date)
+
+
+def test_month_bounds_is_inclusive_at_both_ends() -> None:
+    assert month_bounds(2026, 2) == (date(2026, 2, 1), date(2026, 2, 28))
+    assert month_bounds(2024, 2) == (date(2024, 2, 1), date(2024, 2, 29))
+    assert month_bounds(2026, 12) == (date(2026, 12, 1), date(2026, 12, 31))
+
+
+@pytest.mark.parametrize("mese", [0, 13, -1])
+def test_month_bounds_refuses_a_month_outside_one_to_twelve(mese: int) -> None:
+    from pigrocrm.core.errors import ValidationFailed
+
+    with pytest.raises(ValidationFailed) as caught:
+        month_bounds(2026, mese)
+    assert caught.value.details["field"] == "mese"
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_clock.py -v`
+Expected: collection error — `ImportError: cannot import name 'month_bounds' from 'pigrocrm.core.db'`.
+
+- [ ] **Step 3: Add the setting**
+
+```python
+# packages/core/src/pigrocrm/core/config.py
+# Add `from zoneinfo import ZoneInfo, available_timezones` to the imports, and this field
+# to Settings, immediately after `cookie_secure`:
+
+    # The emitter's timezone, and the only one. Every `Date` column in the product is a
+    # calendar day in *this* zone: `invoices.data_emissione` (slice 3 §6.2),
+    # `costs.data` and `time_entries.data` (slice 4), `deals.chiuso_il` and
+    # `documents.stato_dal` (slice 6 §4.1). Deriving any of them from
+    # `datetime.now(UTC).date()` moves everything after 23:00 CET by a day and everything
+    # on 31 December by a year — the exact defect slice 3 §6.2 names. Single-tenant, so
+    # one zone: a per-user zone would mean the same invoice falling in two fiscal years
+    # depending on who looked at it.
+    timezone: str = "Europe/Rome"
+
+# And this validator, next to `_jwt_secret_must_be_long_enough`:
+
+    @field_validator("timezone")
+    @classmethod
+    def _timezone_must_be_a_real_zone(cls, value: str) -> str:
+        # Checked against the tz database at construction, not at first use: a typo in
+        # PIGROCRM_TIMEZONE must fail at start-up rather than shift every date in the
+        # product by an hour for the life of the deployment.
+        if value not in available_timezones():
+            raise ValueError(
+                f"timezone {value!r} is not in the IANA tz database "
+                "(examples: Europe/Rome, UTC)"
+            )
+        return value
+```
+
+`ZoneInfo` is imported in `config.py` only if the validator needs it; it does not, so import `available_timezones` alone and let `clock.py` import `ZoneInfo`. Keep the import line to what is used — `ruff` fails on an unused import.
+
+- [ ] **Step 4: Write the clock**
+
+```python
+# packages/core/src/pigrocrm/core/db/clock.py
+"""The project's only clock.
+
+Nothing anywhere in `packages/core`, `apps/api` or `apps/mcp` may call `date.today()` or
+`datetime.now(UTC).date()` to obtain a calendar day. Both answer the *UTC* day, and every
+`Date` column in this product is a day in the emitter's zone: at 00:30 on 1 April in Rome
+it is still 31 March in UTC, so a deal won just after midnight would land in the previous
+month's conversion rate, and an invoice issued on 31 December at 23:30 CET would land in
+the previous fiscal year — the defect slice 3 §6.2 names by name.
+
+`datetime.now(UTC)` for a *timestamp* is still correct and still required: `created_at`,
+`updated_at`, `deleted_at` and `occurred_at` are instants, and an instant has no zone
+problem. This module is about the other kind of column.
+
+`_now` is a module-level function rather than an inline call so a test can freeze it
+without patching the standard library.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, date, datetime
+from zoneinfo import ZoneInfo
+
+from pigrocrm.core.config import Settings, get_settings
+from pigrocrm.core.errors import ValidationFailed
+
+# Days per month, non-leap. February is corrected in `month_bounds`.
+_DAYS_IN_MONTH = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def today_local(settings: Settings | None = None) -> date:
+    """Today, in the emitter's zone.
+
+    `settings` is optional so a repository three layers down does not have to thread it
+    through; passing it explicitly is what makes the tests able to check two zones without
+    touching the environment.
+    """
+    resolved = settings if settings is not None else get_settings()
+    return _now().astimezone(ZoneInfo(resolved.timezone)).date()
+
+
+def month_bounds(anno: int, mese: int) -> tuple[date, date]:
+    """The first and last day of a month, both inclusive.
+
+    Inclusive at both ends because every period filter in this slice and in slice 4 is
+    `BETWEEN da AND a` over a `Date` column. A half-open convention would be defensible
+    and would also mean two conventions in one product, which is how a December figure
+    ends up counted twice.
+
+    Computed rather than taken from `calendar.monthrange`: the arithmetic is four lines,
+    and this way the leap rule is visible next to the only place that depends on it.
+    """
+    if not 1 <= mese <= 12:
+        raise ValidationFailed(
+            "periodo", "mese", "mese fuori intervallo", expected="1-12"
+        )
+    last = _DAYS_IN_MONTH[mese - 1]
+    if mese == 2 and (anno % 4 == 0 and (anno % 100 != 0 or anno % 400 == 0)):
+        last = 29
+    return date(anno, mese, 1), date(anno, mese, last)
+```
+
+- [ ] **Step 5: Re-export**
+
+```python
+# packages/core/src/pigrocrm/core/db/__init__.py -- add to the imports and __all__:
+from pigrocrm.core.db.clock import month_bounds, today_local
+# "month_bounds" and "today_local" in __all__, alphabetically sorted as ruff requires.
+```
+
+- [ ] **Step 6: Run the tests and watch them pass**
+
+Run: `uv run pytest packages/core/tests/test_clock.py -v`
+Expected: PASS, eight tests (the parametrised one expands to three).
+
+- [ ] **Step 7: Full gate**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+Expected: green.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/config.py \
+        packages/core/src/pigrocrm/core/db/clock.py \
+        packages/core/src/pigrocrm/core/db/__init__.py \
+        packages/core/tests/test_clock.py
+git commit -m "feat(core): one clock for calendar dates, in the emitter's timezone"
+```
+
+---
+
+### Task B2: `deals.chiuso_il`, `documents.stato_dal`, and their writers
+
+**Files:**
+- Modify: `packages/core/src/pigrocrm/core/deals/models.py` (one column, one index)
+- Modify: `packages/core/src/pigrocrm/core/deals/schemas.py` (`DealRead.chiuso_il`)
+- Modify: `packages/core/src/pigrocrm/core/deals/service.py` (`move_stage`)
+- Modify: `packages/core/src/pigrocrm/core/documents/models.py` (one column, one index)
+- Modify: `packages/core/src/pigrocrm/core/documents/schemas.py` (`DocumentRead.stato_dal`)
+- Modify: `packages/core/src/pigrocrm/core/documents/service.py` (`set_offer_state`)
+- Create: `packages/core/migrations/versions/0008_automations_and_dates.py`
+- Modify: `packages/core/tests/test_migrations.py`
+- Create: `packages/core/tests/test_closure_dates.py`
+
+**Interfaces:**
+- Consumes: `today_local` from `pigrocrm.core.db` (Task B1); `PipelineStageRead.tipo`; `OFFER_TRANSITIONS`.
+- Produces:
+  - `Deal.chiuso_il: Mapped[date | None]`, and `DealRead.chiuso_il: date | None`
+  - `Document.stato_dal: Mapped[date | None]`, and `DocumentRead.stato_dal: date | None`
+  - Indexes `ix_deals_chiuso_il` and `ix_documents_stato_dal`
+  - Migration `0008` also creates `automation_config` (Task B3's table, in the same revision — see the note below)
+- Tasks B7 and B8 read both columns; Task B5 writes `stato_dal` through the same path.
+
+**One migration for both columns and the config table, and that is deliberate.** Three revisions in one sub-plan means three `alembic upgrade head` round-trips in the test suite's slowest test, and the three objects are meaningless apart: the automation cannot run without the config row and cannot record a closure without the column. Task B3 writes the `automation_config` half of the same file; this task writes the two columns and leaves the table's `op.create_table` call to B3, in the same file, in a section marked for it. If B3 is deferred, `0008` still applies cleanly — a migration with two of its three sections is a valid migration.
+
+**Neither column is `NOT NULL`, and one is not backfilled.** `documents.stato_dal` **is** backfilled from the timeline, because the offer timeline's payload is `{"da": "inviata", "a": "accettata"}` — literals of `OfferState`, never user text. `deals.chiuso_il` is **not**, because `DealService.move_stage` records `{"from": <nome>, "to": <nome>}` — the *names*, which the user is free to rename (residuo R15). Deducing "when was this deal won" from a mutable string is exactly what `pipeline_stages.tipo` and `code` exist to avoid, and a guessed conversion rate is the worst kind of figure: plausible and wrong.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_closure_dates.py
+"""The two date columns §4.1 adds, and the asymmetry that decides their backfill.
+
+`Date`, not `timestamptz`, against slice 1 §5's general convention and for slice 3 §6.2's
+precise reason: a date that decides which period a figure falls in is not an instant. All
+of this slice's period filters land on `Date` columns -- `invoices.data_emissione`,
+`costs.data`, `time_entries.data`, `chiuso_il` -- and no mixed comparison exists anywhere.
+"""
+
+from datetime import UTC, date, datetime
+
+import pytest
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.db import today_local
+from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.deals.service import DealService
+from pigrocrm.core.documents.models import Document
+from pigrocrm.core.documents.service import DocumentService
+from pigrocrm.core.pipeline.service import PipelineService
+
+ADMIN = Actor(id=None, type="system", role="admin")
+
+
+@pytest.fixture
+def stages(db_session: Session) -> dict[str, object]:
+    PipelineService(db_session).seed_defaults(ADMIN)
+    return {
+        stage.code: stage
+        for stage in PipelineService(db_session).list()
+        if stage.code is not None
+    }
+
+
+def _deal(db_session: Session, stage_id: object) -> Deal:
+    customer = Customer(ragione_sociale="Cliente Srl", nazione="IT", custom_fields={})
+    db_session.add(customer)
+    db_session.flush()
+    deal = Deal(
+        nome="Impianto", customer_id=customer.id, pipeline_stage_id=stage_id,
+        probabilita=50, custom_fields={},
+    )
+    db_session.add(deal)
+    db_session.flush()
+    return deal
+
+
+def test_a_new_deal_has_no_closure_date(db_session: Session, stages: dict) -> None:
+    deal = _deal(db_session, stages["lead"].id)
+    assert deal.chiuso_il is None
+
+
+def test_moving_to_a_won_stage_stamps_the_local_day(
+    db_session: Session, stages: dict
+) -> None:
+    deal = _deal(db_session, stages["lead"].id)
+    DealService(db_session).move_stage(deal.id, stages["vinto"].id, ADMIN)
+    db_session.refresh(deal)
+    assert deal.chiuso_il == today_local()
+
+
+def test_moving_to_a_lost_stage_also_stamps_it(db_session: Session, stages: dict) -> None:
+    """`tipo != 'open'`, not `tipo == 'won'`: a lost deal is closed too, and the
+    conversion rate needs both halves of the denominator."""
+    deal = _deal(db_session, stages["lead"].id)
+    DealService(db_session).move_stage(deal.id, stages["perso"].id, ADMIN)
+    db_session.refresh(deal)
+    assert deal.chiuso_il == today_local()
+
+
+def test_reopening_a_deal_clears_the_closure_date(
+    db_session: Session, stages: dict
+) -> None:
+    """A reopened deal is not a deal closed in March. Leaving the stamp would put it in
+    both the conversion rate and the open pipeline at the same time."""
+    service = DealService(db_session)
+    deal = _deal(db_session, stages["lead"].id)
+    service.move_stage(deal.id, stages["vinto"].id, ADMIN)
+    service.move_stage(deal.id, stages["negoziazione"].id, ADMIN)
+    db_session.refresh(deal)
+    assert deal.chiuso_il is None
+
+
+def test_moving_between_two_open_stages_never_stamps_it(
+    db_session: Session, stages: dict
+) -> None:
+    deal = _deal(db_session, stages["lead"].id)
+    DealService(db_session).move_stage(deal.id, stages["offerta"].id, ADMIN)
+    db_session.refresh(deal)
+    assert deal.chiuso_il is None
+
+
+def test_moving_from_won_to_lost_keeps_the_original_closure_date(
+    db_session: Session, stages: dict
+) -> None:
+    """A correction of *which* terminal state, not a new closure. Restamping would move
+    the deal into the month someone fixed the mistake in."""
+    service = DealService(db_session)
+    deal = _deal(db_session, stages["lead"].id)
+    service.move_stage(deal.id, stages["vinto"].id, ADMIN)
+    db_session.refresh(deal)
+    original = deal.chiuso_il
+    deal.chiuso_il = date(2026, 1, 15)  # simulate a closure recorded earlier
+    db_session.flush()
+
+    service.move_stage(deal.id, stages["perso"].id, ADMIN)
+    db_session.refresh(deal)
+    assert deal.chiuso_il == date(2026, 1, 15), original
+
+
+def test_chiuso_il_is_exposed_on_the_read_schema(db_session: Session, stages: dict) -> None:
+    deal = _deal(db_session, stages["lead"].id)
+    read = DealService(db_session).move_stage(deal.id, stages["vinto"].id, ADMIN)
+    assert read.chiuso_il == today_local()
+
+
+def test_setting_an_offer_state_stamps_stato_dal(
+    db_session: Session, document_service: DocumentService
+) -> None:
+    """`documents.stato_dal` is what makes "questa offerta è ferma da N giorni"
+    answerable; §4 shows the age in days on the commercial dashboard."""
+    document = document_service.create_offer_for_test()  # see the note below
+    document_service.set_offer_state(document.id, "inviata", ADMIN)
+    row = db_session.get(Document, document.id)
+    assert row is not None
+    assert row.stato_dal == today_local()
+
+
+def test_stato_dal_moves_on_every_state_change(
+    db_session: Session, document_service: DocumentService
+) -> None:
+    document = document_service.create_offer_for_test()
+    document_service.set_offer_state(document.id, "inviata", ADMIN)
+    row = db_session.get(Document, document.id)
+    assert row is not None
+    row.stato_dal = date(2026, 1, 1)
+    db_session.flush()
+
+    document_service.set_offer_state(document.id, "accettata", ADMIN)
+    db_session.refresh(row)
+    assert row.stato_dal == today_local()
+
+
+def test_both_columns_are_date_and_not_timestamp() -> None:
+    """Asserted on the type, because the whole argument of §4.1 rests on it and a
+    `DateTime` here would still pass every test above."""
+    from sqlalchemy import Date
+
+    assert isinstance(Deal.__table__.c.chiuso_il.type, Date)
+    assert isinstance(Document.__table__.c.stato_dal.type, Date)
+    assert not isinstance(Deal.__table__.c.chiuso_il.type, datetime.__class__)
+```
+
+For the two `document_service` tests, use whatever fixture `packages/core/tests/test_documents_service.py` already provides for building an offer with a `deal_id`; if it is a local helper rather than a fixture, promote it to `conftest.py` in this task rather than duplicating it. Replace `create_offer_for_test()` with that helper's real name.
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_closure_dates.py -v`
+Expected: every test FAILS with `AttributeError: 'Deal' object has no attribute 'chiuso_il'`.
+
+- [ ] **Step 3: Add the columns**
+
+```python
+# packages/core/src/pigrocrm/core/deals/models.py -- one column, after `custom_fields`,
+# and one index appended to __table_args__.
+    # `Date`, not `timestamptz`, against slice 1 §5's general convention and for slice 3
+    # §6.2's precise reason: a date that decides which period a figure falls in is not an
+    # instant. Written by `DealService.move_stage` when the destination stage has
+    # `tipo != 'open'`, and cleared when the deal returns to an open stage.
+    #
+    # Deliberately NOT backfilled (spec §4.1): `move_stage` records the stage *names* in
+    # its activity payload, and a name is renamable (residuo R15), so deducing a
+    # historical closure date from the timeline would mean matching a mutable string. The
+    # period dashboards exclude `chiuso_il IS NULL` and say how many rows they excluded,
+    # rather than counting them as zero or attributing them to the wrong month.
+    chiuso_il: Mapped[date | None] = mapped_column(Date, default=None)
+
+# __table_args__ gains:
+        Index("ix_deals_chiuso_il", "chiuso_il"),
+```
+
+```python
+# packages/core/src/pigrocrm/core/documents/models.py -- one column and one index.
+    # The day the current `stato` was set. Written by `DocumentService.set_offer_state`,
+    # the only writer of `documents.stato`. `Date` for the same reason as
+    # `deals.chiuso_il`. Backfilled in migration 0008 -- unlike `chiuso_il` -- because the
+    # offer timeline's payload is `{"da": "inviata", "a": "accettata"}`, literals of
+    # `OfferState` rather than user-editable text.
+    stato_dal: Mapped[date | None] = mapped_column(Date, default=None)
+
+# __table_args__ gains:
+        Index("ix_documents_stato_dal", "stato_dal"),
+```
+
+Both files need `date` on their `from datetime import ...` line and `Date` on their `from sqlalchemy import ...` line — `deals/models.py` already has both.
+
+Add `chiuso_il: date | None` to `DealRead` and `stato_dal: date | None` to `DocumentRead`. Neither goes on a Create or an Update schema: both are derived, written only by a dedicated method, and putting either on `DealUpdate` would let a caller claim a closure that never happened.
+
+- [ ] **Step 4: Write the closure into `move_stage`**
+
+```python
+# packages/core/src/pigrocrm/core/deals/service.py -- replace `move_stage` only.
+# Imports gain: from pigrocrm.core.db import today_local
+
+    def move_stage(self, deal_id: UUID, stage_id: UUID, actor: Actor) -> DealRead:
+        """The only supported way to change a deal's stage -- see `DealUpdate`'s own
+        docstring for why it is not also a plain field on `update`. `_settle_probability`
+        -- also used by `create` and `update` -- is what actually keeps "won at 60%"
+        unreachable through *any* of the three; this method no longer settles the
+        probability by itself.
+
+        Since slice 6 it also maintains `chiuso_il`, and the three cases are not
+        symmetric: entering a terminal stage from an open one stamps today, returning to
+        an open stage clears it, and moving between two terminal stages leaves it alone --
+        that is a correction of *which* outcome, not a new closure, and restamping would
+        move the deal into the month somebody fixed the mistake in.
+        """
+        actor.require_write("move_deal")
+        deal = self.repo.get(deal_id)
+        if deal is None:
+            raise NotFound(ENTITY, deal_id)
+
+        target = self.pipeline.get(stage_id)
+        previous = self.pipeline.get(deal.pipeline_stage_id)
+
+        deal.pipeline_stage_id = target.id
+        deal.probabilita = _settle_probability(target, deal.probabilita)
+        _settle_closure_date(deal, previous, target)
+
+        self.activities.record(
+            ENTITY, deal.id, "stage_changed", actor, {"from": previous.nome, "to": target.nome}
+        )
+        self.session.commit()
+        return DealRead.model_validate(deal)
+```
+
+And this module-level function, placed immediately after `_settle_probability` so the two authorities on "what a stage change means" sit together:
+
+```python
+def _settle_closure_date(
+    deal: Deal, previous: PipelineStageRead, target: PipelineStageRead
+) -> None:
+    """The single authority on `deals.chiuso_il`, at module level for the same reason
+    `_settle_probability` is: `AutomationRunner` reaches it through
+    `set_stage_in_transaction` (slice 6 §9.3), and an invariant reachable through two
+    paths must live in one function or it holds on one of them.
+
+    `today_local()` and never `date.today()`: at 00:30 on 1 April in Rome it is still
+    31 March in UTC, and a deal won just after midnight would land in the previous
+    month's conversion rate.
+    """
+    if target.tipo == "open":
+        # Reopened. A reopened deal is not a deal closed in March, and leaving the stamp
+        # would put it in the conversion rate and in the open pipeline at once.
+        deal.chiuso_il = None
+        return
+    if previous.tipo != "open":
+        # won -> lost or lost -> won: a correction, not a closure.
+        return
+    deal.chiuso_il = today_local()
+```
+
+`PipelineStageRead` and `Deal` are already imported in that module.
+
+- [ ] **Step 5: Write the stamp into `set_offer_state`**
+
+```python
+# packages/core/src/pigrocrm/core/documents/service.py -- inside `set_offer_state`,
+# replace the single mutation line with two. Imports gain:
+#   from pigrocrm.core.db import today_local
+
+        previous, document.stato = document.stato, stato
+        # The day this state began. Task B5 inserts the automation runner between this
+        # line and `activities.record` below -- the order in §9.3 is not cosmetic.
+        document.stato_dal = today_local()
+```
+
+- [ ] **Step 6: Write migration 0008 (the two columns and the backfill)**
+
+```python
+# packages/core/migrations/versions/0008_automations_and_dates.py
+"""deals.chiuso_il, documents.stato_dal with its backfill, and automation_config
+
+Revision ID: 0008
+Revises: 0007
+Create Date: 2026-08-21
+
+Three objects in one revision because they are meaningless apart: the automation cannot
+run without its config row and cannot record a closure without the column. The
+`automation_config` section is written by Task B3; this file applies cleanly with or
+without it.
+
+**The backfill is asymmetric, and the asymmetry is the whole argument of spec §4.1.**
+
+`documents.stato_dal` is backfilled from `activities`: the offer timeline's payload is
+`{"da": "inviata", "a": "accettata"}` -- literals of `OfferState`, not text a user can
+edit -- so `occurred_at` of the most recent `state_changed` for a document is a reliable
+answer. Projected to a date in the emitter's zone, not in UTC, for the reason
+`db/clock.py` exists.
+
+`deals.chiuso_il` is **not** backfilled. `DealService.move_stage` records
+`{"from": <nome>, "to": <nome>}` -- the stage *names*, which a user is free to rename
+(residuo R15) -- so deducing a historical closure would mean matching a mutable string,
+which is precisely what `pipeline_stages.code` and `tipo` exist to avoid. Rows closed
+before this migration keep `chiuso_il IS NULL`, the period dashboards exclude them and
+declare how many they excluded. A guessed conversion rate is the worst kind of figure:
+plausible and wrong.
+"""
+
+from collections.abc import Sequence
+
+import sqlalchemy as sa
+from alembic import op
+
+revision: str = "0008"
+down_revision: str | Sequence[str] | None = "0007"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+# Must equal `Settings.timezone`'s default. Hardcoded here rather than read from settings
+# because a migration must be reproducible: re-running it on a differently configured
+# deployment has to produce the same rows it produced the first time.
+_BACKFILL_TZ = "Europe/Rome"
+
+
+def upgrade() -> None:
+    op.add_column("deals", sa.Column("chiuso_il", sa.Date(), nullable=True))
+    op.create_index("ix_deals_chiuso_il", "deals", ["chiuso_il"])
+
+    op.add_column("documents", sa.Column("stato_dal", sa.Date(), nullable=True))
+    op.create_index("ix_documents_stato_dal", "documents", ["stato_dal"])
+
+    # One statement, not a loop: `DISTINCT ON` gives the latest `state_changed` per
+    # document directly, and a Python loop over a million-row activities table inside a
+    # migration is how a deploy times out.
+    op.execute(
+        sa.text(
+            """
+            UPDATE documents AS d
+               SET stato_dal = latest.giorno
+              FROM (
+                    SELECT DISTINCT ON (a.entity_id)
+                           a.entity_id,
+                           (a.occurred_at AT TIME ZONE :tz)::date AS giorno
+                      FROM activities AS a
+                     WHERE a.entity_type = 'document'
+                       AND a.kind = 'state_changed'
+                     ORDER BY a.entity_id, a.occurred_at DESC, a.id DESC
+                   ) AS latest
+             WHERE d.id = latest.entity_id
+               AND d.stato IS NOT NULL
+            """
+        ).bindparams(tz=_BACKFILL_TZ)
+    )
+
+    # `deals.chiuso_il` is deliberately NOT backfilled. See the module docstring.
+
+    # -- automation_config: written by Task B3, in this same revision. --
+
+
+def downgrade() -> None:
+    op.drop_index("ix_documents_stato_dal", table_name="documents")
+    op.drop_column("documents", "stato_dal")
+    op.drop_index("ix_deals_chiuso_il", table_name="deals")
+    op.drop_column("deals", "chiuso_il")
+```
+
+`d.stato IS NOT NULL` is the guard that keeps the backfill to offers: `documents.stato` is `NULL` on every non-offer document, and stamping a `stato_dal` on a row with no state would make "this offer has been sitting for N days" answer for a contract.
+
+- [ ] **Step 7: Update `test_migrations.py`**
+
+Add `"ix_deals_chiuso_il"` and `"ix_documents_stato_dal"` to `HAND_MAINTAINED_INDEXES`, move the two head assertions from `"0007"` to `"0008"`, and append:
+
+```python
+def test_stato_dal_is_backfilled_from_the_timeline_and_chiuso_il_is_not() -> None:
+    """The asymmetry of spec §4.1, asserted rather than described.
+
+    A migration that quietly backfilled `chiuso_il` from the `stage_changed` payload would
+    pass every other test in this file and would silently attribute deals to months
+    derived from a renamable string.
+    """
+    source = (
+        CORE_ROOT / "migrations" / "versions" / "0008_automations_and_dates.py"
+    ).read_text(encoding="utf-8")
+    assert "UPDATE documents" in source
+    assert "state_changed" in source
+    assert "UPDATE deals" not in source, (
+        "deals.chiuso_il must not be backfilled: move_stage records stage *names*, which "
+        "are renamable (residuo R15). See spec §4.1."
+    )
+    assert "stage_changed" not in source
+```
+
+- [ ] **Step 8: Run the tests and watch them pass**
+
+Run: `uv run pytest packages/core/tests/test_closure_dates.py packages/core/tests/test_migrations.py packages/core/tests/test_deals.py packages/core/tests/test_documents_service.py -v`
+Expected: PASS.
+
+- [ ] **Step 9: Full gate**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+Expected: green.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/deals/ \
+        packages/core/src/pigrocrm/core/documents/ \
+        packages/core/migrations/versions/0008_automations_and_dates.py \
+        packages/core/tests/test_migrations.py \
+        packages/core/tests/test_closure_dates.py
+git commit -m "feat(core): deals.chiuso_il and documents.stato_dal, backfilling only one"
+```
+
+---
+### Task B3: `automation_config`, and R5 closed for it
+
+**Files:**
+- Create: `packages/core/src/pigrocrm/core/automations/__init__.py`
+- Create: `packages/core/src/pigrocrm/core/automations/models.py`
+- Create: `packages/core/src/pigrocrm/core/automations/schemas.py`
+- Create: `packages/core/src/pigrocrm/core/automations/repository.py`
+- Create: `packages/core/src/pigrocrm/core/automations/config_service.py`
+- Modify: `packages/core/src/pigrocrm/core/models_registry.py`
+- Modify: `packages/core/migrations/versions/0008_automations_and_dates.py` (the section Task B2 left marked)
+- Modify: `packages/core/src/pigrocrm/core/activities/repository.py` (`by_kind`)
+- Create: `packages/core/tests/test_automation_config.py`
+
+**Interfaces:**
+- Consumes: `Actor.require_admin`; `ActivityService.record`; `Base`, `PrimaryKeyMixin`, `TimestampMixin`.
+- Produces:
+  - `AutomationConfig` — table `automation_config`, columns `id`, `created_at`, `updated_at`, `a1_offerta_accettata_vince_deal: bool` (default `True`), `a2_offerta_inviata_avanza_deal: bool` (default `True`)
+  - `AUTOMATION_KINDS: tuple[str, ...] = ("automazione.stage_spostato", "automazione.non_eseguita", "automazione.configurazione_modificata")`
+  - `AutomationRule = Literal["A1", "A2"]`, `AutomationSkipReason = Literal["stage_bersaglio_assente", "stage_bersaglio_ambiguo", "gia_nello_stato", "regola_disattivata"]`
+  - `AutomationConfigRead(BaseModel)` — the two booleans
+  - `AutomationConfigUpdate(BaseModel)` — the two booleans, both optional, `extra="forbid"`
+  - `AutomationRun(BaseModel)` — `kind: str`, `occurred_at: datetime`, `deal_id: UUID | None`, `regola: str | None`, `motivo: str | None`, `payload: dict[str, Any]`
+  - `AutomationsDescription(BaseModel)` — `configurazione: AutomationConfigRead`, `regole: list[AutomationRuleDescription]`, `esecuzioni: list[AutomationRun]`
+  - `AutomationRuleDescription(BaseModel)` — `codice: AutomationRule`, `titolo: str`, `descrizione: str`, `attiva: bool`
+  - `AutomationConfigRepository(session)` with `get() -> AutomationConfig | None`, `add(row) -> AutomationConfig`
+  - `AutomationConfigService(session)` with exactly two public methods: `describe_automations(actor) -> AutomationsDescription` and `update_automation_config(data, actor) -> AutomationConfigRead`
+  - `ActivityRepository.by_kind(kinds: Sequence[str], limit: int) -> list[Activity]`
+- Task B5 reads the config through `AutomationConfigService`'s repository; Task B12 exposes `describe_automations` as a tool and **not** `update_automation_config`.
+
+**Two public methods, and the split is what the architecture test needs.** Spec §11.1: `describe_automations` is on both surfaces, `update_automation_config` is on the API only, and the slice-6 exclusion list must be **exactly** `update_automation_config`. A single `get`/`upsert` pair would put two names on that list. `get` is therefore *not* public — `describe_automations` returns the configuration as part of its payload, which is what both surfaces actually need.
+
+**Column widths, following slice 3's precedent.** These are booleans so there is no width to get wrong, but the `motivo` and `regola` values that Task B5 writes go into a JSONB payload rather than into a sized column — deliberately, because `activities.payload` is JSONB and a `String(24)` sized to `stage_bersaglio_ambiguo` would be a column sized exactly to its closed set, which is the defect slice 3 just fixed on `invoices.tipo`.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_automation_config.py
+"""Two booleans, and every change to them audited.
+
+Spec §9.6: `automation_config` is a single row like `emitter_profile` and
+`fiscal_profile`, admin-only, and every modification writes an activity -- residuo **R5**
+closed for this table, with slice 3 §7.1's argument: changing what the system will do by
+itself to future data is of a different order of seriousness from renaming a stage.
+
+No flow builder, no configurable conditions, no second effect per rule (§15). Two booleans
+are the configuration surface, and that is a property to defend rather than a starting
+point to grow from.
+"""
+
+import pytest
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.automations.config_service import AutomationConfigService
+from pigrocrm.core.automations.schemas import AutomationConfigUpdate
+from pigrocrm.core.db.base import uuid7
+from pigrocrm.core.errors import PermissionDenied
+
+ADMIN = Actor(id=uuid7(), type="user", role="admin")
+COLLABORATORE = Actor(id=uuid7(), type="user", role="collaboratore")
+READONLY = Actor(id=uuid7(), type="user", role="readonly")
+
+
+def test_both_rules_are_on_by_default(db_session: Session) -> None:
+    """Default `true`, and it is a decision: an automation nobody switched on is an
+    automation nobody knows exists."""
+    described = AutomationConfigService(db_session).describe_automations(ADMIN)
+    assert described.configurazione.a1_offerta_accettata_vince_deal is True
+    assert described.configurazione.a2_offerta_inviata_avanza_deal is True
+
+
+def test_the_row_is_created_on_first_read_and_not_duplicated(db_session: Session) -> None:
+    """Single-row table, like `emitter_profile`. Reading it twice must not leave two."""
+    from sqlalchemy import func, select
+
+    from pigrocrm.core.automations.models import AutomationConfig
+
+    service = AutomationConfigService(db_session)
+    service.describe_automations(ADMIN)
+    service.describe_automations(ADMIN)
+    assert db_session.scalar(select(func.count()).select_from(AutomationConfig)) == 1
+
+
+def test_describe_lists_both_rules_with_their_state(db_session: Session) -> None:
+    described = AutomationConfigService(db_session).describe_automations(ADMIN)
+    assert [rule.codice for rule in described.regole] == ["A1", "A2"]
+    assert all(rule.attiva for rule in described.regole)
+    # The description is what an agent reads to know what the system does by itself.
+    assert "vinto" in described.regole[0].descrizione.lower()
+
+
+def test_an_admin_can_switch_a_rule_off(db_session: Session) -> None:
+    service = AutomationConfigService(db_session)
+    updated = service.update_automation_config(
+        AutomationConfigUpdate(a1_offerta_accettata_vince_deal=False), ADMIN
+    )
+    assert updated.a1_offerta_accettata_vince_deal is False
+    assert updated.a2_offerta_inviata_avanza_deal is True
+
+
+def test_an_omitted_field_changes_nothing(db_session: Session) -> None:
+    """`exclude_unset`, not `exclude_none`: with two booleans, `None` and "not sent" have
+    to be distinguishable or switching A1 off would silently switch A2 on."""
+    service = AutomationConfigService(db_session)
+    service.update_automation_config(
+        AutomationConfigUpdate(a1_offerta_accettata_vince_deal=False), ADMIN
+    )
+    after = service.update_automation_config(
+        AutomationConfigUpdate(a2_offerta_inviata_avanza_deal=False), ADMIN
+    )
+    assert after.a1_offerta_accettata_vince_deal is False
+    assert after.a2_offerta_inviata_avanza_deal is False
+
+
+def test_false_is_a_value_and_not_a_blank(db_session: Session) -> None:
+    """The backend mirror of the frontend rule. A truthiness check here would make
+    "switch it off" impossible to express."""
+    service = AutomationConfigService(db_session)
+    service.update_automation_config(
+        AutomationConfigUpdate(a1_offerta_accettata_vince_deal=False), ADMIN
+    )
+    described = service.describe_automations(ADMIN)
+    assert described.configurazione.a1_offerta_accettata_vince_deal is False
+
+
+@pytest.mark.parametrize("actor", [COLLABORATORE, READONLY])
+def test_only_an_admin_may_change_it(db_session: Session, actor: Actor) -> None:
+    with pytest.raises(PermissionDenied):
+        AutomationConfigService(db_session).update_automation_config(
+            AutomationConfigUpdate(a1_offerta_accettata_vince_deal=False), actor
+        )
+
+
+def test_every_change_writes_an_activity(db_session: Session) -> None:
+    """Residuo R5, closed for this table."""
+    from pigrocrm.core.activities.repository import ActivityRepository
+
+    AutomationConfigService(db_session).update_automation_config(
+        AutomationConfigUpdate(a1_offerta_accettata_vince_deal=False), ADMIN
+    )
+    rows = ActivityRepository(db_session).by_kind(
+        ["automazione.configurazione_modificata"], limit=10
+    )
+    assert len(rows) == 1
+    assert rows[0].actor_id == ADMIN.id
+    assert rows[0].payload["a1_offerta_accettata_vince_deal"] == {"da": True, "a": False}
+    # The unchanged rule is absent, not recorded as unchanged: an audit entry listing
+    # every field on every edit is an audit entry nobody reads.
+    assert "a2_offerta_inviata_avanza_deal" not in rows[0].payload
+
+
+def test_a_no_op_update_writes_no_activity(db_session: Session) -> None:
+    """Saving a form without touching anything is not a change to audit."""
+    from pigrocrm.core.activities.repository import ActivityRepository
+
+    service = AutomationConfigService(db_session)
+    service.update_automation_config(
+        AutomationConfigUpdate(a1_offerta_accettata_vince_deal=True), ADMIN
+    )
+    assert (
+        ActivityRepository(db_session).by_kind(
+            ["automazione.configurazione_modificata"], limit=10
+        )
+        == []
+    )
+
+
+def test_describe_returns_the_recent_runs(db_session: Session) -> None:
+    """§9.5's third surface: the last executions with their outcome, read from
+    `activities` by `kind` -- not a new table (§9.4)."""
+    AutomationConfigService(db_session).update_automation_config(
+        AutomationConfigUpdate(a2_offerta_inviata_avanza_deal=False), ADMIN
+    )
+    described = AutomationConfigService(db_session).describe_automations(ADMIN)
+    assert [run.kind for run in described.esecuzioni] == [
+        "automazione.configurazione_modificata"
+    ]
+
+
+def test_by_kind_orders_newest_first_and_respects_the_limit(db_session: Session) -> None:
+    from pigrocrm.core.activities.repository import ActivityRepository
+    from pigrocrm.core.activities.service import ActivityService
+
+    service = ActivityService(db_session)
+    for index in range(5):
+        service.record("deal", uuid7(), "automazione.stage_spostato", ADMIN, {"n": index})
+    db_session.flush()
+
+    rows = ActivityRepository(db_session).by_kind(["automazione.stage_spostato"], limit=3)
+    assert len(rows) == 3
+    assert [row.payload["n"] for row in rows] == [4, 3, 2]
+
+
+def test_by_kind_with_an_empty_kind_list_returns_nothing(db_session: Session) -> None:
+    """`IN ()` is a syntax error in some dialects and matches everything if written
+    carelessly. An empty filter must mean "nothing", never "all"."""
+    from pigrocrm.core.activities.repository import ActivityRepository
+
+    assert ActivityRepository(db_session).by_kind([], limit=10) == []
+
+
+def test_the_config_service_exposes_exactly_two_public_methods() -> None:
+    """Task B12's exclusion list must be exactly `update_automation_config`, so every
+    other public method needs a tool. Two methods, one tool, one exclusion."""
+    import inspect
+
+    from pigrocrm.core.automations.config_service import AutomationConfigService
+
+    public = {
+        name
+        for name, member in inspect.getmembers(
+            AutomationConfigService, predicate=inspect.isfunction
+        )
+        if not name.startswith("_")
+        and member.__qualname__.startswith("AutomationConfigService.")
+    }
+    assert public == {"describe_automations", "update_automation_config"}
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_automation_config.py -v`
+Expected: collection error — `ModuleNotFoundError: No module named 'pigrocrm.core.automations'`.
+
+- [ ] **Step 3: Write the model**
+
+```python
+# packages/core/src/pigrocrm/core/automations/models.py
+"""The whole configuration surface of this slice's automations: two booleans.
+
+A single row, like `emitter_profile` (slice 2) and `fiscal_profile` (slice 3), and read
+through `AutomationConfigRepository.get()` which creates it on first use. No `singleton`
+CHECK constraint: the repository is the only writer and it never inserts a second row, and
+a constraint pinning a magic primary key would be a second mechanism for the same
+invariant.
+
+No flow builder, no configurable conditions, no second effect per rule (spec §15). A flow
+builder brings a condition evaluator, an execution order, a failure semantics and a way to
+stop a loop: four mechanisms for a product that has two rules.
+"""
+
+from sqlalchemy.orm import Mapped, mapped_column
+
+from pigrocrm.core.db import Base, PrimaryKeyMixin, TimestampMixin
+
+
+class AutomationConfig(Base, PrimaryKeyMixin, TimestampMixin):
+    __tablename__ = "automation_config"
+
+    # A1 -- offerta accettata -> deal vinto. Default on: an automation nobody switched on
+    # is an automation nobody knows exists.
+    a1_offerta_accettata_vince_deal: Mapped[bool] = mapped_column(
+        nullable=False, default=True, server_default="true"
+    )
+    # A2 -- offerta inviata -> il deal avanza allo stage `code='offerta'`, only if its
+    # current `posizione` is lower. Never backwards: see `AutomationRunner`.
+    a2_offerta_inviata_avanza_deal: Mapped[bool] = mapped_column(
+        nullable=False, default=True, server_default="true"
+    )
+```
+
+`server_default="true"` as well as `default=True`: the Python default covers rows this code inserts, the server default covers the row the migration inserts, and without the second the migration's `INSERT` would need to name both columns.
+
+- [ ] **Step 4: Write the schemas**
+
+```python
+# packages/core/src/pigrocrm/core/automations/schemas.py
+"""What the automations expose, and the four reasons one may decline to run.
+
+The `motivo` values are a closed `Literal` in Python and a JSONB value in the database --
+not a sized `String` column. A `String(24)` sized exactly to `stage_bersaglio_ambiguo`
+would be a column sized precisely to its legal set, which is the defect slice 3 just fixed
+on `invoices.tipo`: the width rejects a wrong value before the CHECK beside it can, and
+Postgres answers with a raw truncation error instead of the named violation.
+"""
+
+from datetime import datetime
+from typing import Any, Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict
+
+# New `kind` values. No migration: `activities.kind` is an open value by project
+# (slice 1 §5.8) and `ActivityService.record` takes `kind: str` and truncates to the
+# column width without consulting any Literal.
+KIND_STAGE_MOVED = "automazione.stage_spostato"
+KIND_NOT_EXECUTED = "automazione.non_eseguita"
+KIND_CONFIG_CHANGED = "automazione.configurazione_modificata"
+AUTOMATION_KINDS: tuple[str, ...] = (
+    KIND_STAGE_MOVED,
+    KIND_NOT_EXECUTED,
+    KIND_CONFIG_CHANGED,
+)
+
+AutomationRule = Literal["A1", "A2"]
+
+# The four declared conditions the runner absorbs. Anything not in this list propagates
+# and rolls the trigger back (§9.3): a database that cannot write is not an automation
+# that did not fire.
+AutomationSkipReason = Literal[
+    "stage_bersaglio_assente",
+    "stage_bersaglio_ambiguo",
+    "gia_nello_stato",
+    "regola_disattivata",
+]
+
+
+class AutomationConfigRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    a1_offerta_accettata_vince_deal: bool
+    a2_offerta_inviata_avanza_deal: bool
+
+
+class AutomationConfigUpdate(BaseModel):
+    """Both optional, and read with `exclude_unset=True`.
+
+    With two booleans, `None` and "not sent" must be distinguishable: `exclude_none` would
+    make "switch A1 off without mentioning A2" indistinguishable from "switch A1 off and
+    A2 on". This is residuo A14's shape, avoided rather than inherited -- there is no
+    nullable typed column here, so no spelling of "clear it" is needed at all.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    a1_offerta_accettata_vince_deal: bool | None = None
+    a2_offerta_inviata_avanza_deal: bool | None = None
+
+
+class AutomationRuleDescription(BaseModel):
+    codice: AutomationRule
+    titolo: str
+    descrizione: str
+    attiva: bool
+
+
+class AutomationRun(BaseModel):
+    kind: str
+    occurred_at: datetime
+    deal_id: UUID | None
+    regola: str | None
+    motivo: str | None
+    payload: dict[str, Any]
+
+
+class AutomationsDescription(BaseModel):
+    configurazione: AutomationConfigRead
+    regole: list[AutomationRuleDescription]
+    esecuzioni: list[AutomationRun]
+
+
+# The prose an agent and a human both read. Here rather than in the service so the two
+# surfaces cannot drift, and in Italian like every other user-facing string.
+RULE_DESCRIPTIONS: dict[AutomationRule, tuple[str, str]] = {
+    "A1": (
+        "Offerta accettata → deal vinto",
+        "Quando un'offerta passa da «inviata» ad «accettata», il deal collegato viene "
+        "spostato nello stato con code «vinto», o nell'unico stato di tipo «won». Se lo "
+        "stato manca o ce ne sono due, l'automazione non indovina: non fa nulla e "
+        "registra il motivo.",
+    ),
+    "A2": (
+        "Offerta inviata → il deal avanza",
+        "Quando un'offerta passa da «bozza» a «inviata», il deal collegato avanza allo "
+        "stato con code «offerta», ma solo se la sua posizione attuale è precedente. Non "
+        "torna mai indietro: un deal già in negoziazione non retrocede perché è stata "
+        "mandata una seconda offerta.",
+    ),
+}
+```
+
+- [ ] **Step 5: Write the repository and `by_kind`**
+
+```python
+# packages/core/src/pigrocrm/core/automations/repository.py
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.automations.models import AutomationConfig
+
+
+class AutomationConfigRepository:
+    """Single row, created on first read.
+
+    Created here rather than by the migration alone so that a database restored from
+    before this slice, or a test using `Base.metadata.create_all`, behaves identically to
+    a freshly migrated one. `flush`, never `commit`: the service owns the transaction.
+    """
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def get_or_create(self) -> AutomationConfig:
+        row = self.session.scalar(select(AutomationConfig).limit(1))
+        if row is None:
+            row = AutomationConfig()
+            self.session.add(row)
+            self.session.flush()
+        return row
+```
+
+```python
+# packages/core/src/pigrocrm/core/activities/repository.py -- append one method.
+# `list` is not defined on this class, so there is no last-method constraint to respect
+# here; check before appending and move this above `list` if one has appeared.
+
+    def by_kind(self, kinds: Sequence[str], limit: int = 20) -> list[Activity]:
+        """Activities of the given kinds, newest first, across every entity.
+
+        Spec §9.5 and §11.1: the automation run log is a read of `activities` by `kind`,
+        not a new table (§9.4). A dedicated execution log would be a table whose only
+        function is answering a question `activities` answers better -- the same reasoning
+        that made slice 3 refuse to historicise `fiscal_profile`.
+
+        An empty `kinds` returns nothing. `IN ()` is not portable and a carelessly written
+        empty filter matches everything, which here would dump the whole timeline into a
+        settings page.
+        """
+        if not kinds:
+            return []
+        return list(
+            self.session.execute(
+                select(Activity)
+                .where(Activity.kind.in_(list(kinds)))
+                .order_by(Activity.occurred_at.desc(), Activity.id.desc())
+                .limit(limit)
+            ).scalars()
+        )
+```
+
+Add `from collections.abc import Sequence` to that file's imports.
+
+- [ ] **Step 6: Write the service**
+
+```python
+# packages/core/src/pigrocrm/core/automations/config_service.py
+"""Read and change what the system does by itself.
+
+Two public methods, and the split is what the architecture test needs: spec §11.1 puts
+`describe_automations` on both surfaces and `update_automation_config` on the API only,
+and requires the slice-6 exclusion list to be **exactly** one name. A `get`/`upsert` pair
+would put two names on that list, so `get` is not public -- `describe_automations` returns
+the configuration inside its payload, which is what both surfaces actually need.
+"""
+
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.activities.repository import ActivityRepository
+from pigrocrm.core.activities.service import ActivityService
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.automations.repository import AutomationConfigRepository
+from pigrocrm.core.automations.schemas import (
+    AUTOMATION_KINDS,
+    KIND_CONFIG_CHANGED,
+    RULE_DESCRIPTIONS,
+    AutomationConfigRead,
+    AutomationConfigUpdate,
+    AutomationRule,
+    AutomationRuleDescription,
+    AutomationRun,
+    AutomationsDescription,
+)
+
+ENTITY = "automation_config"
+_RUN_LIMIT = 20
+
+
+class AutomationConfigService:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+        self.repo = AutomationConfigRepository(session)
+        self.activities = ActivityService(session)
+        self.activity_repo = ActivityRepository(session)
+
+    def describe_automations(self, actor: Actor) -> AutomationsDescription:
+        """The two rules, their state, and the last twenty executions with their outcome.
+
+        No authorisation check: it is a read of what the system does by itself, every role
+        may see it, and spec §13 states this slice adds no authorisation rule. `actor` is
+        still taken because every service method in this project takes it.
+
+        This method writes -- `get_or_create` may insert the single row -- so it commits.
+        A read method that commits is unusual enough to say out loud: the alternative is
+        that the first `GET` of a fresh installation leaves an uncommitted row and the
+        second one inserts a duplicate.
+        """
+        row = self.repo.get_or_create()
+        config = AutomationConfigRead.model_validate(row)
+        rules = [
+            AutomationRuleDescription(
+                codice=code,
+                titolo=RULE_DESCRIPTIONS[code][0],
+                descrizione=RULE_DESCRIPTIONS[code][1],
+                attiva=self._is_active(config, code),
+            )
+            for code in ("A1", "A2")
+        ]
+        runs = [
+            AutomationRun(
+                kind=activity.kind,
+                occurred_at=activity.occurred_at,
+                deal_id=activity.entity_id if activity.entity_type == "deal" else None,
+                regola=activity.payload.get("regola"),
+                motivo=activity.payload.get("motivo"),
+                payload=activity.payload,
+            )
+            for activity in self.activity_repo.by_kind(AUTOMATION_KINDS, _RUN_LIMIT)
+        ]
+        self.session.commit()
+        return AutomationsDescription(
+            configurazione=config, regole=rules, esecuzioni=runs
+        )
+
+    @staticmethod
+    def _is_active(config: AutomationConfigRead, code: AutomationRule) -> bool:
+        if code == "A1":
+            return config.a1_offerta_accettata_vince_deal
+        return config.a2_offerta_inviata_avanza_deal
+
+    def update_automation_config(
+        self, data: AutomationConfigUpdate, actor: Actor
+    ) -> AutomationConfigRead:
+        """Admin only, audited, and absent from the MCP surface.
+
+        Admin because it changes what the system will do to *future* data without a human
+        in the loop -- slice 4 §11's reason 2, and the reason it has no MCP tool. The audit
+        entry is residuo **R5** closed for this table, with slice 3 §7.1's argument:
+        changing what the system does by itself is of a different order of seriousness from
+        renaming a stage.
+
+        `exclude_unset=True`, not `exclude_none`: with two booleans, "not sent" and `None`
+        have to be distinguishable, or switching A1 off would silently switch A2 on.
+        """
+        actor.require_admin("update_automation_config")
+        row = self.repo.get_or_create()
+
+        changes: dict[str, Any] = {}
+        for field, value in data.model_dump(exclude_unset=True).items():
+            if value is None:
+                continue
+            current = getattr(row, field)
+            # `is not` on booleans, and only a real difference is recorded: an audit entry
+            # that lists every field on every save is an audit entry nobody reads.
+            if current is not value:
+                changes[field] = {"da": current, "a": value}
+                setattr(row, field, value)
+
+        if changes:
+            # Last thing that touches the session before the commit, as
+            # `ActivityService.record`'s docstring requires.
+            self.activities.record(ENTITY, row.id, KIND_CONFIG_CHANGED, actor, changes)
+        self.session.commit()
+        return AutomationConfigRead.model_validate(row)
+```
+
+```python
+# packages/core/src/pigrocrm/core/automations/__init__.py
+from pigrocrm.core.automations.config_service import AutomationConfigService
+from pigrocrm.core.automations.models import AutomationConfig
+from pigrocrm.core.automations.schemas import (
+    AUTOMATION_KINDS,
+    KIND_CONFIG_CHANGED,
+    KIND_NOT_EXECUTED,
+    KIND_STAGE_MOVED,
+    AutomationConfigRead,
+    AutomationConfigUpdate,
+    AutomationRule,
+    AutomationRuleDescription,
+    AutomationRun,
+    AutomationsDescription,
+    AutomationSkipReason,
+)
+
+__all__ = [
+    "AUTOMATION_KINDS",
+    "KIND_CONFIG_CHANGED",
+    "KIND_NOT_EXECUTED",
+    "KIND_STAGE_MOVED",
+    "AutomationConfig",
+    "AutomationConfigRead",
+    "AutomationConfigService",
+    "AutomationConfigUpdate",
+    "AutomationRule",
+    "AutomationRuleDescription",
+    "AutomationRun",
+    "AutomationSkipReason",
+    "AutomationsDescription",
+]
+```
+
+`AutomationRunner` joins this `__all__` in Task B5.
+
+- [ ] **Step 7: Register the model and finish the migration**
+
+```python
+# packages/core/src/pigrocrm/core/models_registry.py -- one import, alphabetically placed.
+from pigrocrm.core.automations.models import AutomationConfig  # noqa: F401
+```
+
+```python
+# packages/core/migrations/versions/0008_automations_and_dates.py
+# Replace the marked section in `upgrade()`:
+    op.create_table(
+        "automation_config",
+        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True),
+            server_default=sa.text("now()"), nullable=False,
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True),
+            server_default=sa.text("now()"), nullable=False,
+        ),
+        sa.Column(
+            "a1_offerta_accettata_vince_deal", sa.Boolean(),
+            server_default=sa.text("true"), nullable=False,
+        ),
+        sa.Column(
+            "a2_offerta_inviata_avanza_deal", sa.Boolean(),
+            server_default=sa.text("true"), nullable=False,
+        ),
+    )
+    # The single row, seeded here so a migrated installation has it before the first
+    # request. `AutomationConfigRepository.get_or_create` covers the other path -- a
+    # database built by `Base.metadata.create_all`, which is how the test suite builds
+    # one. Both paths must work: slice 3 lost a sequence to exactly this gap.
+    op.execute(
+        sa.text("INSERT INTO automation_config (id) VALUES (gen_random_uuid())")
+    )
+
+# And in `downgrade()`, before the column drops:
+    op.drop_table("automation_config")
+```
+
+`gen_random_uuid()` rather than a UUIDv7: it is one row, its id is never sorted on, and `pgcrypto` is not needed — `gen_random_uuid()` is built into PostgreSQL 13 and later.
+
+- [ ] **Step 8: Run the tests and watch them pass**
+
+Run: `uv run pytest packages/core/tests/test_automation_config.py packages/core/tests/test_migrations.py packages/core/tests/test_activities.py -v`
+Expected: PASS.
+
+Add `"automation_config"` to `test_every_table_the_slice_needs_exists`'s expected set in `test_migrations.py` if that test enumerates tables per slice; it does, as of slice 1.
+
+- [ ] **Step 9: Full gate**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+Expected: green.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/automations/ \
+        packages/core/src/pigrocrm/core/activities/repository.py \
+        packages/core/src/pigrocrm/core/models_registry.py \
+        packages/core/migrations/versions/0008_automations_and_dates.py \
+        packages/core/tests/test_automation_config.py \
+        packages/core/tests/test_migrations.py
+git commit -m "feat(automations): automation_config with two booleans, audited, closing R5"
+```
+
+---
+
+### Task B4: `set_stage_in_transaction`, and the mechanical check on who may call it
+
+**Files:**
+- Modify: `packages/core/src/pigrocrm/core/deals/service.py`
+- Modify: `packages/core/tests/test_architecture.py`
+- Create: `packages/core/tests/test_in_transaction_callers.py`
+- Create: `packages/core/tests/test_set_stage_in_transaction.py`
+
+**Interfaces:**
+- Consumes: `_settle_probability`, `_settle_closure_date` (Task B2); `PipelineStageRead`; `Deal`.
+- Produces:
+  - `DealService.set_stage_in_transaction(self, deal: Deal, stage: PipelineStageRead) -> None` — mutates, does not record, does not commit, does not authorise.
+  - In `packages/core/tests/test_architecture.py`: `IN_TRANSACTION_SUFFIX = "_in_transaction"`, `IN_TRANSACTION_CALLER_PREFIX = "automations"`, and `test_in_transaction_methods_are_called_only_from_core_automations`.
+- Task B5 is the only caller.
+
+**The one new convention this slice introduces, and it is introduced with its enforcement in the same commit.** Spec §9.3:
+
+> Un servizio può esporre un metodo `*_in_transaction(...)` che muta, non registra, non committa e non controlla l'autorizzazione. Il test di architettura verifica che tali metodi siano chiamati **solo** da `core/automations/`.
+
+The runner cannot call `DealService.move_stage`, because that method commits and records — it would commit the offer's state change before the trigger was finished, and it would write a second timeline entry for one movement. So the mutation is separated out. Separating it creates a method that skips authorisation, which is exactly the kind of thing that gets called from a router eighteen months later by someone who read its name and not its docstring. Hence the test.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# packages/core/tests/test_set_stage_in_transaction.py
+"""The mutation half of a stage change, without the transaction or the timeline.
+
+Four things it deliberately does **not** do, each of which is a test below: authorise,
+record, commit, or reach the database on its own. It is called by `AutomationRunner`
+inside `set_offer_state`'s transaction, where the authorisation has already happened
+(`actor.require_write`) and the commit belongs to the trigger.
+
+`_settle_probability` is reused rather than reimplemented, which is the only reason that
+function is at module level: the invariant "won at 60% is unreachable" has to hold on this
+path too, and an invariant reachable through two paths must live in one function.
+"""
+
+import pytest
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.db import today_local
+from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.deals.service import DealService
+from pigrocrm.core.pipeline.service import PipelineService
+
+ADMIN = Actor(id=None, type="system", role="admin")
+READONLY = Actor(id=None, type="user", role="readonly")
+
+
+@pytest.fixture
+def stages(db_session: Session) -> dict:
+    PipelineService(db_session).seed_defaults(ADMIN)
+    return {s.code: s for s in PipelineService(db_session).list() if s.code is not None}
+
+
+@pytest.fixture
+def deal(db_session: Session, stages: dict) -> Deal:
+    customer = Customer(ragione_sociale="Cliente Srl", nazione="IT", custom_fields={})
+    db_session.add(customer)
+    db_session.flush()
+    row = Deal(
+        nome="Impianto", customer_id=customer.id,
+        pipeline_stage_id=stages["lead"].id, probabilita=50, custom_fields={},
+    )
+    db_session.add(row)
+    db_session.flush()
+    return row
+
+
+def test_it_moves_the_deal_and_settles_the_probability(
+    db_session: Session, deal: Deal, stages: dict
+) -> None:
+    DealService(db_session).set_stage_in_transaction(deal, stages["vinto"])
+    assert deal.pipeline_stage_id == stages["vinto"].id
+    # "Won at 60%" stays unreachable through this path too.
+    assert deal.probabilita == 100
+
+
+def test_it_settles_the_closure_date(db_session: Session, deal: Deal, stages: dict) -> None:
+    DealService(db_session).set_stage_in_transaction(deal, stages["vinto"])
+    assert deal.chiuso_il == today_local()
+
+
+def test_it_records_nothing(db_session: Session, deal: Deal, stages: dict) -> None:
+    """The runner writes its own single entry (§9.5). Two entries for one movement is the
+    defect §9.3 names explicitly."""
+    from pigrocrm.core.activities.repository import ActivityRepository
+
+    DealService(db_session).set_stage_in_transaction(deal, stages["vinto"])
+    db_session.flush()
+    assert ActivityRepository(db_session).by_kind(["stage_changed"], limit=10) == []
+
+
+def test_it_does_not_commit(db_session: Session, deal: Deal, stages: dict) -> None:
+    """The property the whole design rests on: rolling back must undo it."""
+    DealService(db_session).set_stage_in_transaction(deal, stages["vinto"])
+    db_session.rollback()
+    reloaded = db_session.get(Deal, deal.id)
+    # The row itself vanished with the rollback of the fixture's own insert, which is
+    # itself proof that nothing was committed.
+    assert reloaded is None or reloaded.pipeline_stage_id == stages["lead"].id
+
+
+def test_it_does_not_check_authorisation(
+    db_session: Session, deal: Deal, stages: dict
+) -> None:
+    """Not an oversight -- the point. The authorisation is the trigger's
+    (`set_offer_state` calls `actor.require_write`), and a `readonly` actor never reaches
+    the runner. Re-authorising here would be harmless; *elevating* here would make
+    accepting an offer a way to write to a deal the actor could not otherwise touch, and
+    the architecture test in `test_in_transaction_callers.py` is what keeps this method
+    out of a router."""
+    # No actor parameter exists to pass; the signature is the assertion.
+    import inspect
+
+    signature = inspect.signature(DealService.set_stage_in_transaction)
+    assert "actor" not in signature.parameters
+    assert list(signature.parameters) == ["self", "deal", "stage"]
+
+
+def test_moving_back_to_an_open_stage_clears_the_closure_date(
+    db_session: Session, deal: Deal, stages: dict
+) -> None:
+    service = DealService(db_session)
+    service.set_stage_in_transaction(deal, stages["vinto"])
+    service.set_stage_in_transaction(deal, stages["negoziazione"])
+    assert deal.chiuso_il is None
+```
+
+```python
+# packages/core/tests/test_in_transaction_callers.py
+"""The one new convention of slice 6, enforced.
+
+Spec §9.3: a service may expose a `*_in_transaction(...)` method that mutates, does not
+record, does not commit and does not check authorisation -- and such methods must be
+called **only** from `core/automations/`.
+
+Without this test the convention is a comment. `set_stage_in_transaction` skips
+`actor.require_write`, so a router calling it eighteen months from now -- because its name
+reads like a helper -- would be an authorisation bypass with no error anywhere. The check
+is on the *call site*, in the AST, across `packages/core`, `apps/api` and `apps/mcp`.
+"""
+
+import ast
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SEARCHED_ROOTS = (
+    REPO_ROOT / "packages" / "core" / "src" / "pigrocrm" / "core",
+    REPO_ROOT / "apps" / "api" / "src" / "pigrocrm_api",
+    REPO_ROOT / "apps" / "mcp" / "src" / "pigrocrm_mcp",
+)
+SUFFIX = "_in_transaction"
+# The one directory allowed to call them, as a path fragment rather than a module name so
+# a future `core/automations/rules/foo.py` is covered without an edit here.
+ALLOWED_FRAGMENT = "core/automations/"
+
+
+def _calls_with_suffix(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr.endswith(SUFFIX):
+            found.append(f"{func.attr} (line {node.lineno})")
+    return found
+
+
+def _definitions_with_suffix(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return [
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name.endswith(SUFFIX)
+    ]
+
+
+def test_in_transaction_methods_are_called_only_from_core_automations() -> None:
+    offenders: list[str] = []
+    for root in SEARCHED_ROOTS:
+        for path in sorted(root.rglob("*.py")):
+            as_posix = path.as_posix()
+            if ALLOWED_FRAGMENT in as_posix:
+                continue
+            calls = _calls_with_suffix(path)
+            if calls:
+                offenders.append(f"{path.relative_to(REPO_ROOT)}: {calls}")
+    assert not offenders, (
+        "a `*_in_transaction` method mutates without checking authorisation, without "
+        "recording and without committing; it may only be called from core/automations/ "
+        f"(spec §9.3). Offending call sites:\n" + "\n".join(offenders)
+    )
+
+
+def test_at_least_one_such_method_exists_so_the_guard_is_not_vacuous() -> None:
+    """A guard over an empty set passes forever and proves nothing."""
+    defined: list[str] = []
+    for path in sorted(SEARCHED_ROOTS[0].rglob("*.py")):
+        defined.extend(_definitions_with_suffix(path))
+    assert "set_stage_in_transaction" in defined, defined
+
+
+def test_the_guard_catches_a_call_from_outside(tmp_path: Path) -> None:
+    """The guard proven to catch what it claims to, in the same style as the
+    import-direction tests in test_architecture.py."""
+    offending = tmp_path / "router.py"
+    offending.write_text(
+        "def endpoint(session, deal, stage):\n"
+        "    DealService(session).set_stage_in_transaction(deal, stage)\n",
+        encoding="utf-8",
+    )
+    assert _calls_with_suffix(offending), "the AST walk failed to see an obvious call"
+
+
+def test_the_runner_is_where_the_call_actually_is() -> None:
+    """Positive control: the allowed directory really does contain the call, so the test
+    above is not passing merely because nothing calls it anywhere."""
+    runner = SEARCHED_ROOTS[0] / "automations" / "runner.py"
+    assert runner.exists(), "core/automations/runner.py is missing (Task B5)"
+    assert _calls_with_suffix(runner), "the runner does not call set_stage_in_transaction"
+```
+
+`test_the_runner_is_where_the_call_actually_is` fails until Task B5 lands. That is intentional and is called out in Step 3.
+
+- [ ] **Step 2: Run them and watch them fail**
+
+Run: `uv run pytest packages/core/tests/test_set_stage_in_transaction.py packages/core/tests/test_in_transaction_callers.py -v`
+Expected: the first file FAILS with `AttributeError: 'DealService' object has no attribute 'set_stage_in_transaction'`; in the second, `test_at_least_one_such_method_exists_so_the_guard_is_not_vacuous` and `test_the_runner_is_where_the_call_actually_is` FAIL.
+
+- [ ] **Step 3: Add the method**
+
+```python
+# packages/core/src/pigrocrm/core/deals/service.py -- insert immediately after
+# `move_stage`, so the two ways a stage changes sit together. NOT after `list`, which must
+# stay the last method in the class.
+
+    def set_stage_in_transaction(self, deal: Deal, stage: PipelineStageRead) -> None:
+        """Move a deal to a stage, and nothing else. Slice 6 §9.3's convention.
+
+        Mutates. Does **not** record an activity, does **not** commit, and does **not**
+        check authorisation. Callable only from `core/automations/`, and
+        `packages/core/tests/test_in_transaction_callers.py` enforces that on the AST of
+        every call site in the repository.
+
+        Why it exists at all: `AutomationRunner` runs inside its trigger's transaction
+        (`DocumentService.set_offer_state`), and `move_stage` commits and records. Calling
+        `move_stage` from the runner would commit the offer's state change before the
+        trigger had finished -- destroying the atomicity that is the whole answer to "what
+        happens if an automation fails halfway" -- and would write a second timeline entry
+        for a single movement.
+
+        Why it does not authorise: the trigger already did (`set_offer_state` calls
+        `actor.require_write`), so a `readonly` actor never reaches the runner. Adding a
+        check here would be harmless; *elevating* here would turn accepting an offer into a
+        way to write to a deal the actor could not otherwise touch. It takes no `actor`
+        parameter at all, so there is nothing to elevate with.
+
+        `_settle_probability` and `_settle_closure_date` are reused rather than
+        reimplemented, and that is the only reason both are module-level functions: "won at
+        60%" and "closed in the wrong month" must stay unreachable through this path too,
+        and an invariant reachable through two paths has to live in one place.
+        """
+        deal.pipeline_stage_id = stage.id
+        deal.probabilita = _settle_probability(stage, deal.probabilita)
+        _settle_closure_date(deal, self.pipeline.get(deal.pipeline_stage_id), stage)
+```
+
+That last line has a bug worth reading twice: by the time it runs, `deal.pipeline_stage_id` is already the *target*, so `self.pipeline.get(...)` would return the target as the "previous" stage and `_settle_closure_date` would take the "correction between two terminal stages" branch. Read the previous stage **first**:
+
+```python
+        previous = self.pipeline.get(deal.pipeline_stage_id)
+        deal.pipeline_stage_id = stage.id
+        deal.probabilita = _settle_probability(stage, deal.probabilita)
+        _settle_closure_date(deal, previous, stage)
+```
+
+Use this second form. `test_it_settles_the_closure_date` is what catches the first one.
+
+- [ ] **Step 4: Run the tests and watch them pass**
+
+Run: `uv run pytest packages/core/tests/test_set_stage_in_transaction.py -v`
+Expected: PASS, six tests.
+
+Run: `uv run pytest packages/core/tests/test_in_transaction_callers.py -v`
+Expected: three PASS, `test_the_runner_is_where_the_call_actually_is` still FAILS with "core/automations/runner.py is missing (Task B5)". That failure is the handoff to the next task; leave it red and note it in the commit message.
+
+- [ ] **Step 5: Cross-reference from the architecture test**
+
+```python
+# packages/core/tests/test_architecture.py -- append, so the whole architectural rule set
+# is discoverable from one file even though the AST walk lives in its own module.
+def test_the_in_transaction_convention_has_its_own_guard() -> None:
+    """Slice 6 §9.3's rule is enforced in `test_in_transaction_callers.py`, which walks
+    the AST of every call site in three packages. Named here because this file is where
+    somebody looks for the project's architectural rules, and a rule enforced in a file
+    nobody opens is a rule that gets deleted in a refactor."""
+    guard = CORE_ROOT / "tests" / "test_in_transaction_callers.py"
+    assert guard.exists(), "the *_in_transaction caller guard is missing"
+    assert "core/automations/" in guard.read_text(encoding="utf-8")
+```
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/deals/service.py \
+        packages/core/tests/test_set_stage_in_transaction.py \
+        packages/core/tests/test_in_transaction_callers.py \
+        packages/core/tests/test_architecture.py
+git commit -m "feat(deals): set_stage_in_transaction, with an AST guard on its callers"
+```
+
+The suite is intentionally one test red at this point (`test_the_runner_is_where_the_call_actually_is`). Task B5 closes it, and the two tasks are adjacent for that reason.
+
+---
+### Task B5: `AutomationRunner` — A1, A2, and the four declared reasons for not running
+
+**Files:**
+- Create: `packages/core/src/pigrocrm/core/automations/runner.py`
+- Modify: `packages/core/src/pigrocrm/core/automations/__init__.py`
+- Modify: `packages/core/src/pigrocrm/core/pipeline/repository.py` (`get_by_tipo`)
+- Create: `packages/core/tests/test_automation_runner.py`
+
+**Interfaces:**
+- Consumes: `DealService.set_stage_in_transaction(deal, stage)` (Task B4); `AutomationConfigRepository.get_or_create()` (Task B3); `ActivityService.record`; `PipelineRepository.get_by_code`; `DealRepository.get`.
+- Produces:
+  - `AutomationRunner(session: Session)` with one public method:
+    `on_offer_state_changed(self, document: Document, previous: str, actor: Actor) -> None`
+  - `PipelineRepository.get_by_tipo(tipo: str) -> list[PipelineStage]` — a **list**, because "there are two `won` stages" is an answer the runner must be able to see (R14).
+  - `AutomationOutcome` — frozen dataclass, `rule: AutomationRule | None`, `moved: bool`, `reason: AutomationSkipReason | None`. Returned by the private `_apply_*` methods; not part of the public surface.
+- Task B6 calls `on_offer_state_changed` from `DocumentService.set_offer_state`.
+
+**No `actor.require_*` anywhere in this file.** The trigger already authorised (`set_offer_state` calls `actor.require_write`), so a `readonly` actor never reaches here. The runner neither re-authorises nor elevates: if it could elevate, accepting an offer would become a way to write to a deal the actor could not otherwise touch.
+
+**The exception policy, which is where this kind of code usually lies.** The runner absorbs a **declared list** of four domain conditions — target stage absent, target stage ambiguous, deal already in the target state, rule switched off — records each, and lets the trigger continue. Every other exception **propagates and rolls everything back**. A database that cannot write is not an automation that did not fire, and it is the one case where the user should not see their offer accepted.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_automation_runner.py
+"""**Criteria 8 and 9.** The two rules, and the four reasons one may decline.
+
+Everything here runs inside the caller's transaction: the runner never commits, so every
+test flushes and reads back rather than committing. That is not a testing convenience, it
+is the property under test -- §9.3's answer to "what happens if an automation fails
+halfway" is that there is no halfway.
+
+`§9.5`'s fourth surface is the one that usually goes missing, so it gets the most tests:
+without an activity for the *non*-execution, "it did not fire" and "it was not supposed to
+fire" are the same empty screen.
+"""
+
+import pytest
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.activities.repository import ActivityRepository
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.automations.runner import AutomationRunner
+from pigrocrm.core.automations.schemas import KIND_NOT_EXECUTED, KIND_STAGE_MOVED
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.db.base import uuid7
+from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.documents.models import Document
+from pigrocrm.core.pipeline.models import PipelineStage
+from pigrocrm.core.pipeline.service import PipelineService
+
+ADMIN = Actor(id=uuid7(), type="user", role="admin")
+SEED = Actor(id=None, type="system", role="admin")
+
+
+@pytest.fixture
+def stages(db_session: Session) -> dict:
+    PipelineService(db_session).seed_defaults(SEED)
+    return {s.code: s for s in PipelineService(db_session).list() if s.code is not None}
+
+
+@pytest.fixture
+def deal(db_session: Session, stages: dict) -> Deal:
+    customer = Customer(ragione_sociale="Cliente Srl", nazione="IT", custom_fields={})
+    db_session.add(customer)
+    db_session.flush()
+    row = Deal(
+        nome="Impianto", customer_id=customer.id,
+        pipeline_stage_id=stages["lead"].id, probabilita=10, custom_fields={},
+    )
+    db_session.add(row)
+    db_session.flush()
+    return row
+
+
+def _offer(db_session: Session, deal: Deal, stato: str) -> Document:
+    document = Document(
+        deal_id=deal.id, tipo="offerta", titolo="Offerta impianti",
+        stato=stato, versione_corrente=1, custom_fields={},
+    )
+    db_session.add(document)
+    db_session.flush()
+    return document
+
+
+def _kinds(db_session: Session, kind: str) -> list:
+    return ActivityRepository(db_session).by_kind([kind], limit=20)
+
+
+# -- A1 --------------------------------------------------------------------------
+
+def test_a1_moves_the_deal_to_won(db_session: Session, deal: Deal, stages: dict) -> None:
+    document = _offer(db_session, deal, "accettata")
+    AutomationRunner(db_session).on_offer_state_changed(document, "inviata", ADMIN)
+    db_session.flush()
+    assert deal.pipeline_stage_id == stages["vinto"].id
+    assert deal.probabilita == 100
+
+
+def test_a1_writes_exactly_one_activity_attributed_to_the_system(
+    db_session: Session, deal: Deal, stages: dict
+) -> None:
+    """§16 criterion 8. One entry, `actor_type='system'`, and `attivata_da` naming the
+    human -- the timeline says "the system did it" *and* "because you accepted that
+    offer". `Actor.system()` carries `id=None`, which is why the trigger's actor lives in
+    the payload."""
+    document = _offer(db_session, deal, "accettata")
+    AutomationRunner(db_session).on_offer_state_changed(document, "inviata", ADMIN)
+    db_session.flush()
+
+    moved = _kinds(db_session, KIND_STAGE_MOVED)
+    assert len(moved) == 1
+    entry = moved[0]
+    assert entry.entity_type == "deal"
+    assert entry.entity_id == deal.id
+    assert entry.actor_type == "system"
+    assert entry.actor_id is None
+    assert entry.payload["regola"] == "A1"
+    assert entry.payload["documento_id"] == str(document.id)
+    assert entry.payload["attivata_da"] == str(ADMIN.id)
+    assert entry.payload["da"] == "Lead"
+    assert entry.payload["a"] == "Vinto"
+
+
+def test_a1_does_not_write_a_second_stage_changed_entry(
+    db_session: Session, deal: Deal, stages: dict
+) -> None:
+    """§9.3: one entry for the movement, not two. Calling `move_stage` from the runner
+    would produce a parallel `stage_changed` and the timeline would show one movement
+    twice."""
+    document = _offer(db_session, deal, "accettata")
+    AutomationRunner(db_session).on_offer_state_changed(document, "inviata", ADMIN)
+    db_session.flush()
+    assert _kinds(db_session, "stage_changed") == []
+
+
+def test_a1_ignores_a_transition_that_is_not_inviata_to_accettata(
+    db_session: Session, deal: Deal, stages: dict
+) -> None:
+    """`rifiutata` moves nothing: an offer refused is almost always followed by a revision,
+    and marking the deal lost would force reopening it to tell the truth (§9.2)."""
+    document = _offer(db_session, deal, "rifiutata")
+    AutomationRunner(db_session).on_offer_state_changed(document, "inviata", ADMIN)
+    db_session.flush()
+    assert deal.pipeline_stage_id == stages["lead"].id
+    assert _kinds(db_session, KIND_STAGE_MOVED) == []
+    # Nor is it a *skipped* automation: nothing was supposed to happen.
+    assert _kinds(db_session, KIND_NOT_EXECUTED) == []
+
+
+def test_a1_on_an_offer_without_a_deal_does_nothing(db_session: Session) -> None:
+    customer = Customer(ragione_sociale="Cliente Srl", nazione="IT", custom_fields={})
+    db_session.add(customer)
+    db_session.flush()
+    document = Document(
+        customer_id=customer.id, tipo="offerta", titolo="Offerta",
+        stato="accettata", versione_corrente=1, custom_fields={},
+    )
+    db_session.add(document)
+    db_session.flush()
+
+    AutomationRunner(db_session).on_offer_state_changed(document, "inviata", ADMIN)
+    db_session.flush()
+    assert _kinds(db_session, KIND_STAGE_MOVED) == []
+
+
+def test_a1_resolves_by_code_and_not_by_name(
+    db_session: Session, deal: Deal, stages: dict
+) -> None:
+    """The stage renamed, the automation unaffected. This is what `code` is for
+    (slice 1 §5.4, residuo R11)."""
+    won = db_session.get(PipelineStage, stages["vinto"].id)
+    assert won is not None
+    won.nome = "Chiuso positivo"
+    db_session.flush()
+
+    document = _offer(db_session, deal, "accettata")
+    AutomationRunner(db_session).on_offer_state_changed(document, "inviata", ADMIN)
+    db_session.flush()
+    assert deal.pipeline_stage_id == won.id
+
+
+def test_a1_falls_back_to_the_single_won_stage_when_the_code_is_gone(
+    db_session: Session, deal: Deal, stages: dict
+) -> None:
+    won = db_session.get(PipelineStage, stages["vinto"].id)
+    assert won is not None
+    won.code = None
+    db_session.flush()
+
+    document = _offer(db_session, deal, "accettata")
+    AutomationRunner(db_session).on_offer_state_changed(document, "inviata", ADMIN)
+    db_session.flush()
+    assert deal.pipeline_stage_id == won.id
+
+
+def test_a1_refuses_to_guess_between_two_won_stages(
+    db_session: Session, deal: Deal, stages: dict
+) -> None:
+    """Residuo **R14**: nothing forbids two `tipo='won'` stages, and no migration in this
+    slice adds a constraint -- it would refuse data an installation may have created for a
+    reason. So the automation does not guess; it declines and says why."""
+    won = db_session.get(PipelineStage, stages["vinto"].id)
+    assert won is not None
+    won.code = None
+    db_session.add(
+        PipelineStage(nome="Vinto bis", posizione=6, probabilita_default=100, tipo="won")
+    )
+    db_session.flush()
+
+    document = _offer(db_session, deal, "accettata")
+    AutomationRunner(db_session).on_offer_state_changed(document, "inviata", ADMIN)
+    db_session.flush()
+
+    assert deal.pipeline_stage_id == stages["lead"].id
+    skipped = _kinds(db_session, KIND_NOT_EXECUTED)
+    assert len(skipped) == 1
+    assert skipped[0].payload["motivo"] == "stage_bersaglio_ambiguo"
+    assert skipped[0].payload["regola"] == "A1"
+
+
+def test_a1_declines_when_there_is_no_won_stage_at_all(
+    db_session: Session, deal: Deal, stages: dict
+) -> None:
+    """§16 criterion 7's second half: accepting the offer **succeeds**, and the
+    non-execution is recorded."""
+    won = db_session.get(PipelineStage, stages["vinto"].id)
+    assert won is not None
+    db_session.delete(won)
+    db_session.flush()
+
+    document = _offer(db_session, deal, "accettata")
+    AutomationRunner(db_session).on_offer_state_changed(document, "inviata", ADMIN)
+    db_session.flush()
+
+    skipped = _kinds(db_session, KIND_NOT_EXECUTED)
+    assert skipped[0].payload["motivo"] == "stage_bersaglio_assente"
+
+
+def test_a1_on_a_deal_already_won_is_a_recorded_no_op(
+    db_session: Session, deal: Deal, stages: dict
+) -> None:
+    """§16 criterion 8: idempotence is *inherited*, not added (§9.4). The effect is a
+    state, not an increment, so a second accepted offer produces one move and one recorded
+    no-op -- and no execution-log table is needed to know that."""
+    deal.pipeline_stage_id = stages["vinto"].id
+    db_session.flush()
+
+    document = _offer(db_session, deal, "accettata")
+    AutomationRunner(db_session).on_offer_state_changed(document, "inviata", ADMIN)
+    db_session.flush()
+
+    assert _kinds(db_session, KIND_STAGE_MOVED) == []
+    skipped = _kinds(db_session, KIND_NOT_EXECUTED)
+    assert skipped[0].payload["motivo"] == "gia_nello_stato"
+
+
+def test_a1_declines_when_the_rule_is_switched_off(
+    db_session: Session, deal: Deal, stages: dict
+) -> None:
+    """§16 criterion 9. Disabled means disabled, and it says so rather than staying
+    silent -- otherwise "off" and "broken" look identical."""
+    from pigrocrm.core.automations.config_service import AutomationConfigService
+    from pigrocrm.core.automations.schemas import AutomationConfigUpdate
+
+    AutomationConfigService(db_session).update_automation_config(
+        AutomationConfigUpdate(a1_offerta_accettata_vince_deal=False), ADMIN
+    )
+
+    document = _offer(db_session, deal, "accettata")
+    AutomationRunner(db_session).on_offer_state_changed(document, "inviata", ADMIN)
+    db_session.flush()
+
+    assert deal.pipeline_stage_id == stages["lead"].id
+    skipped = _kinds(db_session, KIND_NOT_EXECUTED)
+    assert skipped[0].payload["motivo"] == "regola_disattivata"
+
+
+# -- A2 --------------------------------------------------------------------------
+
+def test_a2_advances_the_deal_to_the_offer_stage(
+    db_session: Session, deal: Deal, stages: dict
+) -> None:
+    document = _offer(db_session, deal, "inviata")
+    AutomationRunner(db_session).on_offer_state_changed(document, "bozza", ADMIN)
+    db_session.flush()
+    assert deal.pipeline_stage_id == stages["offerta"].id
+
+
+def test_a2_never_moves_a_deal_backwards(
+    db_session: Session, deal: Deal, stages: dict
+) -> None:
+    """§9.2: a deal already in Negoziazione must not retreat because a second offer was
+    sent. An automation that moves things backwards gets switched off on day one."""
+    deal.pipeline_stage_id = stages["negoziazione"].id
+    db_session.flush()
+
+    document = _offer(db_session, deal, "inviata")
+    AutomationRunner(db_session).on_offer_state_changed(document, "bozza", ADMIN)
+    db_session.flush()
+
+    assert deal.pipeline_stage_id == stages["negoziazione"].id
+    skipped = _kinds(db_session, KIND_NOT_EXECUTED)
+    assert skipped[0].payload["motivo"] == "gia_nello_stato"
+
+
+def test_a2_has_no_tipo_fallback(db_session: Session, deal: Deal, stages: dict) -> None:
+    """§9.2, the asymmetry that is easy to miss: "Offerta" is `open` like every other open
+    stage, so there is nothing for a `tipo` fallback to select. Two rules with the same
+    shape and two different resolutions -- confusing them would move a deal into some
+    arbitrary open stage."""
+    offer_stage = db_session.get(PipelineStage, stages["offerta"].id)
+    assert offer_stage is not None
+    offer_stage.code = None
+    db_session.flush()
+
+    document = _offer(db_session, deal, "inviata")
+    AutomationRunner(db_session).on_offer_state_changed(document, "bozza", ADMIN)
+    db_session.flush()
+
+    assert deal.pipeline_stage_id == stages["lead"].id
+    skipped = _kinds(db_session, KIND_NOT_EXECUTED)
+    assert skipped[0].payload["motivo"] == "stage_bersaglio_assente"
+
+
+def test_a2_is_not_triggered_by_a_reopened_offer(
+    db_session: Session, deal: Deal, stages: dict
+) -> None:
+    """`inviata -> bozza` is a legal transition (`OFFER_TRANSITIONS`), and it is not a
+    send."""
+    document = _offer(db_session, deal, "bozza")
+    AutomationRunner(db_session).on_offer_state_changed(document, "inviata", ADMIN)
+    db_session.flush()
+    assert deal.pipeline_stage_id == stages["lead"].id
+    assert _kinds(db_session, KIND_STAGE_MOVED) == []
+
+
+def test_a2_respects_its_own_switch(db_session: Session, deal: Deal, stages: dict) -> None:
+    from pigrocrm.core.automations.config_service import AutomationConfigService
+    from pigrocrm.core.automations.schemas import AutomationConfigUpdate
+
+    AutomationConfigService(db_session).update_automation_config(
+        AutomationConfigUpdate(a2_offerta_inviata_avanza_deal=False), ADMIN
+    )
+    document = _offer(db_session, deal, "inviata")
+    AutomationRunner(db_session).on_offer_state_changed(document, "bozza", ADMIN)
+    db_session.flush()
+
+    assert deal.pipeline_stage_id == stages["lead"].id
+    assert _kinds(db_session, KIND_NOT_EXECUTED)[0].payload["motivo"] == "regola_disattivata"
+
+
+# -- the exception policy --------------------------------------------------------
+
+def test_the_runner_never_commits(db_session: Session, deal: Deal, stages: dict) -> None:
+    """The property everything else rests on. If the runner committed, the offer's own
+    state change would be persisted before the trigger finished -- and §9.3's "there is no
+    halfway" would be false."""
+    document = _offer(db_session, deal, "accettata")
+    AutomationRunner(db_session).on_offer_state_changed(document, "inviata", ADMIN)
+    db_session.rollback()
+    assert db_session.get(Deal, deal.id) is None
+
+
+def test_an_undeclared_exception_propagates(
+    db_session: Session, deal: Deal, stages: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The distinction that keeps this code from lying. The runner absorbs four *declared*
+    domain conditions. Anything else -- a database that cannot write -- propagates and
+    rolls the trigger back, because that is not "an automation that did not fire"."""
+    from pigrocrm.core.deals.service import DealService
+
+    def explode(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr(DealService, "set_stage_in_transaction", explode)
+    document = _offer(db_session, deal, "accettata")
+
+    with pytest.raises(RuntimeError, match="disk on fire"):
+        AutomationRunner(db_session).on_offer_state_changed(document, "inviata", ADMIN)
+
+
+def test_the_runner_exposes_exactly_one_public_method() -> None:
+    import inspect
+
+    public = {
+        name
+        for name, member in inspect.getmembers(AutomationRunner, predicate=inspect.isfunction)
+        if not name.startswith("_")
+        and member.__qualname__.startswith("AutomationRunner.")
+    }
+    assert public == {"on_offer_state_changed"}
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_automation_runner.py -v`
+Expected: collection error — `ModuleNotFoundError: No module named 'pigrocrm.core.automations.runner'`.
+
+- [ ] **Step 3: Add `get_by_tipo` to the pipeline repository**
+
+```python
+# packages/core/src/pigrocrm/core/pipeline/repository.py -- append. `list` is the last
+# method in that class; insert this ABOVE it.
+
+    def get_by_tipo(self, tipo: str) -> list[PipelineStage]:
+        """Every stage of a kind, ordered by `posizione`.
+
+        Returns a **list** and not an `Optional`, deliberately: residuo **R14** records
+        that nothing forbids two `tipo='won'` stages, and "there are two" is an answer the
+        automation runner has to be able to see so it can decline instead of picking one.
+        An `Optional` signature would force this method to choose, which is exactly the
+        decision it must not make.
+        """
+        return list(
+            self.session.execute(
+                select(PipelineStage)
+                .where(PipelineStage.tipo == tipo)
+                .order_by(PipelineStage.posizione, PipelineStage.id)
+            ).scalars()
+        )
+```
+
+- [ ] **Step 4: Write the runner**
+
+```python
+# packages/core/src/pigrocrm/core/automations/runner.py
+"""The two automations of spec §9, running inside their trigger's transaction.
+
+**Never commits.** `DocumentService.set_offer_state` owns the transaction, and that is the
+whole answer to "what happens if an automation fails halfway": there is no halfway. Either
+the offer is accepted and the deal is moved, or neither is true.
+
+**Never authorises.** `set_offer_state` already called `actor.require_write`, so a
+`readonly` actor never gets here. The runner does not re-check and does not elevate: if it
+could elevate, accepting an offer would become a way to write to a deal the actor could not
+otherwise touch.
+
+**Never guesses a stage.** By `code`, then by `tipo` where a `tipo` can identify one
+(A1 only), then it declines and records why. Never by name -- a name is renamable, and
+matching on one is precisely what `pipeline_stages.code` and `tipo` exist to prevent
+(slice 1 §5.4, residuo R11).
+
+**Absorbs a declared list and nothing else.** The four `AutomationSkipReason` values are
+recorded and the trigger continues. Every other exception propagates and rolls everything
+back: a database that cannot write is not an automation that did not fire, and it is the
+one case where the user should not see their offer accepted.
+
+No execution-log table (§9.4). Idempotence is inherited from three properties already in
+the tree: the trigger is unrepeatable by construction (`OFFER_TRANSITIONS` gives
+`"accettata": frozenset()`, so `inviata -> accettata` happens at most once per document);
+the effect is a state rather than an increment, so a repeat is a recorded no-op; and
+atomicity with the trigger means "fired but not recorded" does not exist.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.activities.service import ActivityService
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.automations.repository import AutomationConfigRepository
+from pigrocrm.core.automations.schemas import (
+    KIND_NOT_EXECUTED,
+    KIND_STAGE_MOVED,
+    AutomationRule,
+    AutomationSkipReason,
+)
+from pigrocrm.core.deals.repository import DealRepository
+from pigrocrm.core.deals.service import DealService
+from pigrocrm.core.documents.models import Document
+from pigrocrm.core.pipeline.repository import PipelineRepository
+from pigrocrm.core.pipeline.schemas import PipelineStageRead
+
+_DEAL_ENTITY = "deal"
+# A1 fires on this transition and no other; A2 on this one. Declared as data rather than
+# as `if` chains so that "which transitions are triggers" is answerable by reading two
+# lines, the same shape `OFFER_TRANSITIONS` already uses.
+_A1_TRANSITION = ("inviata", "accettata")
+_A2_TRANSITION = ("bozza", "inviata")
+
+
+@dataclass(frozen=True)
+class AutomationOutcome:
+    rule: AutomationRule | None
+    moved: bool
+    reason: AutomationSkipReason | None
+
+
+class AutomationRunner:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+        self.config = AutomationConfigRepository(session)
+        self.deals = DealRepository(session)
+        self.deal_service = DealService(session)
+        self.pipeline = PipelineRepository(session)
+        self.activities = ActivityService(session)
+
+    def on_offer_state_changed(
+        self, document: Document, previous: str, actor: Actor
+    ) -> None:
+        """Called explicitly by `DocumentService.set_offer_state`, not by a hook.
+
+        Explicitly because an implicit hook on a state change is a mechanism whose call
+        sites cannot be found by reading the code, and because §9.3 fixes the order inside
+        the trigger: mutate the document, then this, then the document's own activity,
+        then commit. That order is not cosmetic -- `ActivityService.record`'s docstring
+        requires it to be the last thing touching the session before the caller's commit.
+        """
+        current = document.stato
+        if current is None or document.deal_id is None:
+            # Not an offer, or an offer attached to a customer rather than a deal. Nothing
+            # was supposed to happen, so nothing is recorded: a `non_eseguita` entry here
+            # would fill the log with non-events.
+            return
+
+        transition = (previous, current)
+        if transition == _A1_TRANSITION:
+            outcome = self._apply_a1(document, actor)
+        elif transition == _A2_TRANSITION:
+            outcome = self._apply_a2(document, actor)
+        else:
+            return
+
+        if outcome.reason is not None:
+            self._record_skip(document, outcome, actor)
+
+    # -- the two rules ---------------------------------------------------------
+
+    def _apply_a1(self, document: Document, actor: Actor) -> AutomationOutcome:
+        row = self.config.get_or_create()
+        if not row.a1_offerta_accettata_vince_deal:
+            return AutomationOutcome("A1", False, "regola_disattivata")
+
+        target, reason = self._resolve_won_stage()
+        if target is None:
+            return AutomationOutcome("A1", False, reason)
+        return self._move(document, target, "A1", actor)
+
+    def _apply_a2(self, document: Document, actor: Actor) -> AutomationOutcome:
+        row = self.config.get_or_create()
+        if not row.a2_offerta_inviata_avanza_deal:
+            return AutomationOutcome("A2", False, "regola_disattivata")
+
+        # By `code` only. There is deliberately no `tipo` fallback: "Offerta" is `open`
+        # like every other open stage, so a `tipo` lookup would select an arbitrary one.
+        stage = self.pipeline.get_by_code("offerta")
+        if stage is None:
+            return AutomationOutcome("A2", False, "stage_bersaglio_assente")
+
+        deal = self.deals.get(document.deal_id) if document.deal_id else None
+        if deal is None:
+            return AutomationOutcome("A2", False, "stage_bersaglio_assente")
+        current = self.pipeline.get(deal.pipeline_stage_id)
+        if current is None:
+            return AutomationOutcome("A2", False, "stage_bersaglio_assente")
+
+        # Never backwards, and never sideways. A deal already at or past "Offerta" stays
+        # put: an automation that retreats a deal because a second offer went out gets
+        # switched off on its first day (§9.2).
+        if current.posizione >= stage.posizione:
+            return AutomationOutcome("A2", False, "gia_nello_stato")
+
+        return self._move(document, PipelineStageRead.model_validate(stage), "A2", actor)
+
+    def _resolve_won_stage(
+        self,
+    ) -> tuple[PipelineStageRead | None, AutomationSkipReason | None]:
+        """`code='vinto'`, then the single `tipo='won'`, then decline.
+
+        The `tipo` fallback exists for A1 and not for A2 because `won` identifies exactly
+        one intended stage while `open` identifies four. Residuo **R14**: two `won` stages
+        are legal, so "there are two" has to be a visible answer -- hence
+        `get_by_tipo` returning a list.
+        """
+        by_code = self.pipeline.get_by_code("vinto")
+        if by_code is not None:
+            return PipelineStageRead.model_validate(by_code), None
+
+        candidates = self.pipeline.get_by_tipo("won")
+        if not candidates:
+            return None, "stage_bersaglio_assente"
+        if len(candidates) > 1:
+            return None, "stage_bersaglio_ambiguo"
+        return PipelineStageRead.model_validate(candidates[0]), None
+
+    # -- the movement and its two activities -----------------------------------
+
+    def _move(
+        self,
+        document: Document,
+        target: PipelineStageRead,
+        rule: AutomationRule,
+        actor: Actor,
+    ) -> AutomationOutcome:
+        deal = self.deals.get(document.deal_id) if document.deal_id else None
+        if deal is None:
+            return AutomationOutcome(rule, False, "stage_bersaglio_assente")
+        if deal.pipeline_stage_id == target.id:
+            return AutomationOutcome(rule, False, "gia_nello_stato")
+
+        previous = self.pipeline.get(deal.pipeline_stage_id)
+        previous_name = previous.nome if previous is not None else None
+
+        # The one call in the whole repository to a `*_in_transaction` method, and
+        # `packages/core/tests/test_in_transaction_callers.py` is what keeps it the only
+        # one. It mutates and does not record, so the single timeline entry below is the
+        # single timeline entry for this movement.
+        self.deal_service.set_stage_in_transaction(deal, target)
+
+        # `Actor.system()` carries `id=None`, so `actor_id` is NULL and the triggering
+        # human lives in `attivata_da`: the timeline has to say both "the system did it"
+        # and "because you accepted that offer" (§9.5).
+        self.activities.record(
+            _DEAL_ENTITY,
+            deal.id,
+            KIND_STAGE_MOVED,
+            Actor.system(),
+            {
+                "regola": rule,
+                "documento_id": str(document.id),
+                "da": previous_name,
+                "a": target.nome,
+                "attivata_da": str(actor.id) if actor.id is not None else None,
+            },
+        )
+        return AutomationOutcome(rule, True, None)
+
+    def _record_skip(
+        self, document: Document, outcome: AutomationOutcome, actor: Actor
+    ) -> None:
+        """§9.5's fourth surface, and the one that is usually missing.
+
+        Without it, "it did not fire" and "it was not supposed to fire" are the same empty
+        screen. The signal "offerta accettata, deal non vinto" on the commercial dashboard
+        (§6.2) is this entry's permanent cross-check: if the automation goes quiet, the
+        count speaks.
+        """
+        self.activities.record(
+            _DEAL_ENTITY,
+            document.deal_id,
+            KIND_NOT_EXECUTED,
+            Actor.system(),
+            {
+                "regola": outcome.rule,
+                "motivo": outcome.reason,
+                "documento_id": str(document.id),
+                "attivata_da": str(actor.id) if actor.id is not None else None,
+            },
+        )
+```
+
+- [ ] **Step 5: Export it**
+
+```python
+# packages/core/src/pigrocrm/core/automations/__init__.py -- add to imports and __all__:
+from pigrocrm.core.automations.runner import AutomationOutcome, AutomationRunner
+# "AutomationOutcome", "AutomationRunner" in __all__, alphabetically sorted.
+```
+
+- [ ] **Step 6: Run the tests and watch them pass**
+
+Run: `uv run pytest packages/core/tests/test_automation_runner.py packages/core/tests/test_in_transaction_callers.py -v`
+Expected: PASS — including `test_the_runner_is_where_the_call_actually_is`, which Task B4 left red.
+
+- [ ] **Step 7: Full gate**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+Expected: green.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/automations/ \
+        packages/core/src/pigrocrm/core/pipeline/repository.py \
+        packages/core/tests/test_automation_runner.py
+git commit -m "feat(automations): A1 and A2, resolving stages by code and declining to guess"
+```
+
+---
+
+### Task B6: The runner inside the trigger's transaction — criterion 7
+
+**Files:**
+- Modify: `packages/core/src/pigrocrm/core/documents/service.py` (`set_offer_state`)
+- Create: `packages/core/tests/test_automation_atomicity.py`
+- Modify: `packages/core/tests/test_documents_service.py`
+
+**Interfaces:**
+- Consumes: `AutomationRunner.on_offer_state_changed(document, previous, actor)` (Task B5).
+- Produces: no new signature. `DocumentService.set_offer_state(document_id, stato, actor) -> DocumentRead` is unchanged from the caller's point of view — which is the point: the automation is not a parameter, an option or a flag.
+
+**The order inside the method is fixed by §9.3 and it is not cosmetic:**
+
+1. mutate `documents.stato` and `documents.stato_dal`
+2. **the runner** — which mutates the deal and records its own activity
+3. `self.activities.record(...)` for the document
+4. `commit`
+
+`ActivityService.record`'s own docstring requires it to be "the last thing that touches the session before the caller's commit" and forbids following it with a call into another service that commits on its own behalf. The runner sits before it and never commits, so both halves of that contract hold.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_automation_atomicity.py
+"""**Criterion 7.** The automation is atomic with its trigger.
+
+With an error injected between the automation and the commit, neither thing happened: the
+offer is still `inviata` and the deal is still in its old stage, verified by re-reading
+both rows on a fresh session. This is the assertion that makes "there is no halfway" a
+property rather than a claim, and it needs its own committed rows -- `db_session` holds an
+outer transaction open, so a rollback inside it cannot be told apart from the fixture's
+own cleanup.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+
+import pytest
+from sqlalchemy import Engine, delete
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.activities.repository import ActivityRepository
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.automations.runner import AutomationRunner
+from pigrocrm.core.automations.schemas import KIND_NOT_EXECUTED, KIND_STAGE_MOVED
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.db import session_factory
+from pigrocrm.core.db.base import uuid7
+from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.documents.models import Document
+from pigrocrm.core.documents.service import DocumentService
+from pigrocrm.core.errors import PermissionDenied
+from pigrocrm.core.pipeline.models import PipelineStage
+from pigrocrm.core.pipeline.service import PipelineService
+
+ADMIN = Actor(id=uuid7(), type="user", role="admin")
+READONLY = Actor(id=uuid7(), type="user", role="readonly")
+SEED = Actor(id=None, type="system", role="admin")
+
+
+@pytest.fixture
+def committed(db_engine: Engine) -> Iterator[tuple[Session, Document, Deal, dict]]:
+    """Real committed rows, on their own session, removed afterwards."""
+    factory = session_factory(db_engine)
+    session = factory()
+    PipelineService(session).seed_defaults(SEED)
+    stages = {s.code: s for s in PipelineService(session).list() if s.code is not None}
+
+    customer = Customer(ragione_sociale="ATOMIC Cliente", nazione="IT", custom_fields={})
+    session.add(customer)
+    session.flush()
+    deal = Deal(
+        nome="ATOMIC Impianto", customer_id=customer.id,
+        pipeline_stage_id=stages["lead"].id, probabilita=10, custom_fields={},
+    )
+    session.add(deal)
+    session.flush()
+    document = Document(
+        deal_id=deal.id, tipo="offerta", titolo="ATOMIC Offerta",
+        stato="inviata", versione_corrente=1, custom_fields={},
+    )
+    session.add(document)
+    session.commit()
+    try:
+        yield session, document, deal, stages
+    finally:
+        session.rollback()
+        session.execute(delete(Document).where(Document.titolo.like("ATOMIC %")))
+        session.execute(delete(Deal).where(Deal.nome.like("ATOMIC %")))
+        session.execute(
+            delete(Customer).where(Customer.ragione_sociale.like("ATOMIC %"))
+        )
+        session.commit()
+        session.close()
+
+
+def test_accepting_an_offer_moves_the_deal_in_the_same_transaction(
+    db_engine: Engine, committed: tuple
+) -> None:
+    session, document, deal, stages = committed
+    DocumentService(session, storage=None).set_offer_state(document.id, "accettata", ADMIN)
+
+    with session_factory(db_engine)() as other:
+        reread_document = other.get(Document, document.id)
+        reread_deal = other.get(Deal, deal.id)
+        assert reread_document is not None and reread_deal is not None
+        assert reread_document.stato == "accettata"
+        assert reread_deal.pipeline_stage_id == stages["vinto"].id
+
+
+def test_an_error_between_the_automation_and_the_commit_undoes_both(
+    db_engine: Engine, committed: tuple, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The assertion this file exists for. `ActivityService.record` is the last thing
+    before the commit, so failing it is precisely "after the automation, before the
+    commit"."""
+    session, document, deal, stages = committed
+    original = ActivityRepository.add
+
+    calls = {"n": 0}
+
+    def fail_on_the_documents_entry(self: ActivityRepository, activity: object) -> object:
+        calls["n"] += 1
+        # The runner's own entry is first; the document's `state_changed` is second.
+        if calls["n"] == 2:
+            raise RuntimeError("injected failure after the automation")
+        return original(self, activity)
+
+    monkeypatch.setattr(ActivityRepository, "add", fail_on_the_documents_entry)
+
+    with pytest.raises(RuntimeError, match="injected failure"):
+        DocumentService(session, storage=None).set_offer_state(
+            document.id, "accettata", ADMIN
+        )
+    session.rollback()
+
+    with session_factory(db_engine)() as other:
+        reread_document = other.get(Document, document.id)
+        reread_deal = other.get(Deal, deal.id)
+        assert reread_document is not None and reread_deal is not None
+        # Neither happened. There is no halfway.
+        assert reread_document.stato == "inviata"
+        assert reread_deal.pipeline_stage_id == stages["lead"].id
+        assert reread_deal.chiuso_il is None
+
+
+def test_with_the_won_stage_deleted_accepting_still_succeeds(
+    db_engine: Engine, committed: tuple
+) -> None:
+    """§16 criterion 7's second half. A missing target stage is a *declared* condition:
+    the offer is accepted, and the non-execution is on the record."""
+    session, document, deal, stages = committed
+    won = session.get(PipelineStage, stages["vinto"].id)
+    assert won is not None
+    session.delete(won)
+    session.commit()
+
+    DocumentService(session, storage=None).set_offer_state(document.id, "accettata", ADMIN)
+
+    with session_factory(db_engine)() as other:
+        reread = other.get(Document, document.id)
+        assert reread is not None and reread.stato == "accettata"
+        skipped = ActivityRepository(other).by_kind([KIND_NOT_EXECUTED], limit=5)
+        assert skipped[0].payload["motivo"] == "stage_bersaglio_assente"
+
+
+def test_a_readonly_actor_never_reaches_the_runner(
+    db_engine: Engine, committed: tuple
+) -> None:
+    """§16 criterion 8's last sentence. The authorisation is the trigger's, and it is
+    checked before anything is mutated -- so no row is touched at all."""
+    session, document, deal, stages = committed
+
+    with pytest.raises(PermissionDenied):
+        DocumentService(session, storage=None).set_offer_state(
+            document.id, "accettata", READONLY
+        )
+    session.rollback()
+
+    with session_factory(db_engine)() as other:
+        reread_document = other.get(Document, document.id)
+        reread_deal = other.get(Deal, deal.id)
+        assert reread_document is not None and reread_deal is not None
+        assert reread_document.stato == "inviata"
+        assert reread_deal.pipeline_stage_id == stages["lead"].id
+        assert ActivityRepository(other).by_kind([KIND_STAGE_MOVED], limit=5) == []
+        assert ActivityRepository(other).by_kind([KIND_NOT_EXECUTED], limit=5) == []
+```
+
+`DocumentService(session, storage=None)` matches whatever constructor the shipped class has; if it requires a real storage backend, use the fake the existing `test_documents_service.py` already builds rather than passing `None`.
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_automation_atomicity.py -v`
+Expected: `test_accepting_an_offer_moves_the_deal_in_the_same_transaction` FAILS — the deal is still in `lead`, because nothing calls the runner yet.
+
+- [ ] **Step 3: Wire the runner into the trigger**
+
+```python
+# packages/core/src/pigrocrm/core/documents/service.py -- replace the tail of
+# `set_offer_state` only. Imports gain:
+#   from pigrocrm.core.automations.runner import AutomationRunner
+
+        previous, document.stato = document.stato, stato
+        document.stato_dal = today_local()
+
+        # Slice 6 §9.3. The order of these three statements is fixed and is not cosmetic:
+        #
+        #   1. the mutation above,
+        #   2. the runner -- which mutates the deal and records its own activity,
+        #   3. this document's own activity,
+        #   4. the commit.
+        #
+        # `ActivityService.record`'s docstring requires it to be the last thing that
+        # touches the session before the caller's commit, and forbids following it with a
+        # call into another service that commits on its own behalf. The runner sits before
+        # it and never commits, so both halves hold.
+        #
+        # Called explicitly, not through a hook: an implicit hook on a state change is a
+        # mechanism whose call sites cannot be found by reading the code.
+        AutomationRunner(self.session).on_offer_state_changed(document, previous, actor)
+
+        self.activities.record(
+            ENTITY, document.id, "state_changed", actor, {"da": previous, "a": stato}
+        )
+        self.session.commit()
+        return DocumentRead.model_validate(document)
+```
+
+**Check for an import cycle before running.** `documents/service.py` now imports `automations/runner.py`, which imports `deals/service.py`, which imports `pipeline` and `activities` — and none of those import `documents`. `documents/service.py` already imports `templates/service.py`. Confirm with:
+
+Run: `uv run python -c "import pigrocrm.core.documents.service"`
+Expected: no output. If it raises `ImportError: cannot import name ... (most likely due to a circular import)`, move the `AutomationRunner` import inside `set_offer_state` as a function-level import and say why in a comment — but measure first rather than pre-emptively deferring it, because a function-level import hides the dependency from `test_architecture.py`'s AST walk.
+
+- [ ] **Step 4: Run the tests and watch them pass**
+
+Run: `uv run pytest packages/core/tests/test_automation_atomicity.py packages/core/tests/test_documents_service.py -v`
+Expected: PASS.
+
+Existing tests in `test_documents_service.py` that accept an offer on a document with a `deal_id` will now also move the deal. That is the feature, not a regression — but any test asserting "the deal did not change" must be updated to assert the new truth, and any test asserting an exact activity count for the document must account for the runner's entry. Both are found by running the file.
+
+- [ ] **Step 5: Full gate**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+Expected: green.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/documents/service.py \
+        packages/core/tests/test_automation_atomicity.py \
+        packages/core/tests/test_documents_service.py
+git commit -m "feat(automations): run inside set_offer_state's transaction, atomically"
+```
+
+---
+### Task B7: The commercial aggregates, and the only two exceptions to §3
+
+**Files:**
+- Modify: `packages/core/src/pigrocrm/core/deals/repository.py`
+- Modify: `packages/core/src/pigrocrm/core/documents/repository.py`
+- Create: `packages/core/src/pigrocrm/core/dashboard/__init__.py`
+- Create: `packages/core/src/pigrocrm/core/dashboard/schemas.py`
+- Create: `packages/core/tests/test_commercial_aggregates.py`
+
+**Interfaces:**
+- Consumes: `Deal`, `PipelineStage`, `Document`; `today_local` (Task B1).
+- Produces:
+  - In `deals/repository.py` — all four **above** the class's `list` method:
+    - `pipeline_summary(self) -> list[PipelineStageSummary]`
+    - `closed_in_period(self, da: date, a: date) -> ClosedInPeriod`
+    - `expected_closures(self, da: date, a: date) -> int`
+    - `unattributable_closures(self) -> int`
+  - In `documents/repository.py` — both above `list`:
+    - `pending_offers(self, limit: int = 20) -> list[PendingOffer]`
+    - `count_accepted_with_unwon_deal(self) -> int`
+  - In `dashboard/schemas.py`: `PipelineStageSummary`, `ClosedInPeriod`, `PendingOffer`, `Periodo`, and `CommercialDashboard` (Task B8 fills the last one in).
+- Task B8 composes these; Task B10 compares each against its drill-through.
+
+**§3's two named exceptions live here and nowhere else.** Both combine only columns of `deals`, and neither is money received:
+
+- **the weighted pipeline value** — `Σ ROUND(valore_previsto × probabilita / 100, 2)`, `ROUND_HALF_UP`, summing already-rounded rows, labelled *stima* everywhere it appears and never added to revenue;
+- **the conversion rate** — `vinti / (vinti + persi)`, two decimals, **`null` when the denominator is 0**.
+
+Every other figure on the commercial dashboard is a plain `COUNT` or a plain `SUM` over one table. `DashboardService` (Task B8) contains no arithmetic at all, and Task B9 makes that a fact of the build.
+
+**`null` and not `0` for the conversion rate.** Zero per cent means "I lost everything"; no closed deals means something else entirely. Same rule as slice 4 §7.1 for the margin percentage — and the same rule, so there is one rule.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_commercial_aggregates.py
+"""§4's figures, each from its one stated source.
+
+The two §3 exceptions are here and the tests say so out loud, because an exception that is
+not written down is a rule that does not hold. Everything else in this file is a `COUNT` or
+a `SUM` over a single table.
+"""
+
+from datetime import date
+from decimal import Decimal
+
+import pytest
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.deals.repository import DealRepository
+from pigrocrm.core.documents.models import Document
+from pigrocrm.core.documents.repository import DocumentRepository
+from pigrocrm.core.pipeline.service import PipelineService
+
+SEED = Actor(id=None, type="system", role="admin")
+
+
+@pytest.fixture
+def stages(db_session: Session) -> dict:
+    PipelineService(db_session).seed_defaults(SEED)
+    return {s.code: s for s in PipelineService(db_session).list() if s.code is not None}
+
+
+@pytest.fixture
+def customer(db_session: Session) -> Customer:
+    row = Customer(ragione_sociale="Cliente Srl", nazione="IT", custom_fields={})
+    db_session.add(row)
+    db_session.flush()
+    return row
+
+
+def _deal(
+    db_session: Session,
+    customer: Customer,
+    stage_id: object,
+    *,
+    valore: str | None = "1000.00",
+    probabilita: int = 50,
+    chiuso_il: date | None = None,
+    data_chiusura_prevista: date | None = None,
+) -> Deal:
+    row = Deal(
+        nome="Impianto", customer_id=customer.id, pipeline_stage_id=stage_id,
+        valore_previsto=Decimal(valore) if valore is not None else None,
+        probabilita=probabilita, chiuso_il=chiuso_il,
+        data_chiusura_prevista=data_chiusura_prevista, custom_fields={},
+    )
+    db_session.add(row)
+    db_session.flush()
+    return row
+
+
+# -- pipeline_summary ------------------------------------------------------------
+
+def test_pipeline_summary_groups_open_deals_by_stage(
+    db_session: Session, customer: Customer, stages: dict
+) -> None:
+    _deal(db_session, customer, stages["lead"].id, valore="1000.00")
+    _deal(db_session, customer, stages["lead"].id, valore="2000.00")
+    _deal(db_session, customer, stages["offerta"].id, valore="500.00")
+
+    rows = {row.stage_code: row for row in DealRepository(db_session).pipeline_summary()}
+    assert rows["lead"].numero == 2
+    assert rows["lead"].valore_totale == Decimal("3000.00")
+    assert rows["offerta"].numero == 1
+
+
+def test_pipeline_summary_excludes_closed_stages(
+    db_session: Session, customer: Customer, stages: dict
+) -> None:
+    """`tipo='open'` only. A won deal is not pipeline; it is history."""
+    _deal(db_session, customer, stages["vinto"].id)
+    _deal(db_session, customer, stages["perso"].id)
+    codes = {row.stage_code for row in DealRepository(db_session).pipeline_summary()}
+    assert "vinto" not in codes and "perso" not in codes
+
+
+def test_pipeline_summary_excludes_soft_deleted_deals(
+    db_session: Session, customer: Customer, stages: dict
+) -> None:
+    from datetime import UTC, datetime
+
+    row = _deal(db_session, customer, stages["lead"].id)
+    row.deleted_at = datetime.now(UTC)
+    db_session.flush()
+    summary = {r.stage_code: r for r in DealRepository(db_session).pipeline_summary()}
+    assert summary.get("lead") is None or summary["lead"].numero == 0
+
+
+def test_a_deal_without_a_value_is_counted_separately_and_never_summed_as_zero(
+    db_session: Session, customer: Customer, stages: dict
+) -> None:
+    """§4's own note. Counting a missing value as zero understates the pipeline and there
+    is no way for the reader to tell -- so it is a column of its own."""
+    _deal(db_session, customer, stages["lead"].id, valore="1000.00")
+    _deal(db_session, customer, stages["lead"].id, valore=None)
+
+    row = next(r for r in DealRepository(db_session).pipeline_summary() if r.stage_code == "lead")
+    assert row.numero == 2
+    assert row.senza_valore == 1
+    assert row.valore_totale == Decimal("1000.00")
+
+
+def test_a_stage_with_no_deals_still_appears_with_zeroes(
+    db_session: Session, customer: Customer, stages: dict
+) -> None:
+    """A missing stage and an empty stage render identically in a bar chart, and the
+    reader cannot tell which they are looking at."""
+    codes = {row.stage_code for row in DealRepository(db_session).pipeline_summary()}
+    assert {"lead", "contattato", "offerta", "negoziazione"} <= codes
+
+
+def test_stages_come_back_in_pipeline_order(
+    db_session: Session, customer: Customer, stages: dict
+) -> None:
+    """A pipeline chart whose bars reorder between loads is unreadable."""
+    positions = [row.posizione for row in DealRepository(db_session).pipeline_summary()]
+    assert positions == sorted(positions)
+
+
+# -- the first §3 exception: the weighted value ----------------------------------
+
+def test_the_weighted_value_is_the_product_of_two_columns_of_deals(
+    db_session: Session, customer: Customer, stages: dict
+) -> None:
+    """**§3 exception 1.** `Σ ROUND(valore_previsto × probabilita / 100, 2)`. Allowed
+    because it combines only columns of `deals` and is not money received; labelled
+    *stima* everywhere it appears."""
+    _deal(db_session, customer, stages["lead"].id, valore="1000.00", probabilita=50)
+    _deal(db_session, customer, stages["lead"].id, valore="333.33", probabilita=33)
+
+    row = next(r for r in DealRepository(db_session).pipeline_summary() if r.stage_code == "lead")
+    # 500.00 + ROUND(109.99890, 2) = 500.00 + 110.00
+    assert row.valore_ponderato == Decimal("610.00")
+
+
+def test_the_weighted_value_rounds_per_row_then_sums(
+    db_session: Session, customer: Customer, stages: dict
+) -> None:
+    """`Σ ROUND(row, 2)`, never `ROUND(Σ exact, 2)`, and HALF_UP not HALF_EVEN -- the
+    project-wide rule from slice 4. Three rows at 0.005 differ between the two by a cent,
+    which is exactly how a reconciliation stops reconciling."""
+    for _ in range(3):
+        _deal(db_session, customer, stages["lead"].id, valore="0.01", probabilita=50)
+    row = next(r for r in DealRepository(db_session).pipeline_summary() if r.stage_code == "lead")
+    # ROUND(0.005, 2) = 0.01 half-up, three times.
+    assert row.valore_ponderato == Decimal("0.03")
+
+
+def test_a_deal_without_a_value_contributes_nothing_to_the_weighted_value(
+    db_session: Session, customer: Customer, stages: dict
+) -> None:
+    _deal(db_session, customer, stages["lead"].id, valore=None, probabilita=90)
+    row = next(r for r in DealRepository(db_session).pipeline_summary() if r.stage_code == "lead")
+    assert row.valore_ponderato == Decimal("0.00")
+
+
+# -- closed_in_period and the second §3 exception --------------------------------
+
+def test_closed_in_period_counts_won_and_lost_by_chiuso_il(
+    db_session: Session, customer: Customer, stages: dict
+) -> None:
+    _deal(db_session, customer, stages["vinto"].id, chiuso_il=date(2026, 3, 10),
+          valore="1000.00")
+    _deal(db_session, customer, stages["vinto"].id, chiuso_il=date(2026, 3, 20),
+          valore="2000.00")
+    _deal(db_session, customer, stages["perso"].id, chiuso_il=date(2026, 3, 15))
+    _deal(db_session, customer, stages["vinto"].id, chiuso_il=date(2026, 4, 1))
+
+    result = DealRepository(db_session).closed_in_period(date(2026, 3, 1), date(2026, 3, 31))
+    assert result.vinti == 2
+    assert result.persi == 1
+    assert result.valore_vinto == Decimal("3000.00")
+
+
+def test_the_period_bounds_are_inclusive(
+    db_session: Session, customer: Customer, stages: dict
+) -> None:
+    _deal(db_session, customer, stages["vinto"].id, chiuso_il=date(2026, 3, 1))
+    _deal(db_session, customer, stages["vinto"].id, chiuso_il=date(2026, 3, 31))
+    result = DealRepository(db_session).closed_in_period(date(2026, 3, 1), date(2026, 3, 31))
+    assert result.vinti == 2
+
+
+def test_the_conversion_rate_is_a_ratio_of_two_counts(
+    db_session: Session, customer: Customer, stages: dict
+) -> None:
+    """**§3 exception 2.** `vinti / (vinti + persi)`, two decimals."""
+    for _ in range(3):
+        _deal(db_session, customer, stages["vinto"].id, chiuso_il=date(2026, 3, 10))
+    _deal(db_session, customer, stages["perso"].id, chiuso_il=date(2026, 3, 10))
+
+    result = DealRepository(db_session).closed_in_period(date(2026, 3, 1), date(2026, 3, 31))
+    assert result.tasso_conversione == Decimal("75.00")
+
+
+def test_the_conversion_rate_is_null_when_nothing_closed(
+    db_session: Session, customer: Customer, stages: dict
+) -> None:
+    """`null`, not `0`. Zero per cent means "I lost everything"; no closed deals means
+    something else. Same rule as slice 4 §7.1's margin percentage, and the *same* rule so
+    there is one."""
+    result = DealRepository(db_session).closed_in_period(date(2026, 3, 1), date(2026, 3, 31))
+    assert result.vinti == 0 and result.persi == 0
+    assert result.tasso_conversione is None
+
+
+def test_the_conversion_rate_is_zero_when_everything_was_lost(
+    db_session: Session, customer: Customer, stages: dict
+) -> None:
+    """The other half of the same distinction, which a `null`-only test would not catch."""
+    _deal(db_session, customer, stages["perso"].id, chiuso_il=date(2026, 3, 10))
+    result = DealRepository(db_session).closed_in_period(date(2026, 3, 1), date(2026, 3, 31))
+    assert result.tasso_conversione == Decimal("0.00")
+
+
+def test_deals_closed_before_the_column_existed_are_reported_not_counted(
+    db_session: Session, customer: Customer, stages: dict
+) -> None:
+    """§4.1: `chiuso_il` is not backfilled, so historical closures are unattributable. The
+    dashboard says how many rather than counting them as zero or putting them in the wrong
+    month -- a guessed conversion rate is plausible and wrong, which is the worst
+    combination."""
+    _deal(db_session, customer, stages["vinto"].id, chiuso_il=None)
+    _deal(db_session, customer, stages["perso"].id, chiuso_il=None)
+    _deal(db_session, customer, stages["vinto"].id, chiuso_il=date(2026, 3, 10))
+
+    repo = DealRepository(db_session)
+    assert repo.closed_in_period(date(2026, 3, 1), date(2026, 3, 31)).vinti == 1
+    assert repo.unattributable_closures() == 2
+
+
+def test_expected_closures_counts_open_deals_in_the_window(
+    db_session: Session, customer: Customer, stages: dict
+) -> None:
+    _deal(db_session, customer, stages["lead"].id,
+          data_chiusura_prevista=date(2026, 3, 15))
+    _deal(db_session, customer, stages["lead"].id,
+          data_chiusura_prevista=date(2026, 6, 1))
+    # A won deal with a future expected date is not an expected closure.
+    _deal(db_session, customer, stages["vinto"].id,
+          data_chiusura_prevista=date(2026, 3, 20), chiuso_il=date(2026, 2, 1))
+
+    assert DealRepository(db_session).expected_closures(
+        date(2026, 3, 1), date(2026, 3, 31)
+    ) == 1
+
+
+# -- the documents side ----------------------------------------------------------
+
+def test_pending_offers_carries_the_age_in_days(
+    db_session: Session, customer: Customer, stages: dict
+) -> None:
+    from pigrocrm.core.db import today_local
+
+    db_session.add(
+        Document(
+            customer_id=customer.id, tipo="offerta", titolo="Offerta ferma",
+            stato="inviata", stato_dal=date(2026, 3, 1), versione_corrente=1,
+            custom_fields={},
+        )
+    )
+    db_session.flush()
+
+    rows = DocumentRepository(db_session).pending_offers()
+    assert len(rows) == 1
+    assert rows[0].titolo == "Offerta ferma"
+    assert rows[0].giorni == (today_local() - date(2026, 3, 1)).days
+
+
+def test_pending_offers_ignores_offers_in_any_other_state(
+    db_session: Session, customer: Customer
+) -> None:
+    for stato in ("bozza", "accettata", "rifiutata"):
+        db_session.add(
+            Document(
+                customer_id=customer.id, tipo="offerta", titolo=f"Offerta {stato}",
+                stato=stato, stato_dal=date(2026, 3, 1), versione_corrente=1,
+                custom_fields={},
+            )
+        )
+    db_session.flush()
+    assert DocumentRepository(db_session).pending_offers() == []
+
+
+def test_an_offer_with_no_stato_dal_has_a_null_age_rather_than_zero(
+    db_session: Session, customer: Customer
+) -> None:
+    """The backfill covers documents with a `state_changed` in their timeline; one written
+    directly by a fixture or an import has none. Zero days would read as "sent today"."""
+    db_session.add(
+        Document(
+            customer_id=customer.id, tipo="offerta", titolo="Senza data",
+            stato="inviata", stato_dal=None, versione_corrente=1, custom_fields={},
+        )
+    )
+    db_session.flush()
+    rows = DocumentRepository(db_session).pending_offers()
+    assert rows[0].giorni is None
+
+
+def test_the_signal_counts_accepted_offers_whose_deal_is_not_won(
+    db_session: Session, customer: Customer, stages: dict
+) -> None:
+    """§6.2's first signal, and the permanent cross-check on automation A1: if the
+    automation goes quiet, this count speaks. A `COUNT` across a join, which §3 permits --
+    a `SUM` across one it does not."""
+    open_deal = _deal(db_session, customer, stages["lead"].id)
+    won_deal = _deal(db_session, customer, stages["vinto"].id, chiuso_il=date(2026, 3, 1))
+    for deal, titolo in ((open_deal, "Da sistemare"), (won_deal, "A posto")):
+        db_session.add(
+            Document(
+                deal_id=deal.id, tipo="offerta", titolo=titolo, stato="accettata",
+                stato_dal=date(2026, 3, 1), versione_corrente=1, custom_fields={},
+            )
+        )
+    db_session.flush()
+
+    assert DocumentRepository(db_session).count_accepted_with_unwon_deal() == 1
+
+
+def test_the_signal_ignores_an_accepted_offer_with_no_deal(
+    db_session: Session, customer: Customer
+) -> None:
+    """An offer attached to a customer has no deal to be won, so it is not an
+    inconsistency."""
+    db_session.add(
+        Document(
+            customer_id=customer.id, tipo="offerta", titolo="Senza deal",
+            stato="accettata", stato_dal=date(2026, 3, 1), versione_corrente=1,
+            custom_fields={},
+        )
+    )
+    db_session.flush()
+    assert DocumentRepository(db_session).count_accepted_with_unwon_deal() == 0
+
+
+def test_the_signal_ignores_a_soft_deleted_deal(
+    db_session: Session, customer: Customer, stages: dict
+) -> None:
+    from datetime import UTC, datetime
+
+    deal = _deal(db_session, customer, stages["lead"].id)
+    deal.deleted_at = datetime.now(UTC)
+    db_session.add(
+        Document(
+            deal_id=deal.id, tipo="offerta", titolo="Deal archiviato",
+            stato="accettata", stato_dal=date(2026, 3, 1), versione_corrente=1,
+            custom_fields={},
+        )
+    )
+    db_session.flush()
+    assert DocumentRepository(db_session).count_accepted_with_unwon_deal() == 0
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_commercial_aggregates.py -v`
+Expected: collection error — `ModuleNotFoundError: No module named 'pigrocrm.core.dashboard'`.
+
+- [ ] **Step 3: Write the schemas**
+
+```python
+# packages/core/src/pigrocrm/core/dashboard/schemas.py
+"""What a dashboard returns. Sub-plan 6C appends two more dashboards to this file.
+
+Every money field is `Decimal` with `max_digits`/`decimal_places` matching the column it
+came from, and every one arrives already summed. The frontend formats; it never adds
+(§13, and Task B13's AST test).
+"""
+
+from datetime import date, datetime
+from decimal import Decimal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class Periodo(BaseModel):
+    """Normalised and echoed back, always. A screenshot of a dashboard with no explicit
+    period is a number with no unit (§4)."""
+
+    da: date
+    a: date
+
+
+class PipelineStageSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    stage_id: str
+    stage_code: str | None
+    stage_nome: str
+    posizione: int
+    numero: int
+    valore_totale: Decimal = Field(max_digits=12, decimal_places=2)
+    # Counted, never summed as zero (§4). A missing expected value is not a value of zero,
+    # and a reader has no way to tell the two apart from a total alone.
+    senza_valore: int
+    # §3 exception 1. Labelled "stima" in every rendering and never added to revenue.
+    valore_ponderato: Decimal = Field(max_digits=12, decimal_places=2)
+
+
+class ClosedInPeriod(BaseModel):
+    vinti: int
+    persi: int
+    # `Σ valore_previsto` of the deals won in the period. **Not revenue** and not
+    # comparable with it: it is what the deal *claimed*. The revenue of those same deals
+    # is on the economic dashboard, and the two figures live on two pages for exactly this
+    # reason (§4).
+    valore_vinto: Decimal = Field(max_digits=12, decimal_places=2)
+    # §3 exception 2. Per cent, two places. `None` -- never `0` -- when nothing closed:
+    # zero per cent means "I lost everything", no closed deals means something else. Same
+    # rule as slice 4 §7.1's margin percentage.
+    tasso_conversione: Decimal | None = Field(default=None, max_digits=5, decimal_places=2)
+
+
+class PendingOffer(BaseModel):
+    document_id: str
+    titolo: str
+    deal_id: str | None
+    customer_id: str | None
+    stato_dal: date | None
+    # `None`, not 0, when `stato_dal` is unknown: zero days would read as "sent today".
+    giorni: int | None
+
+
+class CommercialDashboard(BaseModel):
+    """One endpoint, one transaction, one instant (§7.1).
+
+    `calcolato_alle` is the `transaction_timestamp()` of *that* transaction, and the
+    browser shows its age. A number with no age is a number the user believes is
+    instantaneous.
+    """
+
+    periodo: Periodo
+    calcolato_alle: datetime
+    pipeline: list[PipelineStageSummary]
+    chiusure: ClosedInPeriod
+    offerte_in_attesa: list[PendingOffer]
+    offerte_in_attesa_totale: int
+    chiusure_previste_30_giorni: int
+    # §4.1: deals closed before `chiuso_il` existed cannot be attributed to a period. The
+    # dashboard declares how many rather than counting them as zero.
+    chiusure_non_attribuibili: int
+    # §6.2's first signal, and the permanent cross-check on automation A1.
+    offerte_accettate_deal_non_vinto: int
+```
+
+```python
+# packages/core/src/pigrocrm/core/dashboard/__init__.py
+from pigrocrm.core.dashboard.schemas import (
+    ClosedInPeriod,
+    CommercialDashboard,
+    PendingOffer,
+    Periodo,
+    PipelineStageSummary,
+)
+
+__all__ = [
+    "ClosedInPeriod",
+    "CommercialDashboard",
+    "PendingOffer",
+    "Periodo",
+    "PipelineStageSummary",
+]
+```
+
+`DashboardService` joins this `__all__` in Task B8. **Note for Task B9:** this package must never import `Decimal`… except that `schemas.py` legitimately does, to type its fields. Task B9's AST clause therefore applies to `dashboard/service.py` and any future module in the package **other than `schemas.py`**, and that exemption is declared there with its reasoning — a schema declaring a `Decimal` field performs no arithmetic, and the clause exists to forbid arithmetic.
+
+- [ ] **Step 4: Write the deal aggregates**
+
+```python
+# packages/core/src/pigrocrm/core/deals/repository.py -- four methods, all inserted
+# ABOVE `list`, which must stay the last method in the class. Imports gain:
+#   from datetime import date
+#   from decimal import Decimal
+#   from sqlalchemy import Numeric, case, func, literal, select
+#   from pigrocrm.core.dashboard.schemas import ClosedInPeriod, PipelineStageSummary
+#   from pigrocrm.core.pipeline.models import PipelineStage
+
+    def pipeline_summary(self) -> list[PipelineStageSummary]:
+        """Open deals per stage: count, `Σ valore_previsto`, count without a value, and
+        the weighted estimate.
+
+        Lives in the repository rather than on `DealService` on purpose (spec §3): these
+        aggregates have no business rule beyond `deleted_at IS NULL`, and putting them on
+        the service would create **two paths an agent can reach the same number by** --
+        the deal domain tool and the dashboard tool -- which is exactly the duplication
+        this slice exists not to introduce.
+
+        `valore_ponderato` is the first of §3's two declared exceptions: a product of two
+        columns of `deals`, rounded per row and then summed, HALF_UP. Allowed because both
+        operands are columns of this one table and the result is not money received. It is
+        labelled *stima* in every rendering and never added to revenue.
+
+        A LEFT JOIN from `pipeline_stages`, so a stage with no deals comes back with
+        zeroes: a missing stage and an empty stage render identically in a bar chart and
+        the reader cannot tell which they are looking at.
+        """
+        rounded_weight = func.round(
+            func.cast(Deal.valore_previsto, Numeric(20, 6))
+            * func.cast(Deal.probabilita, Numeric(20, 6))
+            / literal(100),
+            2,
+        )
+        stmt = (
+            select(
+                PipelineStage.id,
+                PipelineStage.code,
+                PipelineStage.nome,
+                PipelineStage.posizione,
+                func.count(Deal.id).label("numero"),
+                func.coalesce(func.sum(Deal.valore_previsto), literal(0)).label("valore"),
+                func.count(case((Deal.valore_previsto.is_(None), 1))).label("senza"),
+                func.coalesce(func.sum(rounded_weight), literal(0)).label("ponderato"),
+            )
+            .select_from(PipelineStage)
+            .outerjoin(
+                Deal,
+                (Deal.pipeline_stage_id == PipelineStage.id) & Deal.deleted_at.is_(None),
+            )
+            .where(PipelineStage.tipo == "open")
+            .group_by(
+                PipelineStage.id, PipelineStage.code, PipelineStage.nome,
+                PipelineStage.posizione,
+            )
+            .order_by(PipelineStage.posizione, PipelineStage.id)
+        )
+        return [
+            PipelineStageSummary(
+                stage_id=str(row.id),
+                stage_code=row.code,
+                stage_nome=row.nome,
+                posizione=row.posizione,
+                numero=row.numero,
+                valore_totale=Decimal(row.valore).quantize(Decimal("0.01")),
+                senza_valore=row.senza,
+                valore_ponderato=Decimal(row.ponderato).quantize(Decimal("0.01")),
+            )
+            for row in self.session.execute(stmt).all()
+        ]
+
+    def closed_in_period(self, da: date, a: date) -> ClosedInPeriod:
+        """Deals won and lost in the period, by `chiuso_il`.
+
+        `chiuso_il` and not the timeline: `move_stage` records the stage *names*, which a
+        user may rename (residuo R15), so deducing a historical closure would mean matching
+        a mutable string. Rows with `chiuso_il IS NULL` are excluded here and counted by
+        `unattributable_closures` so the dashboard can declare them.
+
+        `tasso_conversione` is §3's second declared exception: a ratio of two counts of the
+        same rows. `None` when the denominator is zero -- see `ClosedInPeriod`.
+        """
+        stmt = (
+            select(
+                PipelineStage.tipo,
+                func.count(Deal.id).label("numero"),
+                func.coalesce(func.sum(Deal.valore_previsto), literal(0)).label("valore"),
+            )
+            .join(PipelineStage, PipelineStage.id == Deal.pipeline_stage_id)
+            .where(
+                Deal.deleted_at.is_(None),
+                Deal.chiuso_il.is_not(None),
+                Deal.chiuso_il >= da,
+                Deal.chiuso_il <= a,
+                PipelineStage.tipo.in_(("won", "lost")),
+            )
+            .group_by(PipelineStage.tipo)
+        )
+        by_tipo = {row.tipo: row for row in self.session.execute(stmt).all()}
+        won = by_tipo.get("won")
+        lost = by_tipo.get("lost")
+        vinti = won.numero if won is not None else 0
+        persi = lost.numero if lost is not None else 0
+        chiusi = vinti + persi
+        return ClosedInPeriod(
+            vinti=vinti,
+            persi=persi,
+            valore_vinto=(
+                Decimal(won.valore).quantize(Decimal("0.01"))
+                if won is not None
+                else Decimal("0.00")
+            ),
+            tasso_conversione=(
+                (Decimal(vinti) * 100 / Decimal(chiusi)).quantize(Decimal("0.01"))
+                if chiusi
+                else None
+            ),
+        )
+
+    def expected_closures(self, da: date, a: date) -> int:
+        """Open deals whose `data_chiusura_prevista` falls in the window.
+
+        `tipo='open'` only: a deal already won with a future expected date is not an
+        expected closure, it is a stale field on a finished deal.
+        """
+        return (
+            self.session.scalar(
+                select(func.count(Deal.id))
+                .join(PipelineStage, PipelineStage.id == Deal.pipeline_stage_id)
+                .where(
+                    Deal.deleted_at.is_(None),
+                    PipelineStage.tipo == "open",
+                    Deal.data_chiusura_prevista.is_not(None),
+                    Deal.data_chiusura_prevista >= da,
+                    Deal.data_chiusura_prevista <= a,
+                )
+            )
+            or 0
+        )
+
+    def unattributable_closures(self) -> int:
+        """Deals in a terminal stage with no `chiuso_il`.
+
+        §4.1: `chiuso_il` is deliberately not backfilled, so every deal closed before
+        migration 0008 is unattributable to a period. This count is what lets the dashboard
+        say "N deal chiusi prima dell'introduzione di questa misura non sono attribuibili a
+        un periodo" instead of quietly reporting a conversion rate computed on a subset.
+        """
+        return (
+            self.session.scalar(
+                select(func.count(Deal.id))
+                .join(PipelineStage, PipelineStage.id == Deal.pipeline_stage_id)
+                .where(
+                    Deal.deleted_at.is_(None),
+                    Deal.chiuso_il.is_(None),
+                    PipelineStage.tipo.in_(("won", "lost")),
+                )
+            )
+            or 0
+        )
+```
+
+`Decimal(row.valore)` is safe because `func.sum` over a `Numeric` column returns a `Decimal` in psycopg 3, and `literal(0)` in the `coalesce` is adapted to the same type; the `quantize` is there to normalise `0` to `0.00` so the JSON is stable across an empty and a populated stage. `Numeric(20, 6)` in the weight expression gives the multiplication room before rounding — `Numeric(12,2) × Numeric(12,2)` would otherwise widen to a type Postgres picks for itself.
+
+- [ ] **Step 5: Write the document aggregates**
+
+```python
+# packages/core/src/pigrocrm/core/documents/repository.py -- two methods, inserted ABOVE
+# `list`. Imports gain:
+#   from sqlalchemy import func, literal, select
+#   from pigrocrm.core.dashboard.schemas import PendingOffer
+#   from pigrocrm.core.db import today_local
+#   from pigrocrm.core.deals.models import Deal
+#   from pigrocrm.core.pipeline.models import PipelineStage
+
+    def pending_offers(self, limit: int = 20) -> list[PendingOffer]:
+        """Sent offers still awaiting an answer, oldest first, with their age in days.
+
+        The age is computed in Python from `today_local()` rather than in SQL from
+        `CURRENT_DATE`: `CURRENT_DATE` is the *server's* day, and every date in this
+        product is a day in the emitter's zone (`db/clock.py`). On a UTC database at 00:30
+        Rome time the two differ, and a dashboard showing "ferma da 0 giorni" for something
+        sent yesterday is worse than showing nothing.
+        """
+        today = today_local()
+        rows = self.session.execute(
+            select(Document)
+            .where(
+                Document.deleted_at.is_(None),
+                Document.tipo == "offerta",
+                Document.stato == "inviata",
+            )
+            # Nulls last: an offer with no known start date is not the oldest one.
+            .order_by(Document.stato_dal.asc().nulls_last(), Document.id.asc())
+            .limit(limit)
+        ).scalars()
+        return [
+            PendingOffer(
+                document_id=str(row.id),
+                titolo=row.titolo,
+                deal_id=str(row.deal_id) if row.deal_id else None,
+                customer_id=str(row.customer_id) if row.customer_id else None,
+                stato_dal=row.stato_dal,
+                giorni=(today - row.stato_dal).days if row.stato_dal is not None else None,
+            )
+            for row in rows
+        ]
+
+    def count_pending_offers(self) -> int:
+        """The real total behind `pending_offers`'s truncated list, so a dashboard showing
+        twenty of ninety says ninety."""
+        return (
+            self.session.scalar(
+                select(func.count(Document.id)).where(
+                    Document.deleted_at.is_(None),
+                    Document.tipo == "offerta",
+                    Document.stato == "inviata",
+                )
+            )
+            or 0
+        )
+
+    def count_accepted_with_unwon_deal(self) -> int:
+        """§6.2's first signal: accepted offers whose deal is not in a `won` stage.
+
+        This is the case where automation A1 did **not** fire -- switched off, or declined
+        with a recorded reason -- so it is the automation's permanent cross-check: if the
+        automation goes quiet, this count speaks. It sits on the *commercial* dashboard
+        because it needs no invoices, which is what lets it ship in the same sub-plan as
+        the automation it verifies rather than one later (§17).
+
+        A `COUNT` across a join, which §3 permits explicitly: it looks at two tables and
+        produces no money figure. A `SUM` across a join is how the same row gets counted
+        twice, and on a margin nobody notices.
+        """
+        return (
+            self.session.scalar(
+                select(func.count(Document.id))
+                .join(Deal, Deal.id == Document.deal_id)
+                .join(PipelineStage, PipelineStage.id == Deal.pipeline_stage_id)
+                .where(
+                    Document.deleted_at.is_(None),
+                    Document.tipo == "offerta",
+                    Document.stato == "accettata",
+                    Deal.deleted_at.is_(None),
+                    PipelineStage.tipo != "won",
+                )
+            )
+            or 0
+        )
+```
+
+The `JOIN` on `Deal.id == Document.deal_id` is an inner join, which is what makes `test_the_signal_ignores_an_accepted_offer_with_no_deal` pass without a special case: an offer with `deal_id IS NULL` simply has no matching row.
+
+- [ ] **Step 6: Run the tests and watch them pass**
+
+Run: `uv run pytest packages/core/tests/test_commercial_aggregates.py -v`
+Expected: PASS, twenty-two tests.
+
+- [ ] **Step 7: Check for an import cycle**
+
+`deals/repository.py` and `documents/repository.py` now import `dashboard/schemas.py`, and `dashboard/` imports neither.
+
+Run: `uv run python -c "import pigrocrm.core.models_registry, pigrocrm.core.dashboard"`
+Expected: no output.
+
+- [ ] **Step 8: Full gate**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+Expected: green.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/dashboard/ \
+        packages/core/src/pigrocrm/core/deals/repository.py \
+        packages/core/src/pigrocrm/core/documents/repository.py \
+        packages/core/tests/test_commercial_aggregates.py
+git commit -m "feat(dashboard): commercial aggregates, with §3's two exceptions in deals"
+```
+
+---
+### Task B8: `DashboardService` — one endpoint, one transaction, one instant
+
+**Files:**
+- Create: `packages/core/src/pigrocrm/core/dashboard/service.py`
+- Modify: `packages/core/src/pigrocrm/core/dashboard/schemas.py` (`PeriodoQuery`)
+- Modify: `packages/core/src/pigrocrm/core/dashboard/__init__.py`
+- Create: `packages/core/tests/test_dashboard_commercial.py`
+
+**Interfaces:**
+- Consumes: `DealRepository.{pipeline_summary,closed_in_period,expected_closures,unattributable_closures}`, `DocumentRepository.{pending_offers,count_pending_offers,count_accepted_with_unwon_deal}` (Task B7); `today_local`, `month_bounds` (Task B1).
+- Produces:
+  - `PeriodoQuery(BaseModel)` — `da: date | None = None`, `a: date | None = None`, with `resolve() -> Periodo` filling in the current month and validating the range.
+  - `MAX_PERIOD_DAYS = 3660`
+  - `SNAPSHOT_ISOLATION = "REPEATABLE READ"`
+  - `DashboardService(session: Session)` with, in 6B, exactly one public method:
+    `get_commercial_dashboard(self, query: PeriodoQuery, actor: Actor) -> CommercialDashboard`
+  - `DashboardService._open_snapshot(self) -> datetime` — private, and the single place the isolation level is set.
+- Task B9 asserts this module contains no arithmetic; Task B10 asserts the snapshot; Task B12 exposes the method on both surfaces; 6C appends two more public methods **and their two tools**.
+
+**`REPEATABLE READ`, and why one transaction was not enough.** Spec §7.1: in `READ COMMITTED` — Postgres's default, and therefore what you get by saying nothing — **each statement takes its own snapshot**, so seven queries inside one transaction can see seven states exactly as seven transactions can. A user who adds two cards by hand and does not get the third stops trusting all three, and is right to. `REPEATABLE READ` takes the snapshot once, at the start. The transaction is read-only, so the usual price is not paid: a serialisation failure can only strike a writer, and nothing here writes.
+
+**The service must be handed a session with no transaction in progress**, because Postgres refuses to change the isolation level once one has begun. In the API that is automatic — `SessionDep` yields a fresh session per request. `_open_snapshot` therefore fails **loudly** rather than silently continuing in `READ COMMITTED`: silent degradation here produces a total that was never true at any instant, and no amount of re-reading the service would reveal it.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_dashboard_commercial.py
+"""§4's dashboard, composed and nothing more.
+
+Every figure here is checked against the repository that produced it, not recomputed:
+recomputing in the test would make the test the second source of truth §1 forbids, and a
+test that agrees with a wrong implementation is worse than no test.
+
+The snapshot property is Task B10's; this file uses its own sessions only because the
+service needs a transaction it can set the isolation level on.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from datetime import date
+
+import pytest
+from sqlalchemy import Engine, delete
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.dashboard.schemas import PeriodoQuery
+from pigrocrm.core.dashboard.service import DashboardService
+from pigrocrm.core.db import session_factory, today_local
+from pigrocrm.core.db.base import uuid7
+from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.deals.repository import DealRepository
+from pigrocrm.core.documents.models import Document
+from pigrocrm.core.errors import ValidationFailed
+from pigrocrm.core.pipeline.service import PipelineService
+
+READONLY = Actor(id=uuid7(), type="user", role="readonly")
+SEED = Actor(id=None, type="system", role="admin")
+
+
+@pytest.fixture
+def seeded(db_engine: Engine) -> Iterator[Engine]:
+    """Committed rows on their own session, cleaned up afterwards.
+
+    `db_session` cannot be used: it holds an outer transaction open, and Postgres refuses
+    `SET TRANSACTION ISOLATION LEVEL` once a transaction has begun -- which is exactly
+    what `DashboardService` does first.
+    """
+    factory = session_factory(db_engine)
+    with factory() as session:
+        PipelineService(session).seed_defaults(SEED)
+        stages = {s.code: s for s in PipelineService(session).list() if s.code is not None}
+        customer = Customer(ragione_sociale="DASH Cliente", nazione="IT", custom_fields={})
+        session.add(customer)
+        session.flush()
+
+        session.add(
+            Deal(nome="DASH aperto", customer_id=customer.id,
+                 pipeline_stage_id=stages["lead"].id, valore_previsto="1000.00",
+                 probabilita=50, data_chiusura_prevista=today_local(), custom_fields={})
+        )
+        session.add(
+            Deal(nome="DASH vinto", customer_id=customer.id,
+                 pipeline_stage_id=stages["vinto"].id, valore_previsto="5000.00",
+                 probabilita=100, chiuso_il=today_local(), custom_fields={})
+        )
+        session.add(
+            Deal(nome="DASH perso", customer_id=customer.id,
+                 pipeline_stage_id=stages["perso"].id, valore_previsto="2000.00",
+                 probabilita=0, chiuso_il=today_local(), custom_fields={})
+        )
+        session.flush()
+        session.add(
+            Document(customer_id=customer.id, tipo="offerta", titolo="DASH offerta",
+                     stato="inviata", stato_dal=date(2026, 1, 1), versione_corrente=1,
+                     custom_fields={})
+        )
+        session.commit()
+    try:
+        yield db_engine
+    finally:
+        with factory() as session:
+            session.execute(delete(Document).where(Document.titolo.like("DASH %")))
+            session.execute(delete(Deal).where(Deal.nome.like("DASH %")))
+            session.execute(
+                delete(Customer).where(Customer.ragione_sociale.like("DASH %"))
+            )
+            session.commit()
+
+
+def _dashboard(engine: Engine, da: date | None = None, a: date | None = None):
+    with session_factory(engine)() as session:
+        return DashboardService(session).get_commercial_dashboard(
+            PeriodoQuery(da=da, a=a), READONLY
+        )
+
+
+def test_the_period_defaults_to_the_current_month(seeded: Engine) -> None:
+    from pigrocrm.core.db import month_bounds
+
+    today = today_local()
+    result = _dashboard(seeded)
+    assert (result.periodo.da, result.periodo.a) == month_bounds(today.year, today.month)
+
+
+def test_the_period_is_echoed_back_normalised(seeded: Engine) -> None:
+    """Always echoed, because a screenshot of a dashboard with no explicit period is a
+    number with no unit (§4)."""
+    result = _dashboard(seeded, date(2026, 3, 1), date(2026, 3, 31))
+    assert result.periodo.da == date(2026, 3, 1)
+    assert result.periodo.a == date(2026, 3, 31)
+
+
+def test_an_inverted_period_is_a_named_validation_error(seeded: Engine) -> None:
+    with pytest.raises(ValidationFailed) as caught:
+        _dashboard(seeded, date(2026, 3, 31), date(2026, 3, 1))
+    assert caught.value.details["field"] == "da"
+
+
+def test_an_absurdly_long_period_is_refused(seeded: Engine) -> None:
+    """§7.3: the predicate always carries a bounded period. Without a ceiling, `da=0001-01-01`
+    is a full scan requested from a query string."""
+    with pytest.raises(ValidationFailed) as caught:
+        _dashboard(seeded, date(1900, 1, 1), date(2026, 12, 31))
+    assert caught.value.details["field"] == "a"
+
+
+def test_supplying_only_one_bound_is_refused(seeded: Engine) -> None:
+    """Half a period is not a period, and guessing the other half would silently answer a
+    different question from the one asked."""
+    with pytest.raises(ValidationFailed):
+        _dashboard(seeded, date(2026, 3, 1), None)
+
+
+def test_calcolato_alle_is_the_transaction_timestamp(seeded: Engine) -> None:
+    from datetime import UTC, datetime
+
+    before = datetime.now(UTC)
+    result = _dashboard(seeded)
+    after = datetime.now(UTC)
+    assert before <= result.calcolato_alle <= after
+    assert result.calcolato_alle.tzinfo is not None
+
+
+def test_the_pipeline_matches_the_repository_verbatim(seeded: Engine) -> None:
+    """Composition, not computation: the service returns what the repository produced,
+    with the same names and the same values (§3 form 1)."""
+    result = _dashboard(seeded)
+    with session_factory(seeded)() as session:
+        expected = DealRepository(session).pipeline_summary()
+    assert result.pipeline == expected
+
+
+def test_the_closures_match_the_repository_verbatim(seeded: Engine) -> None:
+    today = today_local()
+    result = _dashboard(seeded, date(today.year, today.month, 1), today)
+    with session_factory(seeded)() as session:
+        expected = DealRepository(session).closed_in_period(
+            date(today.year, today.month, 1), today
+        )
+    assert result.chiusure == expected
+    assert result.chiusure.vinti == 1
+    assert result.chiusure.persi == 1
+    assert result.chiusure.tasso_conversione is not None
+
+
+def test_the_pending_offers_carry_their_age(seeded: Engine) -> None:
+    result = _dashboard(seeded)
+    offer = next(o for o in result.offerte_in_attesa if o.titolo == "DASH offerta")
+    assert offer.giorni == (today_local() - date(2026, 1, 1)).days
+    assert result.offerte_in_attesa_totale >= 1
+
+
+def test_the_signal_is_present_on_the_commercial_dashboard(seeded: Engine) -> None:
+    """§6.2 and §17: this signal ships with the automation it cross-checks, on the
+    dashboard that needs no invoices."""
+    result = _dashboard(seeded)
+    assert result.offerte_accettate_deal_non_vinto == 0
+
+
+def test_a_readonly_actor_sees_the_whole_dashboard(seeded: Engine) -> None:
+    """§13: no new role and no new authorisation rule. Every dashboard is visible to
+    whoever can read the services it reads, and slice 4 §11 gives those to every role. The
+    only admin-only figure in that area is the fiscal estimate, which is on no dashboard
+    (§5.3)."""
+    result = _dashboard(seeded)
+    assert result.pipeline
+
+
+def test_the_service_runs_in_repeatable_read(seeded: Engine) -> None:
+    """The level, read from the connection the service actually used. Task B10 proves the
+    level does something; this proves it was set."""
+    with session_factory(seeded)() as session:
+        service = DashboardService(session)
+        service.get_commercial_dashboard(PeriodoQuery(), READONLY)
+        level = session.execute(
+            __import__("sqlalchemy").text("SHOW transaction_isolation")
+        ).scalar_one()
+    assert level == "repeatable read"
+
+
+def test_a_session_already_in_a_transaction_fails_loudly(db_engine: Engine) -> None:
+    """The failure mode that must never be silent.
+
+    If the isolation level cannot be set, the dashboard runs in READ COMMITTED and returns
+    a total that was true at no single instant -- and nothing about re-reading the service
+    would reveal it. So it raises instead.
+    """
+    with session_factory(db_engine)() as session:
+        session.execute(__import__("sqlalchemy").text("SELECT 1"))  # opens a transaction
+        with pytest.raises(RuntimeError, match="REPEATABLE READ"):
+            DashboardService(session).get_commercial_dashboard(PeriodoQuery(), READONLY)
+
+
+def test_the_service_has_exactly_one_public_method_in_6b() -> None:
+    """Sub-plan 6C appends two more, each with its own tool. Pinned here so a method added
+    without a tool fails in this file rather than in the architecture test, where the
+    message is about a list."""
+    import inspect
+
+    public = {
+        name
+        for name, member in inspect.getmembers(DashboardService, predicate=inspect.isfunction)
+        if not name.startswith("_")
+        and member.__qualname__.startswith("DashboardService.")
+    }
+    assert public == {"get_commercial_dashboard"}
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_dashboard_commercial.py -v`
+Expected: collection error — `ModuleNotFoundError: No module named 'pigrocrm.core.dashboard.service'`.
+
+- [ ] **Step 3: Add `PeriodoQuery` to the schemas**
+
+```python
+# packages/core/src/pigrocrm/core/dashboard/schemas.py -- append. Imports gain:
+#   from pigrocrm.core.db import month_bounds, today_local
+#   from pigrocrm.core.errors import ValidationFailed
+
+# Ten years and a bit -- the span of the §16 reference corpus. A ceiling exists because
+# §7.3 requires the predicate to always carry a bounded period: without one, `da=0001-01-01`
+# is a full table scan requested from a query string.
+MAX_PERIOD_DAYS = 3660
+
+
+class PeriodoQuery(BaseModel):
+    """The period, or nothing at all.
+
+    Both bounds or neither. Supplying one and letting the service guess the other would
+    silently answer a different question from the one asked, and the reader would have no
+    way to see it -- the response echoes the period back for exactly this reason.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    da: date | None = None
+    a: date | None = None
+
+    def resolve(self) -> "Periodo":
+        if (self.da is None) != (self.a is None):
+            raise ValidationFailed(
+                "periodo",
+                "da" if self.da is None else "a",
+                "il periodo richiede entrambe le date, o nessuna",
+                expected="da e a insieme, oppure nessuna delle due",
+            )
+        if self.da is None or self.a is None:
+            today = today_local()
+            first, last = month_bounds(today.year, today.month)
+            return Periodo(da=first, a=last)
+        if self.da > self.a:
+            raise ValidationFailed(
+                "periodo", "da", "la data iniziale è successiva a quella finale",
+                expected=f"da <= {self.a.isoformat()}",
+            )
+        if (self.a - self.da).days > MAX_PERIOD_DAYS:
+            raise ValidationFailed(
+                "periodo", "a", "periodo troppo lungo",
+                expected=f"al massimo {MAX_PERIOD_DAYS} giorni",
+            )
+        return Periodo(da=self.da, a=self.a)
+```
+
+`Periodo` is declared above `PeriodoQuery` in that file already, so the forward reference in quotes is only needed if `PeriodoQuery` is placed first; place it after and drop the quotes.
+
+- [ ] **Step 4: Write the service**
+
+```python
+# packages/core/src/pigrocrm/core/dashboard/service.py
+"""Composition, and deliberately nothing else.
+
+**This module contains no arithmetic, and `packages/core/tests/test_dashboard_no_arithmetic.py`
+makes that a fact of the build rather than an intention of this docstring.** It may not
+import `Decimal`, and it may not contain a `BinOp` node with `*`, `/` or `-`. A composition
+service that cannot subtract cannot invent a margin.
+
+Spec §3: every figure on a dashboard is either returned verbatim by the service that owns
+the data, or a single `COUNT`/`SUM` written in the repository of the table it counts. So
+this file calls **services** for figures somebody else already owns and **repositories**
+for the aggregates it defines -- and never a third thing.
+
+Why repositories rather than services for those aggregates: a service exists to own
+authorisation, a transaction and business rules, and these aggregates have none beyond
+`deleted_at IS NULL`. Putting `pipeline_summary` on `DealService` would create two paths an
+agent could reach the same number by -- the deal domain tool and the dashboard tool -- which
+is the duplication this slice exists not to introduce.
+
+**One endpoint, one transaction, one instant, in `REPEATABLE READ`.** Not one endpoint per
+card. In `READ COMMITTED` -- Postgres's default, and so what you get by saying nothing --
+each statement takes its own snapshot, and seven queries in one transaction can see seven
+states exactly as seven transactions can: a user who adds two cards by hand and does not
+get the third stops trusting all three, and is right to. The transaction is read-only, so
+the usual price of the higher level is not paid -- a serialisation failure can only strike a
+writer, and nothing here writes.
+
+The accepted cost, stated because it is real: no partial rendering. One slow figure slows
+the whole page. It is bearable because the queries are few and the period is always bounded,
+and it is the price of the property this page exists for.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from sqlalchemy import text
+from sqlalchemy.exc import InvalidRequestError
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.dashboard.schemas import CommercialDashboard, PeriodoQuery
+from pigrocrm.core.deals.repository import DealRepository
+from pigrocrm.core.documents.repository import DocumentRepository
+
+# The property §7.1 requires, named so the tests can assert on the same constant the code
+# uses rather than on a duplicated string literal.
+SNAPSHOT_ISOLATION = "REPEATABLE READ"
+
+_PENDING_OFFERS_SHOWN = 20
+_EXPECTED_CLOSURE_WINDOW_DAYS = 30
+
+
+class DashboardService:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+        self.deals = DealRepository(session)
+        self.documents = DocumentRepository(session)
+
+    def _open_snapshot(self) -> datetime:
+        """Begin the one read-only `REPEATABLE READ` transaction, and return its instant.
+
+        Must be the first thing that touches the session: Postgres refuses to change the
+        isolation level once a transaction has begun. In the API that is automatic --
+        `SessionDep` yields a fresh session per request.
+
+        It raises rather than continuing when it cannot. Silent degradation here produces a
+        total that was true at no single instant, and nothing about re-reading this file
+        would reveal it -- which makes a loud failure strictly better than a plausible
+        number.
+
+        `transaction_timestamp()` is constant for the whole transaction, so it is the
+        instant the whole response describes. On its own it would prove nothing -- it is
+        constant in `READ COMMITTED` too, which is precisely why criterion 6 asserts the
+        isolation level as well.
+        """
+        try:
+            self.session.connection(
+                execution_options={"isolation_level": SNAPSHOT_ISOLATION}
+            )
+        except InvalidRequestError as exc:
+            raise RuntimeError(
+                "a dashboard needs a session with no transaction in progress so it can "
+                f"run in {SNAPSHOT_ISOLATION}; this session already had one. Pass a fresh "
+                "session (the API's SessionDep yields one per request)."
+            ) from exc
+        return self.session.execute(text("SELECT transaction_timestamp()")).scalar_one()
+
+    def get_commercial_dashboard(
+        self, query: PeriodoQuery, actor: Actor
+    ) -> CommercialDashboard:
+        """Pipeline snapshot plus two period measures. Touches no invoice and no hour --
+        it reads `deals`, `pipeline_stages` and `documents`, which is what lets it ship
+        before slice 3 (§4, §17).
+
+        No authorisation check: §13 states this slice adds no role and no authorisation
+        rule, every figure here comes from a read every role already has, and the one
+        admin-only figure of that area -- the fiscal estimate -- is on no dashboard (§5.3).
+        Inventing a fourth visibility level on a read-only screen would put a security rule
+        where nobody looks for one. `actor` is taken because every service method here does.
+        """
+        periodo = query.resolve()
+        calcolato_alle = self._open_snapshot()
+        _, finestra_a = month_window(periodo)
+        return CommercialDashboard(
+            periodo=periodo,
+            calcolato_alle=calcolato_alle,
+            pipeline=self.deals.pipeline_summary(),
+            chiusure=self.deals.closed_in_period(periodo.da, periodo.a),
+            offerte_in_attesa=self.documents.pending_offers(_PENDING_OFFERS_SHOWN),
+            offerte_in_attesa_totale=self.documents.count_pending_offers(),
+            chiusure_previste_30_giorni=self.deals.expected_closures(
+                periodo.a, finestra_a
+            ),
+            chiusure_non_attribuibili=self.deals.unattributable_closures(),
+            offerte_accettate_deal_non_vinto=(
+                self.documents.count_accepted_with_unwon_deal()
+            ),
+        )
+```
+
+The `month_window` call above needs a definition, and it cannot live in this module: computing "the period's end plus thirty days" is a subtraction-free addition, but `timedelta` arithmetic is still a `BinOp` and Task B9's clause forbids every one of them without exception. So it goes in `db/clock.py`, next to the other date arithmetic:
+
+```python
+# packages/core/src/pigrocrm/core/db/clock.py -- append.
+def window_from(start: date, days: int) -> tuple[date, date]:
+    """`(start, start + days)`, both inclusive.
+
+    Here and not in `core/dashboard/` because that package is forbidden from containing any
+    arithmetic at all -- no `*`, `/` or `-` BinOp, and no `Decimal` import -- so that it
+    provably cannot invent a figure (spec §3, and
+    `packages/core/tests/test_dashboard_no_arithmetic.py`). A date offset is harmless in
+    itself; the rule has no exceptions precisely so that nobody has to judge which
+    arithmetic is harmless.
+    """
+    return start, start + timedelta(days=days)
+```
+
+Add `timedelta` to that module's `from datetime import ...` line and `window_from` to `db/__init__.py`'s exports. Then in `service.py` replace the `month_window` line with:
+
+```python
+        _, finestra_a = window_from(periodo.a, _EXPECTED_CLOSURE_WINDOW_DAYS)
+```
+
+and import `window_from` from `pigrocrm.core.db`.
+
+- [ ] **Step 5: Export the service**
+
+```python
+# packages/core/src/pigrocrm/core/dashboard/__init__.py -- add to imports and __all__:
+from pigrocrm.core.dashboard.schemas import MAX_PERIOD_DAYS, PeriodoQuery
+from pigrocrm.core.dashboard.service import SNAPSHOT_ISOLATION, DashboardService
+# "MAX_PERIOD_DAYS", "PeriodoQuery", "SNAPSHOT_ISOLATION", "DashboardService" in __all__.
+```
+
+- [ ] **Step 6: Run the tests and watch them pass**
+
+Run: `uv run pytest packages/core/tests/test_dashboard_commercial.py -v`
+Expected: PASS, fourteen tests.
+
+If `test_a_session_already_in_a_transaction_fails_loudly` does **not** raise, SQLAlchemy accepted the execution option and silently ignored it. In that case replace the `try`/`except` with an explicit pre-check and keep the same message:
+
+```python
+        if self.session.in_transaction():
+            raise RuntimeError(
+                "a dashboard needs a session with no transaction in progress so it can "
+                f"run in {SNAPSHOT_ISOLATION}; this session already had one. Pass a fresh "
+                "session (the API's SessionDep yields one per request)."
+            )
+        self.session.connection(
+            execution_options={"isolation_level": SNAPSHOT_ISOLATION}
+        )
+```
+
+Decide by the test, not by reading the SQLAlchemy changelog.
+
+- [ ] **Step 7: Full gate**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+Expected: green.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/dashboard/ \
+        packages/core/src/pigrocrm/core/db/clock.py \
+        packages/core/src/pigrocrm/core/db/__init__.py \
+        packages/core/tests/test_dashboard_commercial.py
+git commit -m "feat(dashboard): commercial dashboard in one repeatable-read transaction"
+```
+
+---
+
+### Task B9: Criterion 11's two AST clauses — the provenance rule, mechanised
+
+**Files:**
+- Create: `packages/core/tests/test_dashboard_no_arithmetic.py`
+- Modify: `packages/core/tests/test_architecture.py` (a cross-reference)
+
+**Interfaces:**
+- Consumes: the existence of `packages/core/src/pigrocrm/core/dashboard/` (Task B8).
+- Produces:
+  - `DASHBOARD_ROOT`, `ARITHMETIC_OPS`, `DECIMAL_IMPORT_EXEMPT: frozenset[str] = frozenset({"schemas.py"})`, `BINOP_EXEMPT: frozenset[str] = frozenset()`
+  - `test_no_dashboard_module_imports_decimal`, `test_no_dashboard_module_contains_a_multiplication_division_or_subtraction`, `test_the_binop_exemption_list_is_empty`, and two guard-proving tests.
+- Nothing depends on this task's output; it depends on 6C not weakening it, which is why the exemption list is asserted to be **empty** rather than merely small.
+
+**Why this is a test and not a code review note.** Spec §3 is the load-bearing paragraph of the whole slice: a dashboard that sums its own numbers is a second source of truth, and a second source of truth about a margin is worse than no margin — someone who reads a wrong number acts, someone who reads no number asks. §3 proposes making it AST-checkable, and the two clauses were chosen because they are **decidable without type inference**: a rule that requires knowing a variable is a `Decimal` is not a rule a test can apply.
+
+**One exemption, and it is about declaration rather than computation.** `dashboard/schemas.py` imports `Decimal` to *type* its fields. Typing a field performs no arithmetic, and the clause exists to forbid arithmetic. The `BinOp` list, by contrast, is empty and is asserted to be empty — including in `schemas.py`.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_dashboard_no_arithmetic.py
+"""**Criterion 11**, the two clauses of spec §3.
+
+`DashboardService` is a composition service: it resolves authorisation, opens a
+transaction, calls services and repositories, and assembles the result. It contains no
+arithmetic. That sentence is worth nothing as a comment and everything as a build failure,
+because the alternative -- a dashboard that computes a margin its own way -- is the second
+source of truth §1 is about, and on a margin nobody notices.
+
+Both clauses are decidable on the AST **without type inference**, which is why they are
+these two clauses and not "no arithmetic on money": a rule needing to know that a variable
+holds a `Decimal` is not a rule a test can apply.
+
+  1. no module under `core/dashboard/` imports `Decimal`  -- except `schemas.py`, which
+     imports it to *type* its fields and performs no arithmetic;
+  2. no module under `core/dashboard/` contains a `BinOp` node with `*`, `/` or `-`, and
+     the exemption list for this clause is **empty**.
+
+A composition service that cannot subtract cannot invent a margin.
+"""
+
+import ast
+from pathlib import Path
+
+CORE_ROOT = Path(__file__).resolve().parents[1]
+DASHBOARD_ROOT = CORE_ROOT / "src" / "pigrocrm" / "core" / "dashboard"
+
+ARITHMETIC_OPS = (ast.Mult, ast.Div, ast.FloorDiv, ast.Sub, ast.Mod, ast.Pow)
+
+# `schemas.py` imports `Decimal` to annotate its fields. Declaring a field's type is not
+# arithmetic, and clause 1 exists to forbid arithmetic. Every other module in the package
+# is covered.
+DECIMAL_IMPORT_EXEMPT: frozenset[str] = frozenset({"schemas.py"})
+
+# Clause 2 has **no** exemptions, and this emptiness is itself asserted below. A `BinOp`
+# with `-` in a dashboard module is either a figure being derived -- forbidden -- or a date
+# offset, which belongs in `db/clock.py` where the other date arithmetic already lives.
+# Keeping the list empty is what stops the rule degrading one "harmless" entry at a time.
+BINOP_EXEMPT: frozenset[str] = frozenset()
+
+
+def _modules() -> list[Path]:
+    return sorted(DASHBOARD_ROOT.rglob("*.py"))
+
+
+def _imports_decimal(tree: ast.AST) -> bool:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "decimal":
+            if any(alias.name == "Decimal" for alias in node.names):
+                return True
+        if isinstance(node, ast.Import):
+            if any(alias.name in ("decimal", "decimal.Decimal") for alias in node.names):
+                return True
+    return False
+
+
+def _arithmetic_binops(tree: ast.AST) -> list[tuple[str, int]]:
+    found: list[tuple[str, int]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ARITHMETIC_OPS):
+            found.append((type(node.op).__name__, node.lineno))
+        # `x -= 1` and `x *= 2` are AugAssign, not BinOp, and would slip through a
+        # BinOp-only walk. Same rule, same reason.
+        if isinstance(node, ast.AugAssign) and isinstance(node.op, ARITHMETIC_OPS):
+            found.append((f"Aug{type(node.op).__name__}", node.lineno))
+    return found
+
+
+def test_the_dashboard_package_exists_so_this_file_is_not_vacuous() -> None:
+    """A guard over an empty directory passes forever and proves nothing."""
+    assert DASHBOARD_ROOT.is_dir(), DASHBOARD_ROOT
+    modules = _modules()
+    assert len(modules) >= 3, [p.name for p in modules]
+    assert (DASHBOARD_ROOT / "service.py").exists()
+
+
+def test_no_dashboard_module_imports_decimal() -> None:
+    offenders: list[str] = []
+    for path in _modules():
+        if path.name in DECIMAL_IMPORT_EXEMPT:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        if _imports_decimal(tree):
+            offenders.append(path.name)
+    assert not offenders, (
+        "a dashboard module imported Decimal. Spec §3: every figure is either returned "
+        "verbatim by the service that owns the data, or a single COUNT/SUM in that table's "
+        "repository. If a derived figure is needed, it belongs to the service that owns "
+        f"the data it derives from. Offenders: {offenders}"
+    )
+
+
+def test_no_dashboard_module_contains_a_multiplication_division_or_subtraction() -> None:
+    offenders: list[str] = []
+    for path in _modules():
+        if path.name in BINOP_EXEMPT:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        found = _arithmetic_binops(tree)
+        if found:
+            offenders.append(f"{path.name}: {found}")
+    assert not offenders, (
+        "a dashboard module contains arithmetic. A composition service that cannot "
+        "subtract cannot invent a margin (spec §3). Date offsets belong in db/clock.py; "
+        f"derived figures belong to the owning service. Offenders: {offenders}"
+    )
+
+
+def test_the_binop_exemption_list_is_empty() -> None:
+    """Spec §3 requires it, in those words: "la lista delle eccezioni è vuota". An
+    exemption list that is allowed to grow is a rule that degrades one harmless-looking
+    entry at a time, and each entry is individually defensible."""
+    assert BINOP_EXEMPT == frozenset()
+
+
+def test_the_decimal_exemption_is_exactly_schemas() -> None:
+    assert DECIMAL_IMPORT_EXEMPT == frozenset({"schemas.py"})
+
+
+def test_the_guard_catches_an_import(tmp_path: Path) -> None:
+    """The guard proven to catch what it claims to, in the same style as the
+    import-direction tests in test_architecture.py."""
+    sneaky = tmp_path / "service.py"
+    sneaky.write_text("from decimal import Decimal\nx = Decimal('1')\n", encoding="utf-8")
+    assert _imports_decimal(ast.parse(sneaky.read_text(encoding="utf-8")))
+
+
+def test_the_guard_catches_each_forbidden_operator(tmp_path: Path) -> None:
+    for source in (
+        "margine = ricavi - costi\n",
+        "quota = parte / totale\n",
+        "peso = valore * probabilita\n",
+        "totale -= sconto\n",
+    ):
+        module = tmp_path / "m.py"
+        module.write_text(source, encoding="utf-8")
+        found = _arithmetic_binops(ast.parse(source))
+        assert found, source
+
+
+def test_addition_is_allowed_because_it_is_not_the_defect() -> None:
+    """`+` is not on the list, deliberately: string and list concatenation are `Add` nodes
+    and are everywhere in ordinary code, while the defect §3 is about -- deriving a margin,
+    a rate or a share -- needs `-`, `/` or `*`. A rule that also banned `+` would be
+    unenforceable and would be turned off."""
+    assert not _arithmetic_binops(ast.parse("etichetta = 'a' + 'b'\n"))
+```
+
+- [ ] **Step 2: Run it and watch it fail, then pass**
+
+Run: `uv run pytest packages/core/tests/test_dashboard_no_arithmetic.py -v`
+
+Expected on the tree as Task B8 left it: **PASS**, because Task B8 already moved the one date offset into `db/clock.py::window_from` for this reason. To see the guard work, temporarily inline that offset back into `dashboard/service.py` as `periodo.a + timedelta(days=30)` — no, that is an `Add` and is allowed; use `periodo.a - timedelta(days=-30)`, which is the same date and a `Sub`. Run again:
+
+Expected: `test_no_dashboard_module_contains_a_multiplication_division_or_subtraction` FAILS naming `service.py` and the line. **Revert.** A guard never observed to fail is not a guard.
+
+- [ ] **Step 3: Cross-reference from the architecture test**
+
+```python
+# packages/core/tests/test_architecture.py -- append.
+def test_the_dashboard_arithmetic_ban_has_its_own_guard() -> None:
+    """Spec §3's two AST clauses live in `test_dashboard_no_arithmetic.py`. Named here
+    because this file is where somebody looks for the project's architectural rules, and a
+    rule enforced in a file nobody opens is a rule deleted in the next refactor."""
+    guard = CORE_ROOT / "tests" / "test_dashboard_no_arithmetic.py"
+    assert guard.exists()
+    source = guard.read_text(encoding="utf-8")
+    assert "BINOP_EXEMPT: frozenset[str] = frozenset()" in source, (
+        "the BinOp exemption list must stay empty (spec §3)"
+    )
+```
+
+- [ ] **Step 4: Full gate**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check .`
+Expected: green.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/core/tests/test_dashboard_no_arithmetic.py \
+        packages/core/tests/test_architecture.py
+git commit -m "test(dashboard): §3's provenance rule as two AST clauses, exemptions empty"
+```
+
+---
+### Task B10: Criterion 6 — one dashboard is one instant, proven by inverting it
+
+**Files:**
+- Create: `packages/core/tests/test_dashboard_snapshot.py`
+
+**Interfaces:**
+- Consumes: `DashboardService.get_commercial_dashboard`, `SNAPSHOT_ISOLATION` (Task B8); `DealRepository.pipeline_summary` (Task B7); the `db_engine` fixture.
+- Produces: nothing importable. The deliverable is the executable criterion.
+
+**Why clause (a) alone would be worthless, in the spec's own words.** `transaction_timestamp()` is constant for the whole transaction **even in `READ COMMITTED`**, so a test that stopped at "the response has one timestamp" would pass on a dashboard reading seven different states. The spec's own self-review caught this. So there are three clauses, and the third is the inversion: **with the isolation level forced to `read committed`, the test must fail.** An assertion that passes either way is measuring nothing.
+
+**This test does not use `db_session`.** That fixture hands out a session on a connection with an already-open outer transaction, and Postgres refuses `SET TRANSACTION ISOLATION LEVEL` once one has begun. It is one of exactly two files in the suite that deliberately builds its own sessions, and its docstring says so.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_dashboard_snapshot.py
+"""**Criterion 6.** A dashboard is one instant, and this is what proves it.
+
+Three clauses, and the first two would not be enough on their own:
+
+  (a) the isolation level in force during the request is `repeatable read`, read from
+      `SHOW transaction_isolation` on the same connection;
+  (b) a parallel connection COMMITs an invoice-shaped change *between* the first and
+      second internal query, synchronised with a barrier -- and that change appears in
+      **no** figure of the response;
+  (c) `calcolato_alle` precedes the parallel commit.
+
+And then the inversion, which is what makes (a) meaningful instead of decorative: repeated
+with the isolation level forced to `read committed`, (b) **fails**. `transaction_timestamp()`
+is constant for a whole transaction even in `READ COMMITTED`, so a test that stopped at (c)
+would pass on a dashboard that read seven different states.
+
+This file deliberately does not use the `db_session` fixture: it holds an outer transaction
+open, and Postgres refuses `SET TRANSACTION ISOLATION LEVEL` once a transaction has begun.
+`test_dashboard_commercial.py` is the only other file in the suite that builds its own
+sessions, and for the same reason.
+"""
+
+from __future__ import annotations
+
+import threading
+from collections.abc import Iterator
+from datetime import datetime
+
+import pytest
+from sqlalchemy import Engine, delete, text
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.dashboard import service as dashboard_service
+from pigrocrm.core.dashboard.schemas import PeriodoQuery
+from pigrocrm.core.dashboard.service import DashboardService
+from pigrocrm.core.db import session_factory, today_local
+from pigrocrm.core.db.base import uuid7
+from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.deals.repository import DealRepository
+from pigrocrm.core.pipeline.service import PipelineService
+
+READONLY = Actor(id=uuid7(), type="user", role="readonly")
+SEED = Actor(id=None, type="system", role="admin")
+_PREFIX = "SNAP"
+_BARRIER_TIMEOUT = 10.0
+
+
+@pytest.fixture
+def seeded(db_engine: Engine) -> Iterator[tuple[Engine, dict, Customer]]:
+    factory = session_factory(db_engine)
+    with factory() as session:
+        PipelineService(session).seed_defaults(SEED)
+        stages = {s.code: s for s in PipelineService(session).list() if s.code is not None}
+        customer = Customer(
+            ragione_sociale=f"{_PREFIX} Cliente", nazione="IT", custom_fields={}
+        )
+        session.add(customer)
+        session.flush()
+        session.add(
+            Deal(nome=f"{_PREFIX} base", customer_id=customer.id,
+                 pipeline_stage_id=stages["lead"].id, valore_previsto="1000.00",
+                 probabilita=50, custom_fields={})
+        )
+        session.commit()
+        detached = {code: stage for code, stage in stages.items()}
+        customer_id = customer.id
+    try:
+        with factory() as session:
+            reread = session.get(Customer, customer_id)
+            assert reread is not None
+            yield db_engine, detached, reread
+    finally:
+        with factory() as session:
+            session.execute(delete(Deal).where(Deal.nome.like(f"{_PREFIX} %")))
+            session.execute(
+                delete(Customer).where(Customer.ragione_sociale.like(f"{_PREFIX} %"))
+            )
+            session.commit()
+
+
+def _run_with_a_commit_in_the_middle(
+    engine: Engine,
+    stages: dict,
+    customer_id: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[object, datetime]:
+    """Run the dashboard, committing a new open deal from another connection between its
+    first and second internal query.
+
+    The barrier hangs off `pipeline_summary`, which is the first aggregate the service
+    calls. Signalling from inside it and waiting for the writer means the commit lands
+    after the snapshot was taken (`SELECT transaction_timestamp()` is the transaction's
+    first statement and acquires it) and before every remaining query -- which is exactly
+    the window `READ COMMITTED` would leak through.
+    """
+    reader_reached_first_query = threading.Event()
+    writer_committed = threading.Event()
+    commit_instant: list[datetime] = []
+
+    def writer() -> None:
+        reader_reached_first_query.wait(_BARRIER_TIMEOUT)
+        with session_factory(engine)() as session:
+            session.add(
+                Deal(
+                    nome=f"{_PREFIX} intruso", customer_id=customer_id,
+                    pipeline_stage_id=stages["lead"].id, valore_previsto="9999.00",
+                    probabilita=50, chiuso_il=None, custom_fields={},
+                )
+            )
+            session.commit()
+            commit_instant.append(
+                session.execute(text("SELECT statement_timestamp()")).scalar_one()
+            )
+        writer_committed.set()
+
+    original = DealRepository.pipeline_summary
+    state = {"tripped": False}
+
+    def barrier(self: DealRepository) -> object:
+        if not state["tripped"]:
+            state["tripped"] = True
+            reader_reached_first_query.set()
+            writer_committed.wait(_BARRIER_TIMEOUT)
+        return original(self)
+
+    monkeypatch.setattr(DealRepository, "pipeline_summary", barrier)
+
+    thread = threading.Thread(target=writer, daemon=True)
+    thread.start()
+    with session_factory(engine)() as session:
+        result = DashboardService(session).get_commercial_dashboard(
+            PeriodoQuery(), READONLY
+        )
+    thread.join(timeout=_BARRIER_TIMEOUT)
+    assert commit_instant, "the parallel writer never committed"
+    return result, commit_instant[0]
+
+
+def test_clause_a_the_isolation_level_in_force_is_repeatable_read(
+    seeded: tuple[Engine, dict, Customer]
+) -> None:
+    engine, _stages, _customer = seeded
+    with session_factory(engine)() as session:
+        DashboardService(session).get_commercial_dashboard(PeriodoQuery(), READONLY)
+        level = session.execute(text("SHOW transaction_isolation")).scalar_one()
+    assert level == "repeatable read"
+    assert dashboard_service.SNAPSHOT_ISOLATION == "REPEATABLE READ"
+
+
+def test_clause_b_a_commit_in_the_middle_appears_in_no_figure(
+    seeded: tuple[Engine, dict, Customer], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, stages, customer = seeded
+    result, _instant = _run_with_a_commit_in_the_middle(
+        engine, stages, customer.id, monkeypatch
+    )
+
+    lead = next(row for row in result.pipeline if row.stage_code == "lead")
+    # One deal, the seeded one. The intruder committed after the snapshot and is invisible
+    # to every query in the transaction -- not just to the ones that ran before it.
+    assert lead.numero == 1
+    assert lead.valore_totale.quantize(lead.valore_totale) == lead.valore_totale
+    assert lead.valore_totale == __import__("decimal").Decimal("1000.00")
+
+
+def test_clause_c_calcolato_alle_precedes_the_parallel_commit(
+    seeded: tuple[Engine, dict, Customer], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, stages, customer = seeded
+    result, commit_instant = _run_with_a_commit_in_the_middle(
+        engine, stages, customer.id, monkeypatch
+    )
+    assert result.calcolato_alle < commit_instant, (
+        f"calcolato_alle {result.calcolato_alle} is not before the parallel commit "
+        f"{commit_instant}; it is not the snapshot's instant"
+    )
+
+
+def test_the_inversion_read_committed_leaks_the_parallel_commit(
+    seeded: tuple[Engine, dict, Customer], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The test that makes clause (a) mean something.
+
+    Forced to `READ COMMITTED` -- Postgres's default, and therefore what this dashboard
+    would silently get if nobody had said otherwise -- each statement takes its own
+    snapshot, so the query that runs *after* the barrier sees the intruder. If this test
+    ever starts passing with the same assertion as clause (b), the isolation level has
+    stopped doing anything and clauses (a) to (c) are decorative.
+    """
+    engine, stages, customer = seeded
+    monkeypatch.setattr(dashboard_service, "SNAPSHOT_ISOLATION", "READ COMMITTED")
+
+    result, _instant = _run_with_a_commit_in_the_middle(
+        engine, stages, customer.id, monkeypatch
+    )
+    lead = next(row for row in result.pipeline if row.stage_code == "lead")
+    assert lead.numero == 2, (
+        "in READ COMMITTED the post-barrier query should have seen the parallel commit. "
+        "It did not, which means the barrier is not actually landing between two "
+        "statements -- fix the barrier before trusting clause (b)."
+    )
+
+
+def test_the_whole_response_is_internally_consistent(
+    seeded: tuple[Engine, dict, Customer]
+) -> None:
+    """The property the user actually experiences: adding two cards by hand and getting the
+    third. Asserted on the response alone, with no parallel writer, so a failure here is a
+    composition bug rather than a race."""
+    engine, _stages, _customer = seeded
+    with session_factory(engine)() as session:
+        result = DashboardService(session).get_commercial_dashboard(
+            PeriodoQuery(), READONLY
+        )
+    total_open = sum(row.numero for row in result.pipeline)
+    with_value = sum(row.numero - row.senza_valore for row in result.pipeline)
+    assert total_open >= with_value >= 0
+    assert len(result.offerte_in_attesa) <= result.offerte_in_attesa_totale
+```
+
+The `sum(...)` calls in that last test are in a **test** file, not in `core/dashboard/`, so Task B9's ban does not reach them — and they are checking the response for internal consistency rather than producing a figure anybody reads.
+
+- [ ] **Step 2: Run it and watch the inversion fail first**
+
+Temporarily change `SNAPSHOT_ISOLATION` in `dashboard/service.py` to `"READ COMMITTED"`.
+
+Run: `uv run pytest packages/core/tests/test_dashboard_snapshot.py -v`
+Expected: `test_clause_a_...` FAILS (`read committed` != `repeatable read`) and `test_clause_b_...` FAILS with `assert 2 == 1` — the intruder leaked in. **Restore `"REPEATABLE READ"`.**
+
+- [ ] **Step 3: Run it green**
+
+Run: `uv run pytest packages/core/tests/test_dashboard_snapshot.py -v`
+Expected: PASS, five tests.
+
+If `test_the_inversion_read_committed_leaks_the_parallel_commit` fails with the barrier message, the writer is committing before the reader's first statement rather than between two of them. Raise `_BARRIER_TIMEOUT`, and check that `pipeline_summary` really is the first aggregate `get_commercial_dashboard` calls — if a later refactor reorders them, move the barrier to whichever is first rather than reordering the service to suit the test.
+
+- [ ] **Step 4: Full gate**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check .`
+Expected: green.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/core/tests/test_dashboard_snapshot.py
+git commit -m "test(dashboard): criterion 6, one snapshot, proven by inverting the level"
+```
+
+---
+
+### Task B11: Criterion 2 — every card equals its drill-through
+
+**Files:**
+- Modify: `packages/core/src/pigrocrm/core/documents/repository.py` (extract the predicate, add the filter)
+- Modify: `packages/core/src/pigrocrm/core/documents/schemas.py` (`DocumentListQuery.solo_deal_non_vinto`)
+- Modify: `apps/api/src/pigrocrm_api/routers/documents.py` (the query parameter)
+- Create: `packages/core/tests/test_dashboard_drillthrough.py`
+
+**Interfaces:**
+- Consumes: `DashboardService.get_commercial_dashboard` (Task B8); `DocumentRepository.count_accepted_with_unwon_deal` (Task B7); `DealRepository.list`, `DocumentRepository.list` (Task A4).
+- Produces:
+  - `documents/repository.py`: `_accepted_with_unwon_deal_predicate()` at module level, used by **both** `count_accepted_with_unwon_deal` and `list`.
+  - `DocumentListQuery.solo_deal_non_vinto: bool = False`
+  - `GET /api/documents?solo_deal_non_vinto=true`
+- Nothing later depends on this task except Task B14, which links the card to that URL.
+
+**§7.2's second property is only true if the predicate is literally the same, so it is made literally the same.** The spec says: *"La card e il suo drill-through sono la stessa query, non due calcoli."* A signal counted with one predicate and listed with a hand-copied variant of it is two calculations that agree today. Extracting the predicate to a module-level function and calling it from both the `COUNT` and the `SELECT` is what makes the criterion mechanical rather than aspirational.
+
+**Which cards have a link, decided here.** Criterion 2 binds "ogni cifra della dashboard che ha un collegamento", so the set of linked cards is a design decision and this task fixes it for the commercial dashboard:
+
+| Card | Link | Why |
+|---|---|---|
+| Deals open per stage (`numero`) | `/app/deal/lista?stage_id=…` | The list endpoint already filters by `stage_id` |
+| Offers awaiting an answer (`offerte_in_attesa_totale`) | `/app/documenti?tipo=offerta&stato=inviata` | Already filterable |
+| **Accepted offer, deal not won** | `/app/documenti?solo_deal_non_vinto=true` | The filter this task adds |
+| `chiusure` (won/lost/rate/value) | **no link** | A period-filtered deal list would need `chiuso_il` range filters on the deals endpoint, which nothing else wants. Declared rather than half-built |
+| `chiusure_previste_30_giorni` | **no link** | Same: a `data_chiusura_prevista` range filter with no second consumer |
+| `chiusure_non_attribuibili` | **no link** | It is a disclosure about missing data, not a set worth browsing |
+
+An unlinked card carries no drill-through obligation, and a card must not carry a link this task did not verify.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_dashboard_drillthrough.py
+"""**Criterion 2.** Every card that has a link equals the count of rows its link returns.
+
+One predicate, two reads. The dashboard's figure and the list behind it must not be two
+calculations that happen to agree -- so where a filter did not already exist, the predicate
+is extracted to one function and both callers use it (`documents/repository.py`).
+
+This is also what makes the cache safe (§7.2): the card and its drill-through cannot say
+different things about the same data, so a divergence can only ever be the age of the
+cached dashboard response -- and then the list wins and the card refreshes.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+
+import pytest
+from sqlalchemy import Engine, delete
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.dashboard.schemas import PeriodoQuery
+from pigrocrm.core.dashboard.service import DashboardService
+from pigrocrm.core.db import session_factory, today_local
+from pigrocrm.core.db.base import uuid7
+from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.deals.schemas import DealListQuery
+from pigrocrm.core.deals.service import DealService
+from pigrocrm.core.documents.models import Document
+from pigrocrm.core.documents.repository import DocumentRepository
+from pigrocrm.core.documents.schemas import DocumentListQuery
+from pigrocrm.core.pipeline.service import PipelineService
+
+READONLY = Actor(id=uuid7(), type="user", role="readonly")
+SEED = Actor(id=None, type="system", role="admin")
+_PREFIX = "DRILL"
+
+
+@pytest.fixture
+def seeded(db_engine: Engine) -> Iterator[tuple[Engine, dict]]:
+    """A corpus with every linked card non-empty: an empty card equals an empty list
+    trivially, which would make this whole file pass without proving anything."""
+    factory = session_factory(db_engine)
+    with factory() as session:
+        PipelineService(session).seed_defaults(SEED)
+        stages = {s.code: s for s in PipelineService(session).list() if s.code is not None}
+        customer = Customer(
+            ragione_sociale=f"{_PREFIX} Cliente", nazione="IT", custom_fields={}
+        )
+        session.add(customer)
+        session.flush()
+
+        open_deals = []
+        for index in range(4):
+            deal = Deal(
+                nome=f"{_PREFIX} aperto {index}", customer_id=customer.id,
+                pipeline_stage_id=stages["lead"].id, valore_previsto="1000.00",
+                probabilita=50, custom_fields={},
+            )
+            session.add(deal)
+            open_deals.append(deal)
+        won = Deal(
+            nome=f"{_PREFIX} vinto", customer_id=customer.id,
+            pipeline_stage_id=stages["vinto"].id, valore_previsto="5000.00",
+            probabilita=100, chiuso_il=today_local(), custom_fields={},
+        )
+        session.add(won)
+        session.flush()
+
+        for index in range(3):
+            session.add(
+                Document(
+                    customer_id=customer.id, tipo="offerta",
+                    titolo=f"{_PREFIX} inviata {index}", stato="inviata",
+                    stato_dal=today_local(), versione_corrente=1, custom_fields={},
+                )
+            )
+        # Two accepted offers on open deals -- the signal -- and one on a won deal, which
+        # is not an inconsistency and must not be counted.
+        for index in range(2):
+            session.add(
+                Document(
+                    deal_id=open_deals[index].id, tipo="offerta",
+                    titolo=f"{_PREFIX} accettata {index}", stato="accettata",
+                    stato_dal=today_local(), versione_corrente=1, custom_fields={},
+                )
+            )
+        session.add(
+            Document(
+                deal_id=won.id, tipo="offerta", titolo=f"{_PREFIX} accettata ok",
+                stato="accettata", stato_dal=today_local(), versione_corrente=1,
+                custom_fields={},
+            )
+        )
+        session.commit()
+        stage_ids = {code: stage.id for code, stage in stages.items()}
+    try:
+        yield db_engine, stage_ids
+    finally:
+        with factory() as session:
+            session.execute(delete(Document).where(Document.titolo.like(f"{_PREFIX} %")))
+            session.execute(delete(Deal).where(Deal.nome.like(f"{_PREFIX} %")))
+            session.execute(
+                delete(Customer).where(Customer.ragione_sociale.like(f"{_PREFIX} %"))
+            )
+            session.commit()
+
+
+def _dashboard(engine: Engine):
+    with session_factory(engine)() as session:
+        return DashboardService(session).get_commercial_dashboard(
+            PeriodoQuery(), READONLY
+        )
+
+
+def test_the_open_deals_card_equals_its_deal_list(seeded: tuple[Engine, dict]) -> None:
+    engine, stage_ids = seeded
+    card = next(
+        row for row in _dashboard(engine).pipeline if row.stage_id == str(stage_ids["lead"])
+    )
+    with session_factory(engine)() as session:
+        page = DealService(session).list(
+            DealListQuery(stage_id=stage_ids["lead"], limit=200), READONLY
+        )
+    assert card.numero == len(page.items)
+
+
+def test_the_pending_offers_card_equals_its_document_list(
+    seeded: tuple[Engine, dict]
+) -> None:
+    engine, _stage_ids = seeded
+    total = _dashboard(engine).offerte_in_attesa_totale
+    with session_factory(engine)() as session:
+        rows = DocumentRepository(session).list(
+            DocumentListQuery(tipo="offerta", stato="inviata", limit=200)
+        )
+    assert total == len(rows)
+
+
+def test_the_signal_card_equals_its_filtered_document_list(
+    seeded: tuple[Engine, dict]
+) -> None:
+    """The card and the list share one predicate function, so this cannot drift."""
+    engine, _stage_ids = seeded
+    count = _dashboard(engine).offerte_accettate_deal_non_vinto
+    with session_factory(engine)() as session:
+        rows = DocumentRepository(session).list(
+            DocumentListQuery(solo_deal_non_vinto=True, limit=200)
+        )
+    assert count == 2
+    assert count == len(rows)
+    assert all(row.stato == "accettata" for row in rows)
+
+
+def test_the_signal_filter_excludes_the_offer_whose_deal_is_won(
+    seeded: tuple[Engine, dict]
+) -> None:
+    """The negative half. Without it, a filter that returned every accepted offer would
+    pass the equality test above only because the count was wrong in the same way."""
+    engine, _stage_ids = seeded
+    with session_factory(engine)() as session:
+        rows = DocumentRepository(session).list(
+            DocumentListQuery(solo_deal_non_vinto=True, limit=200)
+        )
+    assert all(not row.titolo.endswith("ok") for row in rows)
+
+
+def test_the_signal_filter_composes_with_the_other_filters(
+    seeded: tuple[Engine, dict]
+) -> None:
+    """It is an additional predicate, not a replacement for the query. A filter that
+    silently dropped `tipo` would make the drill-through a different question."""
+    engine, _stage_ids = seeded
+    with session_factory(engine)() as session:
+        rows = DocumentRepository(session).list(
+            DocumentListQuery(solo_deal_non_vinto=True, stato="inviata", limit=200)
+        )
+    assert rows == []
+
+
+def test_the_count_and_the_list_use_the_same_predicate_function() -> None:
+    """The mechanical half of §7.2, asserted on the source: two hand-copied predicates
+    agree until one of them is edited."""
+    import inspect
+
+    from pigrocrm.core.documents import repository as documents_repository
+
+    source = inspect.getsource(documents_repository)
+    assert source.count("_accepted_with_unwon_deal_predicate") >= 3, (
+        "the predicate must be defined once and called from both "
+        "count_accepted_with_unwon_deal and list"
+    )
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_dashboard_drillthrough.py -v`
+Expected: the three signal tests FAIL with `pydantic_core.ValidationError: Unexpected keyword argument 'solo_deal_non_vinto'`.
+
+- [ ] **Step 3: Extract the predicate and add the filter**
+
+```python
+# packages/core/src/pigrocrm/core/documents/repository.py -- add at module level, above
+# the class:
+
+def _accepted_with_unwon_deal_predicate() -> tuple[object, ...]:
+    """§6.2's first signal, as one predicate used by both the count and the list.
+
+    Extracted rather than written twice because §7.2's guarantee -- "the card and its
+    drill-through are the same query, not two calculations" -- is only true if the
+    predicate is literally the same. Two hand-copied predicates agree until one is edited,
+    and then the dashboard and the list disagree about the same rows with nothing to say
+    which is right.
+
+    Returned as a tuple of clauses so the caller can splat it into `where(...)` alongside
+    its own; the joins are the caller's, because a `COUNT` and a paginated `SELECT` want
+    them written differently.
+    """
+    return (
+        Document.deleted_at.is_(None),
+        Document.tipo == "offerta",
+        Document.stato == "accettata",
+        Deal.deleted_at.is_(None),
+        PipelineStage.tipo != "won",
+    )
+```
+
+```python
+# ...and replace `count_accepted_with_unwon_deal`'s body to use it:
+    def count_accepted_with_unwon_deal(self) -> int:
+        """§6.2's first signal: accepted offers whose deal is not in a `won` stage.
+
+        This is the case where automation A1 did **not** fire -- switched off, or declined
+        with a recorded reason -- so it is the automation's permanent cross-check: if the
+        automation goes quiet, this count speaks. It sits on the *commercial* dashboard
+        because it needs no invoices, which is what lets it ship in the same sub-plan as
+        the automation it verifies rather than one later (§17).
+
+        A `COUNT` across a join, which §3 permits explicitly: it looks at two tables and
+        produces no money figure. A `SUM` across a join is how the same row gets counted
+        twice, and on a margin nobody notices.
+        """
+        return (
+            self.session.scalar(
+                select(func.count(Document.id))
+                .join(Deal, Deal.id == Document.deal_id)
+                .join(PipelineStage, PipelineStage.id == Deal.pipeline_stage_id)
+                .where(*_accepted_with_unwon_deal_predicate())
+            )
+            or 0
+        )
+```
+
+```python
+# ...and add the branch to `list`, immediately before the sort/cursor block:
+        if query.solo_deal_non_vinto:
+            # The drill-through of §6.2's signal card, sharing its predicate literally.
+            # An inner join, so an offer with no deal simply has no matching row -- no
+            # special case needed, and none written.
+            stmt = (
+                stmt.join(Deal, Deal.id == Document.deal_id)
+                .join(PipelineStage, PipelineStage.id == Deal.pipeline_stage_id)
+                .where(*_accepted_with_unwon_deal_predicate())
+            )
+```
+
+```python
+# packages/core/src/pigrocrm/core/documents/schemas.py -- one field on DocumentListQuery,
+# placed after `search`:
+    # The drill-through of the commercial dashboard's inconsistency signal (§6.2). A
+    # boolean and not a free-text filter: it selects one fixed predicate, and the card
+    # that links here counts rows with that same predicate.
+    solo_deal_non_vinto: bool = False
+```
+
+```python
+# apps/api/src/pigrocrm_api/routers/documents.py -- one parameter and one argument.
+    solo_deal_non_vinto: Annotated[bool, Query()] = False,
+# ...
+        solo_deal_non_vinto=solo_deal_non_vinto,
+```
+
+- [ ] **Step 4: Run the tests and watch them pass**
+
+Run: `uv run pytest packages/core/tests/test_dashboard_drillthrough.py packages/core/tests/test_commercial_aggregates.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Full gate**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+Expected: green.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/core/src/pigrocrm/core/documents/repository.py \
+        packages/core/src/pigrocrm/core/documents/schemas.py \
+        apps/api/src/pigrocrm_api/routers/documents.py \
+        packages/core/tests/test_dashboard_drillthrough.py
+git commit -m "feat(dashboard): criterion 2, one predicate shared by card and drill-through"
+```
+
+---
+### Task B12: The 6B surface on both adapters, and the exclusion list of exactly one name
+
+**Files:**
+- Create: `apps/api/src/pigrocrm_api/routers/dashboard.py`
+- Create: `apps/api/src/pigrocrm_api/routers/automations.py`
+- Modify: `apps/api/src/pigrocrm_api/main.py`
+- Create: `apps/mcp/src/pigrocrm_mcp/tools/dashboard.py`
+- Modify: `apps/mcp/src/pigrocrm_mcp/tools/__init__.py`
+- Create: `apps/api/tests/test_dashboard_api.py`
+- Create: `apps/mcp/tests/test_mcp_dashboard.py`
+
+**Interfaces:**
+- Consumes: `DashboardService.get_commercial_dashboard(query: PeriodoQuery, actor: Actor) -> CommercialDashboard` (Task B8); `AutomationConfigService.describe_automations(actor) -> AutomationsDescription` and `.update_automation_config(data, actor) -> AutomationConfigRead` (Task B3); `ActivityRepository.by_kind` (Task B3).
+- Produces:
+  - `GET /api/dashboard/commerciale?da=&a=` → `CommercialDashboard`
+  - `GET /api/automation-config` → `AutomationConfigRead`; `PUT /api/automation-config` → `AutomationConfigRead`, **admin**
+  - `GET /api/automation-runs?limit=` → `list[AutomationRun]`
+  - MCP tools `get_commercial_dashboard(da: str | None, a: str | None)` and `describe_automations()`
+  - **No** MCP tool for `update_automation_config` — and Task A11's `MCP_EXCLUDED_SLICE6` already declares it, so this task changes not one character of that list.
+- 6C appends two dashboard endpoints and two tools to the same two files.
+
+**The R1 gate applies again, with the same wording as Task A11's Step 6.** A dashboard tool on a process-wide shared `Session` is not a degraded feature, it is a wrong figure: two concurrent dashboards can each read half their numbers inside the other's transaction and produce a total that was true at no instant — and §7.1's whole guarantee is a property of the session. Check before registering.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# apps/api/tests/test_dashboard_api.py
+"""The HTTP surface of §4, plus the configuration endpoints of §9.6."""
+
+from fastapi.testclient import TestClient
+
+
+def test_the_commercial_dashboard_is_one_request(
+    client: TestClient, admin_cookie: dict[str, str]
+) -> None:
+    """One endpoint, not one per card (§7.1)."""
+    response = client.get("/api/dashboard/commerciale", cookies=admin_cookie)
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {
+        "periodo", "calcolato_alle", "pipeline", "chiusure", "offerte_in_attesa",
+        "offerte_in_attesa_totale", "chiusure_previste_30_giorni",
+        "chiusure_non_attribuibili", "offerte_accettate_deal_non_vinto",
+    }
+
+
+def test_the_period_round_trips_through_the_query_string(
+    client: TestClient, admin_cookie: dict[str, str]
+) -> None:
+    response = client.get(
+        "/api/dashboard/commerciale", params={"da": "2026-03-01", "a": "2026-03-31"},
+        cookies=admin_cookie,
+    )
+    assert response.json()["periodo"] == {"da": "2026-03-01", "a": "2026-03-31"}
+
+
+def test_an_inverted_period_is_a_422_naming_the_field(
+    client: TestClient, admin_cookie: dict[str, str]
+) -> None:
+    response = client.get(
+        "/api/dashboard/commerciale", params={"da": "2026-03-31", "a": "2026-03-01"},
+        cookies=admin_cookie,
+    )
+    assert response.status_code == 422
+    assert response.json()["field"] == "da"
+
+
+def test_money_is_serialised_as_a_string(
+    client: TestClient, admin_cookie: dict[str, str]
+) -> None:
+    """A JSON number is a float in every client that parses it, and a float total is the
+    defect this whole slice is built to avoid."""
+    body = client.get("/api/dashboard/commerciale", cookies=admin_cookie).json()
+    for row in body["pipeline"]:
+        assert isinstance(row["valore_totale"], str), row
+        assert isinstance(row["valore_ponderato"], str), row
+
+
+def test_a_readonly_actor_sees_the_dashboard(
+    client: TestClient, readonly_cookie: dict[str, str]
+) -> None:
+    assert client.get(
+        "/api/dashboard/commerciale", cookies=readonly_cookie
+    ).status_code == 200
+
+
+def test_an_unauthenticated_request_is_a_401(client: TestClient) -> None:
+    assert client.get("/api/dashboard/commerciale").status_code == 401
+
+
+def test_the_automation_config_can_be_read_by_anyone_and_written_by_an_admin(
+    client: TestClient, admin_cookie: dict[str, str], readonly_cookie: dict[str, str]
+) -> None:
+    assert client.get("/api/automation-config", cookies=readonly_cookie).status_code == 200
+
+    forbidden = client.put(
+        "/api/automation-config", json={"a1_offerta_accettata_vince_deal": False},
+        cookies=readonly_cookie,
+    )
+    assert forbidden.status_code == 403
+
+    allowed = client.put(
+        "/api/automation-config", json={"a1_offerta_accettata_vince_deal": False},
+        cookies=admin_cookie,
+    )
+    assert allowed.status_code == 200
+    assert allowed.json()["a1_offerta_accettata_vince_deal"] is False
+
+
+def test_an_unknown_field_on_the_config_is_refused(
+    client: TestClient, admin_cookie: dict[str, str]
+) -> None:
+    """`extra="forbid"`: a typo in a field name must not silently do nothing."""
+    response = client.put(
+        "/api/automation-config", json={"a3_qualcosa": True}, cookies=admin_cookie
+    )
+    assert response.status_code == 422
+
+
+def test_the_runs_endpoint_returns_the_recent_activities(
+    client: TestClient, admin_cookie: dict[str, str]
+) -> None:
+    client.put(
+        "/api/automation-config", json={"a2_offerta_inviata_avanza_deal": False},
+        cookies=admin_cookie,
+    )
+    response = client.get("/api/automation-runs", params={"limit": 5},
+                          cookies=admin_cookie)
+    assert response.status_code == 200
+    kinds = [run["kind"] for run in response.json()]
+    assert "automazione.configurazione_modificata" in kinds
+
+
+def test_the_runs_limit_is_bounded(client: TestClient, admin_cookie: dict[str, str]) -> None:
+    assert client.get(
+        "/api/automation-runs", params={"limit": 500}, cookies=admin_cookie
+    ).status_code == 422
+```
+
+```python
+# apps/mcp/tests/test_mcp_dashboard.py
+"""§11.1's dashboard tools, and the one deliberate absence.
+
+The dashboards are on the MCP surface not for symmetry but because their shape is already
+§3's arithmetic-free composition: the tool returns the same figures from the same owning
+service, never a second version. Leaving them off would force an agent to make six reads
+and add them up itself -- the second source of truth reached by another road.
+"""
+
+from typing import Any
+
+
+async def test_the_commercial_dashboard_tool_is_registered(mcp_server: Any) -> None:
+    tools = {tool.name for tool in await mcp_server.list_tools()}
+    assert "get_commercial_dashboard" in tools
+    assert "describe_automations" in tools
+
+
+async def test_update_automation_config_has_no_tool(mcp_server: Any) -> None:
+    """§11.1's single exclusion. It changes what the system will do to future data with no
+    human in the loop (slice 4 §11 reason 2), and while residuo R10 is open -- a PAT has no
+    scopes and inherits its owner's full role -- *not registering the tool* is the only
+    enforcement that actually holds. An authorisation check would let an admin token
+    straight through."""
+    tools = {tool.name for tool in await mcp_server.list_tools()}
+    assert "update_automation_config" not in tools
+    assert not any("automation_config" in name and "update" in name for name in tools)
+
+
+async def test_the_tool_returns_the_same_figures_as_the_service(
+    mcp_server: Any, mcp_context: Any
+) -> None:
+    from pigrocrm.core.dashboard.schemas import PeriodoQuery
+    from pigrocrm.core.dashboard.service import DashboardService
+
+    result = await mcp_server.call_tool("get_commercial_dashboard", {})
+    payload = result.structured_content
+
+    direct = DashboardService(mcp_context.session).get_commercial_dashboard(
+        PeriodoQuery(), mcp_context.actor
+    )
+    assert payload["pipeline"] == direct.model_dump(mode="json")["pipeline"]
+
+
+async def test_an_inverted_period_is_a_domain_error(mcp_server: Any) -> None:
+    result = await mcp_server.call_tool(
+        "get_commercial_dashboard", {"da": "2026-03-31", "a": "2026-03-01"}
+    )
+    assert result.is_error
+
+
+async def test_describe_automations_names_both_rules(mcp_server: Any) -> None:
+    result = await mcp_server.call_tool("describe_automations", {})
+    payload = result.structured_content
+    assert [rule["codice"] for rule in payload["regole"]] == ["A1", "A2"]
+```
+
+Use the fixture names `apps/mcp/tests/conftest.py` already provides; if there is no `mcp_context` fixture, add one exposing the same `McpContext` the server was built with rather than constructing a second one.
+
+- [ ] **Step 2: Run them and watch them fail**
+
+Run: `uv run pytest apps/api/tests/test_dashboard_api.py apps/mcp/tests/test_mcp_dashboard.py -v`
+Expected: every API test FAILS with `404`; the MCP tests FAIL on the missing tool names — except `test_update_automation_config_has_no_tool`, which passes vacuously and will keep passing, which is the point of it.
+
+- [ ] **Step 3: Write the routers**
+
+```python
+# apps/api/src/pigrocrm_api/routers/dashboard.py
+"""One endpoint per dashboard. Sub-plan 6C adds two more to this file.
+
+Each one is a single request served by a single read-only `REPEATABLE READ` transaction:
+`SessionDep` yields a fresh session per request, which is what lets `DashboardService`
+set the isolation level at all (see `_open_snapshot`). Do not add a dependency here that
+touches the session before the service does.
+"""
+
+from datetime import date
+from typing import Annotated
+
+from fastapi import APIRouter, Query
+
+from pigrocrm.core.dashboard.schemas import CommercialDashboard, PeriodoQuery
+from pigrocrm.core.dashboard.service import DashboardService
+from pigrocrm_api.deps import ActorDep, SessionDep
+from pigrocrm_api.errors import PROBLEM_RESPONSES
+
+router = APIRouter(prefix="/api/dashboard", tags=["dashboard"], responses=PROBLEM_RESPONSES)
+
+
+@router.get("/commerciale", response_model=CommercialDashboard)
+def commerciale(
+    session: SessionDep,
+    actor: ActorDep,
+    # Both or neither: `PeriodoQuery.resolve` refuses one alone rather than guessing the
+    # other, because guessing would silently answer a different question. The default is
+    # the current month, and the response always echoes the period back -- a screenshot of
+    # a dashboard with no explicit period is a number with no unit (§4).
+    da: Annotated[date | None, Query()] = None,
+    a: Annotated[date | None, Query()] = None,
+) -> CommercialDashboard:
+    return DashboardService(session).get_commercial_dashboard(
+        PeriodoQuery(da=da, a=a), actor
+    )
+```
+
+```python
+# apps/api/src/pigrocrm_api/routers/automations.py
+"""§9.6's configuration and §9.5's third observability surface.
+
+`PUT` and not `PATCH`, with both fields optional: the body is a partial update read with
+`exclude_unset=True`, and `PUT` is what the shipped `emitter` and `fiscal_profile`
+single-row endpoints already use. One convention for single-row configuration.
+"""
+
+from typing import Annotated
+
+from fastapi import APIRouter, Query
+
+from pigrocrm.core.activities.repository import ActivityRepository
+from pigrocrm.core.automations.config_service import AutomationConfigService
+from pigrocrm.core.automations.schemas import (
+    AUTOMATION_KINDS,
+    AutomationConfigRead,
+    AutomationConfigUpdate,
+    AutomationRun,
+    AutomationsDescription,
+)
+from pigrocrm_api.deps import ActorDep, SessionDep
+from pigrocrm_api.errors import PROBLEM_RESPONSES
+
+router = APIRouter(tags=["automations"], responses=PROBLEM_RESPONSES)
+
+
+@router.get("/api/automation-config", response_model=AutomationConfigRead)
+def get_config(session: SessionDep, actor: ActorDep) -> AutomationConfigRead:
+    return AutomationConfigService(session).describe_automations(actor).configurazione
+
+
+@router.put("/api/automation-config", response_model=AutomationConfigRead)
+def put_config(
+    data: AutomationConfigUpdate, session: SessionDep, actor: ActorDep
+) -> AutomationConfigRead:
+    # `require_admin` lives in the service, not here: slice 1's own review found the same
+    # check living only in a router and therefore absent for every other caller of the
+    # shared service (see `PipelineService.seed_defaults`'s docstring). One place.
+    return AutomationConfigService(session).update_automation_config(data, actor)
+
+
+@router.get("/api/automations", response_model=AutomationsDescription)
+def describe(session: SessionDep, actor: ActorDep) -> AutomationsDescription:
+    """The two rules, their state and the last executions -- what the settings page renders
+    in one request instead of three."""
+    return AutomationConfigService(session).describe_automations(actor)
+
+
+@router.get("/api/automation-runs", response_model=list[AutomationRun])
+def runs(
+    session: SessionDep,
+    actor: ActorDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> list[AutomationRun]:
+    """A read of `activities` by `kind`, never a new table (§9.4).
+
+    Bounded like every other list in the project. `actor` is unused beyond
+    authentication, which `ActorDep` has already performed -- the runs are the same
+    timeline entries every role can already read on the entity itself.
+    """
+    return [
+        AutomationRun(
+            kind=activity.kind,
+            occurred_at=activity.occurred_at,
+            deal_id=activity.entity_id if activity.entity_type == "deal" else None,
+            regola=activity.payload.get("regola"),
+            motivo=activity.payload.get("motivo"),
+            payload=activity.payload,
+        )
+        for activity in ActivityRepository(session).by_kind(AUTOMATION_KINDS, limit)
+    ]
+```
+
+```python
+# apps/api/src/pigrocrm_api/main.py -- add `automations, dashboard` to the router import
+# line and to the registration tuple, keeping both alphabetical.
+```
+
+- [ ] **Step 4: Write the MCP tools**
+
+```python
+# apps/mcp/src/pigrocrm_mcp/tools/dashboard.py
+"""Thin, like every other tool module: resolve the service on the context's session, call
+it, `model_dump(mode="json")`.
+
+`mode="json"` and not the default: it turns every `Decimal` into a string. A JSON number is
+a float in whatever parses it on the other side, and a float margin is the defect this
+slice exists to prevent.
+"""
+
+from typing import Any
+
+from pigrocrm.core.automations.config_service import AutomationConfigService
+from pigrocrm.core.dashboard.schemas import PeriodoQuery
+from pigrocrm.core.dashboard.service import DashboardService
+
+from pigrocrm_mcp.context import McpContext
+
+
+def get_commercial_dashboard(context: McpContext, query: PeriodoQuery) -> dict[str, Any]:
+    return (
+        DashboardService(context.session)
+        .get_commercial_dashboard(query, context.actor)
+        .model_dump(mode="json")
+    )
+
+
+def describe_automations(context: McpContext) -> dict[str, Any]:
+    return (
+        AutomationConfigService(context.session)
+        .describe_automations(context.actor)
+        .model_dump(mode="json")
+    )
+```
+
+```python
+# apps/mcp/src/pigrocrm_mcp/tools/__init__.py -- two tools, registered next to the others.
+# Imports gain:
+#   from datetime import date
+#   from pigrocrm.core.dashboard.schemas import PeriodoQuery
+#   from pigrocrm_mcp.tools import dashboard as dashboard_tools
+
+    @mcp.tool()
+    @guard
+    def get_commercial_dashboard(
+        da: str | None = None, a: str | None = None
+    ) -> dict[str, Any]:
+        """La dashboard commerciale: pipeline aperta per stato (numero, valore, valore
+        ponderato *stimato*), deal vinti e persi nel periodo con il tasso di conversione,
+        offerte inviate in attesa con la loro anzianita' in giorni, chiusure previste nei
+        30 giorni successivi al periodo, e il segnale «offerta accettata ma deal non
+        vinto». `da` e `a` sono date ISO (`2026-03-01`) e vanno insieme: se mancano
+        entrambe si usa il mese in corso. `valore_ponderato` e' una **stima**
+        (valore_previsto x probabilita) e non e' fatturato: non sommarlo ai ricavi.
+        `chiusure_non_attribuibili` conta i deal chiusi prima che questa misura esistesse,
+        che non appartengono a nessun periodo.
+        """
+        return dashboard_tools.get_commercial_dashboard(
+            context,
+            PeriodoQuery(
+                da=date.fromisoformat(da) if da else None,
+                a=date.fromisoformat(a) if a else None,
+            ),
+        )
+
+    @mcp.tool()
+    @guard
+    def describe_automations() -> dict[str, Any]:
+        """Le due automazioni del sistema, se sono attive, e le ultime esecuzioni con il
+        loro esito. A1: un'offerta accettata sposta il deal a vinto. A2: un'offerta inviata
+        fa avanzare il deal allo stato «offerta», mai indietro. Le esecuzioni includono
+        anche le **non** esecuzioni, con il motivo (`stage_bersaglio_assente`,
+        `stage_bersaglio_ambiguo`, `gia_nello_stato`, `regola_disattivata`): «non e'
+        scattata» e «non doveva scattare» sono cose diverse. La configurazione si cambia
+        solo dall'interfaccia web, da un amministratore.
+        """
+        return dashboard_tools.describe_automations(context)
+```
+
+`date.fromisoformat` on a malformed string raises `ValueError`, which `_guard` converts into an error message the agent can read. `da: str` rather than `da: date` at the tool boundary follows the file's own documented "runtime-permissive, schema-only-strict" convention.
+
+- [ ] **Step 5: The R1 gate**
+
+Run: `grep -n "lambda: session\|contextvars\|session_provider" apps/mcp/src/pigrocrm_mcp/__main__.py apps/mcp/src/pigrocrm_mcp/server.py`
+
+If the output still shows one process-lifetime `Session`, comment out **both** `@mcp.tool()` registration blocks from Step 4, keep `tools/dashboard.py`, add the same comment Task A11 Step 6 specifies, and skip `apps/mcp/tests/test_mcp_dashboard.py` at module level — except `test_update_automation_config_has_no_tool`, which must keep running because it asserts an absence. Move that one test into `apps/mcp/tests/test_mcp_schema.py`, which is not skipped.
+
+- [ ] **Step 6: Run the tests and watch them pass**
+
+Run: `uv run pytest apps/api/tests/test_dashboard_api.py apps/mcp/tests/test_mcp_dashboard.py packages/core/tests/test_architecture.py -v`
+Expected: PASS. `test_every_other_public_method_of_a_slice6_service_has_a_tool` now covers `DashboardService.get_commercial_dashboard` and `AutomationConfigService.describe_automations`, both of which have tools, and `update_automation_config`, which is the one declared exclusion.
+
+- [ ] **Step 7: Full gate**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+Expected: green.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add apps/api/src/pigrocrm_api/routers/dashboard.py \
+        apps/api/src/pigrocrm_api/routers/automations.py \
+        apps/api/src/pigrocrm_api/main.py \
+        apps/mcp/src/pigrocrm_mcp/tools/dashboard.py \
+        apps/mcp/src/pigrocrm_mcp/tools/__init__.py \
+        apps/api/tests/test_dashboard_api.py \
+        apps/mcp/tests/test_mcp_dashboard.py
+git commit -m "feat(api): commercial dashboard and automation config on both adapters"
+```
+
+---
+
+### Task B13: The five chart tokens, the four chart shapes, and criterion 14
+
+**Files:**
+- Modify: `apps/web/src/styles/tokens.css`
+- Modify: `apps/web/src/styles/tokens.test.ts`
+- Create: `apps/web/src/features/dashboard/charts.tsx`
+- Create: `apps/web/src/features/dashboard/charts.test.tsx`
+- Create: `apps/web/src/test/no-browser-arithmetic.test.ts`
+- Modify: `apps/web/eslint.config.js`
+
+**Interfaces:**
+- Consumes: nothing from earlier frontend tasks except the existing `cn` helper and the token file.
+- Produces:
+  - `--chart-1` … `--chart-5` in `tokens.css`'s `:root` block (**not** in `@theme` — see below)
+  - `apps/web/src/features/dashboard/charts.tsx`:
+    - `export function BigNumber({ label, value, hint, tone }: { label: string; value: string; hint?: string; tone?: 'neutral' | 'accent' })`
+    - `export function BarRows({ caption, rows }: { caption: string; rows: BarRow[] })`, `export type BarRow = { label: string; value: string; ratio: number; tone: number }`
+    - `export function Sparkline({ caption, points }: { caption: string; points: SparkPoint[] })`, `export type SparkPoint = { label: string; value: string; ratio: number }`
+  - `apps/web/src/test/no-browser-arithmetic.test.ts` — criterion 14's AST test.
+- Task B14 composes all three; 6C reuses them unchanged.
+
+**`:root`, not `@theme`.** `tokens.css:47` declares the palette inside a Tailwind v4 `@theme` block, whose literal hex values are what let the app generate `bg-watermelon/50`-style utilities; a `@theme` entry holding a `color-mix()` of a `var()` cannot be resolved at build time into those utilities. The chart tokens are consumed as `var(--chart-1)` in inline styles and never as a Tailwind utility class, so they belong in `:root` beside `--primary` and `--ring`, which are already `var()` indirections. This keeps `tokens.css` the single source of colour without disturbing `@theme`.
+
+**No charting library.** Four shapes — big numbers, horizontal bars as CSS widths, one sparkline, one table — as inline SVG and CSS. A library costs 40–100 KB for four shapes in a project that gave its landing page a 40 KB total budget (slice 5 §9.4), and it would impose its own palette while `tokens.css` is the single source of colour and has tests behind it. **Every chart renders an equivalent table**, because a chart without a table is a figure a screen reader does not read.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+// apps/web/src/styles/tokens.test.ts -- append inside the existing describe block. The
+// hexToRgb / relativeLuminance / contrastRatio helpers and the token reader at the top of
+// the file are reused, not redefined.
+
+  const CHART_TOKENS = ['--chart-1', '--chart-2', '--chart-3', '--chart-4', '--chart-5']
+
+  it('declares five chart tokens', () => {
+    for (const token of CHART_TOKENS) {
+      expect(css).toContain(`${token}:`)
+    }
+  })
+
+  it('builds every chart token out of existing tints, with no raw hex but white', () => {
+    // The mechanical half of "tokens.css stays the single source of colour" (slice 5 §9.3's
+    // rule, extended here). `#ffffff` is the one literal permitted: it is the neutral being
+    // mixed toward, not a sixth tint.
+    for (const token of CHART_TOKENS) {
+      const declaration = css.match(new RegExp(`${token}:\\s*([^;]+);`))
+      expect(declaration).not.toBeNull()
+      const value = declaration![1]
+      expect(value).toContain('color-mix(')
+      expect(value).toContain('var(--color-')
+      const hexes = value.match(/#[0-9a-fA-F]{3,8}/g) ?? []
+      expect(hexes.every((hex) => hex.toLowerCase() === '#ffffff')).toBe(true)
+    }
+  })
+
+  it('declares the chart tokens outside the @theme block', () => {
+    // A @theme entry holding a color-mix() of a var() cannot be resolved into Tailwind
+    // utilities at build time, which is what @theme's literal hexes are for. The chart
+    // tokens are read as var(--chart-n) in inline styles only.
+    const theme = css.slice(css.indexOf('@theme'), css.indexOf('}', css.indexOf('@theme')))
+    for (const token of CHART_TOKENS) {
+      expect(theme).not.toContain(token)
+    }
+  })
+
+  it('keeps every chart colour readable against both app backgrounds', () => {
+    // Computed sRGB values of the five color-mix() expressions, recorded here because the
+    // test cannot evaluate color-mix() in Node. If a token's expression changes, recompute
+    // these in a browser and update both together -- the pair is the assertion.
+    const COMPUTED: Record<string, string> = {
+      '--chart-1': '#f15a76',
+      '--chart-2': '#3a4d68',
+      '--chart-3': '#cfc069',
+      '--chart-4': '#5e6b79',
+      '--chart-5': '#6b1533',
+    }
+    const light = tokenHex('--color-mint-cream')
+    const dark = tokenHex('--color-prussian-blue')
+    for (const [token, hex] of Object.entries(COMPUTED)) {
+      // 3:1 -- the WCAG threshold for a graphical object, not for body text. A chart mark
+      // is a component boundary, and holding it to 4.5:1 would collapse the five hues into
+      // three usable ones.
+      expect(contrastRatio(hex, light)).toBeGreaterThanOrEqual(3)
+      expect(contrastRatio(hex, dark)).toBeGreaterThanOrEqual(3)
+    }
+  })
+
+  it('keeps the five chart colours distinguishable from each other', () => {
+    // Five bars a reader cannot tell apart is one bar drawn five times.
+    const COMPUTED = ['#f15a76', '#3a4d68', '#cfc069', '#5e6b79', '#6b1533']
+    for (let i = 0; i < COMPUTED.length; i += 1) {
+      for (let j = i + 1; j < COMPUTED.length; j += 1) {
+        expect(contrastRatio(COMPUTED[i]!, COMPUTED[j]!)).toBeGreaterThanOrEqual(1.2)
+      }
+    }
+  })
+```
+
+`tokenHex` is the existing reader the file already defines for pulling a hex out of `tokens.css`; use its real name.
+
+```tsx
+// apps/web/src/features/dashboard/charts.tsx -- test file
+// apps/web/src/features/dashboard/charts.test.tsx
+/**
+ * Four shapes, no library, and every one of them with an equivalent table.
+ *
+ * A chart without a table is a figure a screen reader does not read (§13), so the table is
+ * not a fallback -- it is the accessible rendering, and the visual mark is decoration on
+ * top of it. That is why every assertion below is on table semantics rather than on SVG.
+ */
+import { render, screen } from '@testing-library/react'
+import { describe, expect, it } from 'vitest'
+import { BarRows, BigNumber, Sparkline } from './charts'
+
+describe('BigNumber', () => {
+  it('renders the value exactly as given, never reformatted', () => {
+    // The API sends "1234.56" already formatted for it-IT upstream; the component must not
+    // parse it. Parsing is what criterion 14 forbids.
+    render(<BigNumber label="Fatturato" value="1.234,56 €" hint="imponibile, emesso" />)
+    expect(screen.getByText('1.234,56 €')).toBeInTheDocument()
+    expect(screen.getByText('Fatturato')).toBeInTheDocument()
+    expect(screen.getByText('imponibile, emesso')).toBeInTheDocument()
+  })
+
+  it('associates the label with the value for a screen reader', () => {
+    render(<BigNumber label="Deal aperti" value="12" />)
+    expect(screen.getByRole('group', { name: /deal aperti/i })).toBeInTheDocument()
+  })
+})
+
+describe('BarRows', () => {
+  const rows = [
+    { label: 'Lead', value: '3.000,00 €', ratio: 1, tone: 1 },
+    { label: 'Offerta', value: '500,00 €', ratio: 0.166, tone: 2 },
+  ]
+
+  it('renders a real table with a caption', () => {
+    render(<BarRows caption="Pipeline per stato" rows={rows} />)
+    expect(screen.getByRole('table', { name: 'Pipeline per stato' })).toBeInTheDocument()
+    expect(screen.getAllByRole('row')).toHaveLength(3) // header + two
+  })
+
+  it('shows every label and value as text', () => {
+    render(<BarRows caption="Pipeline per stato" rows={rows} />)
+    expect(screen.getByText('Lead')).toBeInTheDocument()
+    expect(screen.getByText('3.000,00 €')).toBeInTheDocument()
+  })
+
+  it('draws the bar with a CSS width and marks it decorative', () => {
+    render(<BarRows caption="Pipeline per stato" rows={rows} />)
+    const bars = screen.getAllByTestId('bar-fill')
+    expect(bars[0]).toHaveStyle({ width: '100%' })
+    // The bar duplicates the number next to it, so it is hidden from the accessibility
+    // tree rather than announced twice.
+    expect(bars[0]).toHaveAttribute('aria-hidden', 'true')
+  })
+
+  it('clamps a ratio outside 0..1 instead of overflowing the row', () => {
+    render(
+      <BarRows caption="c" rows={[{ label: 'x', value: '1', ratio: 4, tone: 1 }]} />,
+    )
+    expect(screen.getByTestId('bar-fill')).toHaveStyle({ width: '100%' })
+  })
+
+  it('renders an empty state rather than an empty table', () => {
+    render(<BarRows caption="Pipeline per stato" rows={[]} />)
+    expect(screen.getByText(/nessun dato/i)).toBeInTheDocument()
+  })
+})
+
+describe('Sparkline', () => {
+  const points = [
+    { label: 'lun', value: '8,00', ratio: 1 },
+    { label: 'mar', value: '0,00', ratio: 0 },
+    { label: 'mer', value: '4,00', ratio: 0.5 },
+  ]
+
+  it('renders an SVG marked decorative and a table that carries the data', () => {
+    render(<Sparkline caption="Ore per giorno" points={points} />)
+    expect(screen.getByTestId('sparkline-svg')).toHaveAttribute('aria-hidden', 'true')
+    expect(screen.getByRole('table', { name: 'Ore per giorno' })).toBeInTheDocument()
+    expect(screen.getByText('mar')).toBeInTheDocument()
+    expect(screen.getByText('0,00')).toBeInTheDocument()
+  })
+
+  it('handles a single point without dividing by zero', () => {
+    render(<Sparkline caption="c" points={[{ label: 'lun', value: '8', ratio: 1 }]} />)
+    expect(screen.getByTestId('sparkline-svg')).toBeInTheDocument()
+  })
+})
+```
+
+```ts
+// apps/web/src/test/no-browser-arithmetic.test.ts
+/**
+ * **Criterion 14.** No number is born in the browser.
+ *
+ * Slice 4 §14.4 describes this test as already written; it is not -- slice 4 is not
+ * implemented and `apps/web` has no source-reading test other than `styles/tokens.test.ts`,
+ * which parses CSS with a regex. So this slice **creates** it, scoped to the dashboard
+ * modules it introduces.
+ *
+ * Deliberately out of scope, and named so nobody widens the scope without deciding to: the
+ * five existing `Number()` call sites in `features/settings/FieldsPanel.tsx`,
+ * `features/settings/PipelinePanel.tsx`, `features/deals/columns.tsx`,
+ * `components/DynamicFieldRenderer.tsx` and `routes/app/clienti/$customerId.tsx`. Each
+ * coerces a position, a probability or a form input -- none is an economic field from a
+ * dashboard response. If slice 4 lands a wider guard later, this file's scope is subsumed
+ * and it can be deleted.
+ *
+ * The TypeScript compiler API is used rather than a regex: `Number(` inside a string
+ * literal or a comment is not a call, and a regex cannot tell the difference.
+ */
+import { readFileSync } from 'node:fs'
+import { readdirSync, statSync } from 'node:fs'
+import { join } from 'node:path'
+import ts from 'typescript'
+import { describe, expect, it } from 'vitest'
+
+const SCOPED_ROOTS = [
+  join(__dirname, '..', 'features', 'dashboard'),
+  join(__dirname, '..', 'routes', 'app'),
+]
+const FORBIDDEN_CALLS = new Set(['Number', 'parseFloat', 'parseInt'])
+
+function sourceFiles(root: string): string[] {
+  if (!statSync(root, { throwIfNoEntry: false })) return []
+  const found: string[] = []
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const path = join(root, entry.name)
+    if (entry.isDirectory()) found.push(...sourceFiles(path))
+    else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
+      found.push(path)
+    }
+  }
+  return found
+}
+
+function offendingCalls(path: string): string[] {
+  const text = readFileSync(path, 'utf-8')
+  const source = ts.createSourceFile(path, text, ts.ScriptTarget.ESNext, true)
+  const offenders: string[] = []
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+      if (FORBIDDEN_CALLS.has(node.expression.text)) {
+        const { line } = source.getLineAndCharacterOfPosition(node.getStart())
+        offenders.push(`${node.expression.text}() at line ${line + 1}`)
+      }
+    }
+    // The unary `+x` coercion, which is the same defect written shorter.
+    if (
+      ts.isPrefixUnaryExpression(node) &&
+      node.operator === ts.SyntaxKind.PlusToken
+    ) {
+      const { line } = source.getLineAndCharacterOfPosition(node.getStart())
+      offenders.push(`unary + at line ${line + 1}`)
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(source)
+  return offenders
+}
+
+describe('no number is born in the browser', () => {
+  it('finds files to check, so the guard is not vacuous', () => {
+    const files = SCOPED_ROOTS.flatMap(sourceFiles)
+    expect(files.length).toBeGreaterThan(0)
+  })
+
+  it('never coerces an API value to a JS number in a dashboard module', () => {
+    const offenders: string[] = []
+    for (const root of SCOPED_ROOTS) {
+      for (const file of sourceFiles(root)) {
+        const found = offendingCalls(file)
+        if (found.length > 0) offenders.push(`${file}: ${found.join(', ')}`)
+      }
+    }
+    expect(
+      offenders,
+      'the dashboards do not add anything -- every total arrives already summed ' +
+        '(§13). Format the string the API sent; never parse it.',
+    ).toEqual([])
+  })
+
+  it('catches each forbidden form when it is present', () => {
+    // The guard proven to catch what it claims to, on a synthetic source.
+    const probe = join(__dirname, '__probe__.ts')
+    const cases = [
+      'const total = Number(row.valore_totale)',
+      'const total = parseFloat(row.valore_totale)',
+      'const total = +row.valore_totale',
+    ]
+    for (const code of cases) {
+      const source = ts.createSourceFile(probe, code, ts.ScriptTarget.ESNext, true)
+      let hit = false
+      const visit = (node: ts.Node): void => {
+        if (
+          (ts.isCallExpression(node) &&
+            ts.isIdentifier(node.expression) &&
+            FORBIDDEN_CALLS.has(node.expression.text)) ||
+          (ts.isPrefixUnaryExpression(node) &&
+            node.operator === ts.SyntaxKind.PlusToken)
+        ) {
+          hit = true
+        }
+        ts.forEachChild(node, visit)
+      }
+      visit(source)
+      expect(hit, code).toBe(true)
+    }
+  })
+})
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+Run: `cd apps/web && pnpm exec vitest run src/styles/tokens.test.ts src/features/dashboard/charts.test.tsx src/test/no-browser-arithmetic.test.ts`
+Expected: the token tests FAIL on the missing `--chart-*` declarations; the chart tests FAIL to resolve `./charts`; the arithmetic guard FAILS its "not vacuous" assertion because `features/dashboard/` does not exist.
+
+- [ ] **Step 3: Add the tokens**
+
+```css
+/* apps/web/src/styles/tokens.css -- append inside the existing :root block, after --ring.
+   NOT inside @theme: a @theme entry holding a color-mix() of a var() cannot be resolved
+   into Tailwind utilities at build time, and these are read only as var(--chart-n) in
+   inline styles. tokens.css stays the single source of colour either way. */
+
+  /* Five chart hues, every one derived from the five existing tints -- no sixth colour
+     enters the product. #ffffff is the one literal permitted inside a color-mix(): it is
+     the neutral being mixed toward, not a tint. Enforced by styles/tokens.test.ts. */
+  --chart-1: color-mix(in oklab, var(--color-watermelon) 78%, #ffffff);
+  --chart-2: color-mix(in oklab, var(--color-prussian-blue) 72%, #ffffff);
+  --chart-3: color-mix(in oklab, var(--color-royal-gold) 82%, var(--color-charcoal-blue));
+  --chart-4: color-mix(in oklab, var(--color-charcoal-blue) 84%, #ffffff);
+  --chart-5: color-mix(in oklab, var(--color-watermelon) 40%, var(--color-prussian-blue));
+```
+
+- [ ] **Step 4: Write the chart primitives**
+
+```tsx
+// apps/web/src/features/dashboard/charts.tsx
+import { cn } from '@/lib/utils'
+
+/**
+ * Four shapes, no charting library: big numbers, horizontal bars as CSS widths, one
+ * sparkline, one table. A library costs 40-100 KB for these four in a project that gave
+ * its landing page a 40 KB budget (slice 5 §9.4), and it would bring its own palette while
+ * `tokens.css` is the single source of colour and has tests behind it.
+ *
+ * **Every shape renders an equivalent table**, and the table is not a fallback: it is the
+ * accessible rendering, and the visual mark is decoration layered on top with
+ * `aria-hidden`. A chart without a table is a figure a screen reader does not read (§13).
+ *
+ * **Nothing here parses a number.** Values arrive as the strings the API sent, already
+ * formatted, and `ratio` arrives as a number the *server* derived. These components format
+ * nothing and add nothing -- `src/test/no-browser-arithmetic.test.ts` is what keeps that
+ * true.
+ */
+
+const CHART_TONES = 5
+
+function toneColor(tone: number): string {
+  // 1-based, wrapping. `var(--chart-n)` and never a literal colour.
+  const index = ((tone - 1) % CHART_TONES + CHART_TONES) % CHART_TONES
+  return `var(--chart-${index + 1})`
+}
+
+function widthPercent(ratio: number): string {
+  // Clamped rather than trusted: a ratio above 1 would draw a bar past its row, and a
+  // negative one would vanish silently. `Math.min`/`Math.max` on a number the server
+  // computed is not parsing an API string -- the guard forbids coercion, not clamping.
+  const clamped = Math.max(0, Math.min(1, ratio))
+  return `${(clamped * 100).toFixed(2)}%`
+}
+
+export function BigNumber({
+  label,
+  value,
+  hint,
+  tone = 'neutral',
+}: {
+  label: string
+  value: string
+  hint?: string
+  tone?: 'neutral' | 'accent'
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      className="rounded-lg border bg-card p-4"
+    >
+      <p className="text-sm text-muted-foreground">{label}</p>
+      <p
+        className={cn(
+          'mt-1 text-2xl font-semibold tabular-nums',
+          tone === 'accent' && 'text-[var(--chart-1)]',
+        )}
+      >
+        {value}
+      </p>
+      {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
+    </div>
+  )
+}
+
+export type BarRow = {
+  label: string
+  value: string
+  /** 0..1, computed by the server. Clamped here, never derived here. */
+  ratio: number
+  /** 1..5, mapped to --chart-1..5. */
+  tone: number
+}
+
+export function BarRows({ caption, rows }: { caption: string; rows: BarRow[] }) {
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-lg border bg-card p-4">
+        <p className="text-sm font-medium">{caption}</p>
+        <p className="mt-2 text-sm text-muted-foreground">Nessun dato nel periodo.</p>
+      </div>
+    )
+  }
+  return (
+    <div className="overflow-x-auto rounded-lg border bg-card p-4">
+      <table className="w-full text-sm">
+        <caption className="mb-2 text-left text-sm font-medium">{caption}</caption>
+        <thead className="sr-only">
+          <tr>
+            <th scope="col">Voce</th>
+            <th scope="col">Valore</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.label}>
+              <th scope="row" className="py-1 pr-3 text-left font-normal">
+                {row.label}
+              </th>
+              <td className="py-1">
+                <div className="flex items-center gap-2">
+                  <div className="h-2 min-w-24 flex-1 rounded bg-muted">
+                    <div
+                      data-testid="bar-fill"
+                      aria-hidden="true"
+                      className="h-2 rounded"
+                      style={{
+                        width: widthPercent(row.ratio),
+                        backgroundColor: toneColor(row.tone),
+                      }}
+                    />
+                  </div>
+                  <span className="shrink-0 tabular-nums">{row.value}</span>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+export type SparkPoint = {
+  label: string
+  value: string
+  /** 0..1, computed by the server. */
+  ratio: number
+}
+
+export function Sparkline({
+  caption,
+  points,
+}: {
+  caption: string
+  points: SparkPoint[]
+}) {
+  const width = 240
+  const height = 48
+  // `points.length - 1` is a subtraction on an array length, not on an API value, and it
+  // is guarded against a single point -- which would otherwise divide by zero and produce
+  // `NaN` coordinates that render as an invisible line.
+  const step = points.length > 1 ? width / (points.length - 1) : 0
+  const path = points
+    .map((point, index) => {
+      const x = index * step
+      const y = height - Math.max(0, Math.min(1, point.ratio)) * height
+      return `${index === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
+    })
+    .join(' ')
+
+  return (
+    <div className="overflow-x-auto rounded-lg border bg-card p-4">
+      <svg
+        data-testid="sparkline-svg"
+        aria-hidden="true"
+        viewBox={`0 0 ${width} ${height}`}
+        className="h-12 w-full"
+        preserveAspectRatio="none"
+      >
+        <path
+          d={path}
+          fill="none"
+          stroke="var(--chart-2)"
+          strokeWidth={2}
+          strokeLinejoin="round"
+        />
+      </svg>
+      <table className="mt-2 w-full text-sm">
+        <caption className="mb-2 text-left text-sm font-medium">{caption}</caption>
+        <thead>
+          <tr>
+            {points.map((point) => (
+              <th key={point.label} scope="col" className="font-normal text-muted-foreground">
+                {point.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            {points.map((point) => (
+              <td key={point.label} className="tabular-nums">
+                {point.value}
+              </td>
+            ))}
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  )
+}
+```
+
+- [ ] **Step 5: Add the eslint override and `typescript` as an explicit dev dependency**
+
+`typescript` is already in `apps/web/devDependencies` at `5.9`, so the new test's `import ts from 'typescript'` needs no install. Add the override for `charts.tsx`, which exports both components and types:
+
+```js
+// apps/web/eslint.config.js
+  {
+    files: ['src/features/dashboard/charts.tsx'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
+```
+
+`'off'` rather than `allowExportNames` because the exports are TypeScript *types*, which the rule cannot be told to allow by name.
+
+- [ ] **Step 6: Run the tests and watch them pass**
+
+Run: `cd apps/web && pnpm exec vitest run src/styles/tokens.test.ts src/features/dashboard/charts.test.tsx src/test/no-browser-arithmetic.test.ts && pnpm exec tsc --noEmit && pnpm lint`
+Expected: PASS.
+
+If a contrast assertion fails, the recorded computed sRGB values and the `color-mix()` expressions have drifted apart. Recompute the five values in a browser (`getComputedStyle(document.documentElement).getPropertyValue('--chart-1')`) and update **both** the expression and the recorded hex in the same commit — the pair is the assertion.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add apps/web/src/styles/tokens.css \
+        apps/web/src/styles/tokens.test.ts \
+        apps/web/src/features/dashboard/charts.tsx \
+        apps/web/src/features/dashboard/charts.test.tsx \
+        apps/web/src/test/no-browser-arithmetic.test.ts \
+        apps/web/eslint.config.js
+git commit -m "feat(web): five derived chart tokens, four chart shapes, no library"
+```
+
+---
+### Task B14: The dashboard page, the period in the URL, and the automations settings page
+
+**Files:**
+- Modify: `apps/web/src/lib/api-types.ts` (regenerated)
+- Modify: `apps/web/src/lib/query.ts` (`queryKeys.dashboard`, `queryKeys.automations`)
+- Create: `apps/web/src/features/dashboard/queries.ts`
+- Create: `apps/web/src/features/dashboard/Freshness.tsx`
+- Create: `apps/web/src/features/dashboard/CommercialTab.tsx`
+- Create: `apps/web/src/features/dashboard/CommercialTab.test.tsx`
+- Create: `apps/web/src/features/dashboard/PeriodPicker.tsx`
+- Create: `apps/web/src/features/settings/AutomationsPanel.tsx`
+- Create: `apps/web/src/features/settings/AutomationsPanel.test.tsx`
+- Modify: `apps/web/src/routes/app/index.tsx` (**replaced**, not edited)
+- Create: `apps/web/src/routes/app/impostazioni/automazioni.tsx`
+- Modify: `apps/web/src/features/documents/queries.ts` (invalidate the dashboard)
+- Modify: `apps/web/src/features/deals/queries.ts` (invalidate the dashboard)
+- Modify: `apps/web/eslint.config.js`
+
+**Interfaces:**
+- Consumes: `BigNumber`, `BarRows`, `BarRow` from `./charts` (Task B13); `GET /api/dashboard/commerciale`, `GET /api/automations`, `PUT /api/automation-config` (Task B12); `QueryErrorBanner`; `toast` from `sonner`.
+- Produces:
+  - `queryKeys.dashboard(kind: 'commerciale' | 'economica' | 'operativa', params: Record<string, string>)` and `queryKeys.automations()`
+  - `apps/web/src/features/dashboard/queries.ts`: `DASHBOARD_STALE_MS = 60_000`, `type CommercialDashboard`, `useCommercialDashboard(periodo: { da: string; a: string })`, `useAutomations()`, `useUpdateAutomationConfig()`
+  - `apps/web/src/features/dashboard/PeriodPicker.tsx`: `export function PeriodPicker({ periodo, onChange }: { periodo: Periodo; onChange: (next: Periodo) => void })`, `export type Periodo = { da: string; a: string }`, `export function currentMonth(): Periodo`, `export function presetQuarter(): Periodo`, `export function presetYear(): Periodo`
+  - `apps/web/src/features/dashboard/Freshness.tsx`: `export function Freshness({ calcolatoAlle, onRefresh }: { calcolatoAlle: string; onRefresh: () => void })`
+  - `apps/web/src/routes/app/index.tsx`: the route with `validateSearch`, three tabs, and `/app/?tab=&da=&a=`
+- 6C adds the other two tabs to the same route file and the same `queryKeys.dashboard` factory.
+
+**`/app/` is the first route in this codebase with `validateSearch`.** Nothing in `apps/web/src` uses URL search params today; list filters are component-local `useState`. So the whole route definition is written out here rather than pointed at a neighbour. The period is in the URL because a screenshot or a shared link of a dashboard with no explicit period is a number with no unit (§4).
+
+**The three tabs exist from the first commit, and two of them say why they are empty.** Spec §17's closing line: if slices 3 or 4 slip, the "Economica" tab simply does not exist yet — *"cosa che l'utente capisce, a differenza di una scheda che mostra zeri."* So 6B renders the two unbuilt tabs as a one-sentence explanation, not as a tab full of zeros and not as a missing tab that makes the user wonder.
+
+- [ ] **Step 1: Regenerate the client**
+
+With the API running on `:8000`:
+
+Run: `cd apps/web && pnpm generate:api`
+Then: `pnpm exec tsc --noEmit`
+
+Expected: clean. The new paths appear in `src/lib/api-types.ts`; nothing existing breaks, because Task B12 added endpoints rather than changing any.
+
+- [ ] **Step 2: Write the failing tests**
+
+```tsx
+// apps/web/src/features/dashboard/CommercialTab.test.tsx
+/**
+ * §4's tab. Three properties get asserted that a snapshot test would not reach: the figures
+ * are rendered as the strings the API sent, the weighted value is labelled a *stima* and
+ * never sits in the same total as revenue, and a failed request renders an error rather
+ * than an empty dashboard.
+ */
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { CommercialTab } from './CommercialTab'
+
+const fetchMock = vi.fn()
+
+const RESPONSE = {
+  periodo: { da: '2026-03-01', a: '2026-03-31' },
+  calcolato_alle: '2026-03-15T10:00:00Z',
+  pipeline: [
+    {
+      stage_id: 's1', stage_code: 'lead', stage_nome: 'Lead', posizione: 0,
+      numero: 4, valore_totale: '3000.00', senza_valore: 1,
+      valore_ponderato: '610.00',
+    },
+    {
+      stage_id: 's2', stage_code: 'offerta', stage_nome: 'Offerta', posizione: 2,
+      numero: 1, valore_totale: '500.00', senza_valore: 0,
+      valore_ponderato: '250.00',
+    },
+  ],
+  chiusure: {
+    vinti: 3, persi: 1, valore_vinto: '15000.00', tasso_conversione: '75.00',
+  },
+  offerte_in_attesa: [
+    {
+      document_id: 'd1', titolo: 'Offerta impianti', deal_id: 'x',
+      customer_id: null, stato_dal: '2026-02-01', giorni: 42,
+    },
+  ],
+  offerte_in_attesa_totale: 1,
+  chiusure_previste_30_giorni: 2,
+  chiusure_non_attribuibili: 7,
+  offerte_accettate_deal_non_vinto: 2,
+}
+
+function renderTab(periodo = { da: '2026-03-01', a: '2026-03-31' }) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={client}>
+      <CommercialTab periodo={periodo} />
+    </QueryClientProvider>,
+  )
+}
+
+beforeEach(() => {
+  vi.stubGlobal('fetch', fetchMock)
+  fetchMock.mockReset()
+})
+
+afterEach(() => vi.restoreAllMocks())
+
+function ok(body: unknown) {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })
+}
+
+describe('CommercialTab', () => {
+  it('renders the pipeline as a table with the values the API sent', async () => {
+    fetchMock.mockResolvedValue(ok(RESPONSE))
+    renderTab()
+    expect(await screen.findByRole('table', { name: /pipeline/i })).toBeInTheDocument()
+    expect(screen.getByText('Lead')).toBeInTheDocument()
+  })
+
+  it('labels the weighted value a stima wherever it appears', async () => {
+    // §4: "Etichettata *stima*, in una colonna con un'intestazione diversa da qualunque
+    // cifra di fatturato". A weighted pipeline figure read as revenue is the exact
+    // confusion this label prevents.
+    fetchMock.mockResolvedValue(ok(RESPONSE))
+    renderTab()
+    expect(await screen.findByText(/stima/i)).toBeInTheDocument()
+  })
+
+  it('shows deals without a value separately and never as zero', async () => {
+    fetchMock.mockResolvedValue(ok(RESPONSE))
+    renderTab()
+    expect(await screen.findByText(/senza valore/i)).toBeInTheDocument()
+  })
+
+  it('shows the conversion rate, and shows a dash rather than 0% when it is null', async () => {
+    fetchMock.mockResolvedValue(
+      ok({ ...RESPONSE, chiusure: { ...RESPONSE.chiusure, tasso_conversione: null } }),
+    )
+    renderTab()
+    // "0%" would say "I lost everything"; null says "nothing closed". Different facts.
+    expect(await screen.findByText('—')).toBeInTheDocument()
+    expect(screen.queryByText('0,00%')).not.toBeInTheDocument()
+  })
+
+  it('declares the deals that cannot be attributed to a period', async () => {
+    // §4.1: `chiuso_il` is not backfilled, so the dashboard says so instead of counting
+    // those rows as zero or putting them in the wrong month.
+    fetchMock.mockResolvedValue(ok(RESPONSE))
+    renderTab()
+    expect(await screen.findByText(/non sono attribuibili/i)).toBeInTheDocument()
+    expect(screen.getByText(/7/)).toBeInTheDocument()
+  })
+
+  it('shows the age of each pending offer', async () => {
+    fetchMock.mockResolvedValue(ok(RESPONSE))
+    renderTab()
+    expect(await screen.findByText(/42 giorni/i)).toBeInTheDocument()
+  })
+
+  it('links the inconsistency signal to the filtered document list', async () => {
+    fetchMock.mockResolvedValue(ok(RESPONSE))
+    renderTab()
+    const link = await screen.findByRole('link', { name: /offerta accettata/i })
+    expect(link).toHaveAttribute('href', '/app/documenti?solo_deal_non_vinto=true')
+  })
+
+  it('renders an error banner and no dashboard when the request fails', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ title: 'Errore', detail: 'Non disponibile' }), {
+        status: 500,
+        headers: { 'content-type': 'application/problem+json' },
+      }),
+    )
+    renderTab()
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(screen.queryByRole('table', { name: /pipeline/i })).not.toBeInTheDocument()
+    // The rule from §8.6, applied here too: an empty dashboard drawn after a failure says
+    // "there is nothing" when the truth is "I do not know".
+    expect(screen.queryByText(/nessun dato/i)).not.toBeInTheDocument()
+  })
+
+  it('shows how old the figures are', async () => {
+    fetchMock.mockResolvedValue(ok(RESPONSE))
+    renderTab()
+    expect(await screen.findByText(/aggiornato/i)).toBeInTheDocument()
+  })
+})
+```
+
+```tsx
+// apps/web/src/features/settings/AutomationsPanel.test.tsx
+/**
+ * §9.5's third surface: the two rules, their switch, and the last executions with their
+ * outcome.
+ *
+ * The non-executions matter most, so they are what the assertions are about: without them,
+ * "it did not fire" and "it was not supposed to fire" are the same empty list.
+ */
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { AutomationsPanel } from './AutomationsPanel'
+
+const fetchMock = vi.fn()
+
+const DESCRIPTION = {
+  configurazione: {
+    a1_offerta_accettata_vince_deal: true,
+    a2_offerta_inviata_avanza_deal: false,
+  },
+  regole: [
+    { codice: 'A1', titolo: 'Offerta accettata → deal vinto', descrizione: 'Sposta il deal.', attiva: true },
+    { codice: 'A2', titolo: 'Offerta inviata → il deal avanza', descrizione: 'Mai indietro.', attiva: false },
+  ],
+  esecuzioni: [
+    {
+      kind: 'automazione.stage_spostato', occurred_at: '2026-03-10T09:00:00Z',
+      deal_id: 'd1', regola: 'A1', motivo: null, payload: { a: 'Vinto' },
+    },
+    {
+      kind: 'automazione.non_eseguita', occurred_at: '2026-03-09T09:00:00Z',
+      deal_id: 'd2', regola: 'A1', motivo: 'stage_bersaglio_ambiguo', payload: {},
+    },
+  ],
+}
+
+function renderPanel() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={client}>
+      <AutomationsPanel />
+    </QueryClientProvider>,
+  )
+}
+
+beforeEach(() => {
+  vi.stubGlobal('fetch', fetchMock)
+  fetchMock.mockReset()
+  fetchMock.mockResolvedValue(
+    new Response(JSON.stringify(DESCRIPTION), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+  )
+})
+
+afterEach(() => vi.restoreAllMocks())
+
+describe('AutomationsPanel', () => {
+  it('lists both rules with their switch reflecting the server state', async () => {
+    renderPanel()
+    const a1 = await screen.findByRole('switch', { name: /offerta accettata/i })
+    const a2 = screen.getByRole('switch', { name: /offerta inviata/i })
+    expect(a1).toBeChecked()
+    // `false` is a value, not a blank: an off switch must render off, not unset.
+    expect(a2).not.toBeChecked()
+  })
+
+  it('sends only the rule that changed', async () => {
+    renderPanel()
+    const a1 = await screen.findByRole('switch', { name: /offerta accettata/i })
+    await userEvent.click(a1)
+
+    const put = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT')
+    expect(put).toBeDefined()
+    expect(JSON.parse(String(put![1].body))).toEqual({
+      a1_offerta_accettata_vince_deal: false,
+    })
+  })
+
+  it('shows a non-execution with its reason in plain Italian', async () => {
+    renderPanel()
+    // The raw enum value would tell the user nothing; the reason is what they act on.
+    expect(await screen.findByText(/più di uno stato «vinto»/i)).toBeInTheDocument()
+  })
+
+  it('distinguishes an execution from a non-execution', async () => {
+    renderPanel()
+    expect(await screen.findByText(/spostato/i)).toBeInTheDocument()
+    expect(screen.getByText(/non eseguita/i)).toBeInTheDocument()
+  })
+
+  it('renders an error banner rather than an empty rule list on failure', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ title: 'Errore', detail: 'Non disponibile' }), {
+        status: 500,
+        headers: { 'content-type': 'application/problem+json' },
+      }),
+    )
+    renderPanel()
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument()
+  })
+})
+```
+
+- [ ] **Step 3: Run them and watch them fail**
+
+Run: `cd apps/web && pnpm exec vitest run src/features/dashboard/CommercialTab.test.tsx src/features/settings/AutomationsPanel.test.tsx`
+Expected: `Failed to resolve import "./CommercialTab"` and `"./AutomationsPanel"`.
+
+- [ ] **Step 4: Add the query keys and the hooks**
+
+```ts
+// apps/web/src/lib/query.ts -- add to the queryKeys object.
+  // The period is part of the key, so switching period is a different cache entry rather
+  // than a refetch that briefly shows March's numbers under April's heading.
+  dashboard: (kind: 'commerciale' | 'economica' | 'operativa', params: Record<string, string>) =>
+    ['dashboard', kind, params] as const,
+  automations: () => ['automations'] as const,
+```
+
+```ts
+// apps/web/src/features/dashboard/queries.ts
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
+import { api, unwrap } from '@/lib/api'
+import type { components } from '@/lib/api-types'
+import { queryKeys } from '@/lib/query'
+
+export type CommercialDashboard = components['schemas']['CommercialDashboard']
+export type PipelineStageSummary = components['schemas']['PipelineStageSummary']
+export type PendingOffer = components['schemas']['PendingOffer']
+export type AutomationsDescription = components['schemas']['AutomationsDescription']
+export type AutomationConfigUpdate = components['schemas']['AutomationConfigUpdate']
+
+/**
+ * §7.2: 60 seconds, a deliberate override of the 30 000 ms default in `lib/query.ts`.
+ * A dashboard aggregates more than a list does, and its answer stays useful longer -- and
+ * the response's age is shown on screen, so a stale figure is never a silent one.
+ */
+export const DASHBOARD_STALE_MS = 60_000
+
+export function useCommercialDashboard(periodo: { da: string; a: string }) {
+  return useQuery({
+    queryKey: queryKeys.dashboard('commerciale', periodo),
+    queryFn: () =>
+      unwrap(
+        api.GET('/api/dashboard/commerciale', { params: { query: periodo } }),
+      ),
+    staleTime: DASHBOARD_STALE_MS,
+  })
+}
+
+export function useAutomations() {
+  return useQuery({
+    queryKey: queryKeys.automations(),
+    queryFn: () => unwrap(api.GET('/api/automations')),
+  })
+}
+
+export function useUpdateAutomationConfig() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (body: AutomationConfigUpdate) =>
+      unwrap(api.PUT('/api/automation-config', { body })),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.automations() })
+      // The commercial dashboard's signal count reflects whether A1 has been firing, so a
+      // configuration change is a reason to re-read it.
+      void client.invalidateQueries({ queryKey: ['dashboard'] })
+      toast.success('Configurazione aggiornata')
+    },
+  })
+}
+```
+
+```ts
+// apps/web/src/features/documents/queries.ts -- in the `onSuccess` of the offer-state
+// mutation, next to the existing invalidations:
+      // Accepting an offer may move a deal (automation A1), which changes the pipeline,
+      // the closures and the inconsistency signal. §7.2: the keys are the ones this file
+      // already invalidates, plus the dashboard.
+      void client.invalidateQueries({ queryKey: ['dashboard'] })
+```
+
+```ts
+// apps/web/src/features/deals/queries.ts -- in the `onSuccess` of the move-stage mutation:
+      void client.invalidateQueries({ queryKey: ['dashboard'] })
+```
+
+Invalidating by the `['dashboard']` prefix rather than by an exact key is deliberate: a mutation cannot know which period the user is looking at, and the prefix covers every cached period and every tab.
+
+- [ ] **Step 5: Write the period picker and the freshness indicator**
+
+```tsx
+// apps/web/src/features/dashboard/PeriodPicker.tsx
+import { Button } from '@/components/ui/button'
+
+export type Periodo = { da: string; a: string }
+
+/**
+ * The period lives in the URL (§4), so these helpers produce plain `YYYY-MM-DD` strings
+ * and never `Date` objects: `new Date("2026-03-01")` parses as UTC midnight and formatting
+ * it back shifts the day in any zone behind UTC.
+ *
+ * Built from the browser's local calendar parts, which is the only place in the frontend
+ * where a date is constructed at all -- every other date on a dashboard arrives from the
+ * API already decided in the emitter's zone.
+ */
+function iso(year: number, monthIndex: number, day: number): string {
+  const month = String(monthIndex + 1).padStart(2, '0')
+  return `${year}-${month}-${String(day).padStart(2, '0')}`
+}
+
+function lastDayOfMonth(year: number, monthIndex: number): number {
+  // Day 0 of the next month is the last day of this one -- no leap-year table needed.
+  return new Date(year, monthIndex + 1, 0).getDate()
+}
+
+export function currentMonth(): Periodo {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = now.getMonth()
+  return { da: iso(year, month, 1), a: iso(year, month, lastDayOfMonth(year, month)) }
+}
+
+export function presetQuarter(): Periodo {
+  const now = new Date()
+  const year = now.getFullYear()
+  const firstMonthOfQuarter = Math.floor(now.getMonth() / 3) * 3
+  const lastMonthOfQuarter = firstMonthOfQuarter + 2
+  return {
+    da: iso(year, firstMonthOfQuarter, 1),
+    a: iso(year, lastMonthOfQuarter, lastDayOfMonth(year, lastMonthOfQuarter)),
+  }
+}
+
+export function presetYear(): Periodo {
+  const year = new Date().getFullYear()
+  return { da: iso(year, 0, 1), a: iso(year, 11, 31) }
+}
+
+export function PeriodPicker({
+  periodo,
+  onChange,
+}: {
+  periodo: Periodo
+  onChange: (next: Periodo) => void
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <label className="text-sm text-muted-foreground" htmlFor="periodo-da">
+        Dal
+      </label>
+      <input
+        id="periodo-da"
+        type="date"
+        value={periodo.da}
+        onChange={(event) => onChange({ ...periodo, da: event.target.value })}
+        className="rounded-md border bg-background px-2 py-1 text-sm"
+      />
+      <label className="text-sm text-muted-foreground" htmlFor="periodo-a">
+        al
+      </label>
+      <input
+        id="periodo-a"
+        type="date"
+        value={periodo.a}
+        onChange={(event) => onChange({ ...periodo, a: event.target.value })}
+        className="rounded-md border bg-background px-2 py-1 text-sm"
+      />
+      <Button variant="ghost" size="sm" onClick={() => onChange(currentMonth())}>
+        Mese
+      </Button>
+      <Button variant="ghost" size="sm" onClick={() => onChange(presetQuarter())}>
+        Trimestre
+      </Button>
+      <Button variant="ghost" size="sm" onClick={() => onChange(presetYear())}>
+        Anno
+      </Button>
+    </div>
+  )
+}
+```
+
+```tsx
+// apps/web/src/features/dashboard/Freshness.tsx
+import { RefreshCw } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Button } from '@/components/ui/button'
+
+/**
+ * §7.2: the age of the answer is shown, not implied. A number with no age is a number the
+ * user believes is instantaneous, and this one can be up to sixty seconds old by design.
+ *
+ * The minute count re-renders on a 30-second interval, because "aggiornato 4 minuti fa"
+ * that stays frozen at "adesso" is worse than no indicator: it makes a stale figure look
+ * fresh.
+ */
+function minutesSince(iso: string): number {
+  const elapsedMs = Date.now() - new Date(iso).getTime()
+  return Math.max(0, Math.floor(elapsedMs / 60_000))
+}
+
+export function Freshness({
+  calcolatoAlle,
+  onRefresh,
+}: {
+  calcolatoAlle: string
+  onRefresh: () => void
+}) {
+  const [minutes, setMinutes] = useState(() => minutesSince(calcolatoAlle))
+
+  useEffect(() => {
+    setMinutes(minutesSince(calcolatoAlle))
+    const timer = setInterval(() => setMinutes(minutesSince(calcolatoAlle)), 30_000)
+    return () => clearInterval(timer)
+  }, [calcolatoAlle])
+
+  return (
+    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+      <span>
+        {minutes === 0
+          ? 'Aggiornato adesso'
+          : `Aggiornato ${minutes} ${minutes === 1 ? 'minuto' : 'minuti'} fa`}
+      </span>
+      <Button variant="ghost" size="icon-sm" onClick={onRefresh} aria-label="Ricalcola">
+        <RefreshCw className="size-3.5" />
+      </Button>
+    </div>
+  )
+}
+```
+
+`Date.now() - new Date(iso).getTime()` is a subtraction on two timestamps, and `Math.floor(ms / 60_000)` a division — both on instants, neither on an economic field. `src/test/no-browser-arithmetic.test.ts` (Task B13) bans `Number()`, `parseFloat`, `parseInt` and unary `+`; `new Date(...).getTime()` is none of those, and the ban is scoped to coercion of API values on purpose. **`Freshness.tsx` is the one dashboard module that does arithmetic, and it does it on a clock.** Note this in the test's docstring by adding a line to the "deliberately out of scope" paragraph.
+
+- [ ] **Step 6: Write the commercial tab**
+
+```tsx
+// apps/web/src/features/dashboard/CommercialTab.tsx
+import { Link } from '@tanstack/react-router'
+import { QueryErrorBanner } from '@/components/QueryErrorBanner'
+import { Skeleton } from '@/components/ui/skeleton'
+import { BarRows, BigNumber, type BarRow } from './charts'
+import { Freshness } from './Freshness'
+import { useCommercialDashboard } from './queries'
+import type { Periodo } from './PeriodPicker'
+
+/**
+ * §4. Pipeline snapshot plus two period measures. Touches no invoice and no hour, which is
+ * what lets it ship before slice 3.
+ *
+ * **Nothing here computes anything.** Every string comes from the API already formatted as
+ * a decimal string; the only derived quantity is a bar's `ratio`, and it is derived from
+ * the *count* of deals -- an integer the server sent -- never from a money value.
+ * `src/test/no-browser-arithmetic.test.ts` is what keeps that true.
+ */
+
+const REASON_LABELS: Record<string, string> = {
+  stage_bersaglio_assente: 'lo stato «vinto» non esiste',
+  stage_bersaglio_ambiguo: 'ci sono più di uno stato «vinto»',
+  gia_nello_stato: 'il deal era già nello stato',
+  regola_disattivata: 'la regola è disattivata',
+}
+
+function euro(value: string): string {
+  // Formats the string the API sent. Never `Number(value)`: `Number("0.29") * 100` is
+  // 28.999999999999996, and a currency formatter fed a float is how cents disappear.
+  // `Intl.NumberFormat` accepts a string for exactly this reason.
+  return new Intl.NumberFormat('it-IT', {
+    style: 'currency',
+    currency: 'EUR',
+    useGrouping: 'always',
+  }).format(value as unknown as number)
+}
+
+function percent(value: string | null): string {
+  // A dash, not "0,00%": zero per cent means "I lost everything", no closed deals means
+  // something else entirely (§4, and slice 4 §7.1's identical rule for the margin).
+  if (value === null) return '—'
+  return `${value.replace('.', ',')}%`
+}
+
+export function CommercialTab({ periodo }: { periodo: Periodo }) {
+  const query = useCommercialDashboard(periodo)
+
+  if (query.isError) {
+    // No table, no cards, no "nessun dato". An empty dashboard drawn after a failure says
+    // "there is nothing" when the truth is "I do not know" (§8.6's rule, applied here).
+    return <QueryErrorBanner error={query.error} />
+  }
+  if (query.isLoading || !query.data) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-48 w-full" />
+      </div>
+    )
+  }
+
+  const data = query.data
+  // The widest count in the pipeline, used only to scale the bars. An integer from the
+  // server, compared with other integers from the server.
+  const widest = data.pipeline.reduce((best, row) => (row.numero > best ? row.numero : best), 0)
+  const bars: BarRow[] = data.pipeline.map((row, index) => ({
+    label: `${row.stage_nome} · ${row.numero}`,
+    value: euro(row.valore_totale),
+    ratio: widest === 0 ? 0 : row.numero / widest,
+    tone: index + 1,
+  }))
+  const withoutValue = data.pipeline.reduce((total, row) => total + row.senza_valore, 0)
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-end">
+        <Freshness calcolatoAlle={data.calcolato_alle} onRefresh={() => void query.refetch()} />
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <BigNumber label="Deal vinti nel periodo" value={String(data.chiusure.vinti)} />
+        <BigNumber label="Deal persi nel periodo" value={String(data.chiusure.persi)} />
+        <BigNumber
+          label="Tasso di conversione"
+          value={percent(data.chiusure.tasso_conversione)}
+          hint="vinti su vinti + persi"
+        />
+        <BigNumber
+          label="Valore vinto nel periodo"
+          value={euro(data.chiusure.valore_vinto)}
+          // §4: it is what the deal *claimed*, not what was invoiced. The two figures live
+          // on two pages for this reason, and the hint says so where it cannot be missed.
+          hint="valore dichiarato dai deal, non fatturato"
+        />
+      </div>
+
+      <BarRows caption="Pipeline aperta per stato" rows={bars} />
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <BigNumber
+          label="Valore ponderato (stima)"
+          value={euro(
+            data.pipeline.length === 0 ? '0.00' : data.pipeline[0]!.valore_ponderato,
+          )}
+          hint="valore previsto × probabilità — è una stima, non fatturato"
+          tone="accent"
+        />
+        <BigNumber
+          label="Deal senza valore"
+          value={String(withoutValue)}
+          hint="contati, non sommati come zero"
+        />
+        <BigNumber
+          label="Chiusure previste (30 giorni)"
+          value={String(data.chiusure_previste_30_giorni)}
+        />
+        <BigNumber
+          label="Offerte inviate in attesa"
+          value={String(data.offerte_in_attesa_totale)}
+        />
+      </div>
+
+      <section className="rounded-lg border bg-card p-4">
+        <h2 className="text-sm font-medium">Offerte in attesa di risposta</h2>
+        {data.offerte_in_attesa.length === 0 ? (
+          <p className="mt-2 text-sm text-muted-foreground">Nessuna offerta in attesa.</p>
+        ) : (
+          <ul className="mt-2 space-y-1 text-sm">
+            {data.offerte_in_attesa.map((offer) => (
+              <li key={offer.document_id} className="flex justify-between gap-4">
+                <Link to="/app/documenti/$documentId" params={{ documentId: offer.document_id }}
+                      className="truncate hover:underline">
+                  {offer.titolo}
+                </Link>
+                <span className="shrink-0 text-muted-foreground">
+                  {offer.giorni === null ? 'data ignota' : `${offer.giorni} giorni`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="rounded-lg border bg-card p-4">
+        <h2 className="text-sm font-medium">Segnali</h2>
+        <p className="mt-2 text-sm">
+          <a
+            href="/app/documenti?solo_deal_non_vinto=true"
+            className="underline underline-offset-2"
+          >
+            Offerta accettata, deal non vinto
+          </a>
+          : <strong>{data.offerte_accettate_deal_non_vinto}</strong>
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          È il caso in cui l&apos;automazione «offerta accettata → deal vinto» non è
+          scattata. I motivi possibili sono: {Object.values(REASON_LABELS).join(', ')}.
+        </p>
+        {data.chiusure_non_attribuibili > 0 && (
+          <p className="mt-3 text-xs text-muted-foreground">
+            {data.chiusure_non_attribuibili} deal chiusi prima dell&apos;introduzione di
+            questa misura <strong>non sono attribuibili</strong> a un periodo e non entrano
+            nelle cifre sopra.
+          </p>
+        )}
+      </section>
+    </div>
+  )
+}
+```
+
+`euro` passes the API's string straight into `Intl.NumberFormat.format`, which accepts a string and parses it with full decimal precision — this is the shipped project's own approach to money display and it is why no `Number()` appears. The `as unknown as number` cast exists only because the TypeScript lib signature for `format` predates string support; a comment says so at the call site.
+
+- [ ] **Step 7: Write the automations panel and its route**
+
+```tsx
+// apps/web/src/features/settings/AutomationsPanel.tsx
+import { QueryErrorBanner } from '@/components/QueryErrorBanner'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
+import {
+  useAutomations,
+  useUpdateAutomationConfig,
+  type AutomationConfigUpdate,
+} from '@/features/dashboard/queries'
+
+/**
+ * §9.5's third observability surface: the two rules, their switch, and the last twenty
+ * executions with their outcome -- a query over `activities` by `kind`, never a new table.
+ *
+ * The non-executions are the reason this page earns its place. Without them, "it did not
+ * fire" and "it was not supposed to fire" are the same empty list.
+ */
+
+const REASONS: Record<string, string> = {
+  stage_bersaglio_assente: 'lo stato bersaglio non esiste',
+  stage_bersaglio_ambiguo: 'ci sono più di uno stato «vinto»: l’automazione non indovina',
+  gia_nello_stato: 'il deal era già nello stato bersaglio',
+  regola_disattivata: 'la regola è disattivata',
+}
+
+const FIELD_BY_RULE: Record<string, keyof AutomationConfigUpdate> = {
+  A1: 'a1_offerta_accettata_vince_deal',
+  A2: 'a2_offerta_inviata_avanza_deal',
+}
+
+export function AutomationsPanel() {
+  const query = useAutomations()
+  const update = useUpdateAutomationConfig()
+
+  if (query.isError) return <QueryErrorBanner error={query.error} />
+  if (query.isLoading || !query.data) return <Skeleton className="h-64 w-full" />
+
+  const data = query.data
+
+  return (
+    <div className="space-y-6">
+      <section className="space-y-4">
+        <h2 className="text-lg font-semibold">Automazioni</h2>
+        {data.regole.map((rule) => (
+          <div key={rule.codice} className="flex items-start gap-4 rounded-lg border p-4">
+            <Switch
+              checked={rule.attiva}
+              aria-label={rule.titolo}
+              onCheckedChange={(next) =>
+                // Only the rule that changed is sent. The API reads the body with
+                // `exclude_unset=True`, so an omitted field changes nothing -- and `false`
+                // is a value, never a blank.
+                update.mutate({ [FIELD_BY_RULE[rule.codice]!]: next })
+              }
+            />
+            <div className="min-w-0">
+              <p className="text-sm font-medium">{rule.titolo}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{rule.descrizione}</p>
+            </div>
+          </div>
+        ))}
+      </section>
+
+      <section>
+        <h2 className="text-lg font-semibold">Ultime esecuzioni</h2>
+        {data.esecuzioni.length === 0 ? (
+          <p className="mt-2 text-sm text-muted-foreground">
+            Nessuna esecuzione registrata.
+          </p>
+        ) : (
+          <ul className="mt-2 divide-y text-sm">
+            {data.esecuzioni.map((run, index) => (
+              <li key={`${run.occurred_at}-${index}`} className="py-2">
+                <span className="font-medium">
+                  {run.kind === 'automazione.stage_spostato'
+                    ? 'Deal spostato'
+                    : run.kind === 'automazione.non_eseguita'
+                      ? 'Non eseguita'
+                      : 'Configurazione modificata'}
+                </span>
+                {run.regola && <span className="text-muted-foreground"> · {run.regola}</span>}
+                {run.motivo && (
+                  <span className="text-muted-foreground">
+                    {' '}
+                    · {REASONS[run.motivo] ?? run.motivo}
+                  </span>
+                )}
+                <span className="ml-2 text-xs text-muted-foreground">
+                  {new Date(run.occurred_at).toLocaleString('it-IT')}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
+  )
+}
+```
+
+```tsx
+// apps/web/src/routes/app/impostazioni/automazioni.tsx
+import { createFileRoute } from '@tanstack/react-router'
+import { AutomationsPanel } from '@/features/settings/AutomationsPanel'
+
+export const Route = createFileRoute('/app/impostazioni/automazioni')({
+  component: AutomationsPanel,
+})
+```
+
+Add the link to the settings navigation wherever `routes/app/impostazioni.tsx` lists its sections, following the shape the existing entries use.
+
+- [ ] **Step 8: Replace the dashboard route**
+
+```tsx
+// apps/web/src/routes/app/index.tsx -- REPLACED, not edited. The previous contents were a
+// placeholder that named this slice.
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { CommercialTab } from '@/features/dashboard/CommercialTab'
+import { PeriodPicker, currentMonth, type Periodo } from '@/features/dashboard/PeriodPicker'
+
+/**
+ * Three tabs, and the period in the URL.
+ *
+ * The period is in the URL because a screenshot or a shared link of a dashboard with no
+ * explicit period is a number with no unit (§4). This is the first route in this codebase
+ * with `validateSearch`, so the whole shape is written out rather than copied from a
+ * neighbour that does not exist.
+ *
+ * `validateSearch` fills in the current month rather than rejecting a bare `/app/`: the
+ * dashboard is the landing page, and a 404 on the home screen because a query parameter is
+ * missing would be absurd. An *invalid* date, on the other hand, falls back rather than
+ * throwing -- the alternative is an unusable home screen after a mistyped bookmark.
+ */
+
+const TABS = [
+  { id: 'commerciale', label: 'Commerciale' },
+  { id: 'economica', label: 'Economica' },
+  { id: 'operativa', label: 'Operativa' },
+] as const
+
+type TabId = (typeof TABS)[number]['id']
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
+
+type DashboardSearch = { tab: TabId; da: string; a: string }
+
+export const Route = createFileRoute('/app/')({
+  validateSearch: (search: Record<string, unknown>): DashboardSearch => {
+    const fallback = currentMonth()
+    const tab = TABS.some((candidate) => candidate.id === search.tab)
+      ? (search.tab as TabId)
+      : 'commerciale'
+    const da = typeof search.da === 'string' && ISO_DATE.test(search.da) ? search.da : fallback.da
+    const a = typeof search.a === 'string' && ISO_DATE.test(search.a) ? search.a : fallback.a
+    return { tab, da, a }
+  },
+  component: Dashboard,
+})
+
+function Dashboard() {
+  const { tab, da, a } = Route.useSearch()
+  const navigate = useNavigate({ from: Route.fullPath })
+  const periodo: Periodo = { da, a }
+
+  return (
+    <div className="space-y-6 p-8">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <nav className="flex gap-1" aria-label="Dashboard">
+          {TABS.map((candidate) => (
+            <button
+              key={candidate.id}
+              type="button"
+              aria-current={candidate.id === tab ? 'page' : undefined}
+              onClick={() =>
+                void navigate({ search: (previous) => ({ ...previous, tab: candidate.id }) })
+              }
+              className={
+                candidate.id === tab
+                  ? 'rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground'
+                  : 'rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted'
+              }
+            >
+              {candidate.label}
+            </button>
+          ))}
+        </nav>
+        {tab !== 'operativa' && (
+          <PeriodPicker
+            periodo={periodo}
+            onChange={(next) =>
+              void navigate({ search: (previous) => ({ ...previous, ...next }) })
+            }
+          />
+        )}
+      </div>
+
+      {tab === 'commerciale' && <CommercialTab periodo={periodo} />}
+
+      {/* §17: if slices 3 and 4 slip, the tab says why it is empty. A tab full of zeros
+          would be read as "the business made nothing"; this cannot be misread. Sub-plan 6C
+          replaces each of these with its real tab. */}
+      {tab === 'economica' && (
+        <p className="rounded-lg border bg-card p-6 text-sm text-muted-foreground">
+          La dashboard economica arriva con la fatturazione e il conto economico. Finché non
+          ci sono, mostrare degli zeri sarebbe peggio che non mostrare niente.
+        </p>
+      )}
+      {tab === 'operativa' && (
+        <p className="rounded-lg border bg-card p-6 text-sm text-muted-foreground">
+          La dashboard operativa arriva con il time tracking. Finché non c&apos;è, mostrare
+          degli zeri sarebbe peggio che non mostrare niente.
+        </p>
+      )}
+    </div>
+  )
+}
+```
+
+The operational tab takes no period (§6: its figures are the current week and a backlog, the two things that make no sense in the past), which is why `PeriodPicker` is hidden for it.
+
+- [ ] **Step 9: Add the eslint overrides**
+
+```js
+// apps/web/eslint.config.js
+  {
+    files: [
+      'src/features/dashboard/queries.ts',
+      'src/features/dashboard/PeriodPicker.tsx',
+      'src/routes/app/index.tsx',
+    ],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
+```
+
+- [ ] **Step 10: Run the tests and watch them pass**
+
+Run: `cd apps/web && pnpm exec vitest run && pnpm exec tsc --noEmit && pnpm lint`
+Expected: PASS. `src/test/no-browser-arithmetic.test.ts` now has real files in scope and must be green — if it flags `CommercialTab.tsx`, the offending line is a coercion that should be a formatter.
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add apps/web/src/lib/api-types.ts \
+        apps/web/src/lib/query.ts \
+        apps/web/src/features/dashboard/ \
+        apps/web/src/features/settings/AutomationsPanel.tsx \
+        apps/web/src/features/settings/AutomationsPanel.test.tsx \
+        apps/web/src/features/documents/queries.ts \
+        apps/web/src/features/deals/queries.ts \
+        apps/web/src/routes/app/index.tsx \
+        apps/web/src/routes/app/impostazioni/automazioni.tsx \
+        apps/web/src/routes/app/impostazioni.tsx \
+        apps/web/eslint.config.js
+git commit -m "feat(web): commercial dashboard with the period in the URL, and the automations page"
+```
+
+---
+
+## 6B is done. What it closed
+
+| Item | State after 6B |
+|---|---|
+| §9 in full | Both rules, inside their trigger's transaction, with four declared reasons for declining and an activity for each |
+| The `*_in_transaction` convention | Introduced **with** its AST guard, in adjacent commits |
+| §4's dashboard | Shipped, with the signal that cross-checks A1 on the same page |
+| **R5** | **Closed for `automation_config`.** Open elsewhere |
+| Criteria 7, 8, 9 | Executed |
+| Criteria 2, 6, 14 | Executed **on the commercial dashboard**; 6C repeats all three on the two new ones |
+| §12's data delta | `deals.chiuso_il`, `documents.stato_dal`, `automation_config`, three new `activities.kind` values, and **no** new `entity_type` — residuo **R13** is untouched, which the spec notes is the first time in four slices that the four-place extension was not needed |
+| **R11**, **R14**, **R15** | Untouched, deliberately. Contradictions 13 and 14 give the reasoning |
+
+---
+# Sub-plan 6C — Dashboard economica e operativa, prompt MCP
+
+**Before 6C can start, all of this must already be true.** This is the sub-plan with real external dependencies, and none of them has a workaround.
+
+| Prerequisite | How to check | If it is missing |
+|---|---|---|
+| **Sub-plans 6A and 6B merged** | `packages/core/src/pigrocrm/core/{search,dashboard,automations}/service.py` all exist; `uv run pytest -q` green | Stop. 6C appends to `DashboardService` and to the same routers and tools |
+| **Slice 3 in `main`, complete** | `packages/core/src/pigrocrm/core/invoices/service.py` **and** `repository.py` exist and define `InvoiceService.issue` / `annul` | As of this plan's writing, eight of slice 3's twenty-one tasks are merged: `models.py`, `schemas.py`, `totals.py`, `fatturapa.py`, `naming.py`, the fiscal profile, and migrations `0004`/`0005`. The **tables are real**, but there is no `InvoiceService`. Task C3 needs only the tables; Task C4 needs `stato`/`stato_pagamento` to be actually written by something, which means `issue()` |
+| **Slice 4 in `main`, both halves 4A and 4B** | `packages/core/src/pigrocrm/core/timetracking/service.py` and `analytics/service.py` exist; `AnalyticsService` defines `period_pnl`, `deal_pnl`, `budget_vs_actual` | Stop for Tasks C1, C4, C5, C6, C7. `packages/core/src/pigrocrm/core/{timetracking,analytics}/` do not exist at all today. **Do not invent them** — every figure on the economic dashboard is returned verbatim by `AnalyticsService`, and a locally invented substitute is precisely the second source of truth this slice exists to prevent |
+| **The R1 cure in `main`** | `grep -n "lambda: session" apps/mcp/src/pigrocrm_mcp/__main__.py` returns nothing, and a session is created per call | Stop for Tasks C8, C9, C11. Spec §11.3: this slice depends on the cure and does not work around it. A dashboard tool on a shared session is not a degraded feature, it is a wrong figure — §7.1's one-instant guarantee is a property of the session |
+| `period_locks` and the two report fields | `PeriodPnl` carries `periodo_chiuso: bool` and `voci_scritte_in_ritardo: int` | Stop for Task C4. Whether a number can still move is half the value of showing it |
+| The migration chain head | `ls packages/core/migrations/versions/` | 6C writes `0009`; check, do not trust the number |
+
+**Slice 5 is *not* a prerequisite, contrary to spec §2 and §17.** The route prefix `/app/` those sections attribute to slice 5 §9.4 is already shipped — `apps/web/src/routes/app.tsx` makes `/app` a real path and `routes/index.tsx` redirects to it. What slice 5 still owns is Vite's `base` and `deploy/nginx/spa.conf`, neither of which this slice touches. Contradiction 6 records the check.
+
+**Task C13 is executable ahead of the rest.** The invoice *search* branch needs only the `Invoice` model, which exists today. It is listed last for narrative reasons, not dependency ones, and its own header says so.
+
+**6C executes §16 criteria 1, 10, 11, 12 and 15, plus 2, 6 and 14 repeated on the two new dashboards.**
+
+---
+
+### Task C1: `AnalyticsService.unbilled_backlog`, and the three period rows §5 needs
+
+**Blocked on: slice 4 (both halves) in `main`.**
+
+**Files:**
+- Modify: `packages/core/src/pigrocrm/core/analytics/service.py`
+- Modify: `packages/core/src/pigrocrm/core/analytics/schemas.py`
+- Modify: `apps/api/src/pigrocrm_api/routers/analytics.py`
+- Modify: `apps/mcp/src/pigrocrm_mcp/tools/analytics.py` and `tools/__init__.py`
+- Create: `packages/core/tests/test_unbilled_backlog.py`
+
+**Interfaces:**
+- Consumes, from slice 4 and **not to be reimplemented**: `AnalyticsService(session)`, `AnalyticsRepository`, `PeriodPnl`, `PnlTotals`, `PeriodPnlQuery`, and slice 4's own `Σ ROUND(ore × tariffa_applicata, 2)` formula for accrued value (its §7.3). `TimeEntry` with `data`, `ore`, `fatturabile`, `invoice_line_id`, `tariffa_applicata`.
+- Produces:
+  - `UnbilledBacklog(BaseModel)` in `analytics/schemas.py` — `ore_fatturabili_non_fatturate: Decimal` (`max_digits=8, decimal_places=2`), `valore_maturato: Decimal` (`max_digits=12, decimal_places=2`), `voci_senza_tariffa: int`, `voci: int`
+  - `AnalyticsService.unbilled_backlog(self, actor: Actor) -> UnbilledBacklog`
+  - Three new fields on slice 4's `PeriodPnl`: `valore_maturato: Decimal`, `ore_fatturabili_non_fatturate: Decimal`, `ore_senza_tariffa: int`
+  - `GET /api/analytics/backlog` → `UnbilledBacklog`
+  - MCP tool `get_unbilled_backlog()`
+- Task C7 calls `unbilled_backlog`; Task C4 reads the three new `PeriodPnl` fields.
+
+**Two decisions this task records rather than makes.**
+
+**The method is named `unbilled_backlog`, not `get_unbilled_backlog`.** The spec writes `get_unbilled_backlog` in §6.3 and §11.1; slice 4's approved plan names its analytics methods `period_pnl`, `deal_pnl`, `budget_vs_actual`, with the `get_` prefix belonging to the **MCP tool** names. Following the spec's spelling would put one method in a different naming convention from its three neighbours in the same class. So: service method `unbilled_backlog`, MCP tool `get_unbilled_backlog` — which is exactly the name §11.1 fixes for the tool. Contradiction 2 records it.
+
+**It has a tool, so slice 4's exclusion list does not grow.** Spec §6.3 is explicit: slice 4's architecture test requires every new public method on `AnalyticsService` to have a tool *or* an entry in the ten-name exclusion list, and this one has a tool — so **that list stays exactly its ten names**. Task A11 already asserts this. It is the right outcome: the backlog is the figure an agent can be most useful about, and it is read-only.
+
+**Why a new method rather than reading `period_pnl`.** `period_pnl` returns unbilled hours *for a period*; the operational dashboard needs the total with no period, because "how much do I have to invoice" is not a question about March (§6.3). And its euro value is `Σ ROUND(ore × tariffa_applicata, 2)` — a product of two columns, which §3 forbids a dashboard module from containing. So it belongs to the service that already owns that formula.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_unbilled_backlog.py
+"""§6.3's method: the backlog, with no period.
+
+Every figure here is slice 4's formula, called rather than reimplemented. The point of the
+method existing at all is that `core/dashboard/` cannot contain
+`Σ ROUND(ore × tariffa_applicata, 2)` -- it is a product of two columns, and §3 forbids the
+dashboard package any multiplication at all.
+
+The three tests that matter most are the ones about hours with no rate: they are counted
+separately, they contribute nothing to the accrued value, and they are never treated as
+zero-rate hours. A rate of zero and no rate are different facts (slice 4 §5.1).
+"""
+
+from datetime import date
+from decimal import Decimal
+
+import pytest
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.analytics.service import AnalyticsService
+from pigrocrm.core.db.base import uuid7
+
+READONLY = Actor(id=uuid7(), type="user", role="readonly")
+
+
+def test_an_empty_database_returns_zeroes_and_not_none(db_session: Session) -> None:
+    """A fresh installation must render, not crash. `None` here would reach the browser as
+    an empty card indistinguishable from a failed request."""
+    backlog = AnalyticsService(db_session).unbilled_backlog(READONLY)
+    assert backlog.ore_fatturabili_non_fatturate == Decimal("0.00")
+    assert backlog.valore_maturato == Decimal("0.00")
+    assert backlog.voci_senza_tariffa == 0
+    assert backlog.voci == 0
+
+
+def test_it_sums_billable_unbilled_hours_across_every_period(
+    db_session: Session, time_entry_factory: object
+) -> None:
+    """No period. "Quanto ho da fatturare" is not a question about March (§6.3), so an
+    entry from two years ago counts exactly as much as one from yesterday."""
+    time_entry_factory(data=date(2024, 1, 15), ore="8.00", tariffa="50.000000",
+                       fatturabile=True, invoice_line_id=None)
+    time_entry_factory(data=date(2026, 8, 1), ore="2.50", tariffa="50.000000",
+                       fatturabile=True, invoice_line_id=None)
+
+    backlog = AnalyticsService(db_session).unbilled_backlog(READONLY)
+    assert backlog.ore_fatturabili_non_fatturate == Decimal("10.50")
+    assert backlog.valore_maturato == Decimal("525.00")
+    assert backlog.voci == 2
+
+
+def test_an_hour_already_bound_to_an_invoice_line_is_not_backlog(
+    db_session: Session, time_entry_factory: object
+) -> None:
+    time_entry_factory(data=date(2026, 8, 1), ore="8.00", tariffa="50.000000",
+                       fatturabile=True, invoice_line_id=uuid7())
+    backlog = AnalyticsService(db_session).unbilled_backlog(READONLY)
+    assert backlog.ore_fatturabili_non_fatturate == Decimal("0.00")
+    assert backlog.voci == 0
+
+
+def test_a_non_billable_hour_is_not_backlog(
+    db_session: Session, time_entry_factory: object
+) -> None:
+    time_entry_factory(data=date(2026, 8, 1), ore="8.00", tariffa="50.000000",
+                       fatturabile=False, invoice_line_id=None)
+    assert AnalyticsService(db_session).unbilled_backlog(READONLY).voci == 0
+
+
+def test_hours_without_a_rate_are_counted_and_valued_at_nothing(
+    db_session: Session, time_entry_factory: object
+) -> None:
+    """Slice 4 §5.1 already names this as a figure of its own. A rate of zero and no rate
+    are different facts, and treating the second as the first understates the backlog
+    with nothing on screen to say so."""
+    time_entry_factory(data=date(2026, 8, 1), ore="4.00", tariffa=None,
+                       fatturabile=True, invoice_line_id=None)
+    time_entry_factory(data=date(2026, 8, 2), ore="1.00", tariffa="100.000000",
+                       fatturabile=True, invoice_line_id=None)
+
+    backlog = AnalyticsService(db_session).unbilled_backlog(READONLY)
+    assert backlog.ore_fatturabili_non_fatturate == Decimal("5.00")
+    assert backlog.valore_maturato == Decimal("100.00")
+    assert backlog.voci_senza_tariffa == 1
+    assert backlog.voci == 2
+
+
+def test_the_value_rounds_per_row_then_sums(
+    db_session: Session, time_entry_factory: object
+) -> None:
+    """Slice 4's rule, and the reason it is a rule: three rows at 0.005 differ between
+    `Σ ROUND(row)` and `ROUND(Σ exact)` by a cent, which is how a reconciliation stops
+    reconciling."""
+    for _ in range(3):
+        time_entry_factory(data=date(2026, 8, 1), ore="0.10", tariffa="0.050000",
+                           fatturabile=True, invoice_line_id=None)
+    backlog = AnalyticsService(db_session).unbilled_backlog(READONLY)
+    # ROUND(0.005, 2) = 0.01 half-up, three times.
+    assert backlog.valore_maturato == Decimal("0.03")
+
+
+def test_a_soft_deleted_entry_is_not_backlog(
+    db_session: Session, time_entry_factory: object
+) -> None:
+    from datetime import UTC, datetime
+
+    entry = time_entry_factory(data=date(2026, 8, 1), ore="8.00", tariffa="50.000000",
+                               fatturabile=True, invoice_line_id=None)
+    entry.deleted_at = datetime.now(UTC)
+    db_session.flush()
+    assert AnalyticsService(db_session).unbilled_backlog(READONLY).voci == 0
+
+
+def test_the_period_pnl_carries_the_same_three_figures_for_its_period(
+    db_session: Session, time_entry_factory: object
+) -> None:
+    """§5 sources them from `period_pnl`, and slice 4's `PeriodPnl` did not carry them.
+    Added to the owning service (§3 permits exactly this), with the **same field names** as
+    `DealPnl`: they are the same quantity on a different object, and §5's requirement is
+    that the *label* carries the scope -- "nel periodo" on the economic dashboard, "in
+    totale" on the operational one -- and that the two are never shown side by side."""
+    from pigrocrm.core.analytics.schemas import PeriodPnlQuery
+
+    time_entry_factory(data=date(2026, 3, 10), ore="4.00", tariffa="50.000000",
+                       fatturabile=True, invoice_line_id=None)
+    time_entry_factory(data=date(2026, 6, 10), ore="4.00", tariffa="50.000000",
+                       fatturabile=True, invoice_line_id=None)
+
+    pnl = AnalyticsService(db_session).period_pnl(
+        PeriodPnlQuery(da=date(2026, 3, 1), a=date(2026, 3, 31)), READONLY
+    )
+    assert pnl.ore_fatturabili_non_fatturate == Decimal("4.00")
+    assert pnl.valore_maturato == Decimal("200.00")
+    assert pnl.ore_senza_tariffa == 0
+
+    # The period-less total sees both.
+    backlog = AnalyticsService(db_session).unbilled_backlog(READONLY)
+    assert backlog.ore_fatturabili_non_fatturate == Decimal("8.00")
+
+
+def test_a_readonly_actor_may_read_the_backlog(
+    db_session: Session, time_entry_factory: object
+) -> None:
+    """Slice 4 §11 gives every analytics read to every role; the one admin-only figure is
+    the fiscal estimate, which is not this."""
+    assert AnalyticsService(db_session).unbilled_backlog(READONLY).voci == 0
+
+
+def test_unbilled_backlog_is_a_public_method_with_a_tool() -> None:
+    """§6.3: slice 4's exclusion list must stay exactly its ten names, which is only true
+    if this method has a tool."""
+    tools = (
+        __import__("pathlib").Path(__file__).resolve().parents[3]
+        / "apps" / "mcp" / "src" / "pigrocrm_mcp" / "tools"
+    )
+    source = "\n".join(path.read_text(encoding="utf-8") for path in tools.rglob("*.py"))
+    assert ".unbilled_backlog(" in source
+```
+
+`time_entry_factory` is slice 4's own fixture. Use whatever name `packages/core/tests/conftest.py` carries after slice 4 lands; if slice 4 provided none, add one **there**, next to slice 4's other time-tracking fixtures, rather than defining a private helper in this file — a second way to build a `TimeEntry` is a second set of defaults to drift.
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_unbilled_backlog.py -v`
+Expected: `AttributeError: 'AnalyticsService' object has no attribute 'unbilled_backlog'`, and the `PeriodPnl` test fails on the three missing fields.
+
+- [ ] **Step 3: Add the schema**
+
+```python
+# packages/core/src/pigrocrm/core/analytics/schemas.py -- append.
+
+class UnbilledBacklog(BaseModel):
+    """What is waiting to be invoiced, with no period.
+
+    Separate from `PeriodPnl`'s three same-named fields on purpose (§5): those are the
+    period's figures, these are the total. Two different numbers with the same name is the
+    fastest way to lose a reader's trust, so the *labels* carry the scope -- "nel periodo"
+    on the economic dashboard, "in totale" on the operational one -- and the two are never
+    rendered side by side.
+    """
+
+    ore_fatturabili_non_fatturate: Decimal = Field(max_digits=8, decimal_places=2)
+    # `Σ ROUND(ore × tariffa_applicata, 2)` -- slice 4 §7.3's formula, computed here
+    # because §3 forbids `core/dashboard/` any multiplication at all.
+    valore_maturato: Decimal = Field(max_digits=12, decimal_places=2)
+    # A rate of zero and no rate are different facts (slice 4 §5.1). These rows are in
+    # `ore_fatturabili_non_fatturate` and contribute nothing to `valore_maturato`.
+    voci_senza_tariffa: int
+    voci: int
+```
+
+And three fields on slice 4's `PeriodPnl`, placed after `spese_generali`:
+
+```python
+    # Added by slice 6 §5: the informative rows the economic dashboard shows under a
+    # heading that is not "ricavi", and which enter no margin. Same names as `DealPnl`'s
+    # because they are the same quantity on a different object; the scope lives in the
+    # label, never in the field name.
+    valore_maturato: Decimal = Field(max_digits=12, decimal_places=2)
+    ore_fatturabili_non_fatturate: Decimal = Field(max_digits=8, decimal_places=2)
+    ore_senza_tariffa: int
+```
+
+- [ ] **Step 4: Add the repository aggregate and the service method**
+
+```python
+# packages/core/src/pigrocrm/core/analytics/repository.py -- append. Slice 4 owns this
+# file; this is one more method on it, using its existing imports.
+
+    def unbilled_backlog(self) -> tuple[Decimal, Decimal, int, int]:
+        """`(ore, valore, voci_senza_tariffa, voci)` over every unbilled billable hour.
+
+        No period. `Σ ROUND(ore × tariffa_applicata, 2)` per row and then summed -- slice 4's
+        project-wide rounding rule, and the reason this lives here rather than in
+        `core/dashboard/`, which §3 forbids any multiplication.
+
+        `tariffa_applicata IS NULL` rows are counted in `ore` and in `voci_senza_tariffa`
+        and contribute nothing to `valore`: a missing rate is not a rate of zero.
+        """
+        rounded = func.round(
+            func.cast(TimeEntry.ore, Numeric(20, 6))
+            * func.cast(TimeEntry.tariffa_applicata, Numeric(20, 6)),
+            2,
+        )
+        row = self.session.execute(
+            select(
+                func.coalesce(func.sum(TimeEntry.ore), literal(0)).label("ore"),
+                func.coalesce(func.sum(rounded), literal(0)).label("valore"),
+                func.count(
+                    case((TimeEntry.tariffa_applicata.is_(None), 1))
+                ).label("senza_tariffa"),
+                func.count(TimeEntry.id).label("voci"),
+            ).where(
+                TimeEntry.deleted_at.is_(None),
+                TimeEntry.fatturabile.is_(True),
+                TimeEntry.invoice_line_id.is_(None),
+            )
+        ).one()
+        return (
+            Decimal(row.ore).quantize(Decimal("0.01")),
+            Decimal(row.valore).quantize(Decimal("0.01")),
+            row.senza_tariffa,
+            row.voci,
+        )
+```
+
+```python
+# packages/core/src/pigrocrm/core/analytics/service.py -- append. `AnalyticsService` has
+# no method named `list`, so the last-method rule does not arise here (slice 4's plan says
+# so explicitly); confirm that is still true before appending.
+
+    def unbilled_backlog(self, actor: Actor) -> UnbilledBacklog:
+        """The arrears: billable hours not yet on an invoice line, with no period.
+
+        `period_pnl` returns the same quantities *for a period*; this one has none, because
+        "how much do I have to invoice" is not a question about March (§6.3). It lives on
+        this service and not on a dashboard module because its euro value is
+        `Σ ROUND(ore × tariffa_applicata, 2)` -- a product of two columns, which §3 forbids
+        `core/dashboard/` from containing at all.
+
+        No authorisation check beyond what every other read on this service does: slice 4
+        §11 gives every analytics read to every role, and the one admin-only figure -- the
+        fiscal estimate -- is a different method entirely.
+
+        It has an MCP tool (`get_unbilled_backlog`, §11.1), so slice 4 §11's exclusion list
+        stays **exactly** its ten names. That is the right outcome: the backlog is the
+        figure an agent can be most useful about, and it is read-only.
+        """
+        ore, valore, senza_tariffa, voci = self.repo.unbilled_backlog()
+        return UnbilledBacklog(
+            ore_fatturabili_non_fatturate=ore,
+            valore_maturato=valore,
+            voci_senza_tariffa=senza_tariffa,
+            voci=voci,
+        )
+```
+
+And in `period_pnl`, populate the three new fields from the same repository aggregate restricted to the period. Slice 4's `AnalyticsRepository` already computes unbilled hours for a period for its own `PeriodPnl`; extend that method to return the accrued value and the no-rate count alongside, rather than issuing a second query — one aggregate over `time_entries` per dashboard, not two.
+
+- [ ] **Step 5: Expose it on both adapters**
+
+```python
+# apps/api/src/pigrocrm_api/routers/analytics.py -- append. Beside slice 4's analytics
+# endpoints, because the method belongs to AnalyticsService (spec §11.2's own note).
+
+@router.get("/backlog", response_model=UnbilledBacklog)
+def backlog(session: SessionDep, actor: ActorDep) -> UnbilledBacklog:
+    """No period parameter, deliberately: see `AnalyticsService.unbilled_backlog`."""
+    return AnalyticsService(session).unbilled_backlog(actor)
+```
+
+```python
+# apps/mcp/src/pigrocrm_mcp/tools/analytics.py -- append.
+def get_unbilled_backlog(context: McpContext) -> dict[str, Any]:
+    return (
+        AnalyticsService(context.session)
+        .unbilled_backlog(context.actor)
+        .model_dump(mode="json")
+    )
+```
+
+```python
+# apps/mcp/src/pigrocrm_mcp/tools/__init__.py -- register it.
+    @mcp.tool()
+    @guard
+    def get_unbilled_backlog() -> dict[str, Any]:
+        """Le ore fatturabili non ancora finite su una fattura, in **totale** e senza
+        periodo: quante ore, il valore maturato corrispondente
+        (somma di ore x tariffa, arrotondata per riga), e quante voci non hanno una
+        tariffa. Le voci senza tariffa sono contate nelle ore ma valgono zero nel valore
+        maturato: tariffa assente e tariffa zero sono cose diverse. Il valore maturato
+        **non e' un ricavo** e non entra in nessun margine: il ricavo e' la fattura.
+        """
+        return analytics_tools.get_unbilled_backlog(context)
+```
+
+- [ ] **Step 6: Run the tests and watch them pass**
+
+Run: `uv run pytest packages/core/tests/test_unbilled_backlog.py packages/core/tests/test_architecture.py -v`
+Expected: PASS, including `test_the_slice4_exclusion_list_is_still_exactly_its_ten_names` from Task A11.
+
+- [ ] **Step 7: Full gate and commit**
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+
+```bash
+git add packages/core/src/pigrocrm/core/analytics/ \
+        apps/api/src/pigrocrm_api/routers/analytics.py \
+        apps/mcp/src/pigrocrm_mcp/tools/analytics.py \
+        apps/mcp/src/pigrocrm_mcp/tools/__init__.py \
+        packages/core/tests/test_unbilled_backlog.py
+git commit -m "feat(analytics): unbilled_backlog with no period, and its tool"
+```
+
+---
+
+### Task C2: `ActivityRepository.recent`, and the index a global feed needs
+
+**Not blocked on anything beyond 6B.** `activities` has existed since slice 1.
+
+**Files:**
+- Modify: `packages/core/src/pigrocrm/core/activities/models.py` (one index)
+- Modify: `packages/core/src/pigrocrm/core/activities/repository.py` (`recent`)
+- Create: `packages/core/migrations/versions/0009_dashboard_indexes.py`
+- Modify: `packages/core/tests/test_migrations.py`
+- Modify: `packages/core/tests/test_activities.py`
+
+**Interfaces:**
+- Consumes: `Activity`; `INFLATED`, `build_corpus` (Task A1) for the plan assertion.
+- Produces:
+  - Index `ix_activities_recent` on `(occurred_at DESC, id DESC)`
+  - `ActivityRepository.recent(self, limit: int = 50) -> list[Activity]`
+  - Migration `0009` — which Task C13 extends with the tenth trigram index, in the same file
+- Task C7 calls `recent`.
+
+**Why an index is needed for a query that already exists in a similar form.** `ActivityRepository.timeline` filters by entity and already orders `occurred_at DESC, id DESC` — **residuo R9 does not concern the timeline.** But the only index is `ix_activities_entity (entity_type, entity_id, occurred_at)`, and a *global* feed ordered by date cannot use it: the ordering column is third. Hence `ix_activities_recent (occurred_at DESC, id DESC)`.
+
+**Fifty rows, not paginated.** A complete history of activity is the entity's own timeline, which already exists. A paginated global feed would be a second way to browse the same rows, with its own cursor to get wrong.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_activities.py -- append to the existing file.
+
+def test_recent_returns_the_newest_activities_across_every_entity(
+    db_session: Session
+) -> None:
+    """§6.1's feed. Across every entity, which is what distinguishes it from `timeline`."""
+    from pigrocrm.core.db.base import uuid7
+
+    service = ActivityService(db_session)
+    for index in range(5):
+        service.record("deal", uuid7(), "created", ADMIN, {"n": index})
+    for index in range(3):
+        service.record("customer", uuid7(), "updated", ADMIN, {"n": 100 + index})
+    db_session.flush()
+
+    rows = ActivityRepository(db_session).recent(limit=4)
+    assert len(rows) == 4
+    # Newest first, and both entity types present in the newest four.
+    assert [row.payload["n"] for row in rows] == [102, 101, 100, 4]
+
+
+def test_recent_is_bounded_by_its_limit(db_session: Session) -> None:
+    from pigrocrm.core.db.base import uuid7
+
+    service = ActivityService(db_session)
+    for index in range(60):
+        service.record("deal", uuid7(), "created", ADMIN, {"n": index})
+    db_session.flush()
+    assert len(ActivityRepository(db_session).recent(limit=50)) == 50
+
+
+def test_recent_orders_totally_so_two_reads_agree(db_session: Session) -> None:
+    """`occurred_at` alone is not a total order: entries written in one flush share it to
+    the microsecond often enough to matter, and a feed that reorders between reads looks
+    like data changing."""
+    from pigrocrm.core.db.base import uuid7
+
+    service = ActivityService(db_session)
+    for index in range(20):
+        service.record("deal", uuid7(), "created", ADMIN, {"n": index})
+    db_session.flush()
+
+    repo = ActivityRepository(db_session)
+    first = [row.id for row in repo.recent(limit=20)]
+    second = [row.id for row in repo.recent(limit=20)]
+    assert first == second
+
+
+def test_recent_uses_its_own_index_and_not_the_entity_one() -> None:
+    """§6.1: `ix_activities_entity (entity_type, entity_id, occurred_at)` cannot serve a
+    global feed ordered by date -- the ordering column is third. Asserted on the plan
+    because the query is fast either way on a small table, and slow in production."""
+    import pytest
+
+    pytest.importorskip("testcontainers")
+    # The assertion runs against the inflated corpus in test_search_plan.py's fixture
+    # style; see that file. Kept here as a named marker so the requirement is discoverable
+    # from the activities tests, with the measurement where the corpus already exists.
+```
+
+Replace that last placeholder-shaped test with the real plan assertion, in `packages/core/tests/test_search_plan.py` where the inflated corpus fixture already lives:
+
+```python
+# packages/core/tests/test_search_plan.py -- append.
+
+def test_the_global_activity_feed_uses_its_own_index(inflated: Engine) -> None:
+    """§6.1 and §7.3: no `Seq Scan` on `activities`. `ix_activities_entity` puts the
+    ordering column third and cannot serve a global feed ordered by date, so a dedicated
+    `(occurred_at DESC, id DESC)` index has to exist and has to be chosen."""
+    from pigrocrm.core.activities.models import Activity
+    from pigrocrm.core.actor import Actor
+    from pigrocrm.core.activities.service import ActivityService
+    from pigrocrm.core.db.base import uuid7
+
+    with session_factory(inflated)() as session:
+        service = ActivityService(session)
+        for index in range(2000):
+            service.record("deal", uuid7(), "created", Actor.system(), {"n": index})
+        session.commit()
+        session.execute(text("ANALYZE activities"))
+        session.commit()
+
+        plan = "\n".join(
+            str(row[0])
+            for row in session.execute(
+                text(
+                    "EXPLAIN (ANALYZE) SELECT * FROM activities "
+                    "ORDER BY occurred_at DESC, id DESC LIMIT 50"
+                )
+            ).all()
+        )
+        session.execute(text("DELETE FROM activities WHERE kind = 'created'"))
+        session.commit()
+
+    assert "ix_activities_recent" in plan, plan
+    assert "Seq Scan on activities" not in plan, plan
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_activities.py -v`
+Expected: `AttributeError: 'ActivityRepository' object has no attribute 'recent'`.
+
+- [ ] **Step 3: Add the index and the method**
+
+```python
+# packages/core/src/pigrocrm/core/activities/models.py -- append to __table_args__.
+        # §6.1: a *global* feed ordered by date cannot use `ix_activities_entity`, whose
+        # ordering column is third. DESC on both columns so the feed's own ORDER BY is a
+        # forward scan; `id` breaks the tie, because entries written in one flush share
+        # `occurred_at` to the microsecond and a feed that reorders between reads looks
+        # like data changing.
+        Index(
+            "ix_activities_recent",
+            desc(column("occurred_at")),
+            desc(column("id")),
+        ),
+```
+
+Add `column, desc` to that file's `from sqlalchemy import ...` line.
+
+```python
+# packages/core/src/pigrocrm/core/activities/repository.py -- append, above `by_kind`
+# (order within the class does not matter here: this class defines no method named `list`).
+
+    def recent(self, limit: int = 50) -> list[Activity]:
+        """The global activity feed of §6.1: newest first, across every entity.
+
+        Not paginated, and fifty rows at most. A complete history of activity is the
+        entity's own `timeline`, which already exists; a paginated global feed would be a
+        second way to browse the same rows with its own cursor to get wrong.
+
+        Served by `ix_activities_recent`, and `test_search_plan.py` asserts on the plan --
+        this query is fast either way on a small table and slow in production, which is the
+        combination a latency test cannot catch.
+        """
+        return list(
+            self.session.execute(
+                select(Activity)
+                .order_by(Activity.occurred_at.desc(), Activity.id.desc())
+                .limit(limit)
+            ).scalars()
+        )
+```
+
+- [ ] **Step 4: Write migration 0009**
+
+```python
+# packages/core/migrations/versions/0009_dashboard_indexes.py
+"""ix_activities_recent, and the tenth trigram index
+
+Revision ID: 0009
+Revises: 0008
+Create Date: 2026-08-21
+
+Two objects, in one revision because both exist for the same reason: a query this slice
+introduces would otherwise be a sequential scan on a table that grows with use.
+
+The `invoices.causale` trigram index is added by Task C13, in the marked section below.
+This file applies cleanly with or without it.
+"""
+
+from collections.abc import Sequence
+
+from alembic import op
+
+revision: str = "0009"
+down_revision: str | Sequence[str] | None = "0008"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+
+def upgrade() -> None:
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_activities_recent "
+        "ON activities (occurred_at DESC, id DESC)"
+    )
+    # -- ix_invoices_causale_trgm: written by Task C13, in this same revision. --
+
+
+def downgrade() -> None:
+    op.execute("DROP INDEX IF EXISTS ix_activities_recent")
+```
+
+- [ ] **Step 5: Update `test_migrations.py`**
+
+Add `"ix_activities_recent"` to `HAND_MAINTAINED_INDEXES`, move the two head assertions to `"0009"`, and append:
+
+```python
+def test_the_activity_feed_index_is_descending_on_both_columns() -> None:
+    """An ascending index would still be used -- backwards -- but the feed's ORDER BY is
+    DESC, DESC, and asserting the declared shape is what stops a future "simplification"
+    to a single-column ascending index that cannot serve the tie-break."""
+    with PostgresContainer("postgres:17-alpine", driver="psycopg") as container:
+        url = container.get_connection_url()
+        upgrade(_alembic_config(url), "head")
+        engine: Engine = create_engine(url)
+        with engine.connect() as connection:
+            definition = connection.execute(
+                text(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE schemaname = 'public' AND indexname = 'ix_activities_recent'"
+                )
+            ).scalar_one()
+        engine.dispose()
+    assert "occurred_at DESC" in definition, definition
+    assert "id DESC" in definition, definition
+```
+
+- [ ] **Step 6: Run, gate, commit**
+
+Run: `uv run pytest packages/core/tests/test_activities.py packages/core/tests/test_migrations.py -v`
+Expected: PASS.
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+
+```bash
+git add packages/core/src/pigrocrm/core/activities/ \
+        packages/core/migrations/versions/0009_dashboard_indexes.py \
+        packages/core/tests/test_migrations.py \
+        packages/core/tests/test_activities.py \
+        packages/core/tests/test_search_plan.py
+git commit -m "feat(activities): global recent feed with its own descending index"
+```
+
+---
+
+### Task C3: The invoice aggregates, in `InvoiceRepository`
+
+**Blocked on: the `invoices` table, which exists today.** Not blocked on `InvoiceService`.
+
+**Files:**
+- Modify (or create, if slice 3 has not yet): `packages/core/src/pigrocrm/core/invoices/repository.py`
+- Create: `packages/core/tests/test_invoice_aggregates.py`
+
+**Interfaces:**
+- Consumes: `Invoice` with `tipo`, `stato`, `stato_pagamento`, `data_emissione`, `data_scadenza`, `imponibile`, `totale`, `deal_id`, `deleted_at` — all verified present in `packages/core/src/pigrocrm/core/invoices/models.py`; `today_local` (Task B1); `PipelineStage`.
+- Produces, on `InvoiceRepository`:
+  - `sum_da_incassare(self) -> Decimal`
+  - `sum_scaduto(self) -> Decimal`
+  - `count_emesse_in_periodo(self, da: date, a: date) -> int`
+  - `count_deals_invoiced_not_won(self) -> int`
+  - `count_scadute_non_incassate(self) -> int`
+- Task C4 calls the first three; Task C6 calls the last two.
+
+**Why these live in `InvoiceRepository` and not on `InvoiceService`.** §5's table sources "Da incassare" from `InvoiceService`, but §3 rule 2 is the governing rule: *a single-table `COUNT` or `SUM` is written in the repository of that table — even when the table belongs to another slice.* And there is a concrete cost to the alternative: slice 3 §11 fixes its MCP exclusion list at exactly four names, so a new public method on `InvoiceService` would force either a new tool or an edit to another slice's declared list. Contradiction 4 records it.
+
+**"Da incassare" uses `totale`, and that is not an inconsistency.** Revenue is `Σ imponibile` (slice 4 §7.1, and this slice introduces no third meaning). A receivable is what must arrive in the bank, and that includes VAT — money collected on the State's behalf. Under the *forfettario* regime the two coincide and the difference is unobservable, which is exactly why it is written down now: the same condition and the same answer as slice 4 §7.1.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_invoice_aggregates.py
+"""§5.2 and §6.2's invoice-side figures.
+
+The one test that matters most is the last pair: `da_incassare` must follow `totale` and
+`fatturato` must follow `imponibile`, and each must **fail** if it followed the other. Under
+the forfettario regime the two columns are equal, so a test built only on the shipped
+default profile cannot tell a correct implementation from a wrong one -- hence the synthetic
+RF01 rows where they diverge (slice 3 §14.8's own reason for that profile existing).
+"""
+
+from datetime import date, timedelta
+from decimal import Decimal
+
+import pytest
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.db import today_local
+from pigrocrm.core.invoices.models import Invoice
+from pigrocrm.core.invoices.repository import InvoiceRepository
+
+
+@pytest.fixture
+def customer(db_session: Session) -> Customer:
+    row = Customer(ragione_sociale="Cliente Srl", nazione="IT", custom_fields={})
+    db_session.add(row)
+    db_session.flush()
+    return row
+
+
+def _invoice(
+    db_session: Session,
+    customer: Customer,
+    *,
+    tipo: str = "fattura",
+    stato: str = "emessa",
+    stato_pagamento: str = "da_incassare",
+    imponibile: str = "1000.00",
+    totale: str = "1220.00",
+    data_emissione: date | None = None,
+    data_scadenza: date | None = None,
+    deal_id: object = None,
+) -> Invoice:
+    row = Invoice(
+        customer_id=customer.id, deal_id=deal_id, tipo=tipo, stato=stato,
+        stato_pagamento=stato_pagamento,
+        imponibile=Decimal(imponibile), imposta=Decimal("0.00"), bollo=Decimal("0.00"),
+        totale=Decimal(totale),
+        data_emissione=data_emissione or today_local(),
+        data_scadenza=data_scadenza,
+        tipo_documento="TD01", divisa="EUR", custom_fields={},
+    )
+    db_session.add(row)
+    db_session.flush()
+    return row
+
+
+def test_da_incassare_sums_totale_over_issued_unpaid_invoices(
+    db_session: Session, customer: Customer
+) -> None:
+    _invoice(db_session, customer, imponibile="1000.00", totale="1220.00")
+    _invoice(db_session, customer, imponibile="500.00", totale="610.00")
+    assert InvoiceRepository(db_session).sum_da_incassare() == Decimal("1830.00")
+
+
+def test_da_incassare_follows_totale_and_not_imponibile(
+    db_session: Session, customer: Customer
+) -> None:
+    """The RF01 case: the two columns diverge, so this test fails if the implementation
+    picked the wrong one. Under the forfettario they are equal and this is unobservable --
+    which is why it is written now (§5.2, slice 4 §7.1's identical argument)."""
+    _invoice(db_session, customer, imponibile="1000.00", totale="1220.00")
+    total = InvoiceRepository(db_session).sum_da_incassare()
+    assert total == Decimal("1220.00")
+    assert total != Decimal("1000.00"), "da_incassare must use `totale`, not `imponibile`"
+
+
+def test_a_paid_invoice_is_not_a_receivable(
+    db_session: Session, customer: Customer
+) -> None:
+    _invoice(db_session, customer, stato_pagamento="incassato")
+    assert InvoiceRepository(db_session).sum_da_incassare() == Decimal("0.00")
+
+
+def test_a_draft_or_annulled_invoice_is_not_a_receivable(
+    db_session: Session, customer: Customer
+) -> None:
+    _invoice(db_session, customer, stato="bozza")
+    _invoice(db_session, customer, stato="annullata")
+    assert InvoiceRepository(db_session).sum_da_incassare() == Decimal("0.00")
+
+
+def test_a_proforma_is_not_a_receivable(db_session: Session, customer: Customer) -> None:
+    """A proforma is not a fiscal document and nobody owes anything on it."""
+    _invoice(db_session, customer, tipo="proforma", stato="confermata")
+    assert InvoiceRepository(db_session).sum_da_incassare() == Decimal("0.00")
+
+
+def test_a_soft_deleted_invoice_is_not_a_receivable(
+    db_session: Session, customer: Customer
+) -> None:
+    from datetime import UTC, datetime
+
+    row = _invoice(db_session, customer)
+    row.deleted_at = datetime.now(UTC)
+    db_session.flush()
+    assert InvoiceRepository(db_session).sum_da_incassare() == Decimal("0.00")
+
+
+def test_scaduto_is_the_subset_past_its_due_date(
+    db_session: Session, customer: Customer
+) -> None:
+    """§5.2: "Scaduto" is a **subset** of "Da incassare", shown as one -- indented beneath
+    it, never as a second addable line."""
+    yesterday = today_local() - timedelta(days=1)
+    tomorrow = today_local() + timedelta(days=1)
+    _invoice(db_session, customer, totale="1220.00", data_scadenza=yesterday)
+    _invoice(db_session, customer, totale="610.00", data_scadenza=tomorrow)
+
+    repo = InvoiceRepository(db_session)
+    assert repo.sum_scaduto() == Decimal("1220.00")
+    assert repo.sum_da_incassare() == Decimal("1830.00")
+    assert repo.sum_scaduto() <= repo.sum_da_incassare()
+
+
+def test_an_invoice_due_today_is_not_yet_overdue(
+    db_session: Session, customer: Customer
+) -> None:
+    """`data_scadenza < oggi`, strictly. Due today is due today."""
+    _invoice(db_session, customer, data_scadenza=today_local())
+    assert InvoiceRepository(db_session).sum_scaduto() == Decimal("0.00")
+
+
+def test_an_invoice_with_no_due_date_is_never_overdue(
+    db_session: Session, customer: Customer
+) -> None:
+    """`data_scadenza` is nullable. `NULL < today` is NULL, not true -- but relying on
+    three-valued logic silently is how the opposite gets implemented by accident, so it
+    has a test."""
+    _invoice(db_session, customer, data_scadenza=None)
+    assert InvoiceRepository(db_session).sum_scaduto() == Decimal("0.00")
+
+
+def test_count_emesse_in_periodo_counts_by_data_emissione(
+    db_session: Session, customer: Customer
+) -> None:
+    _invoice(db_session, customer, data_emissione=date(2026, 3, 10))
+    _invoice(db_session, customer, data_emissione=date(2026, 3, 31))
+    _invoice(db_session, customer, data_emissione=date(2026, 4, 1))
+    assert InvoiceRepository(db_session).count_emesse_in_periodo(
+        date(2026, 3, 1), date(2026, 3, 31)
+    ) == 2
+
+
+def test_the_signal_counts_deals_invoiced_but_still_open(
+    db_session: Session, customer: Customer, request: pytest.FixtureRequest
+) -> None:
+    """§6.2's second signal. A `COUNT` across a join, which §3 permits; and it counts
+    **deals**, not invoices, because the drill-through lists deals -- so two invoices on one
+    open deal is one signal, not two."""
+    from pigrocrm.core.actor import Actor
+    from pigrocrm.core.deals.models import Deal
+    from pigrocrm.core.pipeline.service import PipelineService
+
+    PipelineService(db_session).seed_defaults(Actor(id=None, type="system", role="admin"))
+    stages = {s.code: s for s in PipelineService(db_session).list() if s.code is not None}
+
+    open_deal = Deal(nome="Aperto", customer_id=customer.id,
+                     pipeline_stage_id=stages["lead"].id, probabilita=50, custom_fields={})
+    won_deal = Deal(nome="Vinto", customer_id=customer.id,
+                    pipeline_stage_id=stages["vinto"].id, probabilita=100,
+                    chiuso_il=today_local(), custom_fields={})
+    db_session.add_all([open_deal, won_deal])
+    db_session.flush()
+
+    _invoice(db_session, customer, deal_id=open_deal.id)
+    _invoice(db_session, customer, deal_id=open_deal.id)
+    _invoice(db_session, customer, deal_id=won_deal.id)
+
+    assert InvoiceRepository(db_session).count_deals_invoiced_not_won() == 1
+
+
+def test_the_overdue_signal_counts_invoices(
+    db_session: Session, customer: Customer
+) -> None:
+    """§6.2's fourth signal. It counts and **sends nothing** -- it is the candidate list of
+    slice 5 §7.1's reminders, counted."""
+    yesterday = today_local() - timedelta(days=1)
+    _invoice(db_session, customer, data_scadenza=yesterday)
+    _invoice(db_session, customer, data_scadenza=yesterday, stato_pagamento="incassato")
+    assert InvoiceRepository(db_session).count_scadute_non_incassate() == 1
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_invoice_aggregates.py -v`
+Expected: `ModuleNotFoundError: No module named 'pigrocrm.core.invoices.repository'` if slice 3 has not created it, otherwise `AttributeError` on each method.
+
+- [ ] **Step 3: Add the aggregates**
+
+```python
+# packages/core/src/pigrocrm/core/invoices/repository.py -- five methods. If this file does
+# not exist yet, create it with the same `__init__(self, session)` shape every other
+# repository in the project uses, and keep any method named `list` LAST in the class.
+
+    def sum_da_incassare(self) -> Decimal:
+        """`Σ totale` over issued, unpaid, non-deleted invoices.
+
+        **`totale`, not `imponibile`, and that is not an inconsistency with the revenue
+        figure.** Revenue is `Σ imponibile` (slice 4 §7.1, and this slice introduces no
+        third meaning); a receivable is what must arrive in the bank, which includes VAT --
+        money collected on the State's behalf. Under the forfettario regime the two
+        coincide and the difference is unobservable, which is exactly why it is written
+        down now: the same condition, and the same answer, as slice 4 §7.1.
+
+        This figure enters **no** margin and never shares a total row with revenue (§5.2).
+        """
+        return Decimal(
+            self.session.scalar(
+                select(func.coalesce(func.sum(Invoice.totale), literal(0))).where(
+                    Invoice.deleted_at.is_(None),
+                    Invoice.tipo == "fattura",
+                    Invoice.stato == "emessa",
+                    Invoice.stato_pagamento == "da_incassare",
+                )
+            )
+            or 0
+        ).quantize(Decimal("0.01"))
+
+    def sum_scaduto(self) -> Decimal:
+        """The subset of `sum_da_incassare` past its due date.
+
+        A **subset**, and rendered as one -- indented beneath it, never as a second addable
+        line (§5.2). `data_scadenza < today` strictly: an invoice due today is due today,
+        not overdue. A `NULL` due date is never overdue, which Postgres's three-valued logic
+        gives for free and which has a test anyway, because relying on it silently is how
+        the opposite gets implemented by accident.
+
+        `today_local()` and not `CURRENT_DATE`: `CURRENT_DATE` is the database server's day,
+        and every date in this product is a day in the emitter's zone (`db/clock.py`).
+        """
+        return Decimal(
+            self.session.scalar(
+                select(func.coalesce(func.sum(Invoice.totale), literal(0))).where(
+                    Invoice.deleted_at.is_(None),
+                    Invoice.tipo == "fattura",
+                    Invoice.stato == "emessa",
+                    Invoice.stato_pagamento == "da_incassare",
+                    Invoice.data_scadenza.is_not(None),
+                    Invoice.data_scadenza < today_local(),
+                )
+            )
+            or 0
+        ).quantize(Decimal("0.01"))
+
+    def count_emesse_in_periodo(self, da: date, a: date) -> int:
+        """A `COUNT` on the same predicate the revenue figure uses, so the two cannot
+        describe different sets."""
+        return (
+            self.session.scalar(
+                select(func.count(Invoice.id)).where(
+                    Invoice.deleted_at.is_(None),
+                    Invoice.tipo == "fattura",
+                    Invoice.stato == "emessa",
+                    Invoice.data_emissione.is_not(None),
+                    Invoice.data_emissione >= da,
+                    Invoice.data_emissione <= a,
+                )
+            )
+            or 0
+        )
+
+    def count_deals_invoiced_not_won(self) -> int:
+        """§6.2's second signal: a deal with at least one issued invoice and an `open`
+        stage. Almost always the stage left behind -- you do not invoice work you have not
+        won.
+
+        Counts **deals**, not invoices: the drill-through lists deals, so two invoices on
+        one open deal is one signal, not two. `distinct` is what makes that true.
+
+        A `COUNT` across a join, which §3 permits explicitly; a `SUM` across one it does
+        not, and this produces no money figure.
+        """
+        return (
+            self.session.scalar(
+                select(func.count(func.distinct(Deal.id)))
+                .select_from(Invoice)
+                .join(Deal, Deal.id == Invoice.deal_id)
+                .join(PipelineStage, PipelineStage.id == Deal.pipeline_stage_id)
+                .where(
+                    Invoice.deleted_at.is_(None),
+                    Invoice.tipo == "fattura",
+                    Invoice.stato == "emessa",
+                    Deal.deleted_at.is_(None),
+                    PipelineStage.tipo == "open",
+                )
+            )
+            or 0
+        )
+
+    def count_scadute_non_incassate(self) -> int:
+        """§6.2's fourth signal: the candidate list of slice 5 §7.1's payment reminders,
+        counted. The count **sends nothing** -- and saying so here is the point, because a
+        count next to a list of overdue customers is exactly the place someone later adds a
+        "send all" button."""
+        return (
+            self.session.scalar(
+                select(func.count(Invoice.id)).where(
+                    Invoice.deleted_at.is_(None),
+                    Invoice.tipo == "fattura",
+                    Invoice.stato == "emessa",
+                    Invoice.stato_pagamento == "da_incassare",
+                    Invoice.data_scadenza.is_not(None),
+                    Invoice.data_scadenza < today_local(),
+                )
+            )
+            or 0
+        )
+```
+
+Imports that file needs: `from datetime import date`, `from decimal import Decimal`, `from sqlalchemy import func, literal, select`, `from pigrocrm.core.db import today_local`, `from pigrocrm.core.deals.models import Deal`, `from pigrocrm.core.invoices.models import Invoice`, `from pigrocrm.core.pipeline.models import PipelineStage`.
+
+- [ ] **Step 4: Run, gate, commit**
+
+Run: `uv run pytest packages/core/tests/test_invoice_aggregates.py -v`
+Expected: PASS, thirteen tests.
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+
+```bash
+git add packages/core/src/pigrocrm/core/invoices/repository.py \
+        packages/core/tests/test_invoice_aggregates.py
+git commit -m "feat(invoices): receivable and signal aggregates in the invoice repository"
+```
+
+---
+### Task C4: The economic dashboard, and criterion 1 in both directions
+
+**Blocked on: slice 3 complete (`InvoiceService.issue`) and slice 4 both halves.**
+
+**Files:**
+- Modify: `packages/core/src/pigrocrm/core/dashboard/schemas.py` (`EconomicDashboard`)
+- Modify: `packages/core/src/pigrocrm/core/dashboard/service.py` (`get_economic_dashboard`)
+- Create: `packages/core/tests/test_dashboard_economic.py`
+
+**Interfaces:**
+- Consumes: `AnalyticsService.period_pnl(PeriodPnlQuery(da, a, customer_id=None), actor) -> PeriodPnl` and its fields `chiusi`, `in_corso`, `spese_generali`, `periodo_chiuso`, `voci_scritte_in_ritardo`, plus the three added in Task C1; `PnlTotals` fields `ricavi`, `costi_diretti`, `costo_lavoro`, `margine_lordo`, `margine_percentuale`, `deal`; `InvoiceRepository.{sum_da_incassare,sum_scaduto,count_emesse_in_periodo}` (Task C3).
+- Produces:
+  - `EconomicDashboard(BaseModel)` — `periodo: Periodo`, `calcolato_alle: datetime`, `pnl: PeriodPnl`, `da_incassare: Decimal`, `scaduto: Decimal`, `fatture_emesse: int`
+  - `DashboardService.get_economic_dashboard(self, query: PeriodoQuery, actor: Actor) -> EconomicDashboard`
+- Task C8 exposes it; Task C12 renders it.
+
+**`pnl: PeriodPnl` verbatim, not flattened.** §5 says there is **no new aggregate here** and every figure comes from `AnalyticsService` or `InvoiceService`. Re-exposing `PeriodPnl`'s fields one by one into a flat dashboard model would be a place for them to be renamed, reordered, or quietly recombined. Embedding the owning service's own model means the reconciliation of criterion 1 is an identity, not a comparison.
+
+**Three things §5.3 keeps off this page, and each has a reason.** No fiscal estimate — slice 4 §11 reason 4 calls it the product's most sensitive figure, and a dashboard is the screen most likely to end up in a screenshot or a screen share; it stays at `/app/analisi/fiscale`, `admin`, and the dashboard shows **a link, not a number**. No single deal's margin "in evidenza" — choosing which would require ranking customers by margin, the feature slice 4 §13 refuses to enable by inertia. No year-on-year comparison — the right behaviour when the prior period is partly written or closed depends on `period_locks` in a way nobody has exercised, and a wrong comparison is worse than none.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_dashboard_economic.py
+"""**Criterion 1.** A dashboard figure reconciles exactly with the service that owns it.
+
+Three reads of the same quantity: the dashboard, `AnalyticsService.period_pnl`, and a direct
+`SELECT SUM(imponibile)` on a path that touches no service at all. All three must agree to
+the cent, compared as `Decimal` and never as float.
+
+Then the part that makes it a real test rather than a tautology: repeated with the synthetic
+**RF01** profile, where `imponibile` and `totale` diverge. `fatturato` must follow
+`imponibile` and the test must fail if it follows `totale`; `da_incassare` must follow
+`totale` and must fail if it follows `imponibile`. Under the shipped forfettario profile the
+two columns are equal, so a suite built only on the default cannot tell a correct
+implementation from a wrong one -- which is precisely why slice 3 §14.8 put an RF01 profile
+in the fixtures.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from datetime import date
+from decimal import Decimal
+
+import pytest
+from sqlalchemy import Engine, delete, text
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.analytics.schemas import PeriodPnlQuery
+from pigrocrm.core.analytics.service import AnalyticsService
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.dashboard.schemas import PeriodoQuery
+from pigrocrm.core.dashboard.service import DashboardService
+from pigrocrm.core.db import session_factory
+from pigrocrm.core.db.base import uuid7
+from pigrocrm.core.invoices.models import Invoice
+
+READONLY = Actor(id=uuid7(), type="user", role="readonly")
+_PREFIX = "ECON"
+_DA = date(2026, 3, 1)
+_A = date(2026, 3, 31)
+
+
+@pytest.fixture
+def rf01_corpus(db_engine: Engine) -> Iterator[Engine]:
+    """Invoices whose `imponibile` and `totale` differ, committed.
+
+    The divergence is the whole point: `1000.00` net at 22% is `1220.00` gross, so a figure
+    following the wrong column is off by 220 and the assertion catches it. Under the shipped
+    forfettario profile both would be `1000.00` and the test would pass either way.
+    """
+    factory = session_factory(db_engine)
+    with factory() as session:
+        customer = Customer(
+            ragione_sociale=f"{_PREFIX} Cliente", nazione="IT", custom_fields={}
+        )
+        session.add(customer)
+        session.flush()
+        for day, net, gross in ((10, "1000.00", "1220.00"), (20, "500.00", "610.00")):
+            session.add(
+                Invoice(
+                    customer_id=customer.id, tipo="fattura", stato="emessa",
+                    stato_pagamento="da_incassare",
+                    imponibile=Decimal(net), imposta=Decimal("0.00"),
+                    bollo=Decimal("0.00"), totale=Decimal(gross),
+                    data_emissione=date(2026, 3, day), tipo_documento="TD01",
+                    divisa="EUR", custom_fields={},
+                )
+            )
+        # Outside the period, and must not be counted.
+        session.add(
+            Invoice(
+                customer_id=customer.id, tipo="fattura", stato="emessa",
+                stato_pagamento="da_incassare",
+                imponibile=Decimal("9999.00"), imposta=Decimal("0.00"),
+                bollo=Decimal("0.00"), totale=Decimal("12198.78"),
+                data_emissione=date(2026, 4, 1), tipo_documento="TD01",
+                divisa="EUR", custom_fields={},
+            )
+        )
+        session.commit()
+    try:
+        yield db_engine
+    finally:
+        with factory() as session:
+            session.execute(
+                delete(Invoice).where(
+                    Invoice.customer_id.in_(
+                        text(
+                            "SELECT id FROM customers WHERE ragione_sociale LIKE "
+                            f"'{_PREFIX} %'"
+                        )
+                    )
+                )
+            )
+            session.execute(
+                delete(Customer).where(Customer.ragione_sociale.like(f"{_PREFIX} %"))
+            )
+            session.commit()
+
+
+def _dashboard(engine: Engine):
+    with session_factory(engine)() as session:
+        return DashboardService(session).get_economic_dashboard(
+            PeriodoQuery(da=_DA, a=_A), READONLY
+        )
+
+
+def test_the_revenue_equals_the_owning_service_to_the_cent(rf01_corpus: Engine) -> None:
+    result = _dashboard(rf01_corpus)
+    with session_factory(rf01_corpus)() as session:
+        pnl = AnalyticsService(session).period_pnl(
+            PeriodPnlQuery(da=_DA, a=_A), READONLY
+        )
+    assert result.pnl.chiusi.ricavi == pnl.chiusi.ricavi
+    assert isinstance(result.pnl.chiusi.ricavi, Decimal)
+
+
+def test_the_revenue_equals_a_direct_sql_sum_on_an_independent_path(
+    rf01_corpus: Engine,
+) -> None:
+    """A path that touches no service. If the dashboard and the service were both wrong in
+    the same way, the two comparisons above would still agree -- this one would not."""
+    result = _dashboard(rf01_corpus)
+    with session_factory(rf01_corpus)() as session:
+        direct = session.execute(
+            text(
+                "SELECT COALESCE(SUM(imponibile), 0) FROM invoices "
+                "WHERE tipo = 'fattura' AND stato = 'emessa' AND deleted_at IS NULL "
+                "AND data_emissione BETWEEN :da AND :a"
+            ),
+            {"da": _DA, "a": _A},
+        ).scalar_one()
+    total = result.pnl.chiusi.ricavi + result.pnl.in_corso.ricavi
+    assert total == Decimal(direct)
+
+
+def test_the_revenue_follows_imponibile_and_fails_if_it_follows_totale(
+    rf01_corpus: Engine,
+) -> None:
+    """§5.1: `fatturato = Σ imponibile`, and this slice introduces no third meaning."""
+    result = _dashboard(rf01_corpus)
+    total = result.pnl.chiusi.ricavi + result.pnl.in_corso.ricavi
+    assert total == Decimal("1500.00")
+    assert total != Decimal("1830.00"), "revenue must follow `imponibile`, not `totale`"
+
+
+def test_da_incassare_follows_totale_and_fails_if_it_follows_imponibile(
+    rf01_corpus: Engine,
+) -> None:
+    """§5.2, specularly. The two quantities are not interchangeable."""
+    result = _dashboard(rf01_corpus)
+    # All three invoices are unpaid, including the April one: the receivable has no period.
+    assert result.da_incassare == Decimal("14028.78")
+    assert result.da_incassare != Decimal("11499.00"), (
+        "da_incassare must follow `totale`, not `imponibile`"
+    )
+
+
+def test_the_receivable_has_no_period_and_the_revenue_does(rf01_corpus: Engine) -> None:
+    """The asymmetry, made explicit: a receivable outside the period is still owed."""
+    result = _dashboard(rf01_corpus)
+    assert result.fatture_emesse == 2
+    assert result.da_incassare > (result.pnl.chiusi.ricavi + result.pnl.in_corso.ricavi)
+
+
+def test_scaduto_is_a_subset_of_da_incassare(rf01_corpus: Engine) -> None:
+    result = _dashboard(rf01_corpus)
+    assert result.scaduto <= result.da_incassare
+
+
+def test_the_pnl_is_embedded_verbatim_and_not_flattened(rf01_corpus: Engine) -> None:
+    """§5: there is no new aggregate on this page. Embedding the owning service's own model
+    makes the reconciliation an identity rather than a comparison, and leaves no place for a
+    field to be renamed or recombined on the way through."""
+    result = _dashboard(rf01_corpus)
+    with session_factory(rf01_corpus)() as session:
+        pnl = AnalyticsService(session).period_pnl(
+            PeriodPnlQuery(da=_DA, a=_A), READONLY
+        )
+    assert result.pnl == pnl
+
+
+def test_the_margin_is_reported_in_two_columns_with_no_sum_of_them(
+    rf01_corpus: Engine,
+) -> None:
+    """Slice 4 §7.4: closed and in-progress, and the reportable figure is the first. There
+    is deliberately no field holding their sum -- adding a finished job's margin to a
+    half-done one produces a figure that is neither, and that moves every week for reasons
+    which are not business performance."""
+    result = _dashboard(rf01_corpus)
+    fields = set(type(result).model_fields)
+    assert "margine_totale" not in fields
+    assert "margine_complessivo" not in fields
+    assert result.pnl.chiusi is not None and result.pnl.in_corso is not None
+
+
+def test_whether_the_period_can_still_move_is_on_the_response(
+    rf01_corpus: Engine,
+) -> None:
+    """Slice 4 §6.4: the only information that tells a reader whether the number can still
+    change. Shown beside the total, never in a footnote."""
+    result = _dashboard(rf01_corpus)
+    assert isinstance(result.pnl.periodo_chiuso, bool)
+    assert isinstance(result.pnl.voci_scritte_in_ritardo, int)
+
+
+def test_no_fiscal_field_appears_anywhere_on_this_dashboard(
+    rf01_corpus: Engine,
+) -> None:
+    """§5.3: the fiscal estimate stays at /app/analisi/fiscale, admin-only. A dashboard is
+    the screen most likely to end up in a screenshot. Checked by field name, not by
+    intention -- the same discipline criterion 10 applies to the prompts."""
+    result = _dashboard(rf01_corpus)
+    rendered = result.model_dump_json()
+    for forbidden in (
+        "imponibile_fiscale", "imposta_sostitutiva", "contributi", "netto_stimato",
+        "coefficiente_redditivita", "aliquota_imposta_sostitutiva", "aliquota_inps",
+    ):
+        assert forbidden not in rendered, forbidden
+
+
+def test_an_annulled_invoice_is_in_no_figure(rf01_corpus: Engine) -> None:
+    with session_factory(rf01_corpus)() as session:
+        session.execute(
+            text(
+                "UPDATE invoices SET stato = 'annullata' "
+                "WHERE data_emissione = :day"
+            ),
+            {"day": date(2026, 3, 10)},
+        )
+        session.commit()
+    result = _dashboard(rf01_corpus)
+    total = result.pnl.chiusi.ricavi + result.pnl.in_corso.ricavi
+    assert total == Decimal("500.00")
+```
+
+The `sum` in two of those tests adds `chiusi.ricavi` and `in_corso.ricavi`, which slice 4 §7.4 forbids **showing** as one figure. Adding them inside a test to reconcile against a single SQL `SUM` is not showing them: the test is checking that the two columns partition the same rows, which is the property that makes the split honest. The tests say so where they do it.
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_dashboard_economic.py -v`
+Expected: `AttributeError: 'DashboardService' object has no attribute 'get_economic_dashboard'`.
+
+- [ ] **Step 3: Add the schema**
+
+```python
+# packages/core/src/pigrocrm/core/dashboard/schemas.py -- append. Imports gain:
+#   from pigrocrm.core.analytics.schemas import PeriodPnl
+
+class EconomicDashboard(BaseModel):
+    """§5. **No new aggregate exists on this page.** Every figure comes from
+    `AnalyticsService` or from `InvoiceRepository`.
+
+    `pnl` embeds the owning service's own model verbatim rather than flattening its fields
+    into this one: a flattened copy is a place for a field to be renamed, reordered or
+    quietly recombined, and embedding it makes criterion 1's reconciliation an identity
+    instead of a comparison.
+
+    `da_incassare` and `scaduto` are the one pair here that does **not** come from the P&L,
+    and they use `totale` rather than `imponibile` because they are a different quantity: a
+    receivable is what must arrive in the bank, VAT included -- money collected on the
+    State's behalf. Neither enters any margin, and neither shares a total row with revenue
+    (§5.2).
+
+    Deliberately absent (§5.3): any fiscal estimate field, any single deal's margin, and any
+    comparison with the same period last year.
+    """
+
+    periodo: Periodo
+    calcolato_alle: datetime
+    pnl: PeriodPnl
+    # No period: an invoice issued in February and still unpaid is still owed in March.
+    da_incassare: Decimal = Field(max_digits=12, decimal_places=2)
+    # A subset of `da_incassare`, rendered as one -- indented beneath it, never as a second
+    # addable line.
+    scaduto: Decimal = Field(max_digits=12, decimal_places=2)
+    # A COUNT on the same predicate the revenue figure uses, so the two cannot describe
+    # different sets.
+    fatture_emesse: int
+```
+
+- [ ] **Step 4: Add the service method**
+
+```python
+# packages/core/src/pigrocrm/core/dashboard/service.py -- one method, after
+# `get_commercial_dashboard`. Imports gain:
+#   from pigrocrm.core.analytics.schemas import PeriodPnlQuery
+#   from pigrocrm.core.analytics.service import AnalyticsService
+#   from pigrocrm.core.dashboard.schemas import EconomicDashboard
+#   from pigrocrm.core.invoices.repository import InvoiceRepository
+# and __init__ gains:
+#   self.analytics = AnalyticsService(session)
+#   self.invoices = InvoiceRepository(session)
+
+    def get_economic_dashboard(
+        self, query: PeriodoQuery, actor: Actor
+    ) -> EconomicDashboard:
+        """§5. Composition only: not one figure on this page is computed here.
+
+        `period_pnl` is called with the same `actor` the caller supplied, so its own
+        authorisation applies unchanged -- this method adds none and removes none.
+
+        The receivable figures come from `InvoiceRepository` rather than from
+        `InvoiceService`: §3 rule 2 puts a single-table `SUM` in that table's repository even
+        when the table belongs to another slice, and adding a public method to
+        `InvoiceService` would force either a new MCP tool or an edit to slice 3 §11's
+        four-name exclusion list.
+        """
+        periodo = query.resolve()
+        calcolato_alle = self._open_snapshot()
+        return EconomicDashboard(
+            periodo=periodo,
+            calcolato_alle=calcolato_alle,
+            pnl=self.analytics.period_pnl(
+                PeriodPnlQuery(da=periodo.da, a=periodo.a, customer_id=None), actor
+            ),
+            da_incassare=self.invoices.sum_da_incassare(),
+            scaduto=self.invoices.sum_scaduto(),
+            fatture_emesse=self.invoices.count_emesse_in_periodo(periodo.da, periodo.a),
+        )
+```
+
+**Check Task B9 immediately after writing this.** `dashboard/service.py` now imports `AnalyticsService`, whose module imports `Decimal` — but the AST clause is per-file, on *this* file's own imports and BinOps, and this method adds neither. Run the guard to confirm rather than assume:
+
+Run: `uv run pytest packages/core/tests/test_dashboard_no_arithmetic.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Run, gate, commit**
+
+Run: `uv run pytest packages/core/tests/test_dashboard_economic.py -v`
+Expected: PASS, eleven tests.
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+
+```bash
+git add packages/core/src/pigrocrm/core/dashboard/ \
+        packages/core/tests/test_dashboard_economic.py
+git commit -m "feat(dashboard): economic dashboard, reconciling to the cent with its owner"
+```
+
+---
+
+### Task C5: Hours by day, and the days with none
+
+**Blocked on: slice 4 (4A is enough — `time_entries` and `TimeEntryRepository`).**
+
+**Files:**
+- Modify: `packages/core/src/pigrocrm/core/timetracking/repository.py`
+- Modify: `packages/core/src/pigrocrm/core/dashboard/schemas.py` (`WeekHours`)
+- Create: `packages/core/tests/test_week_hours.py`
+- Modify: `packages/core/src/pigrocrm/core/db/clock.py` (`current_week`)
+
+**Interfaces:**
+- Consumes: `TimeEntry` with `data`, `ore`, `deleted_at`; `today_local` (Task B1).
+- Produces:
+  - `db/clock.py`: `current_week(settings: Settings | None = None) -> tuple[date, date]` — Monday to Sunday containing today, in the emitter's zone.
+  - `TimeEntryRepository.hours_by_day(self, da: date, a: date) -> dict[date, Decimal]`
+  - `dashboard/schemas.py`: `DayHours(BaseModel)` — `giorno: date`, `ore: Decimal`; `WeekHours(BaseModel)` — `da: date`, `a: date`, `giorni: list[DayHours]`, `giorni_senza_ore: list[date]`, `ore_totali: Decimal`
+- Task C7 composes it.
+
+**Why the empty days are a first-class field and not something the browser derives.** §6's second row is not statistics: it is the real failure slice 4 §13 names when it refuses a stopwatch — *"non ho mai inserito martedì"*. Deriving it in the browser would mean the browser knowing which days the week has and which the query returned, which is business logic in the frontend and a subtraction on a set. The repository returns the days that have hours; the service turns that into both lists. **The service is `DashboardService`, which may contain no arithmetic** — so the set difference happens in `TimeEntryRepository`, where `WeekHours` is assembled whole.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_week_hours.py
+"""§6's first two rows: hours per day in the current week, and the days with none.
+
+The second one is the whole point. Slice 4 §13 refuses a stopwatch and names the real
+failure it leaves open -- "I never entered Tuesday" -- and this is the figure that attacks
+it. It is also the only figure in this slice with a direct agentic counterpart, the
+`ore-da-registrare` prompt of §10.
+"""
+
+from datetime import date
+from decimal import Decimal
+
+import pytest
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.config import Settings
+from pigrocrm.core.db import current_week
+from pigrocrm.core.timetracking.repository import TimeEntryRepository
+
+
+def test_current_week_runs_monday_to_sunday(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Monday to Sunday, not Sunday to Saturday: Italian working weeks start on Monday,
+    and "the days I did not log" is a working-week question."""
+    from datetime import UTC, datetime
+
+    import pigrocrm.core.db.clock as clock
+
+    # Wednesday 2026-03-18.
+    monkeypatch.setattr(clock, "_now", lambda: datetime(2026, 3, 18, 12, 0, tzinfo=UTC))
+    assert current_week(Settings(timezone="Europe/Rome")) == (
+        date(2026, 3, 16),
+        date(2026, 3, 22),
+    )
+
+
+def test_current_week_on_a_monday_starts_that_day(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import UTC, datetime
+
+    import pigrocrm.core.db.clock as clock
+
+    monkeypatch.setattr(clock, "_now", lambda: datetime(2026, 3, 16, 12, 0, tzinfo=UTC))
+    assert current_week(Settings(timezone="Europe/Rome"))[0] == date(2026, 3, 16)
+
+
+def test_current_week_on_a_sunday_ends_that_day(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import UTC, datetime
+
+    import pigrocrm.core.db.clock as clock
+
+    monkeypatch.setattr(clock, "_now", lambda: datetime(2026, 3, 22, 12, 0, tzinfo=UTC))
+    assert current_week(Settings(timezone="Europe/Rome")) == (
+        date(2026, 3, 16),
+        date(2026, 3, 22),
+    )
+
+
+def test_hours_by_day_sums_per_day(db_session: Session, time_entry_factory: object) -> None:
+    time_entry_factory(data=date(2026, 3, 16), ore="4.00")
+    time_entry_factory(data=date(2026, 3, 16), ore="3.50")
+    time_entry_factory(data=date(2026, 3, 18), ore="8.00")
+
+    week = TimeEntryRepository(db_session).week_hours(date(2026, 3, 16), date(2026, 3, 22))
+    by_day = {row.giorno: row.ore for row in week.giorni}
+    assert by_day[date(2026, 3, 16)] == Decimal("7.50")
+    assert by_day[date(2026, 3, 18)] == Decimal("8.00")
+    assert week.ore_totali == Decimal("15.50")
+
+
+def test_every_day_of_the_week_is_present_even_with_no_hours(
+    db_session: Session, time_entry_factory: object
+) -> None:
+    """A sparkline over a week with three points is a sparkline that lies about the shape of
+    the week."""
+    time_entry_factory(data=date(2026, 3, 18), ore="8.00")
+    week = TimeEntryRepository(db_session).week_hours(date(2026, 3, 16), date(2026, 3, 22))
+    assert [row.giorno for row in week.giorni] == [
+        date(2026, 3, day) for day in range(16, 23)
+    ]
+    assert all(isinstance(row.ore, Decimal) for row in week.giorni)
+
+
+def test_the_days_without_hours_are_listed_by_the_repository(
+    db_session: Session, time_entry_factory: object
+) -> None:
+    """Not derived in the browser: that would be a set difference in the frontend, and
+    `DashboardService` -- which is what would otherwise do it server-side -- may contain no
+    arithmetic at all (§3)."""
+    time_entry_factory(data=date(2026, 3, 16), ore="8.00")
+    time_entry_factory(data=date(2026, 3, 20), ore="8.00")
+    week = TimeEntryRepository(db_session).week_hours(date(2026, 3, 16), date(2026, 3, 22))
+    assert week.giorni_senza_ore == [
+        date(2026, 3, 17), date(2026, 3, 18), date(2026, 3, 19),
+        date(2026, 3, 21), date(2026, 3, 22),
+    ]
+
+
+def test_a_day_logged_with_zero_hours_still_counts_as_logged(
+    db_session: Session, time_entry_factory: object
+) -> None:
+    """`0` is a value, never a blank -- the backend mirror of the frontend rule. Somebody
+    who entered a zero-hour day made a statement about it; the dashboard must not tell them
+    they forgot."""
+    time_entry_factory(data=date(2026, 3, 17), ore="0.00")
+    week = TimeEntryRepository(db_session).week_hours(date(2026, 3, 16), date(2026, 3, 22))
+    assert date(2026, 3, 17) not in week.giorni_senza_ore
+
+
+def test_a_soft_deleted_entry_does_not_make_a_day_count_as_logged(
+    db_session: Session, time_entry_factory: object
+) -> None:
+    from datetime import UTC, datetime
+
+    entry = time_entry_factory(data=date(2026, 3, 17), ore="8.00")
+    entry.deleted_at = datetime.now(UTC)
+    db_session.flush()
+    week = TimeEntryRepository(db_session).week_hours(date(2026, 3, 16), date(2026, 3, 22))
+    assert date(2026, 3, 17) in week.giorni_senza_ore
+
+
+def test_hours_outside_the_window_are_excluded(
+    db_session: Session, time_entry_factory: object
+) -> None:
+    time_entry_factory(data=date(2026, 3, 15), ore="8.00")
+    time_entry_factory(data=date(2026, 3, 23), ore="8.00")
+    week = TimeEntryRepository(db_session).week_hours(date(2026, 3, 16), date(2026, 3, 22))
+    assert week.ore_totali == Decimal("0.00")
+    assert len(week.giorni_senza_ore) == 7
+
+
+def test_an_empty_week_returns_seven_zero_days_and_not_an_empty_list(
+    db_session: Session
+) -> None:
+    week = TimeEntryRepository(db_session).week_hours(date(2026, 3, 16), date(2026, 3, 22))
+    assert len(week.giorni) == 7
+    assert week.ore_totali == Decimal("0.00")
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_week_hours.py -v`
+Expected: `ImportError: cannot import name 'current_week'`.
+
+- [ ] **Step 3: Add `current_week`**
+
+```python
+# packages/core/src/pigrocrm/core/db/clock.py -- append.
+def current_week(settings: Settings | None = None) -> tuple[date, date]:
+    """Monday to Sunday, both inclusive, containing today in the emitter's zone.
+
+    Monday and not Sunday: an Italian working week starts on Monday, and "which days did I
+    not log" is a working-week question. `isoweekday()` returns 1 for Monday, so the offset
+    back to Monday is `isoweekday() - 1`.
+    """
+    today = today_local(settings)
+    monday = today - timedelta(days=today.isoweekday() - 1)
+    return monday, monday + timedelta(days=6)
+```
+
+Add `current_week` to `db/__init__.py`'s imports and `__all__`.
+
+- [ ] **Step 4: Add the schemas and the repository method**
+
+```python
+# packages/core/src/pigrocrm/core/dashboard/schemas.py -- append.
+
+class DayHours(BaseModel):
+    giorno: date
+    ore: Decimal = Field(max_digits=8, decimal_places=2)
+
+
+class WeekHours(BaseModel):
+    """§6's first two rows, assembled whole by `TimeEntryRepository`.
+
+    `giorni` always holds seven entries, including the zero ones: a sparkline over a week
+    with three points lies about the shape of the week. `giorni_senza_ore` is a field and
+    not something the client derives -- deriving it would put a set difference in the
+    browser, and the alternative server-side home for it, `DashboardService`, may contain no
+    arithmetic at all (§3).
+    """
+
+    da: date
+    a: date
+    giorni: list[DayHours]
+    # The real failure slice 4 §13 names when it refuses a stopwatch: "I never entered
+    # Tuesday". A day logged with `0.00` hours is **not** in this list -- somebody who
+    # entered a zero made a statement about that day.
+    giorni_senza_ore: list[date]
+    ore_totali: Decimal = Field(max_digits=10, decimal_places=2)
+```
+
+```python
+# packages/core/src/pigrocrm/core/timetracking/repository.py -- append, ABOVE any method
+# named `list`. Imports gain:
+#   from datetime import date, timedelta
+#   from decimal import Decimal
+#   from pigrocrm.core.dashboard.schemas import DayHours, WeekHours
+
+    def week_hours(self, da: date, a: date) -> WeekHours:
+        """`SUM(ore) GROUP BY data` over the window, filled out to every day in it.
+
+        Assembled here rather than in the dashboard for two reasons: it is a single-table
+        `SUM`, which §3 puts in this table's repository, and computing "the days with no
+        hours" is a set difference -- which `DashboardService` is forbidden from containing
+        (§3, and `test_dashboard_no_arithmetic.py`).
+
+        A day present in the grouped result with `0.00` hours counts as **logged**: `0` is a
+        value, never a blank, and telling somebody who entered a zero that they forgot is
+        the one way this figure can be actively unhelpful.
+        """
+        rows = self.session.execute(
+            select(TimeEntry.data, func.coalesce(func.sum(TimeEntry.ore), literal(0)))
+            .where(
+                TimeEntry.deleted_at.is_(None),
+                TimeEntry.data >= da,
+                TimeEntry.data <= a,
+            )
+            .group_by(TimeEntry.data)
+        ).all()
+        logged: dict[date, Decimal] = {
+            row[0]: Decimal(row[1]).quantize(Decimal("0.01")) for row in rows
+        }
+
+        span = (a - da).days + 1
+        days = [da + timedelta(days=offset) for offset in range(span)]
+        giorni = [
+            DayHours(giorno=day, ore=logged.get(day, Decimal("0.00"))) for day in days
+        ]
+        return WeekHours(
+            da=da,
+            a=a,
+            giorni=giorni,
+            giorni_senza_ore=[day for day in days if day not in logged],
+            ore_totali=sum(
+                (row.ore for row in giorni), start=Decimal("0.00")
+            ).quantize(Decimal("0.01")),
+        )
+```
+
+- [ ] **Step 5: Run, gate, commit**
+
+Run: `uv run pytest packages/core/tests/test_week_hours.py packages/core/tests/test_clock.py -v`
+Expected: PASS.
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+
+```bash
+git add packages/core/src/pigrocrm/core/db/clock.py \
+        packages/core/src/pigrocrm/core/db/__init__.py \
+        packages/core/src/pigrocrm/core/timetracking/repository.py \
+        packages/core/src/pigrocrm/core/dashboard/schemas.py \
+        packages/core/tests/test_week_hours.py
+git commit -m "feat(timetracking): hours per day and the days with none, assembled whole"
+```
+
+---
+
+### Task C6: The operational dashboard, with its three remaining signals
+
+**Blocked on: Tasks C1, C3, C5 (so: slices 3 and 4 both).**
+
+**Files:**
+- Modify: `packages/core/src/pigrocrm/core/dashboard/schemas.py` (`OperationalDashboard`, `Signal`)
+- Modify: `packages/core/src/pigrocrm/core/dashboard/service.py` (`get_operational_dashboard`)
+- Modify: `packages/core/src/pigrocrm/core/timetracking/repository.py` (`count_won_deals_to_invoice`)
+- Create: `packages/core/tests/test_dashboard_operational.py`
+
+**Interfaces:**
+- Consumes: `AnalyticsService.unbilled_backlog` (Task C1); `InvoiceRepository.{count_deals_invoiced_not_won,count_scadute_non_incassate}` (Task C3); `TimeEntryRepository.week_hours` (Task C5); `ActivityRepository.recent` (Task C2); `DocumentRepository.count_accepted_with_unwon_deal` (Task B7) — **not used here**, see below.
+- Produces:
+  - `Signal(BaseModel)` — `codice: str`, `etichetta: str`, `conteggio: int`, `collegamento: str | None`
+  - `TimeEntryRepository.count_won_deals_to_invoice(self) -> int`
+  - `OperationalDashboard(BaseModel)` — `calcolato_alle: datetime`, `settimana: WeekHours`, `arretrato: UnbilledBacklog`, `segnali: list[Signal]`, `attivita_recenti: list[ActivityRead]`
+  - `DashboardService.get_operational_dashboard(self, actor: Actor) -> OperationalDashboard`
+- Task C8 exposes it; Task C12 renders it.
+
+**This dashboard takes no period, and that is a decision.** §6: its figures are the current week and a backlog, which are the two things that make no sense in the past. It is also why the backlog cannot come from `period_pnl`, which is by definition of a period (§6.3).
+
+**Three signals here, one on the commercial dashboard.** §6.2 has four; "offerta accettata, deal non vinto" lives on the *commercial* one because it needs no invoices and therefore ships with the automation it cross-checks (§17). The three here are "fatturato ma non vinto", "vinto ma da fatturare" and "scaduto e non incassato". None is stored and none is a flag on a row — they are predicates. **A stored signal is §1's second source of truth in disguise.**
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# packages/core/tests/test_dashboard_operational.py
+"""§6. "What do I have to do now" -- no new economic total, and no period.
+
+The signals get the most tests because each one is a predicate that must not drift into a
+stored flag, and because each one's count is what a human acts on. The fourth signal of
+§6.2 is deliberately not here: it lives on the commercial dashboard, with the automation it
+cross-checks.
+"""
+
+from __future__ import annotations
+
+from datetime import date, timedelta
+from decimal import Decimal
+
+import pytest
+from sqlalchemy import Engine
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.dashboard.service import DashboardService
+from pigrocrm.core.db import current_week, session_factory, today_local
+from pigrocrm.core.db.base import uuid7
+
+READONLY = Actor(id=uuid7(), type="user", role="readonly")
+
+
+def _dashboard(engine: Engine):
+    with session_factory(engine)() as session:
+        return DashboardService(session).get_operational_dashboard(READONLY)
+
+
+def test_it_takes_no_period(db_engine: Engine) -> None:
+    """§6: the current week and a backlog are the two things that make no sense in the
+    past, so there is no period parameter to get wrong."""
+    import inspect
+
+    signature = inspect.signature(DashboardService.get_operational_dashboard)
+    assert list(signature.parameters) == ["self", "actor"]
+
+
+def test_the_week_is_the_current_one(db_engine: Engine) -> None:
+    result = _dashboard(db_engine)
+    assert (result.settimana.da, result.settimana.a) == current_week()
+    assert len(result.settimana.giorni) == 7
+
+
+def test_the_backlog_comes_from_analytics_verbatim(
+    db_engine: Engine, time_entry_factory: object
+) -> None:
+    """§6.3: the backlog is `AnalyticsService`'s, reported field for field. Its euro value
+    is a product of two columns, which `core/dashboard/` may not contain."""
+    from pigrocrm.core.analytics.service import AnalyticsService
+
+    result = _dashboard(db_engine)
+    with session_factory(db_engine)() as session:
+        direct = AnalyticsService(session).unbilled_backlog(READONLY)
+    assert result.arretrato == direct
+
+
+def test_the_signals_are_present_with_their_links(db_engine: Engine) -> None:
+    result = _dashboard(db_engine)
+    codes = [signal.codice for signal in result.segnali]
+    assert codes == [
+        "fatturato_non_vinto", "vinto_da_fatturare", "scaduto_non_incassato",
+    ]
+    # Every signal has a drill-through, because a count with no way to see the rows behind
+    # it is a number nobody can act on (§6.2, §7.2).
+    assert all(signal.collegamento for signal in result.segnali)
+
+
+def test_the_commercial_signal_is_not_on_this_dashboard(db_engine: Engine) -> None:
+    """§6.2 and §17: "offerta accettata, deal non vinto" is the automation's permanent
+    cross-check and lives on the commercial dashboard, which needs no invoices -- so it
+    shipped with the automation instead of a sub-plan later."""
+    result = _dashboard(db_engine)
+    assert "offerta_accettata_deal_non_vinto" not in [s.codice for s in result.segnali]
+
+
+def test_the_invoiced_but_not_won_signal_counts_deals(
+    db_engine: Engine, invoiced_open_deal: object
+) -> None:
+    """You do not invoice work you have not won: almost always the stage left behind."""
+    result = _dashboard(db_engine)
+    signal = next(s for s in result.segnali if s.codice == "fatturato_non_vinto")
+    assert signal.conteggio == 1
+
+
+def test_the_won_but_to_invoice_signal_counts_deals_with_unbilled_billable_hours(
+    db_engine: Engine, won_deal_with_unbilled_hours: object
+) -> None:
+    """The `da fatturare` state slice 4 §7.3 already defines, counted here rather than
+    redefined. A `COUNT` across a join, which §3 permits."""
+    result = _dashboard(db_engine)
+    signal = next(s for s in result.segnali if s.codice == "vinto_da_fatturare")
+    assert signal.conteggio == 1
+
+
+def test_the_overdue_signal_counts_and_sends_nothing(
+    db_engine: Engine, overdue_invoice: object
+) -> None:
+    """§6.2: it is the candidate list of slice 5 §7.1's reminders, counted. The count sends
+    nothing -- asserted by there being no send path reachable from here at all."""
+    result = _dashboard(db_engine)
+    signal = next(s for s in result.segnali if s.codice == "scaduto_non_incassato")
+    assert signal.conteggio == 1
+    assert "sollecito" not in result.model_dump_json()
+
+
+def test_no_signal_is_stored_anywhere(db_engine: Engine) -> None:
+    """§6.2's closing line: none of the four is memorised and none is a flag on a row. A
+    stored signal is §1's second source of truth in disguise. Asserted structurally: no
+    table in the metadata carries a column named after one."""
+    from pigrocrm.core.db import Base
+
+    columns = {
+        column.name
+        for table in Base.metadata.tables.values()
+        for column in table.columns
+    }
+    for forbidden in (
+        "fatturato_non_vinto", "vinto_da_fatturare", "scaduto_non_incassato",
+        "segnale", "segnali",
+    ):
+        assert forbidden not in columns, forbidden
+
+
+def test_the_recent_feed_is_capped_at_fifty(db_engine: Engine) -> None:
+    result = _dashboard(db_engine)
+    assert len(result.attivita_recenti) <= 50
+
+
+def test_no_new_economic_total_appears_on_this_page(db_engine: Engine) -> None:
+    """§6's own claim, checked by field name: this page adds no economic total. The only
+    money on it is `arretrato.valore_maturato`, which is `AnalyticsService`'s and is labelled
+    as accrued value, not revenue."""
+    result = _dashboard(db_engine)
+    fields = set(type(result).model_fields)
+    assert "ricavi" not in fields
+    assert "margine_lordo" not in fields
+    assert "fatturato" not in fields
+
+
+def test_a_readonly_actor_sees_it(db_engine: Engine) -> None:
+    assert _dashboard(db_engine).segnali
+```
+
+`invoiced_open_deal`, `won_deal_with_unbilled_hours` and `overdue_invoice` are fixtures this task adds to `packages/core/tests/conftest.py`, each committing its rows on its own session and deleting them in a `finally`, in the shape Task B10's `seeded` fixture establishes. They are fixtures rather than inline setup because Task C14's end-to-end test needs the same three states.
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `uv run pytest packages/core/tests/test_dashboard_operational.py -v`
+Expected: `AttributeError: 'DashboardService' object has no attribute 'get_operational_dashboard'`.
+
+- [ ] **Step 3: Add the missing aggregate**
+
+```python
+# packages/core/src/pigrocrm/core/timetracking/repository.py -- append, above any `list`.
+
+    def count_won_deals_to_invoice(self) -> int:
+        """§6.2's third signal: deals in a `won` stage with billable, unbilled hours.
+
+        The `da fatturare` state slice 4 §7.3 already defines, counted here rather than
+        redefined -- a second definition of "ready to invoice" is a second source of truth
+        about when to bill a customer.
+
+        Counts **deals**, not entries: the drill-through lists deals, so a deal with twelve
+        unbilled entries is one signal.
+        """
+        return (
+            self.session.scalar(
+                select(func.count(func.distinct(Deal.id)))
+                .select_from(TimeEntry)
+                .join(Deal, Deal.id == TimeEntry.deal_id)
+                .join(PipelineStage, PipelineStage.id == Deal.pipeline_stage_id)
+                .where(
+                    TimeEntry.deleted_at.is_(None),
+                    TimeEntry.fatturabile.is_(True),
+                    TimeEntry.invoice_line_id.is_(None),
+                    Deal.deleted_at.is_(None),
+                    PipelineStage.tipo == "won",
+                )
+            )
+            or 0
+        )
+```
+
+- [ ] **Step 4: Add the schemas**
+
+```python
+# packages/core/src/pigrocrm/core/dashboard/schemas.py -- append. Imports gain:
+#   from pigrocrm.core.activities.schemas import ActivityRead
+#   from pigrocrm.core.analytics.schemas import UnbilledBacklog
+
+class Signal(BaseModel):
+    """One of §6.2's inconsistency counts.
+
+    Not stored, not a flag on a row: a predicate, evaluated on request. A stored signal is
+    §1's second source of truth wearing a disguise, and it would need somewhere to be
+    recomputed from -- which is the materialised summary §7 refuses.
+
+    `collegamento` is mandatory in practice: a count with no way to see the rows behind it
+    is a number nobody can act on, and §7.2's guarantee is that the count and that list are
+    the same predicate.
+    """
+
+    codice: str
+    etichetta: str
+    conteggio: int
+    collegamento: str | None
+
+
+class OperationalDashboard(BaseModel):
+    """§6. "What do I have to do now."
+
+    **No period.** Its figures are the current week and a backlog, which are the two things
+    that make no sense in the past -- and it is why the backlog cannot come from
+    `period_pnl`, which is by definition of a period (§6.3).
+
+    **No new economic total.** The only money here is `arretrato.valore_maturato`, which
+    belongs to `AnalyticsService` and is labelled accrued value, never revenue.
+    """
+
+    calcolato_alle: datetime
+    settimana: WeekHours
+    arretrato: UnbilledBacklog
+    segnali: list[Signal]
+    attivita_recenti: list[ActivityRead]
+```
+
+- [ ] **Step 5: Add the service method**
+
+```python
+# packages/core/src/pigrocrm/core/dashboard/service.py -- one method. Imports gain:
+#   from pigrocrm.core.activities.repository import ActivityRepository
+#   from pigrocrm.core.activities.schemas import ActivityRead
+#   from pigrocrm.core.dashboard.schemas import OperationalDashboard, Signal
+#   from pigrocrm.core.db import current_week
+#   from pigrocrm.core.timetracking.repository import TimeEntryRepository
+# and __init__ gains:
+#   self.entries = TimeEntryRepository(session)
+#   self.activities = ActivityRepository(session)
+
+_RECENT_ACTIVITIES = 50
+
+    def get_operational_dashboard(self, actor: Actor) -> OperationalDashboard:
+        """§6. No period parameter, deliberately -- see `OperationalDashboard`.
+
+        The three signals are built here as `Signal` rows, which is composition and not
+        arithmetic: each `conteggio` is a `COUNT` its own repository produced, and the
+        labels and links are literals. `core/dashboard/` still contains no `*`, `/` or `-`,
+        and `test_dashboard_no_arithmetic.py` is what confirms it.
+
+        The fourth signal of §6.2 is not here: "offerta accettata, deal non vinto" is on the
+        commercial dashboard, because it needs no invoices and therefore shipped with the
+        automation it cross-checks (§17).
+        """
+        da, a = current_week()
+        calcolato_alle = self._open_snapshot()
+        return OperationalDashboard(
+            calcolato_alle=calcolato_alle,
+            settimana=self.entries.week_hours(da, a),
+            arretrato=self.analytics.unbilled_backlog(actor),
+            segnali=[
+                Signal(
+                    codice="fatturato_non_vinto",
+                    etichetta="Fatturato ma non vinto",
+                    conteggio=self.invoices.count_deals_invoiced_not_won(),
+                    collegamento="/app/deal/lista?fatturato_non_vinto=true",
+                ),
+                Signal(
+                    codice="vinto_da_fatturare",
+                    etichetta="Vinto ma da fatturare",
+                    conteggio=self.entries.count_won_deals_to_invoice(),
+                    collegamento="/app/deal/lista?da_fatturare=true",
+                ),
+                Signal(
+                    codice="scaduto_non_incassato",
+                    etichetta="Scaduto e non incassato",
+                    conteggio=self.invoices.count_scadute_non_incassate(),
+                    collegamento="/app/fatture?scadute=true",
+                ),
+            ],
+            attivita_recenti=[
+                ActivityRead.model_validate(row)
+                for row in self.activities.recent(_RECENT_ACTIVITIES)
+            ],
+        )
+```
+
+**The three `collegamento` values name query parameters that do not exist yet.** Criterion 2 binds every card *that has a link*, so each of these three filters must exist and must share its predicate with the count — exactly as Task B11 did for the commercial signal. Add them in this task, in the same shape:
+
+- `DealListQuery.fatturato_non_vinto: bool = False` → `DealRepository.list` joins `invoices` and `pipeline_stages` with the predicate extracted from `InvoiceRepository.count_deals_invoiced_not_won` into a module-level `_invoiced_not_won_predicate()`;
+- `DealListQuery.da_fatturare: bool = False` → the predicate extracted from `TimeEntryRepository.count_won_deals_to_invoice` into `_won_with_unbilled_hours_predicate()`;
+- `InvoiceListQuery.scadute: bool = False` → the predicate extracted from `InvoiceRepository.count_scadute_non_incassate` into `_overdue_predicate()`.
+
+Then extend Task B11's `test_dashboard_drillthrough.py` with one equality test per signal, in the shape it already uses, and add each parameter to its router.
+
+- [ ] **Step 6: Run, gate, commit**
+
+Run: `uv run pytest packages/core/tests/test_dashboard_operational.py packages/core/tests/test_dashboard_drillthrough.py packages/core/tests/test_dashboard_no_arithmetic.py -v`
+Expected: PASS.
+
+Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy packages/core/src apps/api/src apps/mcp/src`
+
+```bash
+git add packages/core/src/pigrocrm/core/dashboard/ \
+        packages/core/src/pigrocrm/core/timetracking/repository.py \
+        packages/core/src/pigrocrm/core/invoices/repository.py \
+        packages/core/src/pigrocrm/core/deals/ \
+        packages/core/src/pigrocrm/core/invoices/schemas.py \
+        apps/api/src/pigrocrm_api/routers/ \
+        packages/core/tests/test_dashboard_operational.py \
+        packages/core/tests/test_dashboard_drillthrough.py \
+        packages/core/tests/conftest.py
+git commit -m "feat(dashboard): operational dashboard with three predicate signals"
 ```
 
 ---
