@@ -5,7 +5,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { api, toProblem, unwrap } from '@/lib/api'
 import type { components } from '@/lib/api-types'
 import { queryKeys } from '@/lib/query'
-import type { EntityType } from '@/lib/schema'
+import type { TimelineEntityType } from '@/lib/schema'
 
 /**
  * The wire shape of one timeline row, taken directly from the generated OpenAPI
@@ -176,7 +176,7 @@ function ActivityDetail({ payload }: { payload: ActivityEntry['payload'] }) {
 // lib/api-types.ts, so a renamed path or parameter fails `tsc`, not silently at
 // runtime the way the two `as never` casts would have.
 const TIMELINE_FETCHERS: Record<
-  EntityType,
+  TimelineEntityType,
   (entityId: string, limit: number) => Promise<ActivityEntry[]>
 > = {
   customer: (entityId, limit) =>
@@ -206,7 +206,7 @@ const TIMELINE_FETCHERS: Record<
 }
 
 interface TimelineProps {
-  entityType: EntityType
+  entityType: TimelineEntityType
   entityId: string
   /**
    * The backend's own bound (routers/{customers,people,deals}.py's shared

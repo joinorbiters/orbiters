@@ -6,7 +6,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from pigrocrm.core.validation import SafeStr
 
-DocumentTipo = Literal["offerta", "contratto", "verbale", "documento"]
+# `fattura` is the PDF of an issued invoice, `fattura_xml` its FatturaPA file, and
+# `proforma` the PDF of a provisional one (which has no XML). Two `documents` rows per
+# issued invoice, not one: a `document_versions` chain is a linear history of one
+# logical file with one `hash_sha256` used for deduplication and integrity, so putting
+# two formats in it would make "version 3" ambiguous and the two hashes incomparable.
+DocumentTipo = Literal[
+    "offerta", "contratto", "verbale", "documento", "fattura", "fattura_xml", "proforma"
+]
 OfferState = Literal["bozza", "inviata", "accettata", "rifiutata"]
 
 TITOLO_MAX_LENGTH = 200
@@ -16,6 +23,7 @@ TITOLO_MAX_LENGTH = 200
 # `text/html` there is a stored XSS with the CRM's own origin behind it.
 ALLOWED_CONTENT_TYPES: dict[str, str] = {
     "application/pdf": ".pdf",
+    "application/xml": ".xml",
     "text/markdown": ".md",
     "text/plain": ".txt",
     "image/png": ".png",

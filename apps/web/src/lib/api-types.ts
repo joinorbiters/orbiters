@@ -1185,7 +1185,7 @@ export interface components {
              * @default documento
              * @enum {string}
              */
-            tipo: "offerta" | "contratto" | "verbale" | "documento";
+            tipo: "offerta" | "contratto" | "verbale" | "documento" | "fattura" | "fattura_xml" | "proforma";
             /** Titolo */
             titolo: string;
             /** Stato */
@@ -1433,7 +1433,7 @@ export interface components {
              * Entity Type
              * @enum {string}
              */
-            entity_type: "customer" | "person" | "deal" | "document";
+            entity_type: "customer" | "person" | "deal" | "document" | "invoice";
             /** Key */
             key: string;
             /** Label */
@@ -1470,7 +1470,7 @@ export interface components {
              * Entity Type
              * @enum {string}
              */
-            entity_type: "customer" | "person" | "deal" | "document";
+            entity_type: "customer" | "person" | "deal" | "document" | "invoice";
             /** Key */
             key: string;
             /** Label */
@@ -1730,7 +1730,7 @@ export interface components {
              * @default offerta
              * @enum {string}
              */
-            tipo: "offerta" | "contratto" | "verbale" | "documento";
+            tipo: "offerta" | "contratto" | "verbale" | "documento" | "fattura" | "fattura_xml" | "proforma";
             /**
              * Corpo Markdown
              * @default
@@ -1812,7 +1812,7 @@ export interface components {
             /** Nome */
             nome?: string | null;
             /** Tipo */
-            tipo?: ("offerta" | "contratto" | "verbale" | "documento") | null;
+            tipo?: ("offerta" | "contratto" | "verbale" | "documento" | "fattura" | "fattura_xml" | "proforma") | null;
             /** Corpo Markdown */
             corpo_markdown?: string | null;
             /** Variabili Dichiarate */
@@ -5089,7 +5089,7 @@ export interface operations {
     list_fields_api_field_definitions_get: {
         parameters: {
             query: {
-                entity_type: "customer" | "person" | "deal" | "document";
+                entity_type: "customer" | "person" | "deal" | "document" | "invoice";
                 include_archived?: boolean;
             };
             header?: never;
@@ -7004,7 +7004,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                entity_type: "customer" | "person" | "deal" | "document";
+                entity_type: "customer" | "person" | "deal" | "document" | "invoice";
             };
             cookie?: never;
         };
@@ -7123,7 +7123,7 @@ export interface operations {
             query?: {
                 customer_id?: string | null;
                 deal_id?: string | null;
-                tipo?: ("offerta" | "contratto" | "verbale" | "documento") | null;
+                tipo?: ("offerta" | "contratto" | "verbale" | "documento" | "fattura" | "fattura_xml" | "proforma") | null;
                 stato?: ("bozza" | "inviata" | "accettata" | "rifiutata") | null;
                 limit?: number;
                 cursor?: string | null;
@@ -8693,7 +8693,7 @@ export interface operations {
         parameters: {
             query?: {
                 search?: string | null;
-                tipo?: ("offerta" | "contratto" | "verbale" | "documento") | null;
+                tipo?: ("offerta" | "contratto" | "verbale" | "documento" | "fattura" | "fattura_xml" | "proforma") | null;
                 include_inactive?: boolean;
                 limit?: number;
                 cursor?: string | null;

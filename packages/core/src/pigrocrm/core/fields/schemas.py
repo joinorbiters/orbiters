@@ -14,7 +14,7 @@ from pigrocrm.core.validation import SafeStr
 # apps/web/src/lib/schema.ts -- rather than a schema or migration change. No table in
 # this module changes shape when an entity type is added: the custom-field machinery
 # stays the same regardless of how many entity types exist.
-EntityType = Literal["customer", "person", "deal", "document"]
+EntityType = Literal["customer", "person", "deal", "document", "invoice"]
 
 _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
 

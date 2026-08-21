@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import type { EntityType } from '@/lib/schema'
+import type { TimelineEntityType } from '@/lib/schema'
 import { Timeline } from './Timeline'
 
 interface EntityDetailLayoutProps {
@@ -16,7 +16,7 @@ interface EntityDetailLayoutProps {
    * user to look for something that does not exist for this entity.
    */
   documents?: ReactNode
-  entityType: EntityType
+  entityType: TimelineEntityType
   entityId: string
   /**
    * Forwarded to `Timeline` untouched -- see that component's own docstring for
