@@ -1,0 +1,329 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { api, toProblem, unwrap } from '@/lib/api'
+import type { components } from '@/lib/api-types'
+import { queryKeys } from '@/lib/query'
+
+export type Invoice = components['schemas']['InvoiceRead']
+export type InvoiceLine = components['schemas']['InvoiceLineRead']
+export type InvoiceLineInput = components['schemas']['InvoiceLineIn']
+export type InvoicePage = components['schemas']['InvoicePage']
+export type InvoiceArtifact = components['schemas']['InvoiceArtifact']
+export type FiscalProfile = components['schemas']['FiscalProfileRead']
+export type Activity = components['schemas']['ActivityRead']
+
+export type InvoiceTipo = 'fattura' | 'proforma'
+export type InvoiceStato = 'bozza' | 'emessa' | 'annullata' | 'confermata' | 'consumata'
+export type StatoPagamento = 'da_incassare' | 'incassato'
+
+/**
+ * A customer or a deal, following the same discriminated shape
+ * `features/documents/queries.ts`'s `DocumentOwner` already established: there is no
+ * "empty id" spelling to get wrong (B1), and a call site cannot ask for both.
+ */
+export type InvoiceOwner = { customerId: string } | { dealId: string }
+
+export interface InvoiceFilters {
+  customer_id?: string
+  deal_id?: string
+  tipo?: InvoiceTipo
+  stato?: InvoiceStato
+  anno?: number
+  stato_pagamento?: StatoPagamento
+  limit?: number
+  cursor?: string
+}
+
+export const INVOICE_TYPE_LABELS: Record<InvoiceTipo, string> = {
+  fattura: 'Fattura',
+  proforma: 'Proforma',
+}
+
+export const INVOICE_STATE_LABELS: Record<InvoiceStato, string> = {
+  bozza: 'Bozza',
+  emessa: 'Emessa',
+  annullata: 'Annullata',
+  confermata: 'Confermata',
+  consumata: 'Consumata',
+}
+
+export const PAYMENT_STATE_LABELS: Record<StatoPagamento, string> = {
+  da_incassare: 'Da incassare',
+  incassato: 'Incassato',
+}
+
+/**
+ * Which buttons a row can offer, mirroring `STATO_TRANSITIONS` in
+ * `packages/core/src/pigrocrm/core/invoices/schemas.py`.
+ *
+ * A mirror for rendering only: the server validates every transition and its 409
+ * message is what gets shown. Same convention as `OFFER_TRANSITIONS` in
+ * `features/documents/queries.ts`.
+ */
+export const INVOICE_TRANSITIONS: Record<InvoiceStato, InvoiceStato[]> = {
+  bozza: ['emessa', 'confermata'],
+  confermata: ['consumata', 'bozza'],
+  emessa: ['annullata'],
+  annullata: [],
+  consumata: [],
+}
+
+function ownerQuery(owner: InvoiceOwner): { customer_id?: string; deal_id?: string } {
+  return 'customerId' in owner ? { customer_id: owner.customerId } : { deal_id: owner.dealId }
+}
+
+export function useInvoices(filters: InvoiceFilters = {}) {
+  return useQuery({
+    queryKey: queryKeys.invoices(filters),
+    queryFn: () => unwrap(api.GET('/api/invoices', { params: { query: filters } })),
+  })
+}
+
+/**
+ * The invoices belonging to a customer or a deal, for the "Fatture" tab on either
+ * entity's detail page. A thin wrapper over `useInvoices` so both call sites share
+ * the same query key shape and cache entry as the plain list page.
+ */
+export function useInvoicesForOwner(owner: InvoiceOwner) {
+  return useInvoices(ownerQuery(owner))
+}
+
+export function useInvoice(invoiceId: string) {
+  return useQuery({
+    // B1: an empty id must not produce a request at all. `useCustomer('')` once
+    // redirected to the list endpoint with an absolute URL, bypassing the Vite proxy.
+    enabled: invoiceId !== '',
+    queryKey: queryKeys.invoice(invoiceId),
+    queryFn: () =>
+      unwrap(
+        api.GET('/api/invoices/{invoice_id}', { params: { path: { invoice_id: invoiceId } } }),
+      ),
+  })
+}
+
+export function useInvoiceLines(invoiceId: string) {
+  return useQuery({
+    enabled: invoiceId !== '',
+    queryKey: queryKeys.invoiceLines(invoiceId),
+    queryFn: () =>
+      unwrap(
+        api.GET('/api/invoices/{invoice_id}/lines', {
+          params: { path: { invoice_id: invoiceId } },
+        }),
+      ),
+  })
+}
+
+export function useInvoiceTimeline(invoiceId: string) {
+  return useQuery({
+    enabled: invoiceId !== '',
+    queryKey: queryKeys.timeline('invoice', invoiceId),
+    queryFn: () =>
+      unwrap(
+        api.GET('/api/invoices/{invoice_id}/timeline', {
+          params: { path: { invoice_id: invoiceId } },
+        }),
+      ),
+  })
+}
+
+export function useFiscalProfile() {
+  return useQuery({
+    queryKey: queryKeys.fiscalProfile,
+    queryFn: async (): Promise<FiscalProfile | null> => {
+      // A 404 here means "not configured yet", which is a legitimate state and not an
+      // error -- the same treatment `useEmitter` in features/settings/queries.ts gives
+      // its own singleton row.
+      const { data, error, response } = await api.GET('/api/fiscal-profile')
+      if (response.status === 404) return null
+      if (error !== undefined) throw toProblem(error, response.status)
+      return data ?? null
+    },
+  })
+}
+
+function useInvoiceInvalidation() {
+  const queryClient = useQueryClient()
+  return (invoiceId?: string) => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.invoices() })
+    if (invoiceId !== undefined) {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.invoice(invoiceId) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.invoiceLines(invoiceId) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.timeline('invoice', invoiceId) })
+    }
+  }
+}
+
+export function useCreateInvoice() {
+  const invalidate = useInvoiceInvalidation()
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      unwrap(api.POST('/api/invoices', { body: body as never })),
+    onSuccess: (invoice) => invalidate(invoice.id),
+  })
+}
+
+export function useUpdateInvoice(invoiceId: string) {
+  const invalidate = useInvoiceInvalidation()
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      unwrap(
+        api.PATCH('/api/invoices/{invoice_id}', {
+          params: { path: { invoice_id: invoiceId } },
+          body: body as never,
+        }),
+      ),
+    onSuccess: () => invalidate(invoiceId),
+  })
+}
+
+export function useReplaceLines(invoiceId: string) {
+  const invalidate = useInvoiceInvalidation()
+  return useMutation({
+    mutationFn: (righe: InvoiceLineInput[]) =>
+      unwrap(
+        api.PUT('/api/invoices/{invoice_id}/lines', {
+          params: { path: { invoice_id: invoiceId } },
+          body: { righe },
+        }),
+      ),
+    onSuccess: () => invalidate(invoiceId),
+  })
+}
+
+export function useConfirmProforma(invoiceId: string) {
+  const invalidate = useInvoiceInvalidation()
+  return useMutation({
+    mutationFn: () =>
+      unwrap(
+        api.POST('/api/invoices/{invoice_id}/confirm', {
+          params: { path: { invoice_id: invoiceId } },
+        }),
+      ),
+    onSuccess: () => invalidate(invoiceId),
+  })
+}
+
+export function useIssueInvoice(invoiceId: string) {
+  const invalidate = useInvoiceInvalidation()
+  return useMutation({
+    mutationFn: (body: { data_emissione?: string | null }) =>
+      unwrap(
+        api.POST('/api/invoices/{invoice_id}/issue', {
+          params: { path: { invoice_id: invoiceId } },
+          body,
+        }),
+      ),
+    onSuccess: (issued) => {
+      // The issued row may be a *different* row when the source was a proforma (which
+      // becomes `consumata` and the new fattura is a separate row), so both ids are
+      // invalidated.
+      invalidate(invoiceId)
+      invalidate(issued.id)
+    },
+  })
+}
+
+export function useAnnulInvoice(invoiceId: string) {
+  const invalidate = useInvoiceInvalidation()
+  return useMutation({
+    mutationFn: (motivo: string) =>
+      unwrap(
+        api.POST('/api/invoices/{invoice_id}/annul', {
+          params: { path: { invoice_id: invoiceId } },
+          body: { motivo },
+        }),
+      ),
+    onSuccess: () => invalidate(invoiceId),
+  })
+}
+
+export function useMarkTransmitted(invoiceId: string) {
+  const invalidate = useInvoiceInvalidation()
+  return useMutation({
+    mutationFn: (data: string) =>
+      unwrap(
+        api.POST('/api/invoices/{invoice_id}/transmitted', {
+          params: { path: { invoice_id: invoiceId } },
+          body: { data },
+        }),
+      ),
+    onSuccess: () => invalidate(invoiceId),
+  })
+}
+
+export function useSetPaymentState(invoiceId: string) {
+  const invalidate = useInvoiceInvalidation()
+  return useMutation({
+    mutationFn: (body: { stato_pagamento: StatoPagamento; data_incasso?: string | null }) =>
+      unwrap(
+        api.PATCH('/api/invoices/{invoice_id}/payment', {
+          params: { path: { invoice_id: invoiceId } },
+          body,
+        }),
+      ),
+    onSuccess: () => invalidate(invoiceId),
+  })
+}
+
+export function useProduceArtifacts(invoiceId: string) {
+  const invalidate = useInvoiceInvalidation()
+  return useMutation({
+    mutationFn: () =>
+      unwrap(
+        api.POST('/api/invoices/{invoice_id}/artifacts', {
+          params: { path: { invoice_id: invoiceId } },
+        }),
+      ),
+    onSuccess: () => invalidate(invoiceId),
+  })
+}
+
+export function useDeleteInvoice() {
+  const invalidate = useInvoiceInvalidation()
+  return useMutation({
+    mutationFn: (invoiceId: string) =>
+      unwrap(
+        api.DELETE('/api/invoices/{invoice_id}', {
+          params: { path: { invoice_id: invoiceId } },
+        }),
+      ),
+    onSuccess: () => invalidate(),
+  })
+}
+
+export function useSaveFiscalProfile() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      unwrap(api.PUT('/api/fiscal-profile', { body: body as never })),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.fiscalProfile })
+    },
+  })
+}
+
+/**
+ * A blob download, the one documented exception to "no `fetch` inside components"
+ * already established by `downloadDocument` in `features/documents/queries.ts`:
+ * `openapi-fetch` cannot express a binary response, and the server's own
+ * `Content-Disposition` is what names the file -- which for the XML is the SdI's
+ * convention and matters to whoever receives it.
+ */
+export async function downloadInvoiceArtifact(
+  invoiceId: string,
+  kind: 'pdf' | 'xml',
+): Promise<void> {
+  const response = await fetch(`/api/invoices/${invoiceId}/${kind}`, { credentials: 'include' })
+  if (!response.ok) {
+    const payload: unknown = await response.json().catch(() => null)
+    throw toProblem(payload, response.status)
+  }
+  const url = URL.createObjectURL(await response.blob())
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = ''
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
+}

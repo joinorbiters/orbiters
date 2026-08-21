@@ -46,4 +46,8 @@ export const queryKeys = {
   templates: () => ['templates'] as const,
   templateDescription: (id: string) => ['template-description', id] as const,
   emitter: ['emitter'] as const,
+  invoices: (params?: unknown) => ['invoices', params ?? {}] as const,
+  invoice: (id: string) => ['invoice', id] as const,
+  invoiceLines: (id: string) => ['invoice-lines', id] as const,
+  fiscalProfile: ['fiscal-profile'] as const,
 }
