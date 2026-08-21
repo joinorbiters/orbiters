@@ -31,3 +31,9 @@ def test_a_new_custom_field_shows_up_immediately(db_session: Session) -> None:
     )
     described = describe_entity(db_session, "deal")
     assert [field["key"] for field in described["custom_fields"]] == ["rischio"]
+
+
+def test_describing_an_invoice_is_a_supported_entity_type() -> None:
+    from pigrocrm.core.schema_registry import ENTITY_TYPES
+
+    assert "invoice" in ENTITY_TYPES

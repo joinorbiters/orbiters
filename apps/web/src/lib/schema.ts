@@ -40,7 +40,19 @@ export interface FieldDefinition {
   options: string[]
 }
 
-export type EntityType = 'customer' | 'person' | 'deal' | 'document'
+export type EntityType = 'customer' | 'person' | 'deal' | 'document' | 'invoice'
+
+/**
+ * The subset of `EntityType` that has a real `GET /api/{plural}/{id}/timeline`
+ * route today -- what `Timeline.tsx`'s `TIMELINE_FETCHERS` and
+ * `EntityDetailLayout`'s `entityType` prop accept. `invoice` is a declared
+ * `EntityType` (so it can carry custom fields and appear in `/api/schema/{entity_type}`)
+ * before any invoice router exists, and the two sets are not always the same one:
+ * conflating them would either make this alias silently exclude a real, working
+ * route, or force this file to invent an invoice timeline endpoint that is not
+ * there. Widen this alongside adding a real timeline endpoint, not before.
+ */
+export type TimelineEntityType = Exclude<EntityType, 'invoice'>
 
 export interface EntitySchema {
   entity_type: string
