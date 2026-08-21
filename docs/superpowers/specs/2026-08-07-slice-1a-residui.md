@@ -196,3 +196,44 @@ servizi, e scope più scadenza più audit sui PAT.
 
 Il terzo è il più invasivo perché cambia il contratto di aggiornamento di tutti i servizi, ed è la
 ragione per cui A14 andava affrontato quando era ancora una scomodità.
+
+---
+
+## R14 — `pipeline_stages` non ha un vincolo di unicità su `tipo`
+
+**Trovato scrivendo la spec dello slice 6, 2026-08-21.** Due stati `won` sono legali, e altrettanto
+due `lost`. Nessuno dei due documenti sui residui lo diceva: emerge qui per la prima volta, perché è
+la prima funzionalità che deve chiedersi *quale* sia lo stato vinto.
+
+Non è un errore di battitura: è che nulla ha mai avuto bisogno di risolvere quella domanda. La
+spec dello slice 6 la aggira ordinando per `code`, poi per `tipo`, e rifiutando con un messaggio
+esplicito se restano ambigui — senza migrazione, perché rinominare uno stato è un diritto
+dell'utente e un vincolo aggiunto ora potrebbe rifiutare dati già presenti.
+
+**Da decidere:** un indice unico parziale su `tipo` dove `tipo IN ('won','lost')`, con una migrazione
+che sappia cosa fare se un'installazione ne ha già due.
+
+---
+
+## R15 — Il timeline registra i cambi di stato con i NOMI degli stati, non con gli id
+
+`DealService.move_stage` scrive `{"from": <nome>, "to": <nome>}`. I nomi sono rinominabili
+dall'utente, e il payload del timeline è **sanificato, non validato**, quindi qualunque metrica
+storica del tipo «quando è stato vinto questo deal» letta da lì è inaffidabile per costruzione.
+
+Lo slice 6 lo risolve aggiungendo `deals.chiuso_il` come dato autoritativo, e **non** fa il backfill
+dal timeline per i deal — a differenza di `documents.stato_dal`, che può farlo perché il timeline
+delle offerte registra codici e non nomi.
+
+**Da decidere:** arricchire il payload con l'id e il `code` dello stage, in aggiunta al nome. Non
+renderebbe il timeline autoritativo — resta sanificato — ma smetterebbe di essere l'unica traccia di
+una cosa che nessuno può ricostruire.
+
+---
+
+## Ancora aperto: la promessa dell'header dello slice 1
+
+La spec dello slice 1 (§10.1) promette «header con breadcrumb e ricerca». `AppShell.tsx` non ha
+alcun header. La ricerca globale dello slice 6 non ha dove vivere, quindi l'header viene costruito
+lì — deciso il 2026-08-21, ed è la collocazione giusta: è la prima funzionalità che ne ha bisogno
+per esistere.
