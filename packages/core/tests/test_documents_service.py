@@ -283,3 +283,34 @@ def test_a_storage_failure_does_not_burn_a_version_number(
     version = service.add_version(document.id, PDF, "application/pdf", ADMIN)
     assert version.numero == 1
     assert service.get(document.id, ADMIN).versione_corrente == 1
+
+
+def test_a_storage_prefix_overrides_the_customer_folder(
+    service: DocumentService, customer: Customer
+) -> None:
+    """Slice 3 needs `fatture/{anno}/{numero}/v1.xml`, not the customer-slug folder:
+    a file pulled out of context has to stay identifiable as a fiscal artefact, which
+    is one of the four independent mechanisms keeping a proforma from being mistaken
+    for an invoice. The default path is untouched -- the parameter is keyword-only and
+    defaults to None, so every existing caller behaves exactly as before."""
+    document = service.create(
+        DocumentCreate(customer_id=customer.id, tipo="fattura", titolo="Fattura 2026/1"), ADMIN
+    )
+    version = service.add_version(
+        document.id,
+        b"<?xml version='1.0'?><a/>",
+        "application/xml",
+        ADMIN,
+        storage_prefix="fatture/2026/1",
+    )
+    assert version.storage_key == "fatture/2026/1/v1.xml"
+
+
+def test_without_a_prefix_the_customer_folder_is_still_used(
+    service: DocumentService, customer: Customer
+) -> None:
+    document = service.create(
+        DocumentCreate(customer_id=customer.id, tipo="documento", titolo="Nota"), ADMIN
+    )
+    version = service.add_version(document.id, b"ciao", "text/plain", ADMIN)
+    assert version.storage_key.endswith(f"/{document.id}/v1.txt")

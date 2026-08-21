@@ -109,8 +109,11 @@ class DocumentService:
         deal = self.session.get(Deal, document.deal_id) if document.deal_id else None
         return self.session.get(Customer, deal.customer_id) if deal else None
 
-    def storage_key_for(self, document: Document, numero: int, content_type: str) -> str:
-        """`{cliente-slug}-{id[:8]}/{document_id}/v{numero}{ext}`.
+    def storage_key_for(
+        self, document: Document, numero: int, content_type: str, *, prefix: str | None = None
+    ) -> str:
+        """`{cliente-slug}-{id[:8]}/{document_id}/v{numero}{ext}`, or
+        `{prefix}/v{numero}{ext}` when a caller supplies its own prefix.
 
         The customer-id fragment is what keeps the folder stable when a customer is
         renamed -- the slug alone would send the next version into a different folder
@@ -121,7 +124,18 @@ class DocumentService:
         through `storage.put`'s own `validate_storage_key` gate before anything
         touches a filesystem -- this method's job is to produce a *sensible* key, not
         to be the security boundary itself.
+
+        The `prefix` override exists for the fiscal artefacts of slice 3, which need
+        `fatture/{anno}/{numero}/` and `proforma/{id}/` rather than a customer folder:
+        the bytes live under a prefix that keeps a file identifiable when it is pulled
+        out of its context, which is one of the four independent mechanisms that stop a
+        proforma from being read as an invoice. Keyword-only and defaulting to `None`,
+        so every existing caller is unaffected; the value still passes through
+        `storage.put`'s own `validate_storage_key` gate, which is what actually refuses
+        an unsafe key -- this method's job is to produce a sensible one.
         """
+        if prefix is not None:
+            return f"{prefix}/v{numero}{ALLOWED_CONTENT_TYPES[content_type]}"
         customer = self._customer_of(document)
         folder = (
             f"{slugify_folder(customer.ragione_sociale)}-{str(customer.id)[:_CUSTOMER_ID_FRAGMENT]}"
@@ -243,6 +257,7 @@ class DocumentService:
         sorgente_markdown: str | None = None,
         template_id: UUID | None = None,
         variabili: dict[str, Any] | None = None,
+        storage_prefix: str | None = None,
     ) -> DocumentVersionRead:
         """Every change makes a version; nothing is ever overwritten (spec 4.2).
 
@@ -302,7 +317,7 @@ class DocumentService:
             sorgente_markdown=sorgente_markdown,
             template_id=template_id,
             variabili=variabili,
-            storage_key=self.storage_key_for(document, numero, content_type),
+            storage_key=self.storage_key_for(document, numero, content_type, prefix=storage_prefix),
             content_type=content_type,
             dimensione=len(data),
             hash_sha256=hashlib.sha256(data).hexdigest(),

@@ -5,6 +5,7 @@ proforma are ordinary mutable rows; the number, the freezing and the artefacts b
 to `issue`, `annul` and the artefact methods added by the following tasks.
 """
 
+import hashlib
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -20,6 +21,9 @@ from pigrocrm.core.clock import oggi_in_italia
 from pigrocrm.core.config import Settings, get_settings
 from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.documents.models import Document
+from pigrocrm.core.documents.schemas import DocumentCreate
+from pigrocrm.core.documents.service import DocumentService
 from pigrocrm.core.emitter.service import EmitterProfileService
 from pigrocrm.core.errors import Conflict, ImmutableField, NotFound, ValidationFailed
 from pigrocrm.core.fields.schemas import EntityType
@@ -28,16 +32,30 @@ from pigrocrm.core.fields.validator import validate_custom_fields
 from pigrocrm.core.fiscal.regime import RegimeStrategy, resolve_regime
 from pigrocrm.core.fiscal.schemas import FiscalSnapshot
 from pigrocrm.core.fiscal.service import FiscalProfileService
-from pigrocrm.core.invoices.fatturapa import check_party_exportable, check_recipient_routing
+from pigrocrm.core.invoices.fatturapa import (
+    FatturaPAExporter,
+    check_party_exportable,
+    check_recipient_routing,
+    normalise_fiscal_id,
+)
 from pigrocrm.core.invoices.models import Invoice, InvoiceLine
-from pigrocrm.core.invoices.naming import proforma_riferimento
+from pigrocrm.core.invoices.naming import (
+    invoice_storage_prefix,
+    numero_completo,
+    proforma_riferimento,
+    proforma_storage_prefix,
+    sdi_filename,
+)
 from pigrocrm.core.invoices.repository import InvoiceRepository
 from pigrocrm.core.invoices.schemas import (
     DIVISA,
     SNAPSHOT_VERSIONE,
     TIPO_DOCUMENTO,
+    ArtifactKind,
     InvoiceAnnul,
+    InvoiceArtifact,
     InvoiceCreate,
+    InvoiceForExport,
     InvoiceIssue,
     InvoiceLineIn,
     InvoiceLineRead,
@@ -75,6 +93,7 @@ class InvoiceService:
         self.activities = ActivityService(session)
         self.fiscal = FiscalProfileService(session)
         self.emitter = EmitterProfileService(session)
+        self.documents = DocumentService(session, storage, self.settings)
 
     # ---- shared helpers -------------------------------------------------------
 
@@ -780,6 +799,261 @@ class InvoiceService:
         )
         self.session.commit()
         return InvoiceRead.model_validate(invoice)
+
+    def _for_export(self, invoice: Invoice) -> InvoiceForExport:
+        """The frozen view the exporter and the PDF read. Never the live profiles.
+
+        `InvoiceSnapshot.model_validate` on the stored JSONB is deliberate: the model
+        is `extra="forbid"` and `versione` has no default, so a payload written by a
+        different version of this code is a loud failure rather than one silently read
+        with a field dropped. This is a fiscal document; guessing is the failure mode
+        the version column exists to prevent.
+        """
+        if invoice.snapshot is None or invoice.anno is None or invoice.numero is None:
+            raise Conflict(
+                ENTITY,
+                "un documento senza numero e senza congelamento non si esporta",
+                stato=invoice.stato,
+            )
+        if invoice.data_emissione is None:  # pragma: no cover - the CHECKs make this unreachable
+            raise Conflict(ENTITY, "manca la data di emissione", stato=invoice.stato)
+        return InvoiceForExport(
+            anno=invoice.anno,
+            numero=invoice.numero,
+            data_emissione=invoice.data_emissione,
+            data_scadenza=invoice.data_scadenza,
+            tipo_documento=invoice.tipo_documento,
+            divisa=invoice.divisa,
+            imponibile=invoice.imponibile,
+            imposta=invoice.imposta,
+            bollo=invoice.bollo,
+            totale=invoice.totale,
+            causale=invoice.causale,
+            snapshot=InvoiceSnapshot.model_validate(invoice.snapshot),
+            righe=tuple(InvoiceLineRead.model_validate(r) for r in self.repo.lines(invoice.id)),
+        )
+
+    def _artifact_document(
+        self, invoice: Invoice, tipo: str, titolo: str, actor: Actor
+    ) -> Document:
+        """The `documents` row for one artefact stream, created on first use.
+
+        Two rows per issued invoice, not one (spec 8.4): a `document_versions` chain is
+        a linear history of *one* logical file with one `hash_sha256` used for
+        deduplication and integrity, so mixing the PDF and the XML would make
+        "version 3" ambiguous and the two hashes incomparable. Two streams, two hashes,
+        two integrity checks -- and re-rendering the PDF never touches the XML.
+
+        `documents.stato` is left `NULL` for all three invoice artefact types: the
+        authoritative state is `invoices.stato`, and duplicating a state machine across
+        two tables produces two truths.
+        """
+        existing_id = invoice.xml_document_id if tipo == "fattura_xml" else invoice.pdf_document_id
+        if existing_id is not None:
+            document = self.documents.repo.get(existing_id)
+            if document is not None:
+                return document
+        created = self.documents.create(
+            DocumentCreate(customer_id=invoice.customer_id, tipo=tipo, titolo=titolo),  # type: ignore[arg-type]
+            actor,
+        )
+        document = self.documents.repo.get(created.id)
+        if document is None:  # pragma: no cover - just created in this transaction
+            raise NotFound("document", created.id)
+        if tipo == "fattura_xml":
+            invoice.xml_document_id = document.id
+        else:
+            invoice.pdf_document_id = document.id
+        return document
+
+    def _artifact_prefix(self, invoice: Invoice) -> str:
+        if invoice.tipo == "proforma":
+            return proforma_storage_prefix(invoice.id)
+        if invoice.anno is None or invoice.numero is None:  # pragma: no cover
+            raise Conflict(ENTITY, "un documento senza numero non ha un prefisso fiscale")
+        return invoice_storage_prefix(invoice.anno, invoice.numero)
+
+    def _xml_filename(self, export: InvoiceForExport) -> str:
+        """`IT{cf_o_piva}_{progressivo}.xml`, from the **frozen** emitter identity.
+
+        Fiscal code first, then VAT number: the same order `IdTrasmittente` uses, and
+        for the same reason -- the SdI accepts either, and this is what the working
+        generator sent. Reading the snapshot rather than the live profile is what keeps
+        the name stable after the issuer edits their own data.
+        """
+        emittente = export.snapshot.emittente
+        id_fiscale = normalise_fiscal_id(emittente.codice_fiscale) or normalise_fiscal_id(
+            emittente.partita_iva
+        )
+        if id_fiscale is None:
+            raise ValidationFailed(
+                "emitter_profile",
+                "codice_fiscale",
+                "il nome del file XML richiede un codice fiscale o una partita IVA "
+                "validi dell'emittente",
+                expected="11 cifre oppure 16 caratteri",
+            )
+        return sdi_filename(id_fiscale, export.anno, export.numero)
+
+    def _store_artifact(
+        self,
+        invoice: Invoice,
+        *,
+        kind: ArtifactKind,
+        tipo: str,
+        titolo: str,
+        content_type: str,
+        filename: str,
+        data: bytes,
+        expected_hash: str | None,
+        actor: Actor,
+    ) -> InvoiceArtifact:
+        """Write the bytes, or prove the bytes already there are the same bytes.
+
+        Three outcomes, and they are spec 4's three:
+
+        * no previous hash -- the first successful production, the only moment with
+          nothing to compare against. Write version 1 and record the hash;
+        * the hash matches and the stored bytes still hash to it -- nothing to do.
+          Return the existing version rather than writing an identical one, so a
+          download does not grow the history;
+        * the hash matches but the bytes are gone or corrupt -- a **repair**: write a
+          new version with identical content. Spec 4 allows exactly this and calls it a
+          repair, not a modification;
+        * the hash differs -- an error to report, never a version to save.
+        """
+        digest = hashlib.sha256(data).hexdigest()
+        if expected_hash is not None and digest != expected_hash:
+            raise Conflict(
+                ENTITY,
+                f"il {kind} rigenerato non coincide con quello originale: e' una "
+                "divergenza da segnalare, non una nuova versione da salvare",
+                atteso=expected_hash,
+                ottenuto=digest,
+                campo="xml_hash_sha256" if kind == "xml" else "hash_sha256",
+            )
+
+        document = self._artifact_document(invoice, tipo, titolo, actor)
+        current = (
+            self.documents.repo.version(document.id, document.versione_corrente)
+            if document.versione_corrente
+            else None
+        )
+        if current is not None and current.hash_sha256 == digest:
+            try:
+                stored_ok = (
+                    hashlib.sha256(self.storage.get(current.storage_key)).hexdigest() == digest
+                )
+            except Exception:
+                stored_ok = False
+            if stored_ok:
+                return InvoiceArtifact(
+                    kind=kind,
+                    document_id=document.id,
+                    version_numero=current.numero,
+                    filename=filename,
+                    content_type=content_type,
+                    hash_sha256=digest,
+                )
+
+        version = self.documents.add_version(
+            document.id,
+            data,
+            content_type,
+            actor,
+            storage_prefix=self._artifact_prefix(invoice),
+        )
+        return InvoiceArtifact(
+            kind=kind,
+            document_id=document.id,
+            version_numero=version.numero,
+            filename=filename,
+            content_type=content_type,
+            hash_sha256=digest,
+        )
+
+    def export_xml(self, invoice_id: UUID, actor: Actor) -> InvoiceArtifact:
+        """Produce -- or verify -- the FatturaPA file.
+
+        Refuses a proforma and a draft on the basis of the row's own **state**, never a
+        flag the caller passed: that is the second of the four independent mechanisms
+        that stop a proforma from being mistaken for an invoice, and the only one that
+        cannot be bypassed by a caller who believes otherwise.
+
+        `xml_hash_sha256` is written by the **first** successful export -- the one
+        moment with no previous value to compare against -- and from then on every
+        export compares and does not rewrite. Until then the column is `NULL` and the
+        export is freely repeatable, which is exactly what makes the out-of-transaction
+        render of spec 3 harmless.
+        """
+        actor.require_write("export_invoice_xml")
+        invoice = self._require(invoice_id)
+        if invoice.tipo != "fattura":
+            raise Conflict(
+                ENTITY,
+                "una proforma non produce un file FatturaPA: non e' un documento fiscale",
+                tipo=invoice.tipo,
+                stato=invoice.stato,
+            )
+        if invoice.stato == "bozza":
+            raise Conflict(
+                ENTITY,
+                "una bozza non ha ancora un numero e non produce un file FatturaPA",
+                stato=invoice.stato,
+            )
+
+        export = self._for_export(invoice)
+        # Re-checked here even though `issue` already checked: the snapshot could have
+        # been edited out of band, and the two callers of these functions are the whole
+        # reason they are module-level rather than methods.
+        check_party_exportable(export.snapshot.emittente, "emitter_profile")
+        check_party_exportable(export.snapshot.cliente, "customer")
+        check_recipient_routing(export.snapshot.cliente)
+
+        data = FatturaPAExporter().to_bytes(export)
+        artifact = self._store_artifact(
+            invoice,
+            kind="xml",
+            tipo="fattura_xml",
+            titolo=f"Fattura {numero_completo(export.anno, export.numero)} (XML)",
+            content_type="application/xml",
+            filename=self._xml_filename(export),
+            data=data,
+            expected_hash=invoice.xml_hash_sha256,
+            actor=actor,
+        )
+        if invoice.xml_hash_sha256 is None:
+            invoice.xml_hash_sha256 = artifact.hash_sha256
+        self.session.commit()
+        return artifact
+
+    def download(
+        self, invoice_id: UUID, kind: ArtifactKind, actor: Actor
+    ) -> tuple[bytes, str, str]:
+        """`(bytes, content_type, filename)`.
+
+        The download always goes through the API, which is the only place authorisation
+        exists on either storage backend (slice 2 §5). The XML's name is the SdI
+        convention; the PDF's is a plain, slug-safe name, because nothing downstream
+        validates it.
+        """
+        invoice = self._require(invoice_id)
+        document_id = invoice.xml_document_id if kind == "xml" else invoice.pdf_document_id
+        if document_id is None:
+            raise NotFound("invoice_artifact", f"{invoice_id}#{kind}")
+        document = self.documents.repo.get(document_id)
+        if document is None or not document.versione_corrente:
+            raise NotFound("invoice_artifact", f"{invoice_id}#{kind}")
+        version = self.documents.repo.version(document.id, document.versione_corrente)
+        if version is None:  # pragma: no cover - versione_corrente points at a real row
+            raise NotFound("invoice_artifact", f"{invoice_id}#{kind}")
+        if kind == "xml":
+            filename = self._xml_filename(self._for_export(invoice))
+        elif invoice.tipo == "proforma":
+            filename = f"proforma-{(invoice.riferimento or str(invoice.id)).lower()}.pdf"
+        else:
+            filename = f"fattura-{invoice.anno}-{invoice.numero}.pdf"
+        return self.storage.get(version.storage_key), version.content_type, filename
 
     # ---- reads ---------------------------------------------------------------
 
