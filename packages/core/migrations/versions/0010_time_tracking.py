@@ -44,6 +44,14 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("uq_cost_categories_code", "cost_categories", ["code"], unique=True)
+    # Matches `uq_users_email_lower`'s own idiom (0001): a functional index over
+    # lower(nome), not a plain unique=True, which would be case-sensitive.
+    op.create_index(
+        "uq_cost_categories_nome",
+        "cost_categories",
+        [sa.literal_column("lower(nome)")],
+        unique=True,
+    )
 
     op.create_table(
         "time_entries",

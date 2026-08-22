@@ -33,6 +33,8 @@ HAND_MAINTAINED_INDEXES = {
     "uq_cost_categories_code",
     "ix_time_entries_custom_fields",
     "ix_costs_custom_fields",
+    # Same shape as `uq_users_email_lower`: a functional unique index over lower(nome).
+    "uq_cost_categories_nome",
 }
 
 
@@ -127,6 +129,14 @@ def test_hand_maintained_indexes_survive_the_migration() -> None:
 
     cost_categories_code_def = indexes["uq_cost_categories_code"]
     assert "UNIQUE" in cost_categories_code_def, "uq_cost_categories_code must be a unique index"
+
+    cost_categories_nome_def = indexes["uq_cost_categories_nome"]
+    assert "UNIQUE" in cost_categories_nome_def, "uq_cost_categories_nome must be a unique index"
+    assert "lower(" in cost_categories_nome_def and "nome" in cost_categories_nome_def, (
+        f"uq_cost_categories_nome is not a functional index over lower(nome): "
+        f"{cost_categories_nome_def}"
+    )
+
     anno_numero_def = indexes["uq_invoices_anno_numero"]
     assert "UNIQUE" in anno_numero_def, "uq_invoices_anno_numero must be a unique index"
     assert "WHERE" in anno_numero_def and "numero IS NOT NULL" in anno_numero_def, (
