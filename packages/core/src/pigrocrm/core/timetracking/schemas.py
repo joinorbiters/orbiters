@@ -125,7 +125,6 @@ class TimeEntryRead(BaseModel):
     custom_fields: dict[str, Any]
     created_at: datetime
     updated_at: datetime
-    deleted_at: datetime | None
 
 
 class TimeEntryListQuery(BaseModel):
@@ -187,7 +186,6 @@ class CostRead(BaseModel):
     custom_fields: dict[str, Any]
     created_at: datetime
     updated_at: datetime
-    deleted_at: datetime | None
 
 
 class CostListQuery(BaseModel):
