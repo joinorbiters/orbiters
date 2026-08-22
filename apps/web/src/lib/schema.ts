@@ -44,15 +44,18 @@ export type EntityType = 'customer' | 'person' | 'deal' | 'document' | 'invoice'
 
 /**
  * The subset of `EntityType` that has a real `GET /api/{plural}/{id}/timeline`
- * route today -- what `Timeline.tsx`'s `TIMELINE_FETCHERS` and
- * `EntityDetailLayout`'s `entityType` prop accept. `invoice` is a declared
- * `EntityType` (so it can carry custom fields and appear in `/api/schema/{entity_type}`)
- * before any invoice router exists, and the two sets are not always the same one:
- * conflating them would either make this alias silently exclude a real, working
- * route, or force this file to invent an invoice timeline endpoint that is not
- * there. Widen this alongside adding a real timeline endpoint, not before.
+ * route -- what `Timeline.tsx`'s `TIMELINE_FETCHERS` and `EntityDetailLayout`'s
+ * `entityType` prop accept. An entity can be a declared `EntityType` (so it carries
+ * custom fields and appears in `/api/schema/{entity_type}`) long before any router
+ * serves its timeline, and conflating the two sets would either exclude a real
+ * working route or invent an endpoint that is not there.
+ *
+ * `invoice` was excluded while its router did not exist. `apps/api/.../invoices.py`
+ * now serves `GET /api/invoices/{invoice_id}/timeline`, so the exclusion is gone --
+ * widened *alongside* the endpoint, which is the rule this comment carried from the
+ * day the alias was written.
  */
-export type TimelineEntityType = Exclude<EntityType, 'invoice'>
+export type TimelineEntityType = EntityType
 
 export interface EntitySchema {
   entity_type: string

@@ -203,6 +203,12 @@ const TIMELINE_FETCHERS: Record<
         params: { path: { document_id: entityId }, query: { limit } },
       }),
     ),
+  invoice: (entityId, limit) =>
+    unwrap(
+      api.GET('/api/invoices/{invoice_id}/timeline', {
+        params: { path: { invoice_id: entityId }, query: { limit } },
+      }),
+    ),
 }
 
 interface TimelineProps {
