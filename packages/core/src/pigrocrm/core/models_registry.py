@@ -17,3 +17,9 @@ from pigrocrm.core.invoices.models import Invoice, InvoiceCounter, InvoiceLine  
 from pigrocrm.core.people.models import Person  # noqa: F401
 from pigrocrm.core.pipeline.models import PipelineStage  # noqa: F401
 from pigrocrm.core.templates.models import Template  # noqa: F401
+from pigrocrm.core.timetracking.models import (  # noqa: F401
+    Cost,
+    CostCategory,
+    PeriodLock,
+    TimeEntry,
+)

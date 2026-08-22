@@ -41,6 +41,11 @@ VALORE_MAX_DIGITS = 12
 ORE_MAX_DIGITS = 8
 DECIMAL_PLACES = 2
 
+# `tariffa_oraria` is Numeric(12,6) -- a factor, not an amount. See the column's own
+# comment in models.py for why slice 3 fixes the precision.
+FACTOR_MAX_DIGITS = 12
+FACTOR_DECIMAL_PLACES = 6
+
 # No Pydantic `ge`/`le` bound on `probabilita` below, unlike `posizione`/`position`
 # elsewhere in this sweep -- see the final-review item on bounding every Integer
 # column. The reason is the same one documented on `CustomerCreate.partita_iva`
@@ -76,6 +81,9 @@ class DealCreate(BaseModel):
     valore_preventivato: Decimal | None = Field(
         default=None, max_digits=VALORE_MAX_DIGITS, decimal_places=DECIMAL_PLACES
     )
+    tariffa_oraria: Decimal | None = Field(
+        default=None, max_digits=FACTOR_MAX_DIGITS, decimal_places=FACTOR_DECIMAL_PLACES, ge=0
+    )
     custom_fields: dict[str, Any] = {}
 
 
@@ -101,6 +109,9 @@ class DealUpdate(BaseModel):
     valore_preventivato: Decimal | None = Field(
         default=None, max_digits=VALORE_MAX_DIGITS, decimal_places=DECIMAL_PLACES
     )
+    tariffa_oraria: Decimal | None = Field(
+        default=None, max_digits=FACTOR_MAX_DIGITS, decimal_places=FACTOR_DECIMAL_PLACES, ge=0
+    )
     custom_fields: dict[str, Any] | None = None
 
 
@@ -118,6 +129,9 @@ class DealRead(BaseModel):
     note: str | None
     ore_preventivate: Decimal | None
     valore_preventivato: Decimal | None
+    # Bare `Decimal | None`, no bound: a Read schema validates values the database
+    # produced, so a bound here would reject a row the column legitimately holds.
+    tariffa_oraria: Decimal | None
     custom_fields: dict[str, Any]
     created_at: datetime
     updated_at: datetime

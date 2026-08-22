@@ -1,12 +1,20 @@
 from collections.abc import Iterator
+from datetime import date
+from decimal import Decimal
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 from testcontainers.community.postgres import PostgresContainer
 
+from pigrocrm.core.auth.models import User
 from pigrocrm.core.config import Settings
+from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.db import Base, create_engine_from_settings, session_factory
+from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.pipeline.models import PipelineStage
+from pigrocrm.core.timetracking.models import CostCategory, TimeEntry
 
 
 @pytest.fixture(scope="session")
@@ -34,3 +42,74 @@ def db_session(db_engine: Engine) -> Iterator[Session]:
         session.close()
         transaction.rollback()
         connection.close()
+
+
+@pytest.fixture
+def seeded_user_id(db_session: Session) -> UUID:
+    user = User(
+        email=f"tester-{uuid4()}@example.test",
+        password_hash="x",
+        nome="Tester",
+        ruolo="collaboratore",
+    )
+    db_session.add(user)
+    db_session.flush()
+    return user.id
+
+
+@pytest.fixture
+def seeded_open_stage_id(db_session: Session) -> UUID:
+    stage = PipelineStage(
+        nome=f"Aperto {uuid4()}", posizione=0, probabilita_default=10, tipo="open"
+    )
+    db_session.add(stage)
+    db_session.flush()
+    return stage.id
+
+
+@pytest.fixture
+def seeded_won_stage_id(db_session: Session) -> UUID:
+    stage = PipelineStage(nome=f"Vinto {uuid4()}", posizione=9, probabilita_default=100, tipo="won")
+    db_session.add(stage)
+    db_session.flush()
+    return stage.id
+
+
+@pytest.fixture
+def seeded_deal_id(db_session: Session, seeded_open_stage_id: UUID) -> UUID:
+    customer = Customer(ragione_sociale=f"Cliente {uuid4()}")
+    db_session.add(customer)
+    db_session.flush()
+    deal = Deal(
+        nome="Progetto di prova",
+        customer_id=customer.id,
+        pipeline_stage_id=seeded_open_stage_id,
+        probabilita=10,
+    )
+    db_session.add(deal)
+    db_session.flush()
+    return deal.id
+
+
+@pytest.fixture
+def seeded_category_id(db_session: Session) -> UUID:
+    category = CostCategory(nome=f"Categoria {uuid4()}", posizione=0, code=None)
+    db_session.add(category)
+    db_session.flush()
+    return category.id
+
+
+@pytest.fixture
+def seeded_entry_id(db_session: Session, seeded_deal_id: UUID, seeded_user_id: UUID) -> UUID:
+    entry = TimeEntry(
+        deal_id=seeded_deal_id,
+        user_id=seeded_user_id,
+        data=date(2026, 3, 10),
+        ore=Decimal("8.00"),
+        descrizione="Analisi",
+        tariffa_applicata=Decimal("80.000000"),
+        tariffa_origine="manuale",
+    )
+    db_session.add(entry)
+    db_session.flush()
+    return entry.id

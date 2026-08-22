@@ -36,6 +36,8 @@ class UserService:
             nome=data.nome,
             ruolo=data.ruolo,
             attivo=True,
+            tariffa_oraria_default=data.tariffa_oraria_default,
+            costo_orario_default=data.costo_orario_default,
         )
         try:
             self.repo.add(user)
