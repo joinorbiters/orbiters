@@ -7,6 +7,8 @@ from pigrocrm.core.errors import DomainError
 from pigrocrm_api.errors import domain_error_handler, ensure_validation_error_schemas_are_declared
 from pigrocrm_api.routers import (
     auth,
+    cost_categories,
+    costs,
     customers,
     deals,
     documents,
@@ -15,9 +17,11 @@ from pigrocrm_api.routers import (
     fiscal_profile,
     invoices,
     people,
+    period_locks,
     pipeline,
     schema,
     templates,
+    time_entries,
     tokens,
     users,
 )
@@ -60,6 +64,10 @@ def create_app() -> FastAPI:
         emitter,
         invoices,
         fiscal_profile,
+        time_entries,
+        costs,
+        cost_categories,
+        period_locks,
     ):
         app.include_router(module.router)
 

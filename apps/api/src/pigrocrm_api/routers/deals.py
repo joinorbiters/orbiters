@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Annotated
 from uuid import UUID
 
@@ -14,6 +15,15 @@ from pigrocrm.core.deals.schemas import (
     DealUpdate,
 )
 from pigrocrm.core.deals.service import DealService
+from pigrocrm.core.timetracking.schemas import (
+    DealRateUpdate,
+    DealTimeSummary,
+    RateDescription,
+    RecalculateRatesRequest,
+    TimeEntryListQuery,
+    TimeEntryPage,
+)
+from pigrocrm.core.timetracking.service import TimeEntryService
 from pigrocrm.core.validation import SafeStr
 from pigrocrm_api.deps import ActorDep, SessionDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
@@ -24,6 +34,13 @@ router = APIRouter(prefix="/api/deals", tags=["deals"], responses=PROBLEM_RESPON
 
 class MoveStageRequest(BaseModel):
     stage_id: UUID
+
+
+class RecalculateResponse(BaseModel):
+    """`voci_aggiornate` rather than a bare integer: the UI says "12 voci aggiornate",
+    and a naked number in a JSON body is a value nobody can label."""
+
+    voci_aggiornate: int
 
 
 @router.post("", response_model=DealRead, status_code=status.HTTP_201_CREATED)
@@ -93,3 +110,48 @@ def timeline(
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> list[ActivityRead]:
     return ActivityService(session).timeline("deal", deal_id, limit)
+
+
+@router.get("/{deal_id}/time-entries", response_model=TimeEntryPage)
+def deal_time_entries(
+    deal_id: UUID,
+    session: SessionDep,
+    actor: ActorDep,
+    da: Annotated[date | None, Query()] = None,
+    a: Annotated[date | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    cursor: Annotated[UUID | None, Query()] = None,
+) -> TimeEntryPage:
+    return TimeEntryService(session).list(
+        TimeEntryListQuery(deal_id=deal_id, da=da, a=a, limit=limit, cursor=cursor), actor
+    )
+
+
+@router.get("/{deal_id}/time-summary", response_model=DealTimeSummary)
+def deal_time_summary(deal_id: UUID, session: SessionDep, actor: ActorDep) -> DealTimeSummary:
+    return TimeEntryService(session).deal_summary(deal_id, actor)
+
+
+@router.get("/{deal_id}/rates", response_model=RateDescription)
+def deal_rates(
+    deal_id: UUID, user_id: Annotated[UUID, Query()], session: SessionDep, actor: ActorDep
+) -> RateDescription:
+    """What a new entry would freeze right now. Shown next to the hours field so the
+    rate is visible before saving, not discovered after."""
+    return TimeEntryService(session).describe_rates(deal_id, user_id, actor)
+
+
+@router.put("/{deal_id}/rate", status_code=status.HTTP_204_NO_CONTENT)
+def set_deal_rate(
+    deal_id: UUID, data: DealRateUpdate, session: SessionDep, actor: ActorDep
+) -> None:
+    TimeEntryService(session).update_deal_rate(deal_id, data, actor)
+
+
+@router.post("/{deal_id}/rates/recalculate", response_model=RecalculateResponse)
+def recalculate_rates(
+    deal_id: UUID, data: RecalculateRatesRequest, session: SessionDep, actor: ActorDep
+) -> RecalculateResponse:
+    return RecalculateResponse(
+        voci_aggiornate=TimeEntryService(session).recalculate_rates(deal_id, data, actor)
+    )
