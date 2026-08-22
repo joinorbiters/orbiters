@@ -46,6 +46,29 @@ class FieldDefinitionService:
             )
         _check_options(data.field_type, data.options)
 
+        # A13. `native_fields()` is derived from the entity's own Create model
+        # (schema_registry.py), and includes `EXTRA_NATIVE_FIELDS` -- columns a
+        # Create schema cannot declare because they are set only later (invoice's
+        # fiscal columns at emission, time_entry's/cost's billing-state columns
+        # when a line is applied) -- so it stays correct as models change without
+        # needing this guard to hand-list anything. Imported here rather than at
+        # module scope: `schema_registry` imports this class
+        # (`schema_registry.py:19`), so a top-level import is a real cycle -- the
+        # same call-time resolution `server.py` uses for `register_entity_tools`.
+        from pigrocrm.core.schema_registry import native_fields
+
+        native = native_fields(data.entity_type)
+        if data.key in native:
+            raise ValidationFailed(
+                "field_definition",
+                "key",
+                "collide con una colonna nativa dell'entità",
+                expected=(
+                    f"una chiave diversa da {data.key!r}: è già una colonna nativa di "
+                    f"{data.entity_type}. Colonne native: {', '.join(sorted(native))}"
+                ),
+            )
+
         if self.repo.get_by_key(data.entity_type, data.key):
             raise Conflict(
                 "field_definition",
