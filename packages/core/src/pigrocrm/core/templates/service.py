@@ -41,6 +41,7 @@ from sqlalchemy.orm import Session
 from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.errors import Conflict, NotFound
+from pigrocrm.core.render.pdf import ASSETS_DIR
 from pigrocrm.core.templates.models import Template
 from pigrocrm.core.templates.parser import declared_paths, parse_template
 from pigrocrm.core.templates.renderer import DeclaredVariable, render_template
@@ -226,6 +227,54 @@ class TemplateService:
         if template is None:
             raise NotFound(ENTITY, template_id)
         return render_template(template.corpo_markdown, values, self.declared_variables(template))
+
+    def seed_defaults(self, actor: Actor) -> list[TemplateRead]:
+        """Seeds the built-in templates that ship as assets, idempotently.
+
+        On `PipelineService.seed_defaults`'s model, and deduplicating on `lower(nome)`
+        to match `uq_templates_nome`'s own functional index -- a case-sensitive check
+        would pass for "rapporto ore" against a stored "Rapporto ore" and then be
+        refused by the database as a raw `IntegrityError`.
+
+        Seeds exactly one template today: the timesheet. `render/assets/
+        template-offer.md` is deliberately left alone -- adopting it would change slice
+        2's shipped behaviour in a slice that is not about offers.
+
+        Returns only what it actually created, so a caller can tell "seeded" from
+        "already there".
+        """
+        from pigrocrm.core.timetracking.report import (  # local: avoids a package cycle
+            TIME_REPORT_TEMPLATE_NOME,
+            TIME_REPORT_TEMPLATE_VARIABLES,
+        )
+
+        seeds = (
+            (
+                TIME_REPORT_TEMPLATE_NOME,
+                "rapporto_ore",
+                (ASSETS_DIR / "template-time-report.md").read_text(encoding="utf-8"),
+                TIME_REPORT_TEMPLATE_VARIABLES,
+            ),
+        )
+        created: list[TemplateRead] = []
+        for nome, tipo, corpo, variabili in seeds:
+            if self.repo.get_by_nome(nome) is not None:
+                continue
+            template = self.repo.add(
+                Template(
+                    nome=nome,
+                    tipo=tipo,
+                    corpo_markdown=corpo,
+                    variabili_dichiarate=list(variabili),
+                    attivo=True,
+                )
+            )
+            self.activities.record(
+                "template", template.id, "created", actor, {"nome": nome, "seed": True}
+            )
+            created.append(TemplateRead.model_validate(template))
+        self.session.commit()
+        return created
 
     # `list` must stay the last method defined in this class -- see
     # `TemplateRepository.list`'s identical comment for the import-time crash this

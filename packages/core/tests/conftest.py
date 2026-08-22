@@ -1,3 +1,4 @@
+import subprocess
 from collections.abc import Iterator
 from datetime import date
 from decimal import Decimal
@@ -14,6 +15,7 @@ from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.db import Base, create_engine_from_settings, session_factory
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.pipeline.models import PipelineStage
+from pigrocrm.core.storage.local import LocalFileStorage
 from pigrocrm.core.timetracking.models import CostCategory, TimeEntry
 
 
@@ -113,3 +115,26 @@ def seeded_entry_id(db_session: Session, seeded_deal_id: UUID, seeded_user_id: U
     db_session.add(entry)
     db_session.flush()
     return entry.id
+
+
+@pytest.fixture
+def local_storage(tmp_path) -> LocalFileStorage:
+    """A tmp-dir backend, never the default `./var/documents` root -- a test must not
+    write real files into this repository's working tree."""
+    return LocalFileStorage(str(tmp_path / "documents"))
+
+
+def extract_pdf_text(storage, session, document_id: UUID) -> str:
+    """Reads the stored PDF back and extracts its text with `pdftotext`, which ships in
+    the same API image as Pandoc and Typst. Reading the produced artefact rather than
+    the intermediate Markdown is the only assertion that proves what the client
+    actually receives."""
+    from pigrocrm.core.documents.repository import DocumentRepository
+
+    version = DocumentRepository(session).version(document_id, 1)
+    assert version is not None
+    data = storage.get(version.storage_key)
+    result = subprocess.run(
+        ["pdftotext", "-layout", "-", "-"], input=data, capture_output=True, check=True
+    )
+    return result.stdout.decode("utf-8", errors="replace")
