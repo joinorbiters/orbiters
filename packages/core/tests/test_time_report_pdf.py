@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.emitter.schemas import EmitterProfileUpsert
 from pigrocrm.core.emitter.service import EmitterProfileService
-from pigrocrm.core.errors import ValidationFailed
+from pigrocrm.core.errors import PermissionDenied, ValidationFailed
 from pigrocrm.core.templates.service import TemplateService
 from pigrocrm.core.timetracking.report import (
     TIME_REPORT_TEMPLATE_NOME,
@@ -73,6 +73,19 @@ def test_the_seeded_template_exists_and_names_no_freelancer(db_session: Session)
     assert "DATA" in body and "ORE" in body and "DESCRIZIONE" in body
     assert "{{#each voci}}" in body
     assert "{{totale_ore}}" in body and "{{numero_voci}}" in body
+
+
+def test_seed_defaults_requires_admin(db_session: Session) -> None:
+    """`create`, `update` and `deactivate`/`activate` on `TemplateService` all call
+    `actor.require_admin(...)` themselves -- `seed_defaults` must too, on
+    `PipelineService.seed_defaults`'s own model (see that method's docstring and
+    `test_pipeline.py`'s `test_seed_defaults_requires_admin`): the admin check has to
+    live on the shared service, not merely in whichever caller happens to invoke it
+    first (today, only the `seed-templates` CLI command, which always passes
+    `Actor.system()` -- an admin actor by construction, so this gap was latent, not
+    exercised, until something non-admin calls this method directly)."""
+    with pytest.raises(PermissionDenied):
+        TemplateService(db_session).seed_defaults(WRITER)
 
 
 def test_report_variables_carry_raw_values_and_a_finished_total(
