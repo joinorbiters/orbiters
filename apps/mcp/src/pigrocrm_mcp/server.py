@@ -1,6 +1,7 @@
 import functools
 import inspect
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from typing import Any, cast
 from uuid import UUID
 
@@ -52,16 +53,17 @@ def build_server(
     actor_provider: ActorProvider,
     storage: DocumentStorage | None = None,
 ) -> MCPServer:
-    # `session_provider` is still called once, up front, and the one Session it
-    # returns is shared by every tool/resource for the server's whole lifetime --
-    # matching `__main__.py`'s single long-lived Session, unlike the API's
-    # `deps.get_session`, which hands each HTTP request its own. A session-per-call
-    # design (considered, not adopted here -- see the final review report for the
-    # concrete reason) would need every property read on `McpContext.session`
-    # within one logical call to resolve to the *same* session: some calls read it
-    # more than once (`resources/entities.py`'s renders read it up to four times),
-    # so a provider called fresh on each read would leak that many un-closed
-    # sessions per call instead of the one this comment is describing.
+    # One session per logical call (Task 4A-1, residual R1). `_guard` opens the
+    # scope via `session_provider.scope()` when the provider exposes one --
+    # `ScopedSessionProvider`, used in production (`__main__.py`) -- and
+    # `McpContext.session` then resolves to the one session bound to it, however
+    # many times a tool or a resource render reads the property
+    # (`resources/entities.py`'s renders read it up to four times). A plain
+    # callable provider (a test passing `lambda: session`, as this package's own
+    # `server` fixture still does) has no `.scope` attribute, so it falls back to a
+    # null scope and keeps the old, single-shared-session behaviour that fixture
+    # relies on. The measurement this replaces: 10 concurrent writes against one
+    # shared Session produced 0 successes and 0 rows.
     #
     # `storage` is an explicit, optional parameter -- not always resolved
     # internally from `get_settings()` -- for the same reason `session_provider`/
@@ -75,6 +77,18 @@ def build_server(
         session_provider, actor_provider, storage or storage_from_settings(get_settings())
     )
     mcp = MCPServer("PigroCRM", instructions=INSTRUCTIONS)
+
+    # Resolved once, here, rather than per call (Task 4A-1). `ScopedSessionProvider`
+    # (production, via `__main__.py`) exposes `.scope()`; a plain callable provider
+    # (a test passing `lambda: session`, as this package's own `server` fixture
+    # still does) does not, and falls back to `nullcontext()` -- the old behaviour,
+    # one session shared for the whole lifetime of whatever holds the provider.
+    _scope: Callable[[], AbstractContextManager[Any]] | None = getattr(
+        session_provider, "scope", None
+    )
+
+    def _session_scope() -> AbstractContextManager[Any]:
+        return _scope() if _scope is not None else nullcontext()
 
     def _guard[T: Callable[..., Any]](fn: T) -> T:
         """Every tool and resource renders a domain error as guidance instead of
@@ -104,35 +118,58 @@ def build_server(
         not a per-tool try/except: a fix that only covered today's tools would not
         cover the next one.
 
-        `context.session.rollback()` in every arm, including the trailing bare
-        `except Exception`, is the final-review fix for a distinct failure this
-        guard did not previously cover at all: `__main__.py` builds one `Session`
-        for the whole process and passes `lambda: session` to `build_server`, so
-        every tool and resource shares it for the process's entire lifetime —
-        unlike the API, where `deps.get_session` hands each request its own,
-        closed at the end of that request regardless of outcome. Before this fix,
-        an exception this guard did not already know how to translate (a raw
-        DBAPI failure, most realistically — anything item 1 through 5 of this same
-        fix wave did not already close off at the public tool surface) escaped
-        uncaught, leaving the shared session's transaction failed; every later
-        call on it — including an unrelated read like `describe_schema` — then
-        failed too (`sqlalchemy.exc.PendingRollbackError` in production, or its
-        underlying `psycopg.errors.InFailedSqlTransaction` under the savepoint-
-        based sessions this project's tests use), forever, until the process was
-        restarted. The trailing `except Exception: ...; raise` re-raises the
-        original exception completely unchanged — it must not also translate a
-        `KeyError`/`AttributeError` into `_as_protocol_error`, the same "guard
-        must not be too wide" property Task 17 verified about the two narrower
-        `except` clauses above it — it exists only to guarantee the rollback runs
-        for literally anything that can come out of `fn`, not to add another
-        translated error shape.
+        `with _session_scope():` wraps the whole call (Task 4A-1, residual R1): with
+        a real `ScopedSessionProvider`, this opens one `Session` for this logical
+        call and closes it on the way out whatever happened, so a raw DBAPI failure
+        poisoning a transaction can no longer follow the next unrelated call the way
+        a single, process-lifetime session used to let it. `context.session.
+        rollback()` stays in every arm regardless, because `_session_scope()` is a
+        no-op `nullcontext()` when `session_provider` is a plain callable — this
+        package's own `server` fixture builds one that way, sharing one `Session`
+        across every tool call in a test the way `__main__.py` used to for the whole
+        process — and that shared-session path still needs the explicit rollback:
+        without it, an exception this guard did not already know how to translate (a
+        raw DBAPI failure, most realistically) leaves that shared session's
+        transaction failed, and every later call on it — including an unrelated read
+        like `describe_schema` — fails too (`sqlalchemy.exc.PendingRollbackError` in
+        production terms, or its underlying `psycopg.errors.InFailedSqlTransaction`
+        under the savepoint-based sessions this project's tests use), forever, until
+        the process (or, in a test, the fixture) is torn down. Calling `rollback()`
+        on a session `_session_scope()` is about to close anyway (the
+        `ScopedSessionProvider` path) is harmless — `Session.close()` already
+        discards any open transaction — so one guard body serves both providers
+        without branching on which kind it received. The trailing
+        `except Exception: ...; raise` re-raises the original exception completely
+        unchanged — it must not also translate a `KeyError`/`AttributeError` into
+        `_as_protocol_error`, the same "guard must not be too wide" property Task 17
+        verified about the two narrower `except` clauses above it — it exists only
+        to guarantee the rollback runs for literally anything that can come out of
+        `fn`, not to add another translated error shape.
         """
         if inspect.iscoroutinefunction(fn):
 
             @functools.wraps(fn)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                with _session_scope():
+                    try:
+                        return await fn(*args, **kwargs)
+                    except DomainError as exc:
+                        context.session.rollback()
+                        raise _as_protocol_error(exc) from exc
+                    except ValueError as exc:
+                        context.session.rollback()
+                        raise _as_protocol_error(to_domain_error(exc)) from exc
+                    except Exception:
+                        context.session.rollback()
+                        raise
+
+            return cast(T, async_wrapper)
+
+        @functools.wraps(fn)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            with _session_scope():
                 try:
-                    return await fn(*args, **kwargs)
+                    return fn(*args, **kwargs)
                 except DomainError as exc:
                     context.session.rollback()
                     raise _as_protocol_error(exc) from exc
@@ -142,22 +179,6 @@ def build_server(
                 except Exception:
                     context.session.rollback()
                     raise
-
-            return cast(T, async_wrapper)
-
-        @functools.wraps(fn)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            try:
-                return fn(*args, **kwargs)
-            except DomainError as exc:
-                context.session.rollback()
-                raise _as_protocol_error(exc) from exc
-            except ValueError as exc:
-                context.session.rollback()
-                raise _as_protocol_error(to_domain_error(exc)) from exc
-            except Exception:
-                context.session.rollback()
-                raise
 
         return cast(T, wrapper)
 
