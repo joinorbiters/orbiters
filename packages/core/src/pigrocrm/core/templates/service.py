@@ -229,12 +229,17 @@ class TemplateService:
         return render_template(template.corpo_markdown, values, self.declared_variables(template))
 
     def seed_defaults(self, actor: Actor) -> list[TemplateRead]:
-        """Seeds the built-in templates that ship as assets, idempotently.
+        """Admin-only, like every other write method on this class (`create`,
+        `update`, `deactivate`/`activate` all call `actor.require_admin` themselves).
 
-        On `PipelineService.seed_defaults`'s model, and deduplicating on `lower(nome)`
-        to match `uq_templates_nome`'s own functional index -- a case-sensitive check
-        would pass for "rapporto ore" against a stored "Rapporto ore" and then be
-        refused by the database as a raw `IntegrityError`.
+        On `PipelineService.seed_defaults`'s model -- including this admin check: that
+        method's own docstring explains why it has to live here rather than solely in
+        whichever router happens to call it first, and `test_pipeline.py`'s
+        `test_seed_defaults_requires_admin` is the regression test for exactly this
+        lesson. Deduplicates on `lower(nome)` to match `uq_templates_nome`'s own
+        functional index -- a case-sensitive check would pass for "rapporto ore"
+        against a stored "Rapporto ore" and then be refused by the database as a raw
+        `IntegrityError`.
 
         Seeds exactly one template today: the timesheet. `render/assets/
         template-offer.md` is deliberately left alone -- adopting it would change slice
@@ -243,6 +248,7 @@ class TemplateService:
         Returns only what it actually created, so a caller can tell "seeded" from
         "already there".
         """
+        actor.require_admin("seed_templates")
         from pigrocrm.core.timetracking.report import (  # local: avoids a package cycle
             TIME_REPORT_TEMPLATE_NOME,
             TIME_REPORT_TEMPLATE_VARIABLES,
