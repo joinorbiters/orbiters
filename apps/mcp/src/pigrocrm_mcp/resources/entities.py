@@ -6,6 +6,7 @@ from pigrocrm.core.customers.service import CustomerService
 from pigrocrm.core.deals.service import DealService
 from pigrocrm.core.people.schemas import PersonListQuery
 from pigrocrm.core.people.service import PersonService
+from pigrocrm.core.timetracking.service import TimeEntryService
 from pigrocrm_mcp.context import McpContext
 
 
@@ -139,6 +140,26 @@ def render_deal(context: McpContext, deal_id: UUID) -> str:
         f"- Valore preventivato: {_or_dash(deal.valore_preventivato)}",
     ]
     lines += _custom_lines(deal.custom_fields)
+
+    # Reading before acting (slice 1 §8.4), applied to the one thing an agent wants to
+    # know before logging an hour. No revenue figure here on purpose: revenue is the
+    # invoice (§3, decision 2), and 4A has no invoices -- printing a zero would read as
+    # a real number.
+    summary = TimeEntryService(context.session).deal_summary(deal.id, context.actor)
+    lines += [
+        "",
+        "## Ore",
+        f"- Stato: **{summary.stato}**",
+        f"- Ore consuntivate: {summary.ore_totali}",
+        f"- Ore fatturabili non ancora fatturate: {summary.ore_fatturabili_non_fatturate}",
+        f"- Valore delle ore non fatturate (stima): {summary.valore_ore_non_fatturate} EUR",
+    ]
+    if summary.ore_senza_tariffa:
+        lines.append(
+            f"- Voci senza tariffa: {summary.ore_senza_tariffa} "
+            "(escluse dal valore maturato e dal margine)"
+        )
+
     lines += ["", "## Timeline", ""] + _timeline_lines(context, "deal", deal_id)
     if deal.note:
         lines += ["", "## Note", "", deal.note]
