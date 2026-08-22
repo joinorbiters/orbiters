@@ -9,6 +9,7 @@ const TABS = [
   { value: 'pipeline', label: 'Pipeline' },
   { value: 'template', label: 'Template' },
   { value: 'emittente', label: 'Emittente' },
+  { value: 'fiscale', label: 'Fiscale' },
   { value: 'utenti', label: 'Utenti' },
 ] as const
 
