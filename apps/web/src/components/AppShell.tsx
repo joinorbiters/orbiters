@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   LogOut,
   PanelLeftIcon,
+  Receipt,
   Settings,
   Users,
 } from 'lucide-react'
@@ -25,6 +26,7 @@ const NAV = [
   { to: '/app/clienti', label: 'Clienti', icon: Building2 },
   { to: '/app/persone', label: 'Persone', icon: Users },
   { to: '/app/deal', label: 'Deal', icon: Handshake },
+  { to: '/app/fatture', label: 'Fatture', icon: Receipt },
   { to: '/app/token', label: 'Token', icon: KeyRound },
 ] as const
 
