@@ -10,7 +10,7 @@ from pigrocrm.core.customers.schemas import CustomerListQuery, CustomerUpdate
 from pigrocrm.core.deals.schemas import DealListQuery, DealUpdate
 from pigrocrm.core.documents.schemas import DocumentListQuery
 from pigrocrm.core.fields.schemas import EntityType
-from pigrocrm.core.invoices.schemas import InvoiceLineIn, InvoiceListQuery
+from pigrocrm.core.invoices.schemas import InvoiceListQuery
 from pigrocrm.core.people.schemas import PersonListQuery, PersonUpdate
 from pigrocrm.core.pipeline.service import PipelineService
 from pigrocrm_mcp.context import McpContext

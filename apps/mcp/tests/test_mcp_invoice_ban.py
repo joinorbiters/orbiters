@@ -18,9 +18,7 @@ from pathlib import Path
 
 import pytest
 
-TOOLS_INIT = (
-    Path(__file__).resolve().parents[1] / "src" / "pigrocrm_mcp" / "tools" / "__init__.py"
-)
+TOOLS_INIT = Path(__file__).resolve().parents[1] / "src" / "pigrocrm_mcp" / "tools" / "__init__.py"
 
 # The four operations that turn a draft into a fiscal fact, or change what one says
 # after the fact. Each is reachable over REST by a human with the right role; none is
