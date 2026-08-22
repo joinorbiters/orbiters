@@ -64,6 +64,11 @@ def server(mcp_session: Session, tmp_path: Path):
 
 
 @pytest.fixture
+def mcp_storage(tmp_path: Path) -> LocalFileStorage:
+    return LocalFileStorage(str(tmp_path / "documents"))
+
+
+@pytest.fixture
 def seeded_customer_id(mcp_session: Session) -> str:
     from pigrocrm.core.customers.models import Customer
 
