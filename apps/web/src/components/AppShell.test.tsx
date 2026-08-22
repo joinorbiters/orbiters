@@ -16,7 +16,7 @@ vi.mock('@/lib/auth', () => ({
 describe('AppShell', () => {
   it('shows the main navigation in Italian', () => {
     render(<AppShell><div /></AppShell>)
-    for (const label of ['Dashboard', 'Clienti', 'Persone', 'Deal', 'Token']) {
+    for (const label of ['Dashboard', 'Clienti', 'Persone', 'Deal', 'Fatture', 'Token']) {
       expect(screen.getByText(label)).toBeInTheDocument()
     }
   })
