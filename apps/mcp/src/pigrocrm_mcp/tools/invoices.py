@@ -44,16 +44,14 @@ MCP_FORBIDDEN_OPERATIONS: frozenset[str] = frozenset(
 MCP_UNEXPOSED_OPERATIONS: dict[str, str] = {
     "update": "note interne e campi custom: nessun agente ha motivo di scriverli, e "
     "la causale e' congelata dopo l'emissione",
-    "soft_delete": "la spec dello slice 1 ha gia' deciso che l'MCP non espone delete "
-    "distruttivi",
+    "soft_delete": "la spec dello slice 1 ha gia' deciso che l'MCP non espone delete distruttivi",
     "confirm_proforma": "e' la conferma umana che precede l'emissione: l'agente "
     "prepara, la persona conferma",
     "export_xml": "l'XML esiste solo per una fattura emessa, e l'MCP non emette; "
     "get_invoice_xml_url restituisce l'URL di uno gia' prodotto",
     "produce_artifacts": "esposto come render_proforma_pdf, che rifiuta una fattura "
     "e restituisce solo l'artefatto PDF",
-    "download": "l'MCP non restituisce mai byte, solo identificativi e URL "
-    "(spec slice 2 §7)",
+    "download": "l'MCP non restituisce mai byte, solo identificativi e URL (spec slice 2 §7)",
     "lines": "get_invoice restituisce gia' la fattura con le sue righe",
     "snapshot": "lettura interna del profilo fiscale, senza actor e senza audience",
     "get": "esposto come get_invoice / describe_fiscal_profile",
@@ -93,8 +91,7 @@ def get(context: McpContext, invoice_id: str) -> dict[str, Any]:
     return {
         **invoice.model_dump(mode="json"),
         "righe": [
-            line.model_dump(mode="json")
-            for line in service.lines(UUID(invoice_id), context.actor)
+            line.model_dump(mode="json") for line in service.lines(UUID(invoice_id), context.actor)
         ],
     }
 
@@ -104,8 +101,8 @@ def create_proforma(context: McpContext, data: dict[str, Any]) -> dict[str, Any]
     the only creation an agent performs, and letting it choose would put a draft
     invoice -- one button away from a consumed number -- on the agentic surface."""
     payload = {**data, "tipo": "proforma"}
-    return _invoices(context).create(InvoiceCreate(**payload), context.actor).model_dump(
-        mode="json"
+    return (
+        _invoices(context).create(InvoiceCreate(**payload), context.actor).model_dump(mode="json")
     )
 
 
@@ -114,8 +111,7 @@ def _require_proforma(service: InvoiceService, invoice_id: UUID, context: McpCon
     if invoice.tipo != "proforma":
         raise Conflict(
             "invoice",
-            "da MCP si modificano solo le proforma: una fattura la prepara e la emette "
-            "una persona",
+            "da MCP si modificano solo le proforma: una fattura la prepara e la emette una persona",
             tipo=invoice.tipo,
             stato=invoice.stato,
         )
