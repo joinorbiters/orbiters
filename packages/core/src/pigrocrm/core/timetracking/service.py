@@ -1,0 +1,430 @@
+from collections.abc import Sequence
+from datetime import UTC, date, datetime
+from typing import Any, Literal
+from uuid import UUID
+
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.activities.service import ActivityService
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.auth.repository import UserRepository
+from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.deals.repository import DealRepository
+from pigrocrm.core.errors import (
+    Conflict,
+    ImmutableField,
+    NotFound,
+    ValidationFailed,
+)
+from pigrocrm.core.fields.schemas import EntityType
+from pigrocrm.core.fields.service import FieldDefinitionService
+from pigrocrm.core.fields.validator import validate_custom_fields
+from pigrocrm.core.money import line_value, sum_hours, sum_money
+from pigrocrm.core.pipeline.service import PipelineService
+from pigrocrm.core.timetracking.locks import PeriodLockService
+from pigrocrm.core.timetracking.models import TimeEntry
+from pigrocrm.core.timetracking.rates import RateResolver
+from pigrocrm.core.timetracking.repository import TimeEntryRepository
+from pigrocrm.core.timetracking.schemas import (
+    DealRateUpdate,
+    DealTimeSummary,
+    RateDescription,
+    RecalculateRatesRequest,
+    TimeEntryCreate,
+    TimeEntryListQuery,
+    TimeEntryPage,
+    TimeEntryRead,
+    TimeEntryUpdate,
+    UserRatesUpdate,
+)
+
+# Typed as the fields module's own EntityType (not a bare `str`), matching
+# CustomerService.ENTITY/DealService.ENTITY exactly: passing a plain `str` into
+# `specs_for` fails mypy strict, which requires the narrower Literal type.
+ENTITY: EntityType = "time_entry"
+
+# §4.3's table, as data. Frozen once the entry belongs to a fiscal document;
+# `note_interne` and `custom_fields` stay mutable because they appear on no artefact.
+# `descrizione` is in this tuple and it is not obvious: it is the column the client
+# reads in the timesheet attached to the invoice, so changing it after issue would
+# make the delivered document and the database say two different things.
+FROZEN_WHEN_BILLED: tuple[str, ...] = (
+    "ore",
+    "data",
+    "tariffa_applicata",
+    "costo_applicato",
+    "descrizione",
+    "deal_id",
+    "fatturabile",
+)
+
+
+def to_read(entry: TimeEntry) -> TimeEntryRead:
+    """The only place `valore_riga` and `costo_riga` are computed.
+
+    Returned already summed because §6 forbids the browser from doing any economic
+    arithmetic: every figure the UI shows arrives finished. Task 4A-14 (the report) and
+    Task 4B-4 (the P&L) both call this rather than repeating the multiplication --
+    Acme's P&L recomputed its own totals in the browser and that is exactly how the
+    printed column and the total came to disagree.
+    """
+    read = TimeEntryRead.model_validate(entry)
+    return read.model_copy(
+        update={
+            "valore_riga": line_value(entry.ore, entry.tariffa_applicata),
+            "costo_riga": line_value(entry.ore, entry.costo_applicato),
+        }
+    )
+
+
+def billed_entry_ids(session: Session, entries: Sequence[TimeEntry]) -> set[UUID]:
+    """Which of `entries` belong to a fiscal document and are therefore frozen.
+
+    **Slice 4A definition:** any entry with a non-null `invoice_line_id`. That is a
+    deliberate *superset* of §4.3's real rule ("a line of an **issued** invoice"),
+    and it is exactly right for 4A: `invoice_lines` does not exist yet, nothing in 4A
+    writes the column, so the "bound" state is unreachable and the superset is
+    unobservable.
+
+    **Task 4B-3 replaces this body** with the real rule -- join `invoice_lines` to
+    `invoices` and keep only `stato = 'emessa'` -- and changes not one call site. That
+    is why this is one function and not an inline `is not None` in three places: the
+    narrowing has to happen once.
+    """
+    return {entry.id for entry in entries if entry.invoice_line_id is not None}
+
+
+class TimeEntryService:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+        self.repo = TimeEntryRepository(session)
+        self.deals = DealRepository(session)
+        self.users = UserRepository(session)
+        self.pipeline = PipelineService(session)
+        self.rates = RateResolver(session)
+        self.locks = PeriodLockService(session)
+        self.fields = FieldDefinitionService(session)
+        self.activities = ActivityService(session)
+
+    # ---- validation helpers ------------------------------------------------
+
+    def _require_deal(self, deal_id: UUID) -> Deal:
+        deal = self.deals.get(deal_id)
+        if deal is None:
+            raise NotFound("deal", deal_id)
+        return deal
+
+    def _require_active_user(self, user_id: UUID) -> None:
+        """Residual R3's answer for this slice, made concrete: an existing assignment
+        survives a deactivation, a new one is refused. The existence check and the
+        activity check are both done against the same fetched row rather than through
+        `UserRepository.get_active` -- that method exists for the login/refresh flows
+        and folds "does not exist" and "is not active" into the same generic
+        `ValidationFailed("user", "id", ...)`, which would not let this method name
+        `user_id` as the offending field the way the problem document needs to."""
+        user = self.users.get(user_id)
+        if user is None:
+            raise NotFound("user", user_id)
+        if not user.attivo:
+            raise ValidationFailed(
+                ENTITY, "user_id", "l'utente non è attivo", expected="un utente attivo"
+            )
+
+    def _check_not_future(self, giorno: date) -> None:
+        """A future hour is not data, it is a forecast, and this slice makes no
+        forecasts (§13). Back-dating has no floor at all, unlike slice 3's
+        `data_emissione`: there you write into a progressive fiscal register, where
+        inserting into a closed year is wrong regardless; here you declare when work
+        was done, and forbidding it would produce hours dated the day somebody
+        remembered to write them -- an archive that lies about its only temporal
+        field."""
+        if giorno > date.today():
+            raise ValidationFailed(
+                ENTITY, "data", "data futura", expected="una data non successiva a oggi"
+            )
+
+    def _validated_custom(self, values: dict[str, Any]) -> dict[str, Any]:
+        return validate_custom_fields(ENTITY, self.fields.specs_for(ENTITY), values)
+
+    def _update_custom_fields(self, entry: TimeEntry, provided: dict[str, Any]) -> dict[str, Any]:
+        """Copies `DealService._update_custom_fields`'s contract exactly -- see that
+        method's docstring for the full reasoning. Validates only the keys the caller
+        touches, against active definitions, never the union with what is stored; a
+        supplied `None` removes the entry unless its definition is active and
+        required."""
+        active_by_key = {spec.key: spec for spec in self.fields.specs_for(ENTITY)}
+        to_remove: set[str] = set()
+        for key, value in provided.items():
+            if value is not None:
+                continue
+            spec = active_by_key.get(key)
+            if spec is not None and spec.required:
+                raise ValidationFailed(
+                    ENTITY, key, "campo obbligatorio", expected="un valore non vuoto"
+                )
+            to_remove.add(key)
+        to_set = {k: v for k, v in provided.items() if v is not None}
+        touched = [spec for spec in active_by_key.values() if spec.key in to_set]
+        validated = validate_custom_fields(ENTITY, touched, to_set)
+        merged = {k: v for k, v in entry.custom_fields.items() if k not in to_remove}
+        merged.update(validated)
+        return merged
+
+    def _require(self, entry_id: UUID, *, include_deleted: bool = False) -> TimeEntry:
+        entry = self.repo.get(entry_id, include_deleted=include_deleted)
+        if entry is None:
+            raise NotFound(ENTITY, entry_id)
+        return entry
+
+    # ---- writes -----------------------------------------------------------
+
+    def create(self, data: TimeEntryCreate, actor: Actor) -> TimeEntryRead:
+        actor.require_write("log_time")
+        deal = self._require_deal(data.deal_id)
+        self._require_active_user(data.user_id)
+        self._check_not_future(data.data)
+        self.locks.assert_writable(ENTITY, "data", data.data)
+
+        resolved = self.rates.resolve(
+            deal_id=data.deal_id,
+            user_id=data.user_id,
+            tariffa_esplicita=data.tariffa_applicata,
+            costo_esplicito=data.costo_applicato,
+        )
+        entry = self.repo.add(
+            TimeEntry(
+                deal_id=data.deal_id,
+                user_id=data.user_id,
+                data=data.data,
+                ore=data.ore,
+                # Stored raw: multi-line, unescaped, exactly as typed. `escape_for`
+                # prepares it at render, once, for the context it lands in. Acme
+                # escaped at write time and the value then reached the XLSX escaped and
+                # the PDF double-escaped.
+                descrizione=data.descrizione,
+                fatturabile=data.fatturabile,
+                tariffa_applicata=resolved.tariffa,
+                costo_applicato=resolved.costo,
+                tariffa_origine=resolved.tariffa_origine,
+                costo_origine=resolved.costo_origine,
+                note_interne=data.note_interne,
+                custom_fields=self._validated_custom(data.custom_fields or {}),
+            )
+        )
+        self.activities.record(
+            ENTITY,
+            entry.id,
+            "created",
+            actor,
+            {
+                "deal_id": str(entry.deal_id),
+                "ore": str(entry.ore),
+                "tariffa_applicata": str(entry.tariffa_applicata),
+                "tariffa_origine": entry.tariffa_origine,
+            },
+        )
+        stage = self.pipeline.get(deal.pipeline_stage_id)
+        if stage.tipo != "open":
+            # Closing a deal blocks nothing (§4.3). On a won deal the work *begins* at
+            # that moment; on a lost one the pre-sales hours are a real cost. Refusing
+            # would force reopening the deal to tell the truth -- corrupting the
+            # pipeline to save the actuals. The UI warns, this records, neither refuses.
+            self.activities.record(
+                ENTITY, entry.id, "time_logged_on_closed_deal", actor, {"stage": stage.nome}
+            )
+        self.session.commit()
+        return to_read(entry)
+
+    def update(self, entry_id: UUID, data: TimeEntryUpdate, actor: Actor) -> TimeEntryRead:
+        actor.require_write("update_time_entry")
+        entry = self._require(entry_id)
+        changes = data.model_dump(exclude_none=True, exclude={"custom_fields"})
+
+        if billed_entry_ids(self.session, [entry]):
+            for field in FROZEN_WHEN_BILLED:
+                if field in changes:
+                    raise ImmutableField(
+                        ENTITY,
+                        field,
+                        "la voce appartiene a una fattura emessa e non è più un dato di CRM",
+                    )
+
+        if "deal_id" in changes:
+            self._require_deal(changes["deal_id"])
+        if "user_id" in changes:
+            self._require_active_user(changes["user_id"])
+        if "data" in changes:
+            self._check_not_future(changes["data"])
+        # Both the stored date and the new one: moving a row out of a closed month is
+        # still a write into it, and checking only the destination would let somebody
+        # empty a reported month one row at a time.
+        self.locks.assert_writable(ENTITY, "data", entry.data, changes.get("data"))
+
+        # A rate supplied on an update is an explicit override and is re-frozen with
+        # `origine = "manuale"`; a rate NOT supplied is never re-resolved, because
+        # re-resolving would be exactly the "a report re-reads a rate column" failure
+        # §5 exists to prevent, wearing an update's clothes.
+        if "tariffa_applicata" in changes:
+            changes["tariffa_origine"] = "manuale"
+        if "costo_applicato" in changes:
+            changes["costo_origine"] = "manuale"
+
+        if data.custom_fields is not None:
+            changes["custom_fields"] = self._update_custom_fields(entry, data.custom_fields)
+        for key, value in changes.items():
+            setattr(entry, key, value)
+
+        self.activities.record(ENTITY, entry.id, "updated", actor, {"changed": sorted(changes)})
+        self.session.commit()
+        return to_read(entry)
+
+    def soft_delete(self, entry_id: UUID, actor: Actor) -> None:
+        """Reversible, like everything else in this product. Acme's only way to void a
+        wrong entry was a physical `DELETE` that rewrote the whole archive file;
+        `ore > 0` stays the rule and the correction has a path that is not destructive
+        (§2.2, last row)."""
+        actor.require_write("delete_time_entry")
+        entry = self._require(entry_id)
+        if billed_entry_ids(self.session, [entry]):
+            raise Conflict(
+                ENTITY,
+                "la voce è legata a una riga di fattura: scollegala prima di cancellarla",
+                invoice_line_id=str(entry.invoice_line_id),
+            )
+        self.locks.assert_writable(ENTITY, "data", entry.data)
+        entry.deleted_at = datetime.now(UTC)
+        self.activities.record(ENTITY, entry.id, "deleted", actor)
+        self.session.commit()
+
+    def restore(self, entry_id: UUID, actor: Actor) -> TimeEntryRead:
+        actor.require_write("restore_time_entry")
+        entry = self._require(entry_id, include_deleted=True)
+        self.locks.assert_writable(ENTITY, "data", entry.data)
+        was_deleted = entry.deleted_at is not None
+        entry.deleted_at = None
+        if was_deleted:
+            # Recorded only when it really was deleted: logging "restored" for an entry
+            # that was never archived would claim a recovery that never happened --
+            # the same guard `DealService.restore` already carries.
+            self.activities.record(ENTITY, entry.id, "restored", actor)
+        self.session.commit()
+        return to_read(entry)
+
+    def update_user_rates(self, user_id: UUID, data: UserRatesUpdate, actor: Actor) -> None:
+        """On `TimeEntryService` and not on a service of its own, deliberately -- see
+        "Contradictions" item 4: §11 fixes the audited surface to three classes and the
+        exclusion list to ten literal names, two of which are this and
+        `update_deal_rate`. A separate `RateService` would put two excluded names
+        outside the audited set, which is the "the ban degrades into an oversight"
+        failure §11 exists to prevent.
+
+        `admin`, not `collaboratore`: changing what an hour is worth is closer to
+        configuration than to writing an entity (slice 1 §6.3). Writes an activity,
+        because the timeline is what reconstructs when a rate changed -- and is the
+        reason §5 can afford not to historicise it (§4.5).
+
+        `exclude_unset`, not `exclude_none`: clearing a rate back to `NULL` has to be
+        expressible, and here it is not a convenience -- an unclearable rate is a
+        number nobody chose staying in force forever. This method is written this way
+        from the start; Task 4B-1 converts the rest of the codebase (residual A14).
+        """
+        actor.require_admin("update_user_rates")
+        user = self.users.get(user_id)
+        if user is None:
+            raise NotFound("user", user_id)
+        changes = data.model_dump(exclude_unset=True)
+        previous = {key: str(getattr(user, key)) for key in changes}
+        for key, value in changes.items():
+            setattr(user, key, value)
+        self.activities.record(
+            "user",
+            user_id,
+            "rates_updated",
+            actor,
+            {"prima": previous, "dopo": {k: str(v) for k, v in changes.items()}},
+        )
+        self.session.commit()
+
+    def update_deal_rate(self, deal_id: UUID, data: DealRateUpdate, actor: Actor) -> None:
+        actor.require_admin("update_deal_rate")
+        deal = self._require_deal(deal_id)
+        changes = data.model_dump(exclude_unset=True)
+        previous = {key: str(getattr(deal, key)) for key in changes}
+        for key, value in changes.items():
+            setattr(deal, key, value)
+        self.activities.record(
+            "deal",
+            deal_id,
+            "rate_updated",
+            actor,
+            {"prima": previous, "dopo": {k: str(v) for k, v in changes.items()}},
+        )
+        self.session.commit()
+
+    def recalculate_rates(self, deal_id: UUID, data: RecalculateRatesRequest, actor: Actor) -> int:
+        """Implemented in Task 4A-11. Declared here so the class's public surface is
+        complete for the architecture test in Task 4A-13."""
+        raise NotImplementedError
+
+    # ---- reads ------------------------------------------------------------
+
+    def get(self, entry_id: UUID, actor: Actor) -> TimeEntryRead:
+        return to_read(self._require(entry_id))
+
+    def describe_rates(self, deal_id: UUID, user_id: UUID, actor: Actor) -> RateDescription:
+        """What a new entry would freeze right now. Reading before acting (slice 1
+        §8.4), and the reason an agent never has to guess which of the three levels
+        answers."""
+        self._require_deal(deal_id)
+        if self.users.get(user_id) is None:
+            raise NotFound("user", user_id)
+        return self.rates.describe(deal_id=deal_id, user_id=user_id)
+
+    def deal_summary(self, deal_id: UUID, actor: Actor) -> DealTimeSummary:
+        """The hours half of a deal's economics, readable with no invoices present.
+
+        Deliberately carries no `ricavi` and no `valore_maturato`: revenue is the
+        invoice (§3, decision 2) and there is no second notion of it. 4B's `DealPnl`
+        adds `ricavi` and defines `valore_maturato = ricavi +
+        valore_ore_non_fatturate` on top of this, instead of 4A shipping a zero that
+        would read as a real figure.
+        """
+        deal = self._require_deal(deal_id)
+        entries = self.repo.for_deal(deal_id)
+        billed = billed_entry_ids(self.session, entries)
+        unbilled_billable = [e for e in entries if e.fatturabile and e.id not in billed]
+        stage = self.pipeline.get(deal.pipeline_stage_id)
+        stato: Literal["in corso", "da fatturare", "chiuso"]
+        if stage.tipo == "open":
+            stato = "in corso"
+        elif unbilled_billable:
+            stato = "da fatturare"
+        else:
+            stato = "chiuso"
+        return DealTimeSummary(
+            deal_id=deal_id,
+            stato=stato,
+            ore_totali=sum_hours([e.ore for e in entries]),
+            ore_fatturabili_non_fatturate=sum_hours([e.ore for e in unbilled_billable]),
+            # Only priced hours contribute; an unpriced one is counted separately and
+            # never valued at zero, which would say the work was free.
+            valore_ore_non_fatturate=sum_money(
+                [line_value(e.ore, e.tariffa_applicata) for e in unbilled_billable]
+            ),
+            # Includes the NON-billable hours: an internal meeting costs exactly what
+            # it would cost if it were billed, and excluding it would make the deal
+            # that demanded more of them look more profitable (§7.1).
+            costo_lavoro=sum_money([line_value(e.ore, e.costo_applicato) for e in entries]),
+            ore_senza_tariffa=sum(1 for e in entries if e.tariffa_applicata is None),
+            voci=len(entries),
+        )
+
+    # `list` stays the last method in this class -- the unconditional project rule.
+    def list(self, query: TimeEntryListQuery, actor: Actor) -> TimeEntryPage:
+        rows = self.repo.list(query)
+        has_more = len(rows) > query.limit
+        items = rows[: query.limit]
+        return TimeEntryPage(
+            items=[to_read(entry) for entry in items],
+            next_cursor=items[-1].id if has_more and items else None,
+        )
