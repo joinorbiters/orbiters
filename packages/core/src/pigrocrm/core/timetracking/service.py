@@ -362,9 +362,78 @@ class TimeEntryService:
         self.session.commit()
 
     def recalculate_rates(self, deal_id: UUID, data: RecalculateRatesRequest, actor: Actor) -> int:
-        """Implemented in Task 4A-11. Declared here so the class's public surface is
-        complete for the architecture test in Task 4A-13."""
-        raise NotImplementedError
+        """The only way to touch the past, and it is visible.
+
+        `admin`, never `collaboratore`, and **not exposed over MCP** (§11's exclusion
+        list, first name): rewriting what already-done work was worth is closer to
+        configuration than to writing an entity -- slice 1 §6.3's reading, which slice
+        3 §11 applied to issuing an invoice.
+
+        All-or-nothing. If the interval contains even one entry belonging to an issued
+        invoice the whole call refuses, naming how many and the first line involved,
+        because that number has already been handed to a client. A partial rewrite
+        would leave the interval in a state nobody chose, so the refusal happens before
+        any assignment.
+
+        Returns how many entries were rewritten, so a caller can say "12 voci
+        aggiornate" instead of "done".
+        """
+        actor.require_admin("recalculate_rates")
+        if data.a < data.da:
+            raise ValidationFailed(
+                ENTITY, "a", "intervallo invertito", expected="una data non anteriore a 'da'"
+            )
+        self._require_deal(deal_id)
+        entries = self.repo.in_range(deal_id, data.da, data.a)
+
+        billed = billed_entry_ids(self.session, entries)
+        if billed:
+            first = next(e for e in entries if e.id in billed)
+            raise Conflict(
+                ENTITY,
+                "l'intervallo contiene voci già fatturate: quei valori sono stati "
+                "consegnati a un cliente e non si riscrivono",
+                voci_fatturate=len(billed),
+                prima_riga=str(first.invoice_line_id),
+                prima_voce=str(first.id),
+            )
+
+        # A closed month is closed to this too: the lock and the recalculation are the
+        # two ways the past can move, and leaving a gap between them would make the
+        # lock decorative.
+        self.locks.assert_writable(ENTITY, "data", *[e.data for e in entries])
+
+        touched = 0
+        for entry in entries:
+            resolved = self.rates.resolve(deal_id=entry.deal_id, user_id=entry.user_id)
+            if (
+                resolved.tariffa == entry.tariffa_applicata
+                and resolved.costo == entry.costo_applicato
+            ):
+                # Nothing changed for this row: skip it rather than writing an activity
+                # claiming a change that did not happen -- the same honesty guard
+                # `restore` applies to its own "restored" entry.
+                continue
+            self.activities.record(
+                ENTITY,
+                entry.id,
+                "rates_recalculated",
+                actor,
+                {
+                    "tariffa_prima": str(entry.tariffa_applicata),
+                    "tariffa_dopo": str(resolved.tariffa),
+                    "costo_prima": str(entry.costo_applicato),
+                    "costo_dopo": str(resolved.costo),
+                },
+            )
+            entry.tariffa_applicata = resolved.tariffa
+            entry.tariffa_origine = resolved.tariffa_origine
+            entry.costo_applicato = resolved.costo
+            entry.costo_origine = resolved.costo_origine
+            touched += 1
+
+        self.session.commit()
+        return touched
 
     # ---- reads ------------------------------------------------------------
 
