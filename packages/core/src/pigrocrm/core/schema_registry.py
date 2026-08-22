@@ -19,8 +19,17 @@ from pigrocrm.core.fields.schemas import EntityType
 from pigrocrm.core.fields.service import FieldDefinitionService
 from pigrocrm.core.invoices.schemas import InvoiceCreate
 from pigrocrm.core.people.schemas import PersonCreate
+from pigrocrm.core.timetracking.schemas import CostCreate, TimeEntryCreate
 
-ENTITY_TYPES: tuple[EntityType, ...] = ("customer", "person", "deal", "document", "invoice")
+ENTITY_TYPES: tuple[EntityType, ...] = (
+    "customer",
+    "person",
+    "deal",
+    "document",
+    "invoice",
+    "time_entry",
+    "cost",
+)
 
 CREATE_MODELS: dict[str, type[BaseModel]] = {
     "customer": CustomerCreate,
@@ -28,19 +37,24 @@ CREATE_MODELS: dict[str, type[BaseModel]] = {
     "deal": DealCreate,
     "document": DocumentCreate,
     "invoice": InvoiceCreate,
+    "time_entry": TimeEntryCreate,
+    "cost": CostCreate,
 }
 
 # Native columns an entity has that its Create schema does *not* declare, because they
-# are derived or set only by a dedicated method. Empty for the four entities whose
+# are derived or set only by a dedicated method. Empty for the entities whose
 # writable surface is their whole surface; non-empty for `invoice`, whose fiscal
 # columns are computed at emission and are exactly the names an administrator would
-# slugify into by accident ("Totale" -> `totale`).
+# slugify into by accident ("Totale" -> `totale`), and for `time_entry`/`cost`,
+# whose billing-state columns (Task 4A-5's plan: `tariffa_applicata`,
+# `costo_applicato`, `tariffa_origine`, `costo_origine`, `invoice_line_id`,
+# `document_id`) are set only when a line is applied or a receipt attached, never on
+# create -- A13's own residual note for this slice: check whether the guard needs
+# the same explicit supplement `invoice` already required, and it does.
 #
-# A13 remains open: `FieldDefinitionService.create` still compares a slugified label
-# only against other definitions and never calls this function at all. Making the list
-# complete does not close that hole -- it makes the data the fix will read correct, so
-# that closing it in slice 1A protects the fiscal columns too rather than only the six
-# names `InvoiceCreate` happens to declare.
+# `FieldDefinitionService.create` (Task 4A-2) reads this function before writing a
+# definition, closing A13 for every entity listed here, including the fiscal columns
+# `InvoiceCreate` itself never declares.
 EXTRA_NATIVE_FIELDS: dict[str, tuple[str, ...]] = {
     "customer": (),
     "person": (),
@@ -66,6 +80,14 @@ EXTRA_NATIVE_FIELDS: dict[str, tuple[str, ...]] = {
         "motivo_annullamento",
         "origine_proforma_id",
     ),
+    "time_entry": (
+        "tariffa_applicata",
+        "costo_applicato",
+        "tariffa_origine",
+        "costo_origine",
+        "invoice_line_id",
+    ),
+    "cost": ("document_id",),
 }
 
 

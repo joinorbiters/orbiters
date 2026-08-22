@@ -40,7 +40,7 @@ export interface FieldDefinition {
   options: string[]
 }
 
-export type EntityType = 'customer' | 'person' | 'deal' | 'document' | 'invoice'
+export type EntityType = 'customer' | 'person' | 'deal' | 'document' | 'invoice' | 'time_entry' | 'cost'
 
 /**
  * The subset of `EntityType` that has a real `GET /api/{plural}/{id}/timeline`
@@ -54,8 +54,13 @@ export type EntityType = 'customer' | 'person' | 'deal' | 'document' | 'invoice'
  * now serves `GET /api/invoices/{invoice_id}/timeline`, so the exclusion is gone --
  * widened *alongside* the endpoint, which is the rule this comment carried from the
  * day the alias was written.
+ *
+ * `time_entry`/`cost` are excluded the same way now: `TIMELINE_FETCHERS` is a
+ * `Record<TimelineEntityType, ...>`, so a bare `= EntityType` alias would force an
+ * entry for both the moment `EntityType` grew them, even though neither has a
+ * timeline router yet. Widen this `Exclude` alongside the endpoint, not before it.
  */
-export type TimelineEntityType = EntityType
+export type TimelineEntityType = Exclude<EntityType, 'time_entry' | 'cost'>
 
 export interface EntitySchema {
   entity_type: string

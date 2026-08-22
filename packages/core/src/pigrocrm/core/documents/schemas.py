@@ -11,8 +11,18 @@ from pigrocrm.core.validation import SafeStr
 # issued invoice, not one: a `document_versions` chain is a linear history of one
 # logical file with one `hash_sha256` used for deduplication and integrity, so putting
 # two formats in it would make "version 3" ambiguous and the two hashes incomparable.
+# `rapporto_ore` is the timesheet PDF archived on the deal (slice 4 §10.2). A
+# String(20) column plus a Literal, never a Postgres ENUM: a new value costs a
+# constant, not an ALTER TYPE.
 DocumentTipo = Literal[
-    "offerta", "contratto", "verbale", "documento", "fattura", "fattura_xml", "proforma"
+    "offerta",
+    "contratto",
+    "verbale",
+    "documento",
+    "fattura",
+    "fattura_xml",
+    "proforma",
+    "rapporto_ore",
 ]
 OfferState = Literal["bozza", "inviata", "accettata", "rifiutata"]
 
