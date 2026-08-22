@@ -111,6 +111,44 @@ def seeded_template_id(mcp_session: Session) -> str:
 
 
 @pytest.fixture
+def seeded_user_id(mcp_session: Session):
+    """A UUID object, not a `str` like `seeded_customer_id` above: the time-tracking
+    tests that consume this feed it straight into `TimeEntryCreate`/raw SQL bind
+    parameters, and `str(seeded_user_id)` is what the tool-call tests do at their own
+    call sites when they need the wire form -- matching `packages/core/tests/
+    conftest.py`'s identical fixture."""
+    from pigrocrm.core.auth.models import User
+
+    user = User(email="worker-mcp@example.test", password_hash="x", nome="Worker")
+    mcp_session.add(user)
+    mcp_session.flush()
+    return user.id
+
+
+@pytest.fixture
+def seeded_deal_id(mcp_session: Session, seeded_customer_id: str):
+    """A UUID object -- see `seeded_user_id`'s docstring for why this differs from
+    `seeded_customer_id`'s `str`."""
+    from uuid import UUID
+
+    from pigrocrm.core.deals.models import Deal
+    from pigrocrm.core.pipeline.models import PipelineStage
+
+    stage = PipelineStage(nome="Aperto", posizione=0, probabilita_default=10, tipo="open")
+    mcp_session.add(stage)
+    mcp_session.flush()
+    deal = Deal(
+        nome="Progetto MCP",
+        customer_id=UUID(seeded_customer_id),
+        pipeline_stage_id=stage.id,
+        probabilita=10,
+    )
+    mcp_session.add(deal)
+    mcp_session.flush()
+    return deal.id
+
+
+@pytest.fixture
 def seeded_offer_id(mcp_session: Session, seeded_customer_id: str, tmp_path: Path) -> str:
     """A plain (not template-generated) offer in its initial `bozza` state -- enough
     to exercise `set_offer_state`'s guard and `get_document_versions` on a document

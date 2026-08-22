@@ -1,0 +1,136 @@
+"""Thin calls into `TimeEntryService`/`CostService`/`CostCategoryService`, like every
+other tool module -- see `tools/invoices.py`'s own docstring for the shape this one
+mirrors.
+
+An agent may record and read. It may not change what an already-recorded number means:
+`recalculate_rates`, `update_user_rates`, `update_deal_rate`, the three cost-category
+writes, `close_period` and `reopen_period` have deliberately no call-through here at
+all, and `apps/mcp/tests/test_mcp_invoice_ban.py` fails the build if any of those
+methods is ever reached from anywhere under `tools/`, not only from this file. A tool
+that contained business logic would be logic the web app cannot reach -- the failure
+this architecture exists to prevent. Every function here builds a core schema from
+caller-supplied data *inside* the guarded call, so a bad value becomes rendered
+guidance instead of a raw pydantic dump (see `tools/__init__.py`'s own note on
+`WithJsonSchema` and `_guard`).
+"""
+
+from typing import Any
+from uuid import UUID
+
+from pigrocrm.core.timetracking.categories import CostCategoryService
+from pigrocrm.core.timetracking.costs import CostService
+from pigrocrm.core.timetracking.schemas import (
+    CostCreate,
+    CostListQuery,
+    CostUpdate,
+    TimeEntryCreate,
+    TimeEntryListQuery,
+    TimeEntryUpdate,
+)
+from pigrocrm.core.timetracking.service import TimeEntryService
+from pigrocrm_mcp.context import McpContext
+
+
+def log_time(context: McpContext, data: dict[str, Any]) -> dict[str, Any]:
+    return (
+        TimeEntryService(context.session)
+        .create(TimeEntryCreate(**data), context.actor)
+        .model_dump(mode="json")
+    )
+
+
+def update_time_entry(context: McpContext, entry_id: str, data: dict[str, Any]) -> dict[str, Any]:
+    return (
+        TimeEntryService(context.session)
+        .update(UUID(entry_id), TimeEntryUpdate(**data), context.actor)
+        .model_dump(mode="json")
+    )
+
+
+def archive_time_entry(context: McpContext, entry_id: str) -> dict[str, str]:
+    TimeEntryService(context.session).soft_delete(UUID(entry_id), context.actor)
+    return {"status": "archiviata", "entry_id": entry_id}
+
+
+def restore_time_entry(context: McpContext, entry_id: str) -> dict[str, Any]:
+    return (
+        TimeEntryService(context.session)
+        .restore(UUID(entry_id), context.actor)
+        .model_dump(mode="json")
+    )
+
+
+def get_time_entry(context: McpContext, entry_id: str) -> dict[str, Any]:
+    return (
+        TimeEntryService(context.session).get(UUID(entry_id), context.actor).model_dump(mode="json")
+    )
+
+
+def list_time_entries(context: McpContext, query: TimeEntryListQuery) -> dict[str, Any]:
+    page = TimeEntryService(context.session).list(query, context.actor)
+    return {
+        "items": [item.model_dump(mode="json") for item in page.items],
+        "next_cursor": str(page.next_cursor) if page.next_cursor else None,
+    }
+
+
+def get_deal_time_summary(context: McpContext, deal_id: str) -> dict[str, Any]:
+    return (
+        TimeEntryService(context.session)
+        .deal_summary(UUID(deal_id), context.actor)
+        .model_dump(mode="json")
+    )
+
+
+def describe_rates(context: McpContext, deal_id: str, user_id: str) -> dict[str, Any]:
+    return (
+        TimeEntryService(context.session)
+        .describe_rates(UUID(deal_id), UUID(user_id), context.actor)
+        .model_dump(mode="json")
+    )
+
+
+def create_cost(context: McpContext, data: dict[str, Any]) -> dict[str, Any]:
+    return (
+        CostService(context.session)
+        .create(CostCreate(**data), context.actor)
+        .model_dump(mode="json")
+    )
+
+
+def update_cost(context: McpContext, cost_id: str, data: dict[str, Any]) -> dict[str, Any]:
+    return (
+        CostService(context.session)
+        .update(UUID(cost_id), CostUpdate(**data), context.actor)
+        .model_dump(mode="json")
+    )
+
+
+def archive_cost(context: McpContext, cost_id: str) -> dict[str, str]:
+    CostService(context.session).soft_delete(UUID(cost_id), context.actor)
+    return {"status": "archiviato", "cost_id": cost_id}
+
+
+def restore_cost(context: McpContext, cost_id: str) -> dict[str, Any]:
+    return (
+        CostService(context.session).restore(UUID(cost_id), context.actor).model_dump(mode="json")
+    )
+
+
+def get_cost(context: McpContext, cost_id: str) -> dict[str, Any]:
+    return CostService(context.session).get(UUID(cost_id), context.actor).model_dump(mode="json")
+
+
+def list_costs(context: McpContext, query: CostListQuery) -> dict[str, Any]:
+    page = CostService(context.session).list(query, context.actor)
+    return {
+        "items": [item.model_dump(mode="json") for item in page.items],
+        "next_cursor": str(page.next_cursor) if page.next_cursor else None,
+    }
+
+
+def list_cost_categories(context: McpContext, include_archived: bool) -> dict[str, Any]:
+    categories = CostCategoryService(context.session).list_cost_categories(
+        include_archived=include_archived
+    )
+    return {"categories": [c.model_dump(mode="json") for c in categories]}
