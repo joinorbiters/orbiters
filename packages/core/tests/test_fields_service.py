@@ -116,13 +116,20 @@ def test_only_admins_change_the_schema(db_session: Session) -> None:
 
 
 def test_specs_for_returns_field_specs_usable_by_the_validator(db_session: Session) -> None:
+    """`key="stato_operativo"`, not `"stato"`: `customer` already has a native
+    `stato` column (customers/schemas.py), so a custom field with that key would
+    now be refused by the A13 guard (fields/service.py) -- exactly the collision
+    this test would otherwise have silently exercised without ever noticing it
+    was shadowing a real column."""
     from pigrocrm.core.fields.validator import validate_custom_fields
 
     service = FieldDefinitionService(db_session)
-    _create(service, key="stato", field_type="select", options=["attivo", "sospeso"])
+    _create(service, key="stato_operativo", field_type="select", options=["attivo", "sospeso"])
 
     specs = service.specs_for("customer")
-    assert validate_custom_fields("customer", specs, {"stato": "attivo"}) == {"stato": "attivo"}
+    assert validate_custom_fields("customer", specs, {"stato_operativo": "attivo"}) == {
+        "stato_operativo": "attivo"
+    }
 
 
 def test_key_length_is_bounded_to_the_column_width_after_slugification() -> None:
