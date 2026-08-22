@@ -37,16 +37,37 @@ def createadmin(email: str | None, nome: str | None) -> int:
     return 0
 
 
+def seed_templates() -> int:
+    """`pigrocrm seed-templates`. Idempotent, so it is safe on every deploy -- which is
+    the point: the timesheet template has to exist before anyone presses Scarica, and
+    requiring a manual step there is how a feature ships broken."""
+    from pigrocrm.core.actor import Actor
+    from pigrocrm.core.config import get_settings
+    from pigrocrm.core.db import create_engine_from_settings, session_factory
+    from pigrocrm.core.templates.service import TemplateService
+
+    with session_factory(create_engine_from_settings(get_settings()))() as session:
+        created = TemplateService(session).seed_defaults(Actor.system())
+    for template in created:
+        print(f"creato: {template.nome} ({template.tipo})")
+    if not created:
+        print("nessun template da creare: sono già presenti")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="pigrocrm")
     sub = parser.add_subparsers(dest="command", required=True)
     admin = sub.add_parser("createadmin", help="Crea il primo utente amministratore")
     admin.add_argument("--email")
     admin.add_argument("--nome")
+    sub.add_parser("seed-templates", help="Crea i template predefiniti, se mancano")
 
     args = parser.parse_args()
     if args.command == "createadmin":
         return createadmin(args.email, args.nome)
+    if args.command == "seed-templates":
+        return seed_templates()
     return 1
 
 
