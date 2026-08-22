@@ -41,7 +41,7 @@ def _check_numbers(values: dict[str, Any]) -> None:
     probabilita = values.get("probabilita")
     if probabilita is not None and not 0 <= probabilita <= 100:
         raise ValidationFailed(ENTITY, "probabilita", "fuori intervallo", expected="0-100")
-    for field in ("valore_previsto", "valore_preventivato", "ore_preventivate"):
+    for field in ("valore_previsto", "valore_preventivato", "ore_preventivate", "tariffa_oraria"):
         value = values.get(field)
         if value is not None and Decimal(value) < 0:
             raise ValidationFailed(ENTITY, field, "non può essere negativo", expected=">= 0")

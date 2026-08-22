@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
@@ -7,6 +8,12 @@ from pigrocrm.core.actor import Role
 from pigrocrm.core.validation import SafeStr
 
 MIN_PASSWORD_LENGTH = 10
+
+# `tariffa_oraria_default`/`costo_orario_default` are Numeric(12,6) -- factors, not
+# amounts. Declared locally rather than imported from `deals/schemas.py`: `deals`
+# and `auth` do not depend on each other today and this is not the reason to start.
+FACTOR_MAX_DIGITS = 12
+FACTOR_DECIMAL_PLACES = 6
 
 # Mirrors `users.nome`'s column width (auth/models.py: String(200)). Predates every
 # other domain's *_MAX_LENGTH sweep and was never itself swept until the final
@@ -27,6 +34,12 @@ class UserCreate(BaseModel):
     password: str
     nome: SafeStr = Field(max_length=NOME_MAX_LENGTH)
     ruolo: Role = "collaboratore"
+    tariffa_oraria_default: Decimal | None = Field(
+        default=None, max_digits=FACTOR_MAX_DIGITS, decimal_places=FACTOR_DECIMAL_PLACES, ge=0
+    )
+    costo_orario_default: Decimal | None = Field(
+        default=None, max_digits=FACTOR_MAX_DIGITS, decimal_places=FACTOR_DECIMAL_PLACES, ge=0
+    )
 
     @field_validator("email", mode="before")
     @classmethod
@@ -38,6 +51,12 @@ class UserUpdate(BaseModel):
     nome: SafeStr | None = Field(default=None, max_length=NOME_MAX_LENGTH)
     ruolo: Role | None = None
     attivo: bool | None = None
+    tariffa_oraria_default: Decimal | None = Field(
+        default=None, max_digits=FACTOR_MAX_DIGITS, decimal_places=FACTOR_DECIMAL_PLACES, ge=0
+    )
+    costo_orario_default: Decimal | None = Field(
+        default=None, max_digits=FACTOR_MAX_DIGITS, decimal_places=FACTOR_DECIMAL_PLACES, ge=0
+    )
 
 
 class UserRead(BaseModel):
@@ -48,4 +67,6 @@ class UserRead(BaseModel):
     nome: str
     ruolo: Role
     attivo: bool
+    tariffa_oraria_default: Decimal | None
+    costo_orario_default: Decimal | None
     created_at: datetime

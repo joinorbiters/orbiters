@@ -59,4 +59,12 @@ class Deal(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     # is money and shares valore_previsto's Numeric(12,2).
     ore_preventivate: Mapped[Decimal | None] = mapped_column(Numeric(8, 2), default=None)
     valore_preventivato: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), default=None)
+    # Numeric(12,6), not (12,2): a rate is a factor, and slice 3 makes
+    # `invoice_lines.prezzo_unitario` Numeric(12,6) for the same reason ("3 hours at
+    # 33.3333 EUR/h is not expressible at two places"). A rate and a unit price are
+    # the same quantity seen from two tables, so a rate at two places would change
+    # value the moment these hours became an invoice line, and slice 4B's
+    # reconciliation would fail by cents. Level 2 of the resolution order in slice 4
+    # §5.1; no report ever reads it, because the resolved value is copied onto the row.
+    tariffa_oraria: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), default=None)
     custom_fields: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
