@@ -15,6 +15,7 @@ from sqlalchemy import (
     String,
     Text,
     Uuid,
+    func,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -40,12 +41,19 @@ class CostCategory(Base, PrimaryKeyMixin, TimestampMixin):
     """
 
     __tablename__ = "cost_categories"
-    __table_args__ = (Index("uq_cost_categories_code", "code", unique=True),)
 
     nome: Mapped[str] = mapped_column(String(60), nullable=False)
     posizione: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     code: Mapped[str | None] = mapped_column(String(30), default=None)
     archiviata: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    __table_args__ = (
+        Index("uq_cost_categories_code", "code", unique=True),
+        # Case-insensitive identity needs a functional index, not a convention: a
+        # plain unique=True on a text column is case-sensitive, and normalising in the
+        # service protects only the paths that go through it.
+        Index("uq_cost_categories_nome", func.lower(nome), unique=True),
+    )
 
 
 class TimeEntry(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
