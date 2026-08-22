@@ -21,6 +21,7 @@ import {
   type RelatedPerson,
 } from '@/features/customers/queries'
 import { DocumentsTab } from '@/features/documents/DocumentsTab'
+import { InvoicesTab } from '@/features/invoices/InvoicesTab'
 import { toProblem, type ProblemDetail } from '@/lib/api'
 import { useCanWrite } from '@/lib/auth'
 import { useEntitySchema } from '@/lib/schema'
@@ -161,6 +162,7 @@ export function CustomerDetail() {
         entityType="customer"
         entityId={customerId}
         documents={<DocumentsTab owner={{ customerId }} />}
+        invoices={<InvoicesTab owner={{ customerId }} />}
         actions={
           canWrite && (
             <>

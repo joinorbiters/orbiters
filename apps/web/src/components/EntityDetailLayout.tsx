@@ -16,6 +16,10 @@ interface EntityDetailLayoutProps {
    * user to look for something that does not exist for this entity.
    */
   documents?: ReactNode
+  /** Optional, like `documents`: only customers and deals have invoices, and a person
+   *  never will. An absent prop means the tab is not rendered at all, rather than a tab
+   *  that opens onto an empty explanation of why it is empty. */
+  invoices?: ReactNode
   entityType: TimelineEntityType
   entityId: string
   /**
@@ -44,6 +48,7 @@ export function EntityDetailLayout({
   overview,
   links,
   documents,
+  invoices,
   entityType,
   entityId,
   timelineLimit,
@@ -62,6 +67,7 @@ export function EntityDetailLayout({
         <TabsList>
           <TabsTrigger value="panoramica">Panoramica</TabsTrigger>
           {documents && <TabsTrigger value="documenti">Documenti</TabsTrigger>}
+          {invoices && <TabsTrigger value="fatture">Fatture</TabsTrigger>}
           <TabsTrigger value="timeline">Timeline</TabsTrigger>
           <TabsTrigger value="collegamenti">Collegamenti</TabsTrigger>
         </TabsList>
@@ -72,6 +78,11 @@ export function EntityDetailLayout({
         {documents && (
           <TabsContent value="documenti" className="mt-6">
             {documents}
+          </TabsContent>
+        )}
+        {invoices && (
+          <TabsContent value="fatture" className="mt-6">
+            {invoices}
           </TabsContent>
         )}
         <TabsContent value="timeline" className="mt-6">
