@@ -6,10 +6,24 @@ from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.analytics.repository import AnalyticsRepository
-from pigrocrm.core.analytics.schemas import DealPnl, PeriodPnl, PeriodPnlQuery, PnlTotals
+from pigrocrm.core.analytics.schemas import (
+    BudgetPage,
+    BudgetQuery,
+    BudgetVsActualRow,
+    DealPnl,
+    PeriodPnl,
+    PeriodPnlQuery,
+    PnlTotals,
+)
 from pigrocrm.core.deals.repository import DealRepository
 from pigrocrm.core.errors import NotFound, ValidationFailed
-from pigrocrm.core.money import ZERO_MONEY, percentage_of, sum_money
+from pigrocrm.core.money import (
+    ZERO_HOURS,
+    ZERO_MONEY,
+    percentage_of,
+    round_money,
+    sum_money,
+)
 from pigrocrm.core.timetracking.locks import PeriodLockService
 from pigrocrm.core.timetracking.service import TimeEntryService
 
@@ -25,6 +39,25 @@ def _months_between(da: date, a: date) -> list[tuple[int, int]]:
         months.append((year, month))
         year, month = (year + 1, 1) if month == 12 else (year, month + 1)
     return months
+
+
+def _comparable(estimate: Decimal | None) -> Decimal | None:
+    """The estimate itself when it can be compared against, `None` when it cannot.
+
+    An estimate is comparable only when it is present **and** greater than zero. `None`
+    means nobody estimated. `0` is the state residual A14 made the only reachable spelling
+    of "no estimate" before Task 4B-1 closed it, and it reads to any division as "zero
+    hours estimated, infinite overrun". Both are refused as denominators here -- the
+    secondary defence §9.2 requires regardless of A14.
+
+    Returns the narrowed value rather than a `bool` on purpose: a predicate would leave
+    every call site holding a `Decimal | None` that the type checker has no way to follow,
+    and the usual repair for that is a `cast` or an `assert` -- an escape hatch standing
+    exactly where the null this function exists to catch would come through.
+    """
+    if estimate is None or estimate <= 0:
+        return None
+    return estimate
 
 
 def _totals(rows: list[tuple[Decimal, Decimal, Decimal]]) -> PnlTotals:
@@ -176,6 +209,105 @@ class AnalyticsService:
             # Free: a COUNT over two columns that already exist, and the one thing a
             # reader most needs to know about an open period (§6.4).
             voci_scritte_in_ritardo=self.repo.late_entry_count(query.da, query.a),
+        )
+
+    def budget_vs_actual(self, query: BudgetQuery, actor: Actor) -> BudgetPage:
+        """Estimate against actual, per deal, with the pro-rata comparison beside the
+        full one rather than instead of it.
+
+        This is the payment on an investment made in advance: `deals.ore_preventivate`
+        and `deals.valore_preventivato` have existed since slice 1 -- written with a
+        comment saying so -- and have never been read by anybody. The actuals are the one
+        missing half.
+        """
+        if query.a < query.da:
+            raise ValidationFailed(
+                ENTITY, "a", "intervallo invertito", expected="una data non anteriore a 'da'"
+            )
+
+        revenue = self.repo.revenue_in_range(query.da, query.a, query.customer_id)
+        hours = self.repo.hours_in_range(query.da, query.a, query.customer_id)
+        deals = self.repo.deals_in_range(query.da, query.a, query.customer_id)
+
+        # Keyset pagination over the already-ordered deal list rather than a second
+        # database round trip: `deals_in_range` orders by `(nome, id)`, so the cursor is
+        # the last id of the page.
+        if query.cursor is not None:
+            ids = [deal.id for deal in deals]
+            if query.cursor in ids:
+                deals = deals[ids.index(query.cursor) + 1 :]
+        window = deals[: query.limit]
+        next_cursor = window[-1].id if len(deals) > query.limit and window else None
+
+        rows: list[BudgetVsActualRow] = []
+        for deal in window:
+            ore_consuntivate = hours.get(deal.id, ZERO_HOURS)
+            ricavi = revenue.get(deal.id, ZERO_MONEY)
+            # Narrowed to "comparable or absent" once, here, so that below there is
+            # nothing left to divide by that could be null or zero.
+            ore_prev = _comparable(deal.ore_preventivate)
+            valore_prev = _comparable(deal.valore_preventivato)
+
+            avanzamento = (
+                percentage_of(ore_consuntivate, ore_prev) if ore_prev is not None else None
+            )
+            # The pro-rata needs BOTH estimate columns. With a value estimate and no hours
+            # estimate there is no progress to derive it from, and inventing one from the
+            # invoiced value would be circular -- the invoiced value is the quantity being
+            # judged.
+            pro_rata = (
+                round_money(valore_prev * avanzamento / Decimal(100))
+                if (valore_prev is not None and avanzamento is not None)
+                else None
+            )
+            rows.append(
+                BudgetVsActualRow(
+                    deal_id=deal.id,
+                    nome=deal.nome,
+                    # The stored column, not the narrowed one: a deal estimated at zero
+                    # hours should show the zero somebody typed. What `_comparable`
+                    # governs is what may be divided by, never what may be displayed.
+                    ore_preventivate=deal.ore_preventivate,
+                    ore_consuntivate=ore_consuntivate,
+                    valore_preventivato=deal.valore_preventivato,
+                    ricavi=ricavi,
+                    avanzamento_ore=avanzamento,
+                    budget_pro_rata=pro_rata,
+                    # Measured against the pro-rata, never the full budget: at 40% of the
+                    # hours, being at 40% of the estimated value is on track, and
+                    # comparing with 100% would mark every job in progress as
+                    # underperforming.
+                    scostamento_valore=(ricavi - pro_rata) if pro_rata is not None else None,
+                    scostamento_ore=(ore_consuntivate - ore_prev if ore_prev is not None else None),
+                    tariffa_media_preventivata=(
+                        round_money(valore_prev / ore_prev)
+                        if (ore_prev is not None and valore_prev is not None)
+                        else None
+                    ),
+                    # The row that serves best, and the only form in which "is this client
+                    # worth it?" has a numeric answer: how much was realised per hour
+                    # worked, comparable even between deals of very different sizes.
+                    # `None` with no hours logged, never `0.00`, which would read as
+                    # "realised nothing per hour" -- the opposite of the truth on a deal
+                    # invoiced without a timesheet.
+                    tariffa_media_consuntivata=(
+                        round_money(ricavi / ore_consuntivate) if ore_consuntivate > 0 else None
+                    ),
+                    non_preventivato=ore_prev is None and valore_prev is None,
+                    pro_rata_non_calcolabile=valore_prev is not None and ore_prev is None,
+                )
+            )
+
+        budgeted = [row for row in rows if not row.non_preventivato]
+        return BudgetPage(
+            items=rows,
+            next_cursor=next_cursor,
+            # Only over rows with an estimate: including the unestimated ones would make
+            # the aggregate depend on how many deals nobody estimated.
+            totale_preventivato=sum_money([row.valore_preventivato for row in budgeted]),
+            totale_ricavi=sum_money([row.ricavi for row in budgeted]),
+            deal_preventivati=len(budgeted),
+            deal_non_preventivati=len(rows) - len(budgeted),
         )
 
 

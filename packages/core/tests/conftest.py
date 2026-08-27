@@ -1,6 +1,6 @@
 import subprocess
 from collections.abc import Callable, Iterator
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -628,3 +628,83 @@ def closed_deal_with_invoice(
         Actor(id=None, type="user", role="collaboratore"),
     )
     return deal_id
+
+
+# --- slice 4B: estimate against actual ---------------------------------------------
+
+
+@pytest.fixture
+def budgeted_deal(
+    db_session: Session, local_storage: LocalFileStorage, seeded_user_id: UUID
+) -> Callable[..., UUID]:
+    """A factory: one deal with the given estimate columns, hours and revenue, in March
+    2026.
+
+    The revenue is built by creating and **issuing** a real invoice rather than by
+    inserting a row, because criterion 1 of this slice is precisely that the figure comes
+    from an invoice that exists -- a fixture that wrote `invoices` directly could not tell
+    a correct implementation from one reading a column nobody ever fills.
+
+    The estimates arrive as strings (or `None`) so that "no estimate" and "an estimate of
+    zero" are two visibly different arguments at every call site: they are the two states
+    §9.2 requires the report to keep apart, and a test that could not spell both would be
+    testing only one.
+    """
+    from pigrocrm.core.timetracking.schemas import TimeEntryCreate
+    from pigrocrm.core.timetracking.service import TimeEntryService
+
+    def _make(
+        *,
+        ore_preventivate: str | None,
+        valore_preventivato: str | None,
+        ore_registrate: str | None = None,
+        ricavi: str | None = None,
+        nome: str = "Progetto preventivato",
+    ) -> UUID:
+        deal_id, customer_id = _deal_of_fiscal_customer(db_session, nome)
+        deal = db_session.get(Deal, deal_id)
+        assert deal is not None
+        deal.ore_preventivate = None if ore_preventivate is None else Decimal(ore_preventivate)
+        deal.valore_preventivato = (
+            None if valore_preventivato is None else Decimal(valore_preventivato)
+        )
+        db_session.flush()
+
+        if ore_registrate is not None:
+            # Spread over consecutive working days at up to 8 hours each, not written as
+            # one entry: `TimeEntryCreate.ore` is capped at 24 because an entry is one
+            # person's one day, and the totals this fixture exists to feed are tens of
+            # hours. The dates stay inside March so the window still selects all of them
+            # -- 120 hours, the largest any test asks for, reaches 24 March.
+            residuo = Decimal(ore_registrate)
+            giorno = date(2026, 3, 10)
+            while residuo > 0:
+                quota = min(residuo, Decimal("8.00"))
+                TimeEntryService(db_session).create(
+                    TimeEntryCreate(
+                        deal_id=deal_id,
+                        user_id=seeded_user_id,
+                        data=giorno,
+                        ore=quota,
+                        descrizione="Lavorazione",
+                    ),
+                    Actor(id=None, type="user", role="collaboratore"),
+                )
+                residuo -= quota
+                giorno += timedelta(days=1)
+        if ricavi is not None:
+            _issue(
+                db_session,
+                local_storage,
+                _draft_for_deal(
+                    db_session,
+                    local_storage,
+                    customer_id=customer_id,
+                    deal_id=deal_id,
+                    importo=Decimal(ricavi),
+                ),
+                date(2026, 3, 15),
+            )
+        return deal_id
+
+    return _make
