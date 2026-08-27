@@ -335,11 +335,22 @@ def annulled_invoice_line_id(
 # enough to issue against -- so these build their own customer, deal and stage.
 
 
-def _deal_of_fiscal_customer(session: Session, nome: str) -> tuple[UUID, UUID]:
-    """`(deal_id, customer_id)`, on an **open** stage so the state starts at "in corso"."""
+def _deal_of_fiscal_customer(
+    session: Session, nome: str, *, tipo: str = "open"
+) -> tuple[UUID, UUID]:
+    """`(deal_id, customer_id)`, on an **open** stage so the state starts at "in corso".
+
+    `tipo="won"` puts it on a closed-won stage instead, which is the first of the two
+    conditions `deal_summary` requires before it will call a deal `chiuso` -- the second
+    being that no billable hour is still unbilled. A period P&L needs both columns
+    populated to be worth asserting on at all, so the choice has to be expressible here.
+    """
     customer_id = _fiscal_customer_id(session)
     stage = PipelineStage(
-        nome=f"Aperto {uuid4()}", posizione=0, probabilita_default=10, tipo="open"
+        nome=f"{'Vinto' if tipo == 'won' else 'Aperto'} {uuid4()}",
+        posizione=9 if tipo == "won" else 0,
+        probabilita_default=100 if tipo == "won" else 10,
+        tipo=tipo,
     )
     session.add(stage)
     session.flush()
@@ -380,11 +391,21 @@ def _draft_for_deal(
     return invoice_id
 
 
-def _issue(session: Session, storage: LocalFileStorage, invoice_id: UUID) -> None:
+def _issue(
+    session: Session,
+    storage: LocalFileStorage,
+    invoice_id: UUID,
+    data_emissione: date | None = None,
+) -> None:
+    """`data_emissione` explicit where the period matters: a period P&L attributes
+    revenue by that column, and the default -- today -- would put every fixture invoice
+    in the month the suite happens to run in rather than the one the test names."""
     from pigrocrm.core.invoices.schemas import InvoiceIssue
 
     _invoice_service(session, storage).issue(
-        invoice_id, InvoiceIssue(), Actor(id=None, type="system", role="admin")
+        invoice_id,
+        InvoiceIssue(data_emissione=data_emissione),
+        Actor(id=None, type="system", role="admin"),
     )
 
 
@@ -518,5 +539,92 @@ def deal_with_bollo_invoice(db_session: Session, local_storage: LocalFileStorage
             deal_id=deal_id,
             importo=Decimal("1000.00"),
         ),
+    )
+    return deal_id
+
+
+# --- slice 4B: the two columns of a period P&L -------------------------------------
+#
+# `period_pnl` splits deals into `chiusi` and `in corso` and refuses to add the two
+# together. Testing that refusal needs one deal of each kind inside the same window,
+# each carrying figures of its own that a wrong implementation could move.
+
+
+@pytest.fixture
+def open_deal_with_hours(
+    db_session: Session, seeded_user_id: UUID, seeded_category_id: UUID
+) -> UUID:
+    """March 2026: 10 priced hours at an internal cost of 40, and 150.00 of licences.
+
+    Labour cost 400.00, direct costs 150.00, revenue nothing -- an unfinished job, whose
+    margin is provisional by construction and must never be added to a finished one's.
+    """
+    from pigrocrm.core.timetracking.costs import CostService
+    from pigrocrm.core.timetracking.schemas import CostCreate, TimeEntryCreate
+    from pigrocrm.core.timetracking.service import TimeEntryService
+
+    writer = Actor(id=None, type="user", role="collaboratore")
+    deal_id, _ = _deal_of_fiscal_customer(db_session, "Progetto in corso")
+    TimeEntryService(db_session).create(
+        TimeEntryCreate(
+            deal_id=deal_id,
+            user_id=seeded_user_id,
+            data=date(2026, 3, 5),
+            ore=Decimal("10.00"),
+            descrizione="Sviluppo",
+            tariffa_applicata=Decimal("100.000000"),
+            costo_applicato=Decimal("40.000000"),
+        ),
+        writer,
+    )
+    CostService(db_session).create(
+        CostCreate(
+            deal_id=deal_id,
+            category_id=seeded_category_id,
+            data=date(2026, 3, 6),
+            importo=Decimal("150.00"),
+            descrizione="Licenze",
+        ),
+        writer,
+    )
+    return deal_id
+
+
+@pytest.fixture
+def closed_deal_with_invoice(
+    db_session: Session, local_storage: LocalFileStorage, seeded_category_id: UUID
+) -> UUID:
+    """March 2026: 2000.00 invoiced and issued, 200.00 of direct costs, no hours.
+
+    On a won stage and with no billable hour left unbilled, which is what makes
+    `deal_summary` call it `chiuso` -- the state `period_pnl` reads to choose a column.
+    Margin 1800.00, that is 90.00% of revenue: a reportable figure, and one that would
+    move visibly if a general expense were ever apportioned onto it.
+    """
+    from pigrocrm.core.timetracking.costs import CostService
+    from pigrocrm.core.timetracking.schemas import CostCreate
+
+    deal_id, customer_id = _deal_of_fiscal_customer(db_session, "Progetto chiuso", tipo="won")
+    _issue(
+        db_session,
+        local_storage,
+        _draft_for_deal(
+            db_session,
+            local_storage,
+            customer_id=customer_id,
+            deal_id=deal_id,
+            importo=Decimal("2000.00"),
+        ),
+        date(2026, 3, 20),
+    )
+    CostService(db_session).create(
+        CostCreate(
+            deal_id=deal_id,
+            category_id=seeded_category_id,
+            data=date(2026, 3, 21),
+            importo=Decimal("200.00"),
+            descrizione="Stampa",
+        ),
+        Actor(id=None, type="user", role="collaboratore"),
     )
     return deal_id
