@@ -204,6 +204,48 @@ describe('DealForm', () => {
     })
   })
 
+  it('clears a native numeric or date column with null, not with an empty string', async () => {
+    // The payoff of task 4B-1 (residual A14), on the form that shows it. `""` is not a
+    // decimal and not a date, so before this these three keys came back as a 422 from
+    // Pydantic and the estimate the user was trying to take back stayed put -- reading,
+    // in the budget report, as an infinite overrun. `null` is what clears them now, and
+    // `note` in the same payload proves the text spelling did not move.
+    const onSubmit = vi.fn()
+    const initial = dealToFormValues({
+      ...BASE_DEAL,
+      note: 'Vecchia nota',
+      ore_preventivate: '40.00',
+      valore_preventivato: '10000.00',
+      data_chiusura_prevista: '2026-12-31',
+    })
+    renderWithClient(
+      <DealForm
+        title="Modifica deal"
+        open
+        onOpenChange={vi.fn()}
+        customFields={[]}
+        initial={initial}
+        onSubmit={onSubmit}
+      />,
+    )
+
+    await userEvent.clear(screen.getByLabelText('Ore preventivate'))
+    await userEvent.clear(screen.getByLabelText('Valore preventivato'))
+    await userEvent.clear(screen.getByLabelText('Chiusura prevista'))
+    await userEvent.clear(screen.getByLabelText('Note'))
+    await userEvent.click(screen.getByRole('button', { name: 'Salva' }))
+
+    expect(submitted(onSubmit)).toEqual({
+      nome: 'Sito vetrina',
+      probabilita: 10,
+      ore_preventivate: null,
+      valore_preventivato: null,
+      data_chiusura_prevista: null,
+      note: '',
+      custom_fields: {},
+    })
+  })
+
   describe('customer selection', () => {
     it('shows a required Cliente picker on create', () => {
       renderWithClient(

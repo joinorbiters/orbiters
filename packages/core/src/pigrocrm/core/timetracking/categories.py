@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
+from pigrocrm.core.schemas import reject_cleared_columns, supplied_changes
 from pigrocrm.core.timetracking.models import Cost, CostCategory
 from pigrocrm.core.timetracking.schemas import (
     CostCategoryCreate,
@@ -118,7 +119,8 @@ class CostCategoryService:
     ) -> CostCategoryRead:
         actor.require_admin("update_cost_category")
         category = self._require(category_id)
-        changes = data.model_dump(exclude_none=True)
+        changes = supplied_changes(data)
+        reject_cleared_columns(ENTITY, CostCategory, changes)
         if "nome" in changes:
             nome = changes["nome"].strip()
             if not nome:

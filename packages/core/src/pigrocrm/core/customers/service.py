@@ -20,6 +20,7 @@ from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 from pigrocrm.core.fields.schemas import EntityType
 from pigrocrm.core.fields.service import FieldDefinitionService
 from pigrocrm.core.fields.validator import validate_custom_fields
+from pigrocrm.core.schemas import reject_cleared_columns, supplied_changes
 
 # Typed as the fields module's own EntityType (not a bare `str`) so that passing it
 # straight into `specs_for` type-checks under mypy strict -- a plain `ENTITY = "customer"`
@@ -164,7 +165,8 @@ class CustomerService:
         # must see a caller-supplied `None` *inside* the dict (e.g. {"settore": None},
         # meaning "remove this key") exactly as given, with no risk of it being
         # confused with the field itself being absent -- see `_update_custom_fields`.
-        changes = data.model_dump(exclude_none=True, exclude={"custom_fields"})
+        changes = supplied_changes(data, exclude={"custom_fields"})
+        reject_cleared_columns(ENTITY, Customer, changes)
         _check_fiscal(changes)
         if data.custom_fields is not None:
             changes["custom_fields"] = self._update_custom_fields(customer, data.custom_fields)

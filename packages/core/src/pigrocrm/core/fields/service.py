@@ -14,6 +14,7 @@ from pigrocrm.core.fields.schemas import (
     FieldDefinitionUpdate,
 )
 from pigrocrm.core.fields.types import OPTION_TYPES, FieldSpec
+from pigrocrm.core.schemas import reject_cleared_columns, supplied_changes
 
 
 def _check_options(field_type: str, options: list[str]) -> None:
@@ -102,7 +103,8 @@ class FieldDefinitionService:
         if field is None:
             raise NotFound("field_definition", field_id)
 
-        changes = data.model_dump(exclude_none=True)
+        changes = supplied_changes(data)
+        reject_cleared_columns("field_definition", FieldDefinition, changes)
         if "options" in changes:
             _check_options(field.field_type, changes["options"])
         for key, value in changes.items():

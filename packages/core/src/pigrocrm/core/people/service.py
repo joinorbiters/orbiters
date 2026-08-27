@@ -21,6 +21,7 @@ from pigrocrm.core.people.schemas import (
     PersonRead,
     PersonUpdate,
 )
+from pigrocrm.core.schemas import reject_cleared_columns, supplied_changes
 
 # Typed as the fields module's own EntityType (not a bare `str`), matching
 # CustomerService.ENTITY exactly: passing a plain `str` into `specs_for` fails mypy
@@ -148,9 +149,8 @@ class PersonService:
         # confused with the field itself being absent -- see `_update_custom_fields`.
         # `customer_id` is excluded here too and handled below, alongside `detach`:
         # the two interact in a way a blind `model_dump` cannot express.
-        changes = data.model_dump(
-            exclude_none=True, exclude={"custom_fields", "detach", "customer_id"}
-        )
+        changes = supplied_changes(data, exclude={"custom_fields", "detach", "customer_id"})
+        reject_cleared_columns(ENTITY, Person, changes)
         _check_email(changes)
 
         # `detach` is an explicit, self-contained intention and wins outright over any

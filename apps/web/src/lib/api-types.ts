@@ -2103,9 +2103,8 @@ export interface components {
          * DocumentUpdate
          * @description `stato` is deliberately absent: an offer's state changes only through a
          *     dedicated state-transition method, which takes a required non-nullable literal.
-         *     That keeps this slice clear of the defect where `model_dump(exclude_none=True)`
-         *     drops a `None`, so a nullable typed column on an Update schema has no spelling
-         *     that means "clear it".
+         *     Since task 4B-1 closed A14 a `null` here *would* clear the column, which is exactly
+         *     why the field stays off this schema -- see `DocumentService.set_offer_state`.
          */
         DocumentUpdate: {
             /** Titolo */

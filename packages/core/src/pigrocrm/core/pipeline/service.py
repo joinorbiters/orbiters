@@ -12,6 +12,7 @@ from pigrocrm.core.pipeline.schemas import (
     PipelineStageRead,
     PipelineStageUpdate,
 )
+from pigrocrm.core.schemas import reject_cleared_columns, supplied_changes
 
 # (code, nome, posizione, probabilita_default, tipo). `seed_defaults` deduplicates on
 # `code`, never on `nome` -- see `PipelineStage`'s docstring for why.
@@ -64,7 +65,8 @@ class PipelineService:
         stage = self.repo.get(stage_id)
         if stage is None:
             raise NotFound("pipeline_stage", stage_id)
-        changes = data.model_dump(exclude_none=True)
+        changes = supplied_changes(data)
+        reject_cleared_columns("pipeline_stage", PipelineStage, changes)
         _check_probability(changes.get("probabilita_default"))
         for key, value in changes.items():
             setattr(stage, key, value)

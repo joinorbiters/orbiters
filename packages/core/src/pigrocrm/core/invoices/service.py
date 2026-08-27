@@ -70,6 +70,7 @@ from pigrocrm.core.invoices.schemas import (
     PaymentState,
 )
 from pigrocrm.core.invoices.totals import ComputedLine, build_riepilogo, line_total, sum_totals
+from pigrocrm.core.schemas import reject_cleared_columns, supplied_changes
 from pigrocrm.core.storage.base import DocumentStorage
 
 ENTITY: EntityType = "invoice"
@@ -293,7 +294,8 @@ class InvoiceService:
     def update(self, invoice_id: UUID, data: InvoiceUpdate, actor: Actor) -> InvoiceRead:
         actor.require_write("update_invoice")
         invoice = self._require(invoice_id)
-        changes = data.model_dump(exclude_none=True, exclude={"custom_fields"})
+        changes = supplied_changes(data, exclude={"custom_fields"})
+        reject_cleared_columns(ENTITY, Invoice, changes)
         frozen = [key for key in changes if key not in MUTABLE_AFTER_ISSUE]
         if frozen and not self._is_editable(invoice):
             raise ImmutableField(
@@ -314,10 +316,13 @@ class InvoiceService:
     ) -> InvoiceRead:
         """The whole list, never a partial patch.
 
-        Two reasons, both from spec 11: it is the natural shape of a line editor, and
-        it is the only way an optional numeric or date column can be cleared at all
-        while `exclude_none=True` is the update contract (A14). Replacing the list
-        sidesteps that defect instead of pretending it is closed.
+        The reason from spec 11 that still stands: it is the natural shape of a line
+        editor, and a line's totals are derived from the whole list, so patching one
+        line in place would leave the invoice's totals to be reconciled separately. The
+        second reason it was written for -- that while `exclude_none=True` was the
+        update contract no optional numeric or date column could be cleared at all
+        (A14) -- was retired by task 4B-1, which closed that defect rather than
+        continuing to sidestep it.
         """
         actor.require_write("replace_invoice_lines")
         invoice = self._require(invoice_id)

@@ -16,8 +16,8 @@ class Person(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     creation time would produce phantom customers (e.g. "Freelance vari") just to
     hold the ones who do not yet have one. `PersonService` validates an explicit
     `customer_id` against `customers` whenever one is supplied, and
-    `PersonUpdate.detach` is how the association is removed again -- `exclude_none`
-    on a partial update cannot otherwise express "set this back to null".
+    `PersonUpdate.detach` is how the association is removed again -- see that field's
+    own comment for why it survived A14 being closed.
 
     `custom_fields` copies `Customer`'s own JSONB column and GIN index, for the same
     reason: `list()`'s containment filter (`custom_fields @> {...}`) must never fall

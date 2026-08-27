@@ -9,7 +9,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import type { ProblemDetail } from '@/lib/api'
-import type { FieldDefinition } from '@/lib/schema'
+import { clearedNativeValue, type FieldDefinition } from '@/lib/schema'
 import type { Customer } from './queries'
 
 const NATIVE_FIELDS: FieldDefinition[] = [
@@ -176,10 +176,12 @@ export function CustomerForm({
       } else if (!isBlank(initial?.native[key])) {
         // The user cleared a native column that used to hold a value -- say so
         // explicitly instead of dropping the key, or the old value survives
-        // untouched. A native column clears on `""` and only on `""`:
-        // `CustomerUpdate.model_dump(exclude_none=True)` keeps an empty string and
-        // drops an actual `None`, so `null` here would be silently ignored.
-        native[key] = ''
+        // untouched. `clearedNativeValue` picks the spelling from the column's type;
+        // every native field on this form is text-shaped, so it answers `""` for all
+        // of them, exactly as before task 4B-1. The call stays anyway rather than a
+        // hardcoded `""`: the day somebody adds a numeric column here, the wrong
+        // spelling would be a 422 nobody would connect to this line.
+        native[key] = clearedNativeValue(NATIVE_FIELDS, key)
       }
       // else: blank now, blank (or never set) before -- nothing changed, so there is
       // nothing to say.

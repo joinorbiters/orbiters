@@ -40,6 +40,43 @@ export interface FieldDefinition {
   options: string[]
 }
 
+/** The field types whose control holds text, and whose column therefore clears on `""`.
+ *  Everything else -- a number, a currency amount, a date, a checkbox, an id with its
+ *  own picker -- holds a typed value that has no empty spelling. */
+const TEXT_SHAPED: ReadonlySet<FieldType> = new Set(['text', 'textarea', 'url', 'select'])
+
+/**
+ * What a form must send for a *native* column the user just emptied.
+ *
+ * Two spellings, and which one is right depends on the column's type -- this is the
+ * detail every form here got wrong in the same way. `""` was the whole answer while
+ * `exclude_none=True` was the backend's update contract: an omitted key changed
+ * nothing, `null` was silently discarded, and `""` was the only thing left that meant
+ * "clear it". It only ever worked for text columns. On `valore_previsto`,
+ * `data_chiusura_prevista`, `ore_preventivate` or `tariffa_applicata`, `""` is not a
+ * decimal or a date and never reached the service at all -- Pydantic answered 422, so
+ * an estimate typed once could not be taken back. That is residual A14, seen from this
+ * side of the wire.
+ *
+ * Task 4B-1 closed it: `supplied_changes` reads `model_fields_set`, so a key supplied
+ * as `null` now clears its column and an omitted key still changes nothing. Text
+ * columns keep `""` -- plan 1B's contract, and the backend normalizes it to `NULL` for
+ * the fields where the distinction matters (`_check_fiscal`, `_check_email`); every
+ * other type clears on `null`.
+ *
+ * An unknown key (one the form renders with a control of its own rather than through
+ * `NATIVE_FIELDS` -- `category_id` on a cost) gets `null`: those are ids, never text.
+ *
+ * A `null` aimed at a `NOT NULL` column comes back as the server's own
+ * `ValidationFailed` naming the field, which `DynamicForm` shows on that very control.
+ * That is deliberate, and better than the 422 it replaces: the rule belongs to the
+ * server, and the message says which field and why.
+ */
+export function clearedNativeValue(fields: readonly FieldDefinition[], key: string): '' | null {
+  const type = fields.find((field) => field.key === key)?.type
+  return type !== undefined && TEXT_SHAPED.has(type) ? '' : null
+}
+
 export type EntityType = 'customer' | 'person' | 'deal' | 'document' | 'invoice' | 'time_entry' | 'cost'
 
 /**

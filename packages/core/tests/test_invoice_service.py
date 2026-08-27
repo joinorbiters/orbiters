@@ -274,8 +274,9 @@ def test_replacing_the_lines_with_an_empty_list_is_allowed_on_a_draft(
 def test_bulk_replacement_is_how_an_optional_numeric_field_gets_cleared(
     service: InvoiceService, customer_id: UUID
 ) -> None:
-    """A14 avoided rather than papered over: with `exclude_none=True` there is no
-    spelling that clears `sconto_importo`, so the list is replaced instead of patched."""
+    """Written when A14 made bulk replacement the *only* way to clear
+    `sconto_importo`; kept now that task 4B-1 has closed A14, because lines still have
+    no `Update` schema and replacement is still how a line editor saves."""
     invoice = service.create(
         InvoiceCreate(
             customer_id=customer_id,

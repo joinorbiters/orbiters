@@ -34,6 +34,7 @@ from pigrocrm.core.fields.schemas import EntityType
 from pigrocrm.core.fields.service import FieldDefinitionService
 from pigrocrm.core.fields.validator import validate_custom_fields
 from pigrocrm.core.render.pdf import build_header, render_pdf
+from pigrocrm.core.schemas import reject_cleared_columns, supplied_changes
 from pigrocrm.core.storage.base import DocumentStorage
 from pigrocrm.core.templates.models import Template
 from pigrocrm.core.templates.renderer import DeclaredVariable, render_template
@@ -197,7 +198,8 @@ class DocumentService:
     def update(self, document_id: UUID, data: DocumentUpdate, actor: Actor) -> DocumentRead:
         actor.require_write("update_document")
         document = self._require(document_id)
-        changes = data.model_dump(exclude_none=True, exclude={"custom_fields"})
+        changes = supplied_changes(data, exclude={"custom_fields"})
+        reject_cleared_columns(ENTITY, Document, changes)
         if data.custom_fields is not None:
             changes["custom_fields"] = self._update_custom_fields(document, data.custom_fields)
         for key, value in changes.items():
@@ -533,10 +535,12 @@ class DocumentService:
     def set_offer_state(self, document_id: UUID, stato: OfferState, actor: Actor) -> DocumentRead:
         """The only writer of `documents.stato`.
 
-        Deliberately not a field on `DocumentUpdate`: `model_dump(exclude_none=True)`
-        drops a `None`, so a nullable typed column on an Update schema has no spelling
-        that means "clear it" -- the A14 defect. A dedicated method with a required,
-        non-nullable literal has no such shape.
+        Deliberately not a field on `DocumentUpdate`, and it stays that way now that
+        A14 is closed and a `null` on an Update schema really does clear a column: the
+        original reason was that it could not, but the better one is that
+        `documents.stato` is `NULL` for everything that is not an offer, so "clear it"
+        is not a state a caller should be able to ask for on an offer at all. A
+        dedicated method taking a required, non-nullable literal cannot express it.
         """
         actor.require_write("set_offer_state")
         document = self._require(document_id)

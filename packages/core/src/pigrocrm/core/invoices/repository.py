@@ -45,9 +45,12 @@ class InvoiceRepository:
         """A real `DELETE`, then a fresh insert of the whole list.
 
         Bulk replacement rather than a per-line diff, for the reason spec 11 gives: it
-        is the natural shape of a line editor, and it is what makes clearing an
-        optional numeric column possible at all (A14 -- with `exclude_none=True` there
-        is no spelling that means "set `sconto_importo` back to nothing").
+        is the natural shape of a line editor. It was also, until task 4B-1 closed A14,
+        the only way to clear an optional numeric column at all -- there was no spelling
+        of `InvoiceLineIn` that meant "set `sconto_importo` back to nothing". That is no
+        longer the reason it exists, and lines still have no `Update` schema of their
+        own: a line's totals are recomputed from the whole list, so patching one line in
+        place would leave the invoice's totals to be reconciled separately.
         """
         self.session.execute(delete(InvoiceLine).where(InvoiceLine.invoice_id == invoice_id))
         self.session.flush()

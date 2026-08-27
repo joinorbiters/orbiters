@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/select'
 import { useCustomers } from '@/features/customers/queries'
 import type { ProblemDetail } from '@/lib/api'
-import type { FieldDefinition } from '@/lib/schema'
+import { clearedNativeValue, type FieldDefinition } from '@/lib/schema'
 import type { Deal } from './queries'
 
 const NATIVE_FIELDS: FieldDefinition[] = [
@@ -237,11 +237,14 @@ export function DealForm({
       } else if (!isBlank(initial?.native[key])) {
         // The user cleared a native column that used to hold a value -- say so
         // explicitly instead of dropping the key, or the old value survives
-        // untouched. A native column clears on `""` and only on `""`:
-        // `DealUpdate.model_dump(exclude_none=True)` keeps an empty string and
-        // drops an actual `None`, so `null` here would be silently ignored --
-        // identical reasoning to `CustomerForm`/`PersonForm`.
-        native[key] = ''
+        // untouched. Which spelling says it depends on the column's type, and this
+        // form is the one that has both: `nome` and `note` clear on `""`, while
+        // `valore_previsto`, `ore_preventivate`, `valore_preventivato` and
+        // `data_chiusura_prevista` clear on `null`. Sending `""` for those four was
+        // a 422 from Pydantic before it was anything else -- an estimate typed once
+        // could not be taken back, which is residual A14 seen from this side of the
+        // wire. See `clearedNativeValue`.
+        native[key] = clearedNativeValue(NATIVE_FIELDS, key)
       }
       // else: blank now, blank (or never set) before -- nothing changed.
     }
