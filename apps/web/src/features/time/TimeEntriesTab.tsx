@@ -6,6 +6,7 @@ import { QueryErrorBanner } from '@/components/QueryErrorBanner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { CostsPanel } from '@/features/costs/CostsPanel'
 import { useCanWrite } from '@/lib/auth'
 import { useEntitySchema } from '@/lib/schema'
 import { TimeEntryForm } from './TimeEntryForm'
@@ -110,6 +111,11 @@ export function TimeEntriesTab({ dealId }: { dealId: string }) {
             : undefined
         }
       />
+
+      {/* Costs sit on the Ore tab in 4A rather than on an «Economia» tab because that
+          tab does not exist until 4B, and a cost with nowhere to be entered is a cost
+          nobody records. */}
+      <CostsPanel dealId={dealId} />
 
       <TimeEntryForm
         open={creating}

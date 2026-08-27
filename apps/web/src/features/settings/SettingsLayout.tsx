@@ -11,6 +11,9 @@ const TABS = [
   { value: 'emittente', label: 'Emittente' },
   { value: 'fiscale', label: 'Fiscale' },
   { value: 'utenti', label: 'Utenti' },
+  { value: 'categorie-costo', label: 'Categorie costo' },
+  { value: 'tariffe', label: 'Tariffe' },
+  { value: 'periodi', label: 'Periodi' },
 ] as const
 
 /**
@@ -24,6 +27,12 @@ const TABS = [
  * `preview` and `EmitterProfileService.get` carry no role check, because the
  * new-from-template dialog and the PDF header need them for every role. Only the
  * writes are gated, and only the writes live behind this tab.
+ *
+ * The three slice-4 tabs are gated the same way and for the same reason:
+ * `CostCategoryService` and `PeriodLockService` call `actor.require_admin` on every
+ * write, and so do `update_user_rates` and `update_deal_rate`. All four are also
+ * deliberately absent from the MCP surface, so this gate is the explanation of why
+ * they are here and never the thing that enforces it.
  *
  * `useIsAdmin` reads the session `AuthProvider` already cached -- no extra
  * request -- and this reads it *before* rendering `<Outlet />`, not in a

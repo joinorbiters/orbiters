@@ -29,6 +29,28 @@ describe('SettingsLayout (the /app/impostazioni route guard)', () => {
     expect(screen.getByTestId('outlet-content')).toBeInTheDocument()
   })
 
+  /**
+   * The three slice-4 tabs. They are asserted here and not only in their own panel
+   * tests because a panel that renders correctly but is unreachable is not shipped:
+   * every service behind them is admin-only, so this list is the only door they have.
+   */
+  it('offers the time-tracking settings tabs to an admin', () => {
+    mockAuth.isAdmin = true
+    render(<SettingsLayout />)
+    expect(screen.getByRole('tab', { name: 'Categorie costo' })).toHaveAttribute(
+      'href',
+      '/app/impostazioni/categorie-costo',
+    )
+    expect(screen.getByRole('tab', { name: 'Tariffe' })).toHaveAttribute(
+      'href',
+      '/app/impostazioni/tariffe',
+    )
+    expect(screen.getByRole('tab', { name: 'Periodi' })).toHaveAttribute(
+      'href',
+      '/app/impostazioni/periodi',
+    )
+  })
+
   it('no longer offers a Token tab here — it moved to its own, non-admin-gated route', () => {
     mockAuth.isAdmin = true
     render(<SettingsLayout />)
