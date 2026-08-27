@@ -1,8 +1,10 @@
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Query, Response, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from pigrocrm.core.activities.schemas import ActivityRead
@@ -15,6 +17,7 @@ from pigrocrm.core.deals.schemas import (
     DealUpdate,
 )
 from pigrocrm.core.deals.service import DealService
+from pigrocrm.core.timetracking.report import TimeReportService
 from pigrocrm.core.timetracking.schemas import (
     DealRateUpdate,
     DealTimeSummary,
@@ -25,11 +28,13 @@ from pigrocrm.core.timetracking.schemas import (
 )
 from pigrocrm.core.timetracking.service import TimeEntryService
 from pigrocrm.core.validation import SafeStr
-from pigrocrm_api.deps import ActorDep, SessionDep
+from pigrocrm_api.deps import ActorDep, SessionDep, StorageDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
 from pigrocrm_api.query_params import CUSTOM_QUERY_DESCRIPTION, parse_custom_filter
 
 router = APIRouter(prefix="/api/deals", tags=["deals"], responses=PROBLEM_RESPONSES)
+
+XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 class MoveStageRequest(BaseModel):
@@ -155,3 +160,32 @@ def recalculate_rates(
     return RecalculateResponse(
         voci_aggiornate=TimeEntryService(session).recalculate_rates(deal_id, data, actor)
     )
+
+
+@router.get("/{deal_id}/time-report")
+def time_report(
+    deal_id: UUID,
+    session: SessionDep,
+    actor: ActorDep,
+    storage: StorageDep,
+    mese: Annotated[str, Query(description="Periodo nella forma AAAA-MM")],
+    formato: Annotated[Literal["pdf", "xlsx"], Query()] = "pdf",
+) -> Response:
+    """Two recipients, two needs (§2.1): the PDF gets attached to the invoice, the XLSX
+    gets filtered by whoever checks it. `formato` is a `Literal`, so an unsupported
+    value is a 422 rather than a branch nobody wrote.
+
+    The PDF is archived as a `document` and this returns its id, matching the slice 2
+    rule that the bytes are fetched from the document download endpoint; the XLSX is
+    streamed, because it is a working copy and not an artefact.
+    """
+    service = TimeReportService(session, storage)
+    if formato == "xlsx":
+        filename, content = service.build_xlsx(deal_id, mese, actor)
+        return Response(
+            content=content,
+            media_type=XLSX_CONTENT_TYPE,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    document = service.render_pdf(deal_id, mese, actor)
+    return JSONResponse(status_code=status.HTTP_201_CREATED, content=jsonable_encoder(document))

@@ -24,6 +24,13 @@ dependencies = [
   # (Python's own docs recommend this exact package for that reason), so emission's
   # notion of "today in the issuer's calendar" cannot depend on the host having it.
   "tzdata==2026.3",
+  # The XLSX writer. Declared on **core**, not on apps/api, because
+  # packages/core/tests/test_architecture.py derives its import allowlist from this
+  # list and the workbook builder is a domain function -- the API image installs
+  # core's dependencies anyway, which is what the spec's "nell'immagine dell'API"
+  # means in practice. The architecture test resolves this entry to the module root
+  # `openpyxl` with no override needed.
+  "openpyxl==3.1.5",
 ]
 
 [project.scripts]

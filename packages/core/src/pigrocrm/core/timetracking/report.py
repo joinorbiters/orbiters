@@ -28,6 +28,7 @@ from pigrocrm.core.templates.service import TemplateService
 from pigrocrm.core.timetracking.locks import period_label
 from pigrocrm.core.timetracking.models import TimeEntry
 from pigrocrm.core.timetracking.repository import TimeEntryRepository
+from pigrocrm.core.timetracking.xlsx import build_time_report_xlsx
 
 ENTITY = "time_report"
 
@@ -171,5 +172,20 @@ class TimeReportService:
         )
 
     def build_xlsx(self, deal_id: UUID, mese: str, actor: Actor) -> tuple[str, bytes]:
-        """Implemented in Task 4A-15. Declared here so the class's surface is complete."""
-        raise NotImplementedError
+        """Returns `(filename, bytes)`.
+
+        Not archived as a `document`, unlike the PDF, and that asymmetry is deliberate:
+        the PDF is the artefact attached to an invoice and therefore has to be
+        reproducible byte for byte a year later, which is what `document_versions` and
+        its hash exist for. The XLSX is a working copy somebody filters -- it is
+        regenerated from the same `variables_for` on every request, so it can never
+        drift from the PDF, and storing versions of it would archive scratch paper.
+        """
+        variables = self.variables_for(deal_id, mese, actor)
+        content = build_time_report_xlsx(
+            cliente=str(variables["cliente"].get("ragione_sociale", "")),
+            offerta=str(variables["deal"]["nome"]),
+            periodo=str(variables["periodo"]),
+            rows=variables["_rows"],
+        )
+        return f"rapporto-ore-{variables['_anno']}-{variables['_mese']:02d}.xlsx", content
