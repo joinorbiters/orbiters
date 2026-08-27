@@ -64,10 +64,13 @@ class PersonUpdate(BaseModel):
     note: SafeStr | None = None
     customer_id: UUID | None = None
     custom_fields: dict[str, Any] | None = None
-    # `exclude_none` on a partial update cannot express "set customer_id back to
-    # null" -- None already means "leave this field alone" for every other field
-    # here -- so detaching is its own explicit flag instead of overloading
-    # customer_id=None.
+    # Detaching is its own explicit flag rather than an overloaded `customer_id=None`.
+    # It was born as a workaround -- `exclude_none` could not express "set customer_id
+    # back to null" -- and task 4B-1, which closed A14, could have retired it. It did
+    # not: `detach` is already the shape every caller and the MCP schema below are
+    # written against, and it names an intention ("unlink this person") that a bare
+    # `null` does not. `PersonService.update` keeps `customer_id` out of the generic
+    # dump for the same reason, so the two spellings cannot disagree.
     #
     # The `description` is not decorative: this field's own JSON Schema entry is
     # what an MCP client renders for `changes.detach` (see apps/mcp's

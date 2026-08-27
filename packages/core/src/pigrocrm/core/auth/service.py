@@ -9,6 +9,7 @@ from pigrocrm.core.auth.passwords import dummy_hash, hash_password, verify_passw
 from pigrocrm.core.auth.repository import UserRepository
 from pigrocrm.core.auth.schemas import MIN_PASSWORD_LENGTH, UserCreate, UserRead, UserUpdate
 from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
+from pigrocrm.core.schemas import reject_cleared_columns, supplied_changes
 
 INVALID_CREDENTIALS = "credenziali non valide"
 
@@ -58,7 +59,14 @@ class UserService:
         user = self.repo.get(user_id)
         if user is None:
             raise NotFound("user", user_id)
-        for field, value in data.model_dump(exclude_none=True).items():
+        # Not listed among task 4B-1's files, converted anyway: leaving two services on
+        # `exclude_none` would mean the codebase has two update contracts, which is how
+        # A14 survived four slices in the first place. It matters here on its own terms
+        # too -- `tariffa_oraria_default` and `costo_orario_default` are nullable, and an
+        # unclearable default rate is a number nobody chose staying in force forever.
+        changes = supplied_changes(data)
+        reject_cleared_columns("user", User, changes)
+        for field, value in changes.items():
             setattr(user, field, value)
         self.session.commit()
         return UserRead.model_validate(user)

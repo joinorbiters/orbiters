@@ -42,6 +42,7 @@ from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.errors import Conflict, NotFound
 from pigrocrm.core.render.pdf import ASSETS_DIR
+from pigrocrm.core.schemas import reject_cleared_columns, supplied_changes
 from pigrocrm.core.templates.models import Template
 from pigrocrm.core.templates.parser import declared_paths, parse_template
 from pigrocrm.core.templates.renderer import DeclaredVariable, render_template
@@ -103,7 +104,11 @@ class TemplateService:
         if template is None:
             raise NotFound(ENTITY, template_id)
 
-        changes = data.model_dump(exclude_none=True)
+        # See `UserService.update`: converted for the same reason, though every column
+        # `TemplateUpdate` can reach is `NOT NULL`, so here the change is only that a
+        # `null` is refused by name instead of being silently discarded.
+        changes = supplied_changes(data)
+        reject_cleared_columns(ENTITY, Template, changes)
         if "corpo_markdown" in changes:
             parse_template(changes["corpo_markdown"])
         if "nome" in changes:

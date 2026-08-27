@@ -1,6 +1,6 @@
 import { isBlank } from '@/features/time/formValues'
 import { toIsoDate } from '@/lib/dates'
-import type { FieldDefinition } from '@/lib/schema'
+import { clearedNativeValue, type FieldDefinition } from '@/lib/schema'
 import type { Cost } from './queries'
 
 /**
@@ -32,9 +32,9 @@ export const NATIVE_FIELDS: FieldDefinition[] = [
 const NATIVE_FIELD_KEYS = [...NATIVE_FIELDS.map((field) => field.key), 'category_id']
 
 /** Two namespaces, decided once at seed time and never re-derived at submit -- the same
- *  structural provenance `TimeEntryFormValues` carries: a native column clears on `""`
- *  and only on `""`, a custom field clears on `null` and only on `null`, and an omitted
- *  key clears nothing. */
+ *  structural provenance `TimeEntryFormValues` carries: a native column clears on the
+ *  spelling its type calls for (`clearedNativeValue`), a custom field clears on `null`
+ *  and only on `null`, and an omitted key clears nothing. */
 export interface CostFormValues {
   native: Record<string, unknown>
   custom: Record<string, unknown>
@@ -79,10 +79,15 @@ export function toCostRequestBody(
     if (!isBlank(value)) {
       native[key] = value
     } else if (!isBlank(initial?.native[key])) {
-      // The user cleared a native column that held a value: say so explicitly with
-      // `""`, or the old value survives untouched. `exclude_none=True` keeps an empty
-      // string and drops an actual `None`, so `null` here would be silently ignored.
-      native[key] = ''
+      // The user cleared a native column that held a value: say so explicitly, or
+      // the old value survives untouched. `clearedNativeValue` picks the spelling
+      // from the column's type -- `descrizione` and `fornitore` clear on `""`, `data`
+      // and `importo` on `null`, and `category_id` (which has its own picker and is
+      // not in `NATIVE_FIELDS`) falls through to `null` because an id is never text.
+      // All three of those are `NOT NULL`, so emptying one comes back as the server's
+      // own refusal naming the field -- for `importo`, "l'importo non può essere
+      // svuotato" -- shown on that control instead of a bare 422.
+      native[key] = clearedNativeValue(NATIVE_FIELDS, key)
     }
   }
 

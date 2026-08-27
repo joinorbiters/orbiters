@@ -21,6 +21,7 @@ from pigrocrm.core.fields.service import FieldDefinitionService
 from pigrocrm.core.fields.validator import validate_custom_fields
 from pigrocrm.core.money import line_value, sum_hours, sum_money
 from pigrocrm.core.pipeline.service import PipelineService
+from pigrocrm.core.schemas import reject_cleared_columns, supplied_changes
 from pigrocrm.core.timetracking.locks import PeriodLockService
 from pigrocrm.core.timetracking.models import TimeEntry
 from pigrocrm.core.timetracking.rates import RateResolver
@@ -238,7 +239,8 @@ class TimeEntryService:
     def update(self, entry_id: UUID, data: TimeEntryUpdate, actor: Actor) -> TimeEntryRead:
         actor.require_write("update_time_entry")
         entry = self._require(entry_id)
-        changes = data.model_dump(exclude_none=True, exclude={"custom_fields"})
+        changes = supplied_changes(data, exclude={"custom_fields"})
+        reject_cleared_columns(ENTITY, TimeEntry, changes)
 
         if billed_entry_ids(self.session, [entry]):
             for field in FROZEN_WHEN_BILLED:
@@ -249,11 +251,16 @@ class TimeEntryService:
                         "la voce appartiene a una fattura emessa e non è più un dato di CRM",
                     )
 
-        if "deal_id" in changes:
+        # `.get(...) is not None` on the value, not `in changes` on the key: all three
+        # columns are `NOT NULL`, so `reject_cleared_columns` has already refused a
+        # `null` above -- but reading the value keeps these lookups from ever being
+        # handed a `None` to resolve, which is what turns a clear into a bogus
+        # `NotFound(..., None)` on the nullable foreign keys elsewhere.
+        if changes.get("deal_id") is not None:
             self._require_deal(changes["deal_id"])
-        if "user_id" in changes:
+        if changes.get("user_id") is not None:
             self._require_active_user(changes["user_id"])
-        if "data" in changes:
+        if changes.get("data") is not None:
             self._check_not_future(changes["data"])
         # Both the stored date and the new one: moving a row out of a closed month is
         # still a write into it, and checking only the destination would let somebody
@@ -264,10 +271,21 @@ class TimeEntryService:
         # `origine = "manuale"`; a rate NOT supplied is never re-resolved, because
         # re-resolving would be exactly the "a report re-reads a rate column" failure
         # §5 exists to prevent, wearing an update's clothes.
+        #
+        # `in changes` on the key, not `is not None` on the value: since A14 was closed
+        # a rate is clearable, and clearing one is a deliberate act ("this hour has no
+        # price") that must be recorded as such -- `assente`, frozen, chosen by
+        # somebody. A cleared rate that fell through to the `else` of nothing would keep
+        # the stale `manuale`/`deal` origin, and the next reader would believe a price
+        # that is no longer there.
         if "tariffa_applicata" in changes:
-            changes["tariffa_origine"] = "manuale"
+            changes["tariffa_origine"] = (
+                "manuale" if changes["tariffa_applicata"] is not None else "assente"
+            )
         if "costo_applicato" in changes:
-            changes["costo_origine"] = "manuale"
+            changes["costo_origine"] = (
+                "manuale" if changes["costo_applicato"] is not None else "assente"
+            )
 
         if data.custom_fields is not None:
             changes["custom_fields"] = self._update_custom_fields(entry, data.custom_fields)
@@ -325,8 +343,9 @@ class TimeEntryService:
 
         `exclude_unset`, not `exclude_none`: clearing a rate back to `NULL` has to be
         expressible, and here it is not a convenience -- an unclearable rate is a
-        number nobody chose staying in force forever. This method is written this way
-        from the start; Task 4B-1 converts the rest of the codebase (residual A14).
+        number nobody chose staying in force forever. This method was written this way
+        from the start, ahead of the rest; task 4B-1 converted every other service to
+        the same contract via `supplied_changes` (residual A14).
         """
         actor.require_admin("update_user_rates")
         user = self.users.get(user_id)

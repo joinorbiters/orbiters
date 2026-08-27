@@ -11,13 +11,13 @@ const EMPTY = '—'
  * dynamic field (`renderFieldValue`'s job, in DynamicFieldRenderer.tsx), a native
  * column has no field type that could make `0`/`false` a legitimate value to
  * preserve, so the wider check is safe here and `??` alone is not: `CustomerForm`'s
- * own "clear a field" path (see that file's docstring on `submit`) sends an
- * explicit `""` -- never `null` -- to clear a native column, because the backend's
- * `CustomerUpdate.model_dump(exclude_none=True)` only drops an actual `None`, so
- * `null` would just be silently ignored instead of clearing anything. `??` alone
- * would then render that legitimately-cleared value as a blank cell instead of the
- * same dash every other absent value gets -- reproduced live while testing the
- * edit form, not a theoretical gap.
+ * own "clear a field" path sends an explicit `""` to clear a native *text* column
+ * (`clearedNativeValue` in lib/schema.ts -- every column on this table is one), and
+ * the cell then holds an empty string, not `null`. `??` alone would render that
+ * legitimately-cleared value as a blank cell instead of the same dash every other
+ * absent value gets -- reproduced live while testing the edit form, not a
+ * theoretical gap. Both spellings have to be handled here regardless: since task
+ * 4B-1 a `null` really can arrive from a clear as well.
  */
 export function displayNative(value: string | null): string {
   return value === null || value === '' ? EMPTY : value

@@ -24,6 +24,7 @@ from pigrocrm.core.fields.service import FieldDefinitionService
 from pigrocrm.core.fields.validator import validate_custom_fields
 from pigrocrm.core.pipeline.schemas import PipelineStageRead
 from pigrocrm.core.pipeline.service import PipelineService
+from pigrocrm.core.schemas import reject_cleared_columns, supplied_changes
 
 # Typed as the fields module's own EntityType (not a bare `str`), matching
 # CustomerService.ENTITY/PersonService.ENTITY exactly: passing a plain `str` into
@@ -192,9 +193,15 @@ class DealService:
         # must see a caller-supplied `None` *inside* the dict (e.g. {"fonte": None},
         # meaning "remove this key") exactly as given, with no risk of it being
         # confused with the field itself being absent -- see `_update_custom_fields`.
-        changes = data.model_dump(exclude_none=True, exclude={"custom_fields"})
+        changes = supplied_changes(data, exclude={"custom_fields"})
+        reject_cleared_columns(ENTITY, Deal, changes)
         _check_numbers(changes)
-        if "owner_id" in changes:
+        # `is not None` on the value, not `in changes` on the key: with `exclude_unset`
+        # an explicit `owner_id: null` now *reaches* this branch, and sending `None` to
+        # the repository would raise `NotFound("user", None)` for what is actually a
+        # valid instruction ("clear the owner"). `_check_owner` already skips a `None`,
+        # so the guard is here only to make that reading explicit at the call site.
+        if changes.get("owner_id") is not None:
             self._check_owner(changes["owner_id"])
         if "probabilita" in changes:
             # `update` never changes `deal.pipeline_stage_id` -- that is

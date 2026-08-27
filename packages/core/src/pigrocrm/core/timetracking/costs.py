@@ -13,6 +13,7 @@ from pigrocrm.core.errors import NotFound, ValidationFailed
 from pigrocrm.core.fields.schemas import EntityType
 from pigrocrm.core.fields.service import FieldDefinitionService
 from pigrocrm.core.fields.validator import validate_custom_fields
+from pigrocrm.core.schemas import reject_cleared_columns, supplied_changes
 from pigrocrm.core.timetracking.categories import CostCategoryService
 from pigrocrm.core.timetracking.locks import PeriodLockService
 from pigrocrm.core.timetracking.models import Cost
@@ -57,11 +58,22 @@ class CostService:
         self.fields = FieldDefinitionService(session)
         self.activities = ActivityService(session)
 
-    def _check_importo(self, importo: Decimal) -> None:
+    def _check_importo(self, importo: Decimal | None) -> None:
         """Zero is refused because it is neither a cost nor a correction. Checked here
         as well as by `ck_costs_importo_non_zero`, not instead of it: this raises the
         project's own `ValidationFailed` naming the field, the CHECK covers every other
-        write path including raw SQL."""
+        write path including raw SQL.
+
+        `None` is refused separately, and it is a different sentence: since A14 was
+        closed an `Update` schema can spell "clear this column", and a caller who spells
+        it here means something the column cannot hold -- `costs.importo` is `NOT NULL`,
+        and an emptied amount is not a zero amount. `reject_cleared_columns` would catch
+        it too, one line later and with the generic message; this branch runs first so
+        the refusal names the amount."""
+        if importo is None:
+            raise ValidationFailed(
+                ENTITY, "importo", "l'importo non può essere svuotato", expected="un importo"
+            )
         if importo == 0:
             raise ValidationFailed(
                 ENTITY, "importo", "importo nullo", expected="un importo diverso da zero"
@@ -145,11 +157,18 @@ class CostService:
     def update(self, cost_id: UUID, data: CostUpdate, actor: Actor) -> CostRead:
         actor.require_write("update_cost")
         cost = self._require(cost_id)
-        changes = data.model_dump(exclude_none=True, exclude={"custom_fields"})
+        changes = supplied_changes(data, exclude={"custom_fields"})
+        # Before the generic guard, deliberately: `importo` is the one `NOT NULL` column
+        # on this table a caller plausibly tries to empty, and it deserves the message
+        # that names it rather than the catch-all one.
         if "importo" in changes:
             self._check_importo(changes["importo"])
+        reject_cleared_columns(ENTITY, Cost, changes)
+        # `_check_refs` already reads values rather than keys, so an explicit
+        # `deal_id: null` -- now reachable -- passes through it as "clear it" instead of
+        # becoming a lookup for `None`.
         self._check_refs(changes.get("deal_id"), changes.get("document_id"))
-        if "category_id" in changes:
+        if changes.get("category_id") is not None:
             self.categories.require_active(changes["category_id"])
         self.locks.assert_writable(ENTITY, "data", cost.data, changes.get("data"))
 

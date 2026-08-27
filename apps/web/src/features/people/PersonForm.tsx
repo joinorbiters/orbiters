@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/select'
 import { useCustomers } from '@/features/customers/queries'
 import type { ProblemDetail } from '@/lib/api'
-import type { FieldDefinition } from '@/lib/schema'
+import { clearedNativeValue, type FieldDefinition } from '@/lib/schema'
 import type { Person } from './queries'
 
 const NATIVE_FIELDS: FieldDefinition[] = [
@@ -217,19 +217,21 @@ export function PersonForm({
       if (!isBlank(value)) {
         native[key] = value
       } else if (!isBlank(initial?.native[key])) {
-        // A native column clears on an explicit `""` and only on `""`:
-        // `PersonUpdate.model_dump(exclude_none=True)` keeps an empty string and
-        // drops an actual `None`, so `null` here would be silently ignored --
-        // identical reasoning to `CustomerForm.submit`.
-        native[key] = ''
+        // The user cleared a native column that used to hold a value. The spelling
+        // comes from the column's type (`clearedNativeValue`); every native field on
+        // this form is text-shaped, so it is `""` for all of them, as before task
+        // 4B-1 -- kept as a call so that a numeric column added here later cannot
+        // inherit the wrong one.
+        native[key] = clearedNativeValue(NATIVE_FIELDS, key)
       }
       // else: blank now, blank (or never set) before -- nothing to say.
     }
 
     // `customer_id` is a UUID column, not free text, and detaching it is not a
-    // value of it. `""` would fail UUID parsing (422); `customer_id: null` is
-    // silently dropped before `PersonService.update` ever sees it
-    // (`model_dump(exclude_none=True)` on `PersonUpdate`, read directly from
+    // value of it. `""` would fail UUID parsing (422); `customer_id: null` never
+    // reaches `PersonService.update`'s generic assignment at all -- the field is in
+    // that method's `supplied_changes(exclude=...)` set, and stayed there when task
+    // 4B-1 closed A14, precisely so the two spellings cannot disagree (read
     // people/schemas.py and people/service.py -- Customer has no equivalent
     // relationship to generalise this from). The wire schema instead carries a
     // dedicated `detach: bool` for exactly this, checked first in

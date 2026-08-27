@@ -29,11 +29,12 @@ const number = new Intl.NumberFormat('it-IT', { useGrouping: 'always' })
 /**
  * `null` and `""` both mean "nothing here" for a native text column -- identical
  * reasoning to `features/customers/columns.tsx`/`features/people/columns.tsx`'s
- * own `displayNative` (see either file's docstring for the live bug this guards:
- * a cleared native column holds `""`, never `null` -- `DealUpdate.model_dump(
- * exclude_none=True)` only drops an actual `None`). Kept local rather than
- * imported, matching those two files' own precedent of a small per-feature
- * display helper rather than a shared module.
+ * own `displayNative` (see either file's docstring for the live bug this guards).
+ * Both spellings reach a cell: a cleared native *text* column holds `""`, and since
+ * task 4B-1 a cleared numeric or date column holds `null` -- see
+ * `clearedNativeValue` in lib/schema.ts. Kept local rather than imported, matching
+ * those two files' own precedent of a small per-feature display helper rather than
+ * a shared module.
  */
 export function displayNative(value: string | null): string {
   return value === null || value === '' ? EMPTY : value

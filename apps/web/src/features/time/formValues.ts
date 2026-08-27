@@ -1,5 +1,5 @@
 import { toIsoDate } from '@/lib/dates'
-import type { FieldDefinition } from '@/lib/schema'
+import { clearedNativeValue, type FieldDefinition } from '@/lib/schema'
 import type { TimeEntry } from './queries'
 
 /**
@@ -42,7 +42,8 @@ export const LOCKED_KEYS = new Set([
 /**
  * Two namespaces, decided once at seed time and never re-derived at submit -- copies
  * `DealFormValues` exactly, for the same reason: provenance is structural. A native
- * column clears on `""` and only on `""`; a custom field clears on `null` and only on
+ * column clears on the spelling its type calls for (`clearedNativeValue`: `""` for
+ * text, `null` for everything else); a custom field clears on `null` and only on
  * `null`; an omitted key clears nothing.
  */
 export interface TimeEntryFormValues {
@@ -114,10 +115,14 @@ export function toRequestBody(
     if (!isBlank(value)) {
       native[key] = value
     } else if (!isBlank(initial?.native[key])) {
-      // The user cleared a native column that held a value: say so explicitly with
-      // `""`, or the old value survives untouched. `exclude_none=True` keeps an empty
-      // string and drops an actual `None`, so `null` here would be silently ignored.
-      native[key] = ''
+      // The user cleared a native column that held a value: say so explicitly, or
+      // the old value survives untouched. `clearedNativeValue` picks the spelling
+      // from the column's type -- `descrizione` and `note_interne` clear on `""`,
+      // `data`, `ore` and `tariffa_applicata` on `null`. Clearing a rate is the one
+      // that matters most here: it is a deliberate "this hour has no price", and
+      // `TimeEntryService.update` records it as `origine = "assente"` rather than
+      // letting the deal's rate quietly take over.
+      native[key] = clearedNativeValue(NATIVE_FIELDS, key)
     }
   }
 
