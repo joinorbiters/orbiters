@@ -47,6 +47,22 @@ DEFAULT_RIFERIMENTO_NORMATIVO = (
 DEFAULT_SOGLIA_BOLLO = Decimal("77.47")
 DEFAULT_IMPORTO_BOLLO = Decimal("2.00")
 
+# §4.5. The three constants that used to live in Acme's `App.jsx` --
+# `FORFETTARIO_PROFITABILITY_RATE = 0.67`, `FORFETTARIO_SUBSTITUTE_TAX_RATE = 0.05`,
+# `FORFETTARIO_INPS_RATE = 0.2607` -- expressed as percentages, which is how their owner
+# reads and types them. Defaults rather than constants for the same reason the bollo
+# values above are: the ATECO coefficient depends on the activity code, and the INPS
+# gestione separata rate is re-set by the Legge di Bilancio most years.
+DEFAULT_COEFFICIENTE_REDDITIVITA = Decimal("67.00")
+DEFAULT_ALIQUOTA_IMPOSTA_SOSTITUTIVA = Decimal("5.00")
+DEFAULT_ALIQUOTA_INPS = Decimal("26.07")
+
+# A percentage: `Numeric(5, 2)` alone would accept `999.99`, and a rate outside 0..100 is
+# not a rate. `decimal_places` matters as much -- `1.005` would otherwise be rounded by
+# Postgres into a value nobody asked for.
+RATE_MIN = 0
+RATE_MAX = 100
+
 
 class FiscalSnapshot(BaseModel):
     """The parameters as they were when an invoice was issued.
@@ -111,6 +127,31 @@ class FiscalProfileUpsert(BaseModel):
     modalita_pagamento: SafeStr = Field(default="MP05", max_length=MODALITA_PAGAMENTO_MAX_LENGTH)
     giorni_scadenza: int = Field(default=30, ge=GIORNI_SCADENZA_MIN, le=GIORNI_SCADENZA_MAX)
     iban: SafeStr | None = Field(default=None, max_length=IBAN_MAX_LENGTH)
+    # Nullable in the column, and still defaulted here: a profile saved without them
+    # would otherwise leave the fiscal estimate with nothing to compute from, and "the
+    # forfettario's own numbers" is a far better answer than NULL for the only regime
+    # this project implements. Clearing them is still possible -- an explicit `null`.
+    coefficiente_redditivita: Decimal | None = Field(
+        default=DEFAULT_COEFFICIENTE_REDDITIVITA,
+        max_digits=RATE_MAX_DIGITS,
+        decimal_places=RATE_DECIMAL_PLACES,
+        ge=RATE_MIN,
+        le=RATE_MAX,
+    )
+    aliquota_imposta_sostitutiva: Decimal | None = Field(
+        default=DEFAULT_ALIQUOTA_IMPOSTA_SOSTITUTIVA,
+        max_digits=RATE_MAX_DIGITS,
+        decimal_places=RATE_DECIMAL_PLACES,
+        ge=RATE_MIN,
+        le=RATE_MAX,
+    )
+    aliquota_inps: Decimal | None = Field(
+        default=DEFAULT_ALIQUOTA_INPS,
+        max_digits=RATE_MAX_DIGITS,
+        decimal_places=RATE_DECIMAL_PLACES,
+        ge=RATE_MIN,
+        le=RATE_MAX,
+    )
 
 
 class FiscalProfileRead(BaseModel):
@@ -128,12 +169,20 @@ class FiscalProfileRead(BaseModel):
     modalita_pagamento: str
     giorni_scadenza: int
     iban: str | None
+    # Bare `Decimal | None`, deliberately: a Read schema validates values the database
+    # produced, so a bound here would reject a row the column legitimately holds.
+    coefficiente_redditivita: Decimal | None
+    aliquota_imposta_sostitutiva: Decimal | None
+    aliquota_inps: Decimal | None
     created_at: datetime
     updated_at: datetime
 
 
 __all__ = [
     "CODICE_REGIME_RE",
+    "DEFAULT_ALIQUOTA_IMPOSTA_SOSTITUTIVA",
+    "DEFAULT_ALIQUOTA_INPS",
+    "DEFAULT_COEFFICIENTE_REDDITIVITA",
     "DEFAULT_IMPORTO_BOLLO",
     "DEFAULT_RIFERIMENTO_NORMATIVO",
     "DEFAULT_SOGLIA_BOLLO",
