@@ -1,5 +1,5 @@
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import date
 from decimal import Decimal
 from uuid import UUID, uuid4
@@ -124,17 +124,33 @@ def local_storage(tmp_path) -> LocalFileStorage:
     return LocalFileStorage(str(tmp_path / "documents"))
 
 
-def extract_pdf_text(storage, session, document_id: UUID) -> str:
+@pytest.fixture
+def extract_pdf_text() -> Callable[[LocalFileStorage, Session, UUID], str]:
     """Reads the stored PDF back and extracts its text with `pdftotext`, which ships in
     the same API image as Pandoc and Typst. Reading the produced artefact rather than
     the intermediate Markdown is the only assertion that proves what the client
-    actually receives."""
-    from pigrocrm.core.documents.repository import DocumentRepository
+    actually receives.
 
-    version = DocumentRepository(session).version(document_id, 1)
-    assert version is not None
-    data = storage.get(version.storage_key)
-    result = subprocess.run(
-        ["pdftotext", "-layout", "-", "-"], input=data, capture_output=True, check=True
-    )
-    return result.stdout.decode("utf-8", errors="replace")
+    A fixture returning the callable, deliberately, rather than a plain module-level
+    function a test imports as `from conftest import extract_pdf_text`. This repository
+    has three test roots -- `packages/core/tests`, `apps/api/tests`, `apps/mcp/tests` --
+    each with its own `conftest.py` and none with an `__init__.py`, so `conftest` is an
+    ambiguous top-level module name: whichever one pytest imports first claims
+    `sys.modules["conftest"]` and every later import binds to *that* file. Running one
+    root at a time hid it; `uv run pytest` with no path -- the CI command, which
+    collects all three -- resolved the import against `apps/mcp/tests/conftest.py` and
+    died at collection. Fixture resolution is scoped per directory by pytest itself, so
+    it cannot collide however the roots are combined."""
+
+    def _extract(storage: LocalFileStorage, session: Session, document_id: UUID) -> str:
+        from pigrocrm.core.documents.repository import DocumentRepository
+
+        version = DocumentRepository(session).version(document_id, 1)
+        assert version is not None
+        data = storage.get(version.storage_key)
+        result = subprocess.run(
+            ["pdftotext", "-layout", "-", "-"], input=data, capture_output=True, check=True
+        )
+        return result.stdout.decode("utf-8", errors="replace")
+
+    return _extract
