@@ -1,6 +1,7 @@
 import { Link, useRouterState } from '@tanstack/react-router'
 import {
   Building2,
+  Clock,
   Handshake,
   KeyRound,
   LayoutDashboard,
@@ -26,6 +27,9 @@ const NAV = [
   { to: '/app/clienti', label: 'Clienti', icon: Building2 },
   { to: '/app/persone', label: 'Persone', icon: Users },
   { to: '/app/deal', label: 'Deal', icon: Handshake },
+  // Right after Deal, and above Fatture: hours are logged against a deal and are what an
+  // invoice is later built from, so the sidebar reads in the order the work happens.
+  { to: '/app/ore', label: 'Ore', icon: Clock },
   { to: '/app/fatture', label: 'Fatture', icon: Receipt },
   { to: '/app/token', label: 'Token', icon: KeyRound },
 ] as const
