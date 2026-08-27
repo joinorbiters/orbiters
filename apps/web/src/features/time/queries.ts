@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, unwrap } from '@/lib/api'
 import type { components } from '@/lib/api-types'
 import { queryKeys } from '@/lib/query'
+import { downloadDocument } from '@/features/documents/queries'
 
 /**
  * Wire shapes taken from the generated OpenAPI schema, never hand-declared: the single
@@ -151,11 +152,56 @@ export function useDeleteTimeEntry() {
 }
 
 /**
- * A plain URL, not a fetch: the browser downloads the file itself, so the bytes never
- * pass through JavaScript. Same-origin, so the session cookie travels with it and no
- * token has to be put in a query string.
+ * The XLSX only. A plain URL, not a fetch: the browser downloads the file itself, so
+ * the bytes never pass through JavaScript. Same-origin, so the session cookie travels
+ * with it and no token has to be put in a query string.
+ *
+ * The PDF deliberately has no URL of its own here -- see `useRenderTimeReportPdf`.
  */
-export function timeReportUrl(dealId: string, mese: string, formato: 'pdf' | 'xlsx'): string {
-  const query = new URLSearchParams({ mese, formato })
+export function timeReportXlsxUrl(dealId: string, mese: string): string {
+  const query = new URLSearchParams({ mese, formato: 'xlsx' })
   return `/api/deals/${dealId}/time-report?${query.toString()}`
+}
+
+/**
+ * The PDF half, which is not a download link and cannot be one.
+ *
+ * The two formats answer differently on purpose. The XLSX is a working copy: the
+ * endpoint streams the bytes with a `Content-Disposition`, so an anchor is exactly
+ * right. The PDF is an *artefact* -- `render_pdf` archives it as a `document`, and the
+ * endpoint answers `201` with that document's JSON, because slice 2's rule is that
+ * archived bytes are fetched from the document download endpoint and nowhere else.
+ *
+ * Pointing an anchor at it therefore navigated the browser to a page of JSON. Two
+ * steps, not one: render (and archive), then download the archived document through
+ * the one path that carries authorisation on either storage backend.
+ */
+export function useRenderTimeReportPdf() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (variables: { dealId: string; mese: string }) => {
+      const document = await unwrap(
+        api.GET('/api/deals/{deal_id}/time-report', {
+          params: {
+            path: { deal_id: variables.dealId },
+            query: { mese: variables.mese, formato: 'pdf' },
+          },
+        }),
+      )
+      await downloadDocument((document as { id: string }).id)
+      return document
+    },
+    // The render archived a new document version, so the deal's Documenti tab is stale
+    // the moment this resolves.
+    onSuccess: (_data, variables) => {
+      // The owner-scoped key first, then the empty-object wildcard that partially
+      // matches every cached owner -- the same belt-and-braces `useDeleteDocument`
+      // uses, and for the same reason: this render archived a new version, so the
+      // deal's Documenti tab is stale the moment it resolves.
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.documents({ dealId: variables.dealId }),
+      })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.documents() })
+    },
+  })
 }
