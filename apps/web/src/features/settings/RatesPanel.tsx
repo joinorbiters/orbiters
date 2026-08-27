@@ -20,7 +20,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useDeals, type Deal } from '@/features/deals/queries'
-import { toProblem } from '@/lib/api'
+import { fieldErrorFrom, toProblem } from '@/lib/api'
 import { useUsers, type UserRecord } from './queries'
 import { useSetDealRate, useSetUserRates } from './queries.timetracking'
 
@@ -46,15 +46,53 @@ function rateBody(value: string): string | null {
   return value.trim() === '' ? null : value.trim()
 }
 
+/** Nullable message, so a row can clear the page banner as well as raise it: the banner
+ *  outlives any single row's mutation, and a stale one sits there contradicting the
+ *  success toast printed for the press that fixed it. */
+type OnProblem = (message: string | null) => void
+
+/**
+ * One row's own error handling.
+ *
+ * A rate row has two inputs and the page has one banner, at the top, above every other
+ * row: a 422 naming `costo_orario_default` put there is true and useless, because it
+ * never says which of the dozens of identical inputs on this screen it is about. So
+ * anything the server attributed to a field stays on the row and marks that input;
+ * anything it did not (a 403, a network failure) goes to the page banner, which is the
+ * only thing wide enough to hold it. Both are cleared before each attempt.
+ */
+function useRowProblem(onProblem: OnProblem) {
+  const [fieldError, setFieldError] = useState<{ field: string; message: string } | null>(null)
+
+  function begin() {
+    setFieldError(null)
+    onProblem(null)
+  }
+
+  function fail(error: unknown) {
+    const problem = toProblem(error)
+    const attributed = fieldErrorFrom(problem)
+    setFieldError(attributed)
+    if (!attributed) onProblem(problem.detail)
+  }
+
+  return { fieldError, begin, fail }
+}
+
+function FieldMessage({ text }: { text: string }) {
+  return <p className="mt-1 text-sm text-destructive">{text}</p>
+}
+
 /**
  * One row per user, its own component: `useSetUserRates(id)` is built from the row's id,
  * and calling it inside the parent's `.map` would be a variable number of hooks in a
  * variable order.
  */
-function UserRateRow({ user, onProblem }: { user: UserRecord; onProblem: (m: string) => void }) {
+function UserRateRow({ user, onProblem }: { user: UserRecord; onProblem: OnProblem }) {
   const [tariffa, setTariffa] = useState(user.tariffa_oraria_default ?? '')
   const [costo, setCosto] = useState(user.costo_orario_default ?? '')
   const save = useSetUserRates(user.id)
+  const { fieldError, begin, fail } = useRowProblem(onProblem)
 
   return (
     <TableRow>
@@ -64,40 +102,48 @@ function UserRateRow({ user, onProblem }: { user: UserRecord; onProblem: (m: str
           type="number"
           step="0.000001"
           aria-label={`Tariffa oraria di ${user.nome}`}
+          aria-invalid={fieldError?.field === 'tariffa_oraria_default'}
           value={tariffa}
           onChange={(event) => setTariffa(event.target.value)}
           className="w-32"
         />
+        {fieldError?.field === 'tariffa_oraria_default' && (
+          <FieldMessage text={fieldError.message} />
+        )}
       </TableCell>
       <TableCell>
         <Input
           type="number"
           step="0.000001"
           aria-label={`Costo orario di ${user.nome}`}
+          aria-invalid={fieldError?.field === 'costo_orario_default'}
           value={costo}
           onChange={(event) => setCosto(event.target.value)}
           className="w-32"
         />
+        {fieldError?.field === 'costo_orario_default' && (
+          <FieldMessage text={fieldError.message} />
+        )}
       </TableCell>
       <TableCell>
         <Button
           size="sm"
           disabled={save.isPending}
-          onClick={() =>
+          onClick={() => {
+            begin()
             // Both values every time, because `UserRatesUpdate` is the whole pair: the
             // strings travel as typed, so a rate at the sixth decimal place -- which is
-            // what Numeric(12,6) exists for -- survives the trip untouched.
+            // what Numeric(12,6) exists for -- survives the trip untouched. The server
+            // reads it with `exclude_unset`, so an omitted key means "leave it alone"
+            // and only a key present with `null` can clear a rate.
             save.mutate(
               {
                 tariffa_oraria_default: rateBody(tariffa),
                 costo_orario_default: rateBody(costo),
               },
-              {
-                onSuccess: () => toast.success('Tariffe aggiornate'),
-                onError: (error) => onProblem(toProblem(error).detail),
-              },
+              { onSuccess: () => toast.success('Tariffe aggiornate'), onError: fail },
             )
-          }
+          }}
         >
           Salva
         </Button>
@@ -106,9 +152,10 @@ function UserRateRow({ user, onProblem }: { user: UserRecord; onProblem: (m: str
   )
 }
 
-function DealRateRow({ deal, onProblem }: { deal: Deal; onProblem: (m: string) => void }) {
+function DealRateRow({ deal, onProblem }: { deal: Deal; onProblem: OnProblem }) {
   const [tariffa, setTariffa] = useState(deal.tariffa_oraria ?? '')
   const save = useSetDealRate(deal.id)
+  const { fieldError, begin, fail } = useRowProblem(onProblem)
 
   return (
     <TableRow>
@@ -118,24 +165,26 @@ function DealRateRow({ deal, onProblem }: { deal: Deal; onProblem: (m: string) =
           type="number"
           step="0.000001"
           aria-label={`Tariffa oraria del deal ${deal.nome}`}
+          aria-invalid={fieldError?.field === 'tariffa_oraria'}
           value={tariffa}
           onChange={(event) => setTariffa(event.target.value)}
           className="w-32"
         />
+        {fieldError?.field === 'tariffa_oraria' && <FieldMessage text={fieldError.message} />}
       </TableCell>
       <TableCell>
         <Button
           size="sm"
           disabled={save.isPending}
-          onClick={() =>
+          onClick={() => {
+            begin()
+            // The deal's own rate, on the deal's own endpoint: it overrides the
+            // person's rate for hours on this deal and never writes to the person.
             save.mutate(
               { tariffa_oraria: rateBody(tariffa) },
-              {
-                onSuccess: () => toast.success('Tariffa del deal aggiornata'),
-                onError: (error) => onProblem(toProblem(error).detail),
-              },
+              { onSuccess: () => toast.success('Tariffa del deal aggiornata'), onError: fail },
             )
-          }
+          }}
         >
           Salva
         </Button>
@@ -256,7 +305,8 @@ export function RatesPanel() {
           </div>
           <Button
             disabled={nuovoDeal === '' || nuovaTariffa.trim() === '' || addRate.isPending}
-            onClick={() =>
+            onClick={() => {
+              setProblem(null)
               addRate.mutate(
                 { tariffa_oraria: rateBody(nuovaTariffa) },
                 {
@@ -268,7 +318,7 @@ export function RatesPanel() {
                   onError: (error) => setProblem(toProblem(error).detail),
                 },
               )
-            }
+            }}
           >
             Imposta
           </Button>

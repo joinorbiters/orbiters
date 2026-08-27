@@ -14,7 +14,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useCostCategories, type CostCategory } from '@/features/costs/queries'
-import { toProblem } from '@/lib/api'
+import { fieldErrorFrom, toProblem, type ProblemDetail } from '@/lib/api'
 import {
   useArchiveCostCategory,
   useCreateCostCategory,
@@ -34,7 +34,9 @@ function CategoryRow({
   onProblem,
 }: {
   category: CostCategory
-  onProblem: (message: string) => void
+  // Nullable, so a row can *clear* the banner as well as raise it: the banner lives in
+  // the parent and outlives this row's own mutation.
+  onProblem: (message: string | null) => void
 }) {
   const [nome, setNome] = useState(category.nome)
   const rename = useUpdateCostCategory(category.id)
@@ -60,7 +62,12 @@ function CategoryRow({
           <Button
             size="sm"
             disabled={rename.isPending}
-            onClick={() =>
+            onClick={() => {
+              // Clear first, then attempt: without this the banner from a refused
+              // attempt survives the retry that fixed it, and the screen shows a
+              // success toast over a red "esiste già una categoria con questo nome".
+              // Every other panel in this folder already does exactly this.
+              onProblem(null)
               rename.mutate(
                 { nome: nome.trim() },
                 {
@@ -68,7 +75,7 @@ function CategoryRow({
                   onError: (error) => onProblem(toProblem(error).detail),
                 },
               )
-            }
+            }}
           >
             Salva
           </Button>
@@ -78,12 +85,13 @@ function CategoryRow({
             size="sm"
             variant="outline"
             disabled={unarchive.isPending}
-            onClick={() =>
+            onClick={() => {
+              onProblem(null)
               unarchive.mutate(category.id, {
                 onSuccess: () => toast.success('Categoria ripristinata'),
                 onError: (error) => onProblem(toProblem(error).detail),
               })
-            }
+            }}
           >
             Ripristina
           </Button>
@@ -92,12 +100,13 @@ function CategoryRow({
             size="sm"
             variant="outline"
             disabled={archive.isPending}
-            onClick={() =>
+            onClick={() => {
+              onProblem(null)
               archive.mutate(category.id, {
                 onSuccess: () => toast.success('Categoria archiviata'),
                 onError: (error) => onProblem(toProblem(error).detail),
               })
-            }
+            }}
           >
             Archivia
           </Button>
@@ -113,8 +122,16 @@ export function CostCategoriesPanel() {
   const [nome, setNome] = useState('')
   const [problem, setProblem] = useState<string | null>(null)
   // Separate from `problem` on purpose: the list banner sits behind the dialog overlay,
-  // so a create that fails there would report itself somewhere nobody can see.
-  const [dialogProblem, setDialogProblem] = useState<string | null>(null)
+  // so a create that fails there would report itself somewhere nobody can see. Kept as
+  // the whole problem document, not just its `detail`, because a 422 naming `nome`
+  // belongs on the input the person typed into -- the shape `PipelinePanel`'s own
+  // create dialog already uses for the identical `ValidationFailed(entity, "nome", ...)`.
+  const [dialogProblem, setDialogProblem] = useState<ProblemDetail | null>(null)
+  const dialogFieldError = dialogProblem ? fieldErrorFrom(dialogProblem) : null
+  // Only what no control can show: a 409 on a duplicate name carries no `field` at
+  // all, and swallowing it would leave the dialog silent after a refused create.
+  const dialogBanner =
+    dialogProblem && dialogFieldError?.field !== 'nome' ? dialogProblem.detail : null
 
   const categories = useCostCategories(includeArchived)
   const create = useCreateCostCategory()
@@ -144,13 +161,14 @@ export function CostCategoriesPanel() {
             <Button
               variant="outline"
               disabled={seed.isPending}
-              onClick={() =>
+              onClick={() => {
+                setProblem(null)
                 seed.mutate(undefined, {
                   onSuccess: (created) =>
                     toast.success(`${created.length} categorie predefinite create`),
                   onError: (error) => setProblem(toProblem(error).detail),
                 })
-              }
+              }}
             >
               <Sparkles className="mr-2 size-4" />
               Crea le categorie predefinite
@@ -203,21 +221,25 @@ export function CostCategoriesPanel() {
           <DialogHeader>
             <DialogTitle>Nuova categoria</DialogTitle>
           </DialogHeader>
-          {dialogProblem && (
+          {dialogBanner && (
             <p
               role="alert"
               className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
             >
-              {dialogProblem}
+              {dialogBanner}
             </p>
           )}
           <div className="space-y-2">
             <Label htmlFor="categoria-nome">Nome</Label>
             <Input
               id="categoria-nome"
+              aria-invalid={dialogFieldError?.field === 'nome'}
               value={nome}
               onChange={(event) => setNome(event.target.value)}
             />
+            {dialogFieldError?.field === 'nome' ? (
+              <p className="text-sm text-destructive">{dialogFieldError.message}</p>
+            ) : null}
             <p className="text-xs text-muted-foreground">
               Una categoria creata qui non ha un codice: il codice esiste solo sulle categorie
               predefinite, che i rapporti riconoscono per codice e non per nome.
@@ -229,7 +251,8 @@ export function CostCategoriesPanel() {
             </Button>
             <Button
               disabled={create.isPending}
-              onClick={() =>
+              onClick={() => {
+                setDialogProblem(null)
                 create.mutate(
                   { nome, posizione: rows.length },
                   {
@@ -237,10 +260,10 @@ export function CostCategoriesPanel() {
                       toast.success('Categoria creata')
                       setOpen(false)
                     },
-                    onError: (error) => setDialogProblem(toProblem(error).detail),
+                    onError: (error) => setDialogProblem(toProblem(error)),
                   },
                 )
-              }
+              }}
             >
               {create.isPending ? 'Creazione…' : 'Crea'}
             </Button>
