@@ -9,6 +9,8 @@
     "build:landing": "vite build --config vite.landing.config.ts",
     "preview:landing": "vite preview --config vite.landing.config.ts",
     "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "preview": "vite preview",
     "generate:api": "openapi-typescript http://localhost:8000/openapi.json -o src/lib/api-types.ts",
     "test:e2e": "bash scripts/e2e.sh",
