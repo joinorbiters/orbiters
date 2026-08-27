@@ -36,6 +36,9 @@ const PROFILE = {
   // A number on the wire, unlike every other field here, which are strings.
   giorni_scadenza: 30,
   iban: null,
+  coefficiente_redditivita: '67.00',
+  aliquota_imposta_sostitutiva: '5.00',
+  aliquota_inps: '26.07',
   created_at: '2026-08-20T09:00:00Z',
   updated_at: '2026-08-20T09:00:00Z',
 }
@@ -105,6 +108,12 @@ describe('FiscalPanel', () => {
    * server's own defaults never apply. If these drifted apart, a first save would
    * quietly store something nobody chose -- an RF19 forfettario with no natura is
    * refused by the SdI on the first invoice, not here.
+   *
+   * Every field on the form is pinned here, `riferimento_normativo` now included: it
+   * was the one left unasserted, because the panel seeded it blank while the server
+   * defaulted it to the forfettario sentence. That was the drift this test exists to
+   * catch, so the panel was changed to offer the sentence rather than the test taught
+   * to tolerate the gap.
    */
   it('offers the same defaults the server would have applied', async () => {
     vi.mocked(api.GET).mockImplementation(() => failed({ detail: 'not found' }, 404))
@@ -113,12 +122,55 @@ describe('FiscalPanel', () => {
     await waitFor(() => expect(screen.getByLabelText('Regime fiscale')).toHaveValue('RF19'))
     expect(screen.getByLabelText('Aliquota IVA predefinita')).toHaveValue('0.00')
     expect(screen.getByLabelText('Natura')).toHaveValue('N2.2')
+    expect(screen.getByLabelText('Riferimento normativo')).toHaveValue(RIFERIMENTO)
     expect(screen.getByLabelText('Soglia bollo')).toHaveValue('77.47')
     expect(screen.getByLabelText('Importo bollo')).toHaveValue('2.00')
     expect(screen.getByLabelText('Condizioni di pagamento')).toHaveValue('TP02')
     expect(screen.getByLabelText('Modalità di pagamento')).toHaveValue('MP05')
     expect(screen.getByLabelText('Giorni di scadenza')).toHaveValue('30')
+    // The three income-calculation columns, `FiscalProfileUpsert`'s own defaults, as
+    // percentages: `67.00`, not `0.67`.
+    expect(screen.getByLabelText('Coefficiente di redditività')).toHaveValue('67.00')
+    expect(screen.getByLabelText('Aliquota imposta sostitutiva')).toHaveValue('5.00')
+    expect(screen.getByLabelText('Aliquota INPS')).toHaveValue('26.07')
     expect(screen.getByLabelText(/Applica il bollo/)).toBeChecked()
+  })
+
+  /**
+   * The defect the three income fields were added to close, pinned as a test rather
+   * than as a comment. `PUT /api/fiscal-profile` is a full replace, so a save writes
+   * back every key the form holds -- and while the form did not know these three
+   * existed, it held their defaults and nothing else. Editing an unrelated field on
+   * this screen therefore reset a coefficient somebody had chosen, with no message and
+   * nothing on the form to show what had gone.
+   */
+  it('sends the stored income parameters back, not the defaults', async () => {
+    const custom = {
+      ...PROFILE,
+      coefficiente_redditivita: '78.00',
+      aliquota_imposta_sostitutiva: '15.00',
+      aliquota_inps: '24.48',
+    }
+    vi.mocked(api.GET).mockImplementation(() => ok(custom))
+    vi.mocked(api.PUT).mockImplementation(() => ok(custom))
+    renderPanel()
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('Coefficiente di redditività')).toHaveValue('78.00'),
+    )
+    // An edit somewhere else entirely: the point is that a save the owner started for
+    // another reason must not carry the defaults along with it.
+    await userEvent.clear(screen.getByLabelText('Giorni di scadenza'))
+    await userEvent.type(screen.getByLabelText('Giorni di scadenza'), '60')
+    await userEvent.click(screen.getByRole('button', { name: 'Salva' }))
+
+    await waitFor(() => expect(api.PUT).toHaveBeenCalled())
+    expect(bodyOfSave()).toMatchObject({
+      coefficiente_redditivita: '78.00',
+      aliquota_imposta_sostitutiva: '15.00',
+      aliquota_inps: '24.48',
+      giorni_scadenza: '60',
+    })
   })
 
   /**
@@ -185,9 +237,12 @@ describe('FiscalPanel', () => {
     const body = bodyOfSave()
     expect(body).toHaveProperty('applica_bollo', false)
     expect(Object.keys(body).sort()).toEqual([
+      'aliquota_imposta_sostitutiva',
+      'aliquota_inps',
       'aliquota_iva_default',
       'applica_bollo',
       'codice_regime',
+      'coefficiente_redditivita',
       'condizioni_pagamento',
       'giorni_scadenza',
       'iban',

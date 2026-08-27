@@ -23,9 +23,26 @@ interface FiscalField {
     | 'modalita_pagamento'
     | 'giorni_scadenza'
     | 'iban'
+    | 'coefficiente_redditivita'
+    | 'aliquota_imposta_sostitutiva'
+    | 'aliquota_inps'
   label: string
   hint?: string
 }
+
+/**
+ * `FiscalProfileUpsert.riferimento_normativo`'s own default, repeated here because the
+ * panel PUTs every key on every save and the server's default therefore never applies.
+ * Seeding this blank -- as this form did until the income columns arrived -- meant a
+ * first save stored an empty normative reference: harmless only by accident, because
+ * `_Forfettario.resolve_line_vat` treats the empty string as falsy and falls back to
+ * this same sentence at emission time. Better to show the owner the sentence their
+ * invoices will actually carry, where they can read and amend it, than to store a blank
+ * and rely on a fallback three layers away.
+ */
+const RIFERIMENTO_NORMATIVO_FORFETTARIO =
+  "Operazione non soggetta a IVA ai sensi dell'art. 1, commi 54-89, " +
+  'L. 190/2014 - regime forfettario'
 
 /**
  * `applica_bollo` is a boolean and lives outside this list; everything else is a text
@@ -43,6 +60,25 @@ const FIELDS: readonly FiscalField[] = [
   { name: 'modalita_pagamento', label: 'Modalità di pagamento', hint: 'MP05' },
   { name: 'giorni_scadenza', label: 'Giorni di scadenza' },
   { name: 'iban', label: 'IBAN' },
+  // The three income-calculation columns. They decide nothing about an invoice -- they
+  // are what the fiscal estimate divides the year's takings by -- but they live on the
+  // same single row, so this is the only screen that can ever set them. Percentages,
+  // the way their owner reads them off a commercialista's letter: `67`, not `0.67`.
+  {
+    name: 'coefficiente_redditivita',
+    label: 'Coefficiente di redditività',
+    hint: 'La quota dei ricavi che diventa reddito imponibile, secondo il codice ATECO',
+  },
+  {
+    name: 'aliquota_imposta_sostitutiva',
+    label: 'Aliquota imposta sostitutiva',
+    hint: 'Sostituisce IRPEF e addizionali: 5% nei primi cinque anni, poi 15%',
+  },
+  {
+    name: 'aliquota_inps',
+    label: 'Aliquota INPS',
+    hint: 'I contributi previdenziali calcolati sul reddito imponibile',
+  },
 ]
 
 type Values = Record<FiscalField['name'], string> & { applica_bollo: boolean }
@@ -52,13 +88,22 @@ function emptyValues(): Values {
     codice_regime: 'RF19',
     aliquota_iva_default: '0.00',
     natura_default: 'N2.2',
-    riferimento_normativo: '',
+    riferimento_normativo: RIFERIMENTO_NORMATIVO_FORFETTARIO,
     soglia_bollo: '77.47',
     importo_bollo: '2.00',
     condizioni_pagamento: 'TP02',
     modalita_pagamento: 'MP05',
     giorni_scadenza: '30',
     iban: '',
+    // `FiscalProfileUpsert`'s own defaults, and they have to be repeated here for the
+    // same reason every other value on this list is: the save is a full replace, so a
+    // key this form does not know about is not left alone -- it is written back as
+    // whatever the form last held for it. Before these three existed here, pressing
+    // Salva reset all of them to the server's defaults, which was invisible only
+    // because nothing had ever changed them yet.
+    coefficiente_redditivita: '67.00',
+    aliquota_imposta_sostitutiva: '5.00',
+    aliquota_inps: '26.07',
     applica_bollo: true,
   }
 }
@@ -83,7 +128,8 @@ export function FiscalPanel() {
         <p className="text-muted-foreground text-sm">
           I parametri che decidono aliquota, natura e bollo su ogni riga di fattura. Una
           fattura emessa conserva una copia di questi valori, quindi cambiarli qui non
-          tocca i documenti già emessi.
+          tocca i documenti già emessi. Gli ultimi tre non finiscono in fattura: servono
+          a stimare imposta sostitutiva e contributi sui compensi dell’anno.
         </p>
       </div>
 
