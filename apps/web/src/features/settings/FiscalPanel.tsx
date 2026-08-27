@@ -95,7 +95,13 @@ export function FiscalPanel() {
         </p>
       ) : null}
 
-      {profile.isLoading ? null : (
+      {profile.isLoading || profile.isError ? null : (
+        // A failed read hides the form entirely -- `isError`, not just `isLoading`.
+        // A 404 is not an error here (`useFiscalProfile` maps it to `null`, "not configured
+        // yet"), so this branch only fires on a *real* failure: the row may well exist
+        // and simply be unreadable. Rendering the blank form in that state invites
+        // somebody to fill it in and press Salva, and the save is a PUT of every key --
+        // it would overwrite a stored profile the panel was never able to show them.
         // Keyed on identity so the form seeds at mount rather than in an effect: one
         // render with the right values, and a later refetch cannot overwrite what the
         // user is typing.

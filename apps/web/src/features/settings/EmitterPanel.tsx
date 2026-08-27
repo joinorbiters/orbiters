@@ -99,7 +99,13 @@ export function EmitterPanel() {
         </p>
       ) : null}
 
-      {emitter.isLoading ? null : (
+      {emitter.isLoading || emitter.isError ? null : (
+        // A failed read hides the form entirely -- `isError`, not just `isLoading`.
+        // A 404 is not an error here (`useEmitter` maps it to `null`, "not configured
+        // yet"), so this branch only fires on a *real* failure: the row may well exist
+        // and simply be unreadable. Rendering the blank form in that state invites
+        // somebody to fill it in and press Salva, and the save is a PUT of every key --
+        // it would overwrite a stored profile the panel was never able to show them.
         // Keyed on the profile's identity so the form seeds its state at mount
         // instead of in an effect. Seeding in an effect meant one render with the
         // wrong values and a cascading re-render; keying makes "seed once" a
