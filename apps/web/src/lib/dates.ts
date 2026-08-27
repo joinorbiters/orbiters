@@ -63,3 +63,28 @@ export function toIsoDate(value: Date): string {
 export function toIsoMonth(value: Date): string {
   return toIsoDate(value).slice(0, 7)
 }
+
+/**
+ * The Monday of the week `value` falls in, at local midnight.
+ *
+ * Monday-first is a product decision about what a working week looks like in Italy, not
+ * a locale lookup: `Intl.Locale.prototype.getWeekInfo` would answer the same today, but
+ * an ICU default that changed would silently reorder the columns of the hours grid, and
+ * a grid whose column order can move is a grid nobody can read a total off.
+ *
+ * Lives here rather than in `features/time/week.ts` for the reason this module exists at
+ * all: it is the same local-parts date arithmetic as its three neighbours, and the next
+ * person to fix a date bug should find it in one place. Reconstructing the `Date` from
+ * year/month/day drops the time of day too, so an anchor at 23:30 and one at 08:00 name
+ * the same week -- and `setDate` with a negative argument rolls the month and the year
+ * back in *local* time, which is why this never subtracts milliseconds (a DST boundary
+ * inside the subtracted span would land it an hour, and from 00:30 a whole day, early).
+ */
+export function startOfWeek(value: Date): Date {
+  const monday = new Date(value.getFullYear(), value.getMonth(), value.getDate())
+  // `getDay()` numbers Sunday 0 .. Saturday 6, so a bare `- getDay()` would leave Sunday
+  // on itself and start every other day's week a day early. `(day + 6) % 7` renumbers it
+  // Monday 0 .. Sunday 6, which is the offset back to Monday.
+  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7))
+  return monday
+}

@@ -27,9 +27,20 @@ export interface TimeEntriesListParams {
   fatturato?: boolean
 }
 
-export function useTimeEntries(params: TimeEntriesListParams = {}) {
+/**
+ * `enabled` is offered because one caller -- the week grid -- has a filter it cannot
+ * safely leave out: `user_id`. An admin's session answers an unfiltered list with the
+ * whole team's hours, so a first render made before `useAuth` has resolved would fill a
+ * personal grid with somebody else's rows and only then correct itself. Defaulting to
+ * `true` keeps every existing caller unchanged.
+ */
+export function useTimeEntries(
+  params: TimeEntriesListParams = {},
+  options: { enabled?: boolean } = {},
+) {
   return useQuery({
     queryKey: queryKeys.timeEntries(params),
+    enabled: options.enabled ?? true,
     queryFn: () =>
       unwrap(api.GET('/api/time-entries', { params: { query: { ...params, limit: 200 } } })),
   })
@@ -95,6 +106,31 @@ export function useUpdateTimeEntry(entryId: string) {
         api.PATCH('/api/time-entries/{entry_id}', {
           params: { path: { entry_id: entryId } },
           body: body as unknown as TimeEntryUpdateBody,
+        }),
+      ),
+    onSuccess: (entry) => invalidateAfterWrite(queryClient, entry.deal_id),
+  })
+}
+
+/**
+ * The same PATCH as `useUpdateTimeEntry`, with the entry id carried in the *variables*
+ * rather than taken at construction.
+ *
+ * That difference is the whole reason it exists: the week grid has one editable control
+ * per deal per day, and `useUpdateTimeEntry(id)` inside that loop would be a hook call
+ * per cell -- a variable number of them, in a variable order, which is precisely what
+ * the rules of hooks forbid. One instance per row serves every cell in it. The
+ * construction-time form stays for the single-entry dialog, where there is exactly one
+ * id and binding it once reads better.
+ */
+export function useUpdateHours() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ entryId, ore }: { entryId: string; ore: string }) =>
+      unwrap(
+        api.PATCH('/api/time-entries/{entry_id}', {
+          params: { path: { entry_id: entryId } },
+          body: { ore } as unknown as TimeEntryUpdateBody,
         }),
       ),
     onSuccess: (entry) => invalidateAfterWrite(queryClient, entry.deal_id),
