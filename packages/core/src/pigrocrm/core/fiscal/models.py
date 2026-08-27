@@ -50,3 +50,25 @@ class FiscalProfile(Base, PrimaryKeyMixin, TimestampMixin):
     modalita_pagamento: Mapped[str] = mapped_column(String(4), nullable=False, default="MP05")
     giorni_scadenza: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
     iban: Mapped[str | None] = mapped_column(String(34), default=None)
+    # §4.5. NOT a second table: slice 1 §3 described a FiscalProfile holding "regime,
+    # ATECO coefficient, substitute tax rate, INPS", and the table slice 3 delivered
+    # holds the FatturaPA parameters and not the income ones. Same concept, same single
+    # row -- a second fiscal profile would create two answers to "which regime am I in".
+    #
+    # Percentages, so Numeric(5, 2): `67.00`, not `0.67`. Stored the way its owner reads
+    # and types them, converted once where the tax is computed. The defaults are the previous system's
+    # own profile -- the migration of FORFETTARIO_PROFITABILITY_RATE (0.67),
+    # FORFETTARIO_SUBSTITUTE_TAX_RATE (0.05) and FORFETTARIO_INPS_RATE (0.2607) out of
+    # App.jsx and into the service layer, which slice 1 §14 assigns to this slice.
+    #
+    # Nullable, unlike the bollo values of law next to them, because a regime that is
+    # not the forfettario computes income by a different arithmetic entirely: for those
+    # the honest value is "not applicable", which is NULL, and not a zero that a report
+    # would quietly multiply by.
+    coefficiente_redditivita: Mapped[Decimal | None] = mapped_column(
+        Numeric(5, 2), default=Decimal("67.00")
+    )
+    aliquota_imposta_sostitutiva: Mapped[Decimal | None] = mapped_column(
+        Numeric(5, 2), default=Decimal("5.00")
+    )
+    aliquota_inps: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), default=Decimal("26.07"))
