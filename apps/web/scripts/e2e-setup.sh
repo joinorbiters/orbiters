@@ -27,6 +27,19 @@ source "$REPO_ROOT/apps/web/scripts/e2e-env.sh"
 echo "== pigrocrm e2e: clearing a stale frontend dev server on :$PIGROCRM_E2E_WEB_PORT, if any =="
 kill_port "$PIGROCRM_E2E_WEB_PORT"
 
+# Same reasoning one port over, and the reason this script's own "idempotent: safe to
+# run again on top of a previous, still-running stack" header is true rather than
+# merely intended. Without it, the `nohup uv run uvicorn` below dies on "[Errno 48]
+# address already in use" while the *previous* run's API keeps answering on that port
+# -- so the readiness curl passes, this script prints "stack pronto", and the whole
+# suite then runs against a process nobody meant to be there (observed live while
+# writing e2e/time-tracking.spec.ts: a stale API held :8000 across a database
+# recreation, and every request after login came back 401 with no other symptom).
+# `kill_port`, not the pidfile, for the same reason the frontend uses it: the leftover
+# may be from a run whose pidfile was already removed by its own teardown.
+echo "== pigrocrm e2e: clearing a stale API on :$PIGROCRM_E2E_API_PORT, if any =="
+kill_port "$PIGROCRM_E2E_API_PORT"
+
 echo "== pigrocrm e2e: bringing up Postgres on :$PIGROCRM_E2E_PG_PORT =="
 docker rm -f "$PIGROCRM_E2E_CONTAINER" >/dev/null 2>&1 || true
 docker run --rm -d --name "$PIGROCRM_E2E_CONTAINER" \
@@ -39,14 +52,18 @@ until docker exec "$PIGROCRM_E2E_CONTAINER" pg_isready -U pigrocrm >/dev/null 2>
 echo "== pigrocrm e2e: running migrations =="
 (cd packages/core && uv run alembic upgrade head)
 
-echo "== pigrocrm e2e: seeding the admin the specs log in as, and the default pipeline =="
+echo "== pigrocrm e2e: seeding the admin the specs log in as, the pipeline, the timesheet template and the cost categories =="
 uv run python - <<'PY'
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.auth.schemas import UserCreate
 from pigrocrm.core.auth.service import UserService
 from pigrocrm.core.config import get_settings
 from pigrocrm.core.db import create_engine_from_settings, session_factory
+from pigrocrm.core.emitter.schemas import EmitterProfileUpsert
+from pigrocrm.core.emitter.service import EmitterProfileService
 from pigrocrm.core.pipeline.service import PipelineService
+from pigrocrm.core.templates.service import TemplateService
+from pigrocrm.core.timetracking.categories import CostCategoryService
 
 engine = create_engine_from_settings(get_settings())
 with session_factory(engine)() as session:
@@ -60,6 +77,37 @@ with session_factory(engine)() as session:
     # no longer accepts. `Actor.system()` is the same actor `createadmin` and this
     # script's own user-seeding step above already use.
     PipelineService(session).seed_defaults(Actor.system())
+    # The timesheet's PDF path needs the «Rapporto ore» template row to exist; without
+    # it `TimeReportService.render_pdf` raises a `ValidationFailed` naming `pigrocrm
+    # seed-templates`, which is the right failure at exactly the wrong time -- halfway
+    # through an E2E run rather than while the environment is being built. Seeded here,
+    # in the same session as everything else, rather than by shelling out to `pigrocrm
+    # seed-templates` and `POST /api/cost-categories/seed`: both of those do precisely
+    # what these two lines do (see `cli.seed_templates` and `routers/cost_categories.
+    # seed`), and a second process plus an HTTP round trip would only add two more ways
+    # for this step to fail. The cost categories come along because the deal's «Ore» tab
+    # renders `CostsPanel`, whose category picker is empty without them.
+    TemplateService(session).seed_defaults(Actor.system())
+    CostCategoryService(session).seed_defaults(Actor.system())
+    # The letterhead every rendered PDF carries. `DocumentService.create_from_template`
+    # reads the emitter singleton unconditionally, so without this row the timesheet's
+    # PDF comes back `404 emitter_profile singleton not found` -- which is honest, and
+    # is a configuration step a real deployment performs on the «Impostazioni →
+    # Emittente» screen before anyone presses Scarica. Synthetic values: nothing here
+    # is a real company and the P.IVA is only shaped like one (11 digits is what
+    # `_check_fiscal` requires).
+    EmitterProfileService(session).upsert(
+        EmitterProfileUpsert(
+            ragione_sociale="Studio E2E",
+            partita_iva="12345678903",
+            indirizzo="Via di Prova 1",
+            cap="00100",
+            comune="Roma",
+            provincia="RM",
+            email="e2e@pigro.it",
+        ),
+        Actor.system(),
+    )
 print("seed completato")
 PY
 
