@@ -2,18 +2,21 @@ import subprocess
 from collections.abc import Callable, Iterator
 from datetime import date
 from decimal import Decimal
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Engine
+from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 from testcontainers.community.postgres import PostgresContainer
 
+from pigrocrm.core.actor import Actor
 from pigrocrm.core.auth.models import User
 from pigrocrm.core.config import Settings
 from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.db import Base, create_engine_from_settings, session_factory
 from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.fiscal.repository import FiscalProfileRepository
 from pigrocrm.core.pipeline.models import PipelineStage
 from pigrocrm.core.storage.local import LocalFileStorage
 from pigrocrm.core.timetracking.models import CostCategory, TimeEntry
@@ -154,3 +157,163 @@ def extract_pdf_text() -> Callable[[LocalFileStorage, Session, UUID], str]:
         return result.stdout.decode("utf-8", errors="replace")
 
     return _extract
+
+
+# --- slice 3 invoices, as states rather than as rows -------------------------------
+#
+# The three fixtures below build a real invoice through `InvoiceService` instead of
+# inserting `invoice_lines` by hand, so `(tipo, stato)`, the line invariants and the
+# register number are the ones that service produces. Task 4B-3 needs them because
+# `time_entries.invoice_line_id` is a real foreign key from migration 0012 on: a random
+# UUID no longer stands in for a line, and the rule the column feeds -- "frozen only
+# when the invoice is *issued*" -- is a question about the invoice's state that only a
+# genuinely issued row can answer.
+#
+# The imports are inside the functions, not at module scope: this file is loaded for
+# every test in the package, and the invoices service drags in storage, rendering and
+# the emitter with it.
+
+
+def _invoice_service(session: Session, storage: LocalFileStorage) -> Any:
+    """`InvoiceService` with the two profiles `issue()` reads already in place."""
+    from pigrocrm.core.emitter.schemas import EmitterProfileUpsert
+    from pigrocrm.core.emitter.service import EmitterProfileService
+    from pigrocrm.core.fiscal.schemas import FiscalProfileUpsert
+    from pigrocrm.core.fiscal.service import FiscalProfileService
+    from pigrocrm.core.invoices.service import InvoiceService
+
+    admin = Actor(id=None, type="system", role="admin")
+    if FiscalProfileRepository(session).get() is None:
+        FiscalProfileService(session).upsert(FiscalProfileUpsert(codice_regime="RF19"), admin)
+        EmitterProfileService(session).upsert(
+            EmitterProfileUpsert(
+                ragione_sociale="Humancraft di Ivan Sala",
+                partita_iva="14518240966",
+                codice_fiscale="HMCRFT00A01H501K",
+                indirizzo="Via Vittorio Veneto 12",
+                cap="20124",
+                comune="Milano",
+                provincia="MI",
+                nazione="IT",
+                email="someone@example.com",
+            ),
+            admin,
+        )
+    return InvoiceService(session, storage)
+
+
+def _fiscal_customer_id(session: Session) -> UUID:
+    """A customer with enough identity to appear on an issued document."""
+    customer = Customer(
+        ragione_sociale=f"Acme {uuid4()}",
+        partita_iva="12345678901",
+        codice_sdi="ABCDEFG",
+        indirizzo="Corso Italia 5",
+        cap="00100",
+        comune="Roma",
+        provincia="RM",
+        nazione="IT",
+    )
+    session.add(customer)
+    session.flush()
+    return customer.id
+
+
+def _invoice_of(session: Session, line_id: UUID) -> UUID:
+    invoice_id: UUID = session.execute(
+        text("SELECT invoice_id FROM invoice_lines WHERE id = :line"), {"line": line_id}
+    ).scalar_one()
+    return invoice_id
+
+
+@pytest.fixture
+def draft_invoice_line_id(db_session: Session, local_storage: LocalFileStorage) -> UUID:
+    """A line on a `bozza`.
+
+    The invoice carries its own customer and no `deal_id`: `_check_owner` requires the
+    deal to belong to the invoice's customer, and the customer `seeded_deal_id` builds
+    has only a `ragione_sociale`, which is not identity enough to issue against. What
+    the tests using these fixtures need from an invoice is its *state*, never its link
+    to a deal.
+    """
+    from pigrocrm.core.invoices.schemas import InvoiceCreate, InvoiceLineIn
+
+    invoice = _invoice_service(db_session, local_storage).create(
+        InvoiceCreate(
+            customer_id=_fiscal_customer_id(db_session),
+            tipo="fattura",
+            righe=[
+                InvoiceLineIn(
+                    descrizione="Attività",
+                    quantita=Decimal("1.000000"),
+                    prezzo_unitario=Decimal("100.000000"),
+                )
+            ],
+        ),
+        Actor(id=None, type="system", role="admin"),
+    )
+    line_id: UUID = db_session.execute(
+        text("SELECT id FROM invoice_lines WHERE invoice_id = :inv ORDER BY numero_linea LIMIT 1"),
+        {"inv": invoice.id},
+    ).scalar_one()
+    return line_id
+
+
+@pytest.fixture
+def proforma_invoice_line_id(db_session: Session, local_storage: LocalFileStorage) -> UUID:
+    """A line on a `confermata` proforma -- the state closest to an emission that is not
+    one. It never touches the register (slice 3 §5)."""
+    from pigrocrm.core.invoices.schemas import InvoiceCreate, InvoiceLineIn
+
+    service = _invoice_service(db_session, local_storage)
+    admin = Actor(id=None, type="system", role="admin")
+    invoice = service.create(
+        InvoiceCreate(
+            customer_id=_fiscal_customer_id(db_session),
+            tipo="proforma",
+            righe=[
+                InvoiceLineIn(
+                    descrizione="Attività",
+                    quantita=Decimal("1.000000"),
+                    prezzo_unitario=Decimal("100.000000"),
+                )
+            ],
+        ),
+        admin,
+    )
+    service.confirm_proforma(invoice.id, admin)
+    line_id: UUID = db_session.execute(
+        text("SELECT id FROM invoice_lines WHERE invoice_id = :inv ORDER BY numero_linea LIMIT 1"),
+        {"inv": invoice.id},
+    ).scalar_one()
+    return line_id
+
+
+@pytest.fixture
+def issued_invoice_line_id(
+    db_session: Session, local_storage: LocalFileStorage, draft_invoice_line_id: UUID
+) -> UUID:
+    """The same line, once `issue()` has consumed a register number for it."""
+    from pigrocrm.core.invoices.schemas import InvoiceIssue
+
+    _invoice_service(db_session, local_storage).issue(
+        _invoice_of(db_session, draft_invoice_line_id),
+        InvoiceIssue(),
+        Actor(id=None, type="system", role="admin"),
+    )
+    return draft_invoice_line_id
+
+
+@pytest.fixture
+def annulled_invoice_line_id(
+    db_session: Session, local_storage: LocalFileStorage, issued_invoice_line_id: UUID
+) -> UUID:
+    """The same line again, on an invoice that keeps its number and loses its revenue."""
+    from pigrocrm.core.invoices.schemas import InvoiceAnnul
+
+    _invoice_service(db_session, local_storage).annul(
+        _invoice_of(db_session, issued_invoice_line_id),
+        InvoiceAnnul(motivo="errore di emissione"),
+        Actor(id=None, type="system", role="admin"),
+    )
+    return issued_invoice_line_id

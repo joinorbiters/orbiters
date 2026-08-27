@@ -4,7 +4,6 @@ every assertion here is about the schema that actually exists."""
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from uuid import uuid4
 
 import pytest
 from sqlalchemy import Engine, inspect, text
@@ -101,17 +100,20 @@ def test_the_partial_indexes_this_slice_queries_by_exist(db_engine: Engine) -> N
 
 
 def test_a_billed_entry_cannot_be_soft_deleted_even_in_raw_sql(
-    db_session: Session, seeded_entry_id
+    db_session: Session, seeded_entry_id, draft_invoice_line_id
 ) -> None:
     """The CHECK, not the service. §4.3: the disappearance of an hour that belongs to
     a fiscal document is covered at the level no write path can go around. The
     constraint is deliberately WIDER than the service rule -- it forbids deleting any
     entry bound to a line, draft included -- because distinguishing invoice state
     would need to read another table, i.e. a trigger, and this project keeps that kind
-    of invisible logic out of the database."""
+    of invisible logic out of the database.
+
+    Bound to a *draft*, which since 4B-3 is the sharpest form of the point: the service
+    would happily edit this entry, and the CHECK still refuses to let it disappear."""
     db_session.execute(
         text("UPDATE time_entries SET invoice_line_id = :line WHERE id = :id"),
-        {"line": uuid4(), "id": seeded_entry_id},
+        {"line": draft_invoice_line_id, "id": seeded_entry_id},
     )
     with pytest.raises(IntegrityError) as excinfo:
         db_session.execute(

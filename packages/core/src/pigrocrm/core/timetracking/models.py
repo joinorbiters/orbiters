@@ -14,7 +14,6 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
-    Uuid,
     func,
     text,
 )
@@ -88,11 +87,12 @@ class TimeEntry(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     this month. Merging them would make the weekly question -- *how much do I have to
     invoice?* -- unanswerable, because "not yet" and "never" would be indistinguishable.
 
-    `invoice_line_id` has **no foreign key** in slice 4A: `invoice_lines` is a slice 3
-    table and 4A deliberately does not depend on slice 3. Task 4B-3 adds the real
-    constraint with `ON DELETE SET NULL` once that table exists. Nothing in 4A writes
-    this column -- `bind_time_to_invoice` is 4B -- so the "bound" state is unreachable
-    until then.
+    `invoice_line_id` had **no foreign key** in slice 4A: `invoice_lines` is a slice 3
+    table and 4A deliberately did not depend on slice 3. Migration 0012 adds the real
+    constraint, `ON DELETE SET NULL` -- which is what lets slice 3 replace a draft's
+    lines wholesale (slice 3 §11) without leaving orphans and without slice 4 having to
+    join the locked transaction of slice 3 §3, the part of the system that least wants
+    new participants.
 
     `tariffa_origine`/`costo_origine` are `String(10)` plus a Pydantic `Literal`, never
     a Postgres ENUM: every closed set in this schema is spelled that way
@@ -158,7 +158,9 @@ class TimeEntry(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     costo_applicato: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), default=None)
     tariffa_origine: Mapped[str] = mapped_column(String(10), nullable=False, default="assente")
     costo_origine: Mapped[str] = mapped_column(String(10), nullable=False, default="assente")
-    invoice_line_id: Mapped[UUID | None] = mapped_column(Uuid, default=None, index=True)
+    invoice_line_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("invoice_lines.id", ondelete="SET NULL"), default=None, index=True
+    )
     note_interne: Mapped[str | None] = mapped_column(Text, default=None)
     custom_fields: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
 

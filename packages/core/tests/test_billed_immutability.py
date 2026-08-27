@@ -1,0 +1,188 @@
+"""§4.3, at full strength. The rule attaches to the **state of the invoice**, not to the
+mere presence of the link, because a draft is still freely editable: while the invoice is
+a draft the hours stay modifiable, and slice 3's wholesale line replacement unbinds and
+rebinds them without orphans. The moment `issue()` commits, the bound hours are frozen --
+without `issue()` having had to know they exist.
+
+Part of criterion 5.
+"""
+
+from datetime import date
+from decimal import Decimal
+from uuid import UUID, uuid4
+
+import pytest
+from sqlalchemy import event, text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.errors import Conflict, ImmutableField
+from pigrocrm.core.timetracking.models import TimeEntry
+from pigrocrm.core.timetracking.schemas import TimeEntryCreate, TimeEntryUpdate
+from pigrocrm.core.timetracking.service import TimeEntryService, billed_entry_ids
+
+WRITER = Actor(id=None, type="user", role="collaboratore")
+
+
+def _bind(session: Session, entry_id: UUID, line_id: UUID) -> TimeEntry:
+    """Raw SQL, because nothing writes this column until 4B's `bind_time_to_invoice`.
+    The ORM copy is expired afterwards so the helper's caller reads the bound state."""
+    session.execute(
+        text("UPDATE time_entries SET invoice_line_id = :line WHERE id = :id"),
+        {"line": line_id, "id": entry_id},
+    )
+    session.flush()
+    entry = session.get(TimeEntry, entry_id)
+    assert entry is not None
+    session.refresh(entry)
+    return entry
+
+
+def _log(service: TimeEntryService, deal_id: UUID, user_id: UUID) -> UUID:
+    entry = service.create(
+        TimeEntryCreate(
+            deal_id=deal_id,
+            user_id=user_id,
+            data=date(2026, 3, 4),
+            ore=Decimal("2.00"),
+            descrizione="x",
+        ),
+        WRITER,
+    )
+    return entry.id
+
+
+def test_an_hour_on_a_draft_invoice_is_still_editable(
+    db_session: Session,
+    seeded_deal_id: UUID,
+    seeded_user_id: UUID,
+    draft_invoice_line_id: UUID,
+) -> None:
+    service = TimeEntryService(db_session)
+    entry_id = _log(service, seeded_deal_id, seeded_user_id)
+    entry = _bind(db_session, entry_id, draft_invoice_line_id)
+
+    assert billed_entry_ids(db_session, [entry]) == set()
+    assert service.update(entry_id, TimeEntryUpdate(ore=Decimal("3.00")), WRITER).ore == Decimal(
+        "3.00"
+    )
+
+
+def test_issuing_the_invoice_freezes_the_bound_hour(
+    db_session: Session,
+    seeded_deal_id: UUID,
+    seeded_user_id: UUID,
+    issued_invoice_line_id: UUID,
+) -> None:
+    service = TimeEntryService(db_session)
+    entry_id = _log(service, seeded_deal_id, seeded_user_id)
+    _bind(db_session, entry_id, issued_invoice_line_id)
+
+    for field, value in [
+        ("ore", Decimal("3.00")),
+        ("data", date(2026, 3, 5)),
+        ("tariffa_applicata", Decimal("99.000000")),
+        ("descrizione", "Altro"),
+    ]:
+        with pytest.raises(ImmutableField) as excinfo:
+            service.update(entry_id, TimeEntryUpdate(**{field: value}), WRITER)
+        assert excinfo.value.details["field"] == field
+
+    # `note_interne` stays mutable: it appears on no artefact.
+    assert service.update(entry_id, TimeEntryUpdate(note_interne="ok"), WRITER).note_interne == "ok"
+
+    with pytest.raises(Conflict):
+        service.soft_delete(entry_id, WRITER)
+
+
+# The other half of §4.3 -- `ck_time_entries_billed_not_deleted`, which forbids deleting
+# *any* entry bound to a line, a draft's included -- is deliberately wider than the rule
+# narrowed here, because a constraint that distinguished invoice state would have to read
+# another table, i.e. be a trigger, and this project keeps that kind of invisible logic
+# out of the database. It is proven in `test_timetracking_models.py`, against a draft
+# line, and is not repeated here.
+
+
+def test_deleting_an_invoice_line_unbinds_rather_than_orphans(
+    db_session: Session, seeded_entry_id: UUID, draft_invoice_line_id: UUID
+) -> None:
+    """`ON DELETE SET NULL`, which is what lets slice 3 replace a draft's lines wholesale
+    without slice 4 participating in that transaction."""
+    _bind(db_session, seeded_entry_id, draft_invoice_line_id)
+    db_session.execute(
+        text("DELETE FROM invoice_lines WHERE id = :line"), {"line": draft_invoice_line_id}
+    )
+    db_session.flush()
+    remaining = db_session.execute(
+        text("SELECT invoice_line_id FROM time_entries WHERE id = :id"), {"id": seeded_entry_id}
+    ).scalar_one()
+    assert remaining is None
+
+
+def test_a_line_that_does_not_exist_cannot_be_bound_at_all(
+    db_session: Session, seeded_entry_id: UUID
+) -> None:
+    """The foreign key itself. Until migration 0012 the column was a bare `Uuid`, so any
+    128 bits at all looked like a billed hour -- which is precisely what four of slice
+    4A's own tests relied on."""
+    with pytest.raises(IntegrityError):
+        db_session.execute(
+            text("UPDATE time_entries SET invoice_line_id = :line WHERE id = :id"),
+            {"line": uuid4(), "id": seeded_entry_id},
+        )
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_an_annulled_invoice_does_not_freeze_its_hours(
+    db_session: Session, seeded_entry_id: UUID, annulled_invoice_line_id: UUID
+) -> None:
+    """Only `emessa` freezes. An annulled invoice keeps its number but not its revenue
+    (§7.1) -- it is the struck-through page of a paper register -- so the hours behind it
+    are CRM data again and can be re-invoiced."""
+    entry = _bind(db_session, seeded_entry_id, annulled_invoice_line_id)
+    assert billed_entry_ids(db_session, [entry]) == set()
+
+
+def test_a_proforma_never_freezes_anything(
+    db_session: Session,
+    seeded_entry_id: UUID,
+    proforma_invoice_line_id: UUID,
+) -> None:
+    """A proforma never touches the register (slice 3 §5): `confermata` is not
+    `emessa`, and the join filters on `tipo` as well as `stato` so a proforma's own
+    states can never be mistaken for an emission."""
+    entry = _bind(db_session, seeded_entry_id, proforma_invoice_line_id)
+    assert billed_entry_ids(db_session, [entry]) == set()
+
+
+def test_one_query_however_many_entries(
+    db_session: Session,
+    seeded_deal_id: UUID,
+    seeded_user_id: UUID,
+    issued_invoice_line_id: UUID,
+) -> None:
+    """`deal_summary` calls this with every entry of a deal, so a per-row lookup would
+    make the P&L quadratic in a deal's hours."""
+    service = TimeEntryService(db_session)
+    bound = [_log(service, seeded_deal_id, seeded_user_id) for _ in range(3)]
+    free = _log(service, seeded_deal_id, seeded_user_id)
+    entries = []
+    for entry_id in bound:
+        entries.append(_bind(db_session, entry_id, issued_invoice_line_id))
+    unbound = db_session.get(TimeEntry, free)
+    assert unbound is not None
+    entries.append(unbound)
+
+    statements: list[str] = []
+
+    def _record(conn, cursor, statement, *args):  # type: ignore[no-untyped-def]
+        statements.append(statement)
+
+    event.listen(db_session.bind, "before_cursor_execute", _record)
+    try:
+        assert billed_entry_ids(db_session, entries) == set(bound)
+    finally:
+        event.remove(db_session.bind, "before_cursor_execute", _record)
+    assert len([s for s in statements if "invoice_lines" in s]) == 1

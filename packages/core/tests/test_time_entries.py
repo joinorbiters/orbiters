@@ -163,18 +163,26 @@ def test_logging_on_a_closed_deal_is_allowed_and_leaves_a_trace(
     assert "time_logged_on_closed_deal" in kinds
 
 
-def test_an_entry_bound_to_an_invoice_line_freezes_the_named_fields(
-    db_session: Session, seeded_deal_id: UUID, seeded_user_id: UUID
+def test_an_entry_on_an_issued_invoice_freezes_the_named_fields(
+    db_session: Session,
+    seeded_deal_id: UUID,
+    seeded_user_id: UUID,
+    issued_invoice_line_id: UUID,
 ) -> None:
     """§4.3's table. `note_interne` and `custom_fields` stay mutable because they appear
     on no artefact; `descrizione` is frozen and that is not obvious -- it is the column
     the client reads in the timesheet attached to the invoice, so changing it after
-    issue would make the delivered document and the database say two different things."""
+    issue would make the delivered document and the database say two different things.
+
+    A real issued line, not the random UUID this test used to bind: since 4B-3 the
+    column is a foreign key and the rule reads the invoice's `stato`, so a stand-in
+    would neither insert nor freeze. Which state freezes is `test_billed_immutability`;
+    what it freezes is here."""
     service = TimeEntryService(db_session)
     entry = _create(service, seeded_deal_id, seeded_user_id)
     db_session.execute(
         text("UPDATE time_entries SET invoice_line_id = :line WHERE id = :id"),
-        {"line": uuid4(), "id": entry.id},
+        {"line": issued_invoice_line_id, "id": entry.id},
     )
     db_session.flush()
 
@@ -236,7 +244,11 @@ def test_the_summary_states_the_three_facts_a_report_needs(
 
 
 def test_the_state_is_derived_never_stored(
-    db_session: Session, seeded_deal_id: UUID, seeded_user_id: UUID, seeded_won_stage_id: UUID
+    db_session: Session,
+    seeded_deal_id: UUID,
+    seeded_user_id: UUID,
+    seeded_won_stage_id: UUID,
+    issued_invoice_line_id: UUID,
 ) -> None:
     """§7.3's three states, and they come from the data -- a stage type plus whether
     billable unbilled hours exist -- never from a column."""
@@ -248,9 +260,12 @@ def test_the_state_is_derived_never_stored(
     db_session.flush()
     assert service.deal_summary(seeded_deal_id, READER).stato == "da fatturare"
 
+    # "chiuso" is "no billable hour left unbilled", and since 4B-3 only an *issued*
+    # invoice bills one: on a draft the deal would still read "da fatturare", which is
+    # the honest answer while the document can still change.
     db_session.execute(
         text("UPDATE time_entries SET invoice_line_id = :line WHERE deal_id = :deal"),
-        {"line": uuid4(), "deal": seeded_deal_id},
+        {"line": issued_invoice_line_id, "deal": seeded_deal_id},
     )
     db_session.flush()
     assert service.deal_summary(seeded_deal_id, READER).stato == "chiuso"
@@ -303,14 +318,21 @@ def test_the_list_is_ordered_by_date_descending(
 
 
 def test_the_fatturato_filter_answers_how_much_is_left_to_invoice(
-    db_session: Session, seeded_deal_id: UUID, seeded_user_id: UUID
+    db_session: Session,
+    seeded_deal_id: UUID,
+    seeded_user_id: UUID,
+    issued_invoice_line_id: UUID,
 ) -> None:
+    """The filter is on the *link*, not on the invoice's state -- one indexed column and
+    no join, because this is the list query the weekly "how much do I have to invoice?"
+    runs. The entry here is on an issued invoice, so both readings agree and the test
+    keeps saying what it always said."""
     service = TimeEntryService(db_session)
     billed = _create(service, seeded_deal_id, seeded_user_id)
     _create(service, seeded_deal_id, seeded_user_id, data=date(2026, 3, 11))
     db_session.execute(
         text("UPDATE time_entries SET invoice_line_id = :line WHERE id = :id"),
-        {"line": uuid4(), "id": billed.id},
+        {"line": issued_invoice_line_id, "id": billed.id},
     )
     db_session.flush()
     unbilled = service.list(TimeEntryListQuery(deal_id=seeded_deal_id, fatturato=False), READER)
