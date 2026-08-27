@@ -10,7 +10,6 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
-from conftest import extract_pdf_text
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
@@ -32,10 +31,7 @@ WRITER = Actor(id=None, type="user", role="collaboratore")
 
 HOSTILE = 'Call con @mario su [fase 1] & #2 — "urgente"\nseconda riga'
 
-ASSETS = (
-    Path(__file__).resolve().parents[1]
-    / "src" / "pigrocrm" / "core" / "render" / "assets"
-)
+ASSETS = Path(__file__).resolve().parents[1] / "src" / "pigrocrm" / "core" / "render" / "assets"
 
 
 @pytest.mark.parametrize("bad", ["2026-13", "2026-00", "202603", "2026-3", "2026-03\n", ""])
@@ -97,23 +93,32 @@ def test_report_variables_carry_raw_values_and_a_finished_total(
     service = TimeEntryService(db_session)
     service.create(
         TimeEntryCreate(
-            deal_id=seeded_deal_id, user_id=seeded_user_id, data=date(2026, 3, 4),
-            ore=Decimal("2.50"), descrizione=HOSTILE,
+            deal_id=seeded_deal_id,
+            user_id=seeded_user_id,
+            data=date(2026, 3, 4),
+            ore=Decimal("2.50"),
+            descrizione=HOSTILE,
         ),
         WRITER,
     )
     service.create(
         TimeEntryCreate(
-            deal_id=seeded_deal_id, user_id=seeded_user_id, data=date(2026, 3, 20),
-            ore=Decimal("1.25"), descrizione="Revisione",
+            deal_id=seeded_deal_id,
+            user_id=seeded_user_id,
+            data=date(2026, 3, 20),
+            ore=Decimal("1.25"),
+            descrizione="Revisione",
         ),
         WRITER,
     )
     # An entry in the next month must not appear.
     service.create(
         TimeEntryCreate(
-            deal_id=seeded_deal_id, user_id=seeded_user_id, data=date(2026, 4, 1),
-            ore=Decimal("8.00"), descrizione="Aprile",
+            deal_id=seeded_deal_id,
+            user_id=seeded_user_id,
+            data=date(2026, 4, 1),
+            ore=Decimal("8.00"),
+            descrizione="Aprile",
         ),
         WRITER,
     )
@@ -134,7 +139,11 @@ def test_report_variables_carry_raw_values_and_a_finished_total(
 
 
 def test_the_pdf_renders_and_contains_the_hostile_description_verbatim(
-    db_session: Session, seeded_deal_id: UUID, seeded_user_id: UUID, local_storage
+    db_session: Session,
+    seeded_deal_id: UUID,
+    seeded_user_id: UUID,
+    local_storage,
+    extract_pdf_text,
 ) -> None:
     """Renders through Pandoc and Typst for real, then reads the text back out of the
     produced PDF. The assertion is on the round trip, because the whole point is that
@@ -151,8 +160,11 @@ def test_the_pdf_renders_and_contains_the_hostile_description_verbatim(
     TemplateService(db_session).seed_defaults(ADMIN)
     TimeEntryService(db_session).create(
         TimeEntryCreate(
-            deal_id=seeded_deal_id, user_id=seeded_user_id, data=date(2026, 3, 4),
-            ore=Decimal("2.50"), descrizione=HOSTILE,
+            deal_id=seeded_deal_id,
+            user_id=seeded_user_id,
+            data=date(2026, 3, 4),
+            ore=Decimal("2.50"),
+            descrizione=HOSTILE,
         ),
         WRITER,
     )
