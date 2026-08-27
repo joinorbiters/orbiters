@@ -22,6 +22,13 @@ dev = [
   "ruff==0.16.1",
   "mypy==2.3.0",
   "lxml-stubs==0.5.1",
+  # openpyxl ships no inline types, so under `strict` every `from openpyxl import ...`
+  # is an `import-untyped` error and the whole workbook builder degrades to `Any` --
+  # which is exactly where a wrong `number_format` or a misspelled attribute would
+  # hide. Same reason `lxml-stubs` is here. Only a dev dependency: stubs are read by
+  # mypy, never imported at runtime, so they have no business in core's own
+  # `[project].dependencies` (and the architecture test reads that list literally).
+  "types-openpyxl==3.1.5.20260807",
 ]
 
 [tool.pytest.ini_options]
