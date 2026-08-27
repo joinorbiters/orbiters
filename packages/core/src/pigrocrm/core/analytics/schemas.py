@@ -1,0 +1,180 @@
+"""Every shape this slice's reports return.
+
+Declared together, and ahead of the methods that build them (tasks 4B-5 to 4B-8), so
+that the vocabulary of the whole slice is readable in one file: `ricavi` means the same
+thing in `DealPnl`, `PnlTotals` and `FiscalEstimate`, and a second meaning would have to
+be introduced here, in the open, rather than discovered in a service.
+
+Every figure arrives already summed. §6 forbids the frontend of this slice from
+computing any economic total at all -- the previous system's whole P&L lived in `App.jsx`, with three
+fiscal constants and float hour sums.
+"""
+
+from datetime import date
+from decimal import Decimal
+from typing import Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
+# The same three values as `DealTimeSummary.stato`, and deliberately a separate
+# declaration rather than an import: `timetracking` answers "what is the state of these
+# hours" and `analytics` answers "what is the state of this deal's economics". They
+# coincide today because the second is derived from the first, and the day they stop
+# coinciding a shared alias would silently pick a side.
+DealStato = Literal["in corso", "da fatturare", "chiuso"]
+
+
+class DealPnl(BaseModel):
+    """One deal's profit and loss, every figure computed by the service and returned
+    already summed -- the browser adds nothing (§6).
+
+    `valore_maturato` is deliberately a separate field from `ricavi` and not a variant of
+    it: it is the estimate of §3 decision 2, it is **not revenue**, it enters no P&L row,
+    and it lives under a heading of its own. On an `in corso` deal it is the honest number
+    to look at and the margin is provisional; the margin is only reportable in the
+    `chiuso` state.
+    """
+
+    deal_id: UUID
+    stato: DealStato
+    ricavi: Decimal
+    costi_diretti: Decimal
+    costo_lavoro: Decimal
+    margine_lordo: Decimal
+    # `None`, never `0.00`, when revenue is zero: zero per cent means "everything I
+    # earned went out in costs", a zero denominator means nothing has been earned. Two
+    # different facts (§7.1, criterion 6).
+    margine_percentuale: Decimal | None
+    ore_totali: Decimal
+    ore_fatturabili_non_fatturate: Decimal
+    valore_maturato: Decimal
+    ore_senza_tariffa: int
+    fatture_emesse: int
+
+
+class PeriodPnlQuery(BaseModel):
+    da: date
+    a: date
+    customer_id: UUID | None = None
+
+
+class PnlTotals(BaseModel):
+    ricavi: Decimal
+    costi_diretti: Decimal
+    costo_lavoro: Decimal
+    margine_lordo: Decimal
+    margine_percentuale: Decimal | None
+    deal: int
+
+
+class PeriodPnl(BaseModel):
+    """Two columns, never one total (§7.4).
+
+    Adding a finished job's margin to a half-done one produces a figure that is neither,
+    and that changes every week for reasons which are not business performance. The
+    reportable number is `chiusi`.
+    """
+
+    da: date
+    a: date
+    customer_id: UUID | None
+    chiusi: PnlTotals
+    in_corso: PnlTotals
+    # A cost with `deal_id IS NULL`: it enters the period P&L in a row of its own and is
+    # **never apportioned** onto any deal. Every apportionment key has one precise and
+    # unacceptable consequence -- a deal's margin would move when a *different* deal was
+    # invoiced.
+    spese_generali: Decimal
+    # Whether the number can still move, which is the thing a reader most needs to know
+    # and costs a COUNT over two columns that already exist (§6.4).
+    periodo_chiuso: bool
+    voci_scritte_in_ritardo: int
+
+
+class BudgetQuery(BaseModel):
+    da: date
+    a: date
+    customer_id: UUID | None = None
+    # Mandatory pagination from the first commit (residual B3): the margins view is by
+    # its nature a list of *closed* deals, so unbounded growth stops being invisible here.
+    limit: int = Field(default=50, ge=1, le=200)
+    cursor: UUID | None = None
+
+
+class BudgetVsActualRow(BaseModel):
+    deal_id: UUID
+    nome: str
+    ore_preventivate: Decimal | None
+    ore_consuntivate: Decimal
+    valore_preventivato: Decimal | None
+    ricavi: Decimal
+    # Per cent, two places: 40 hours of an estimated 100 is `"40.00"`.
+    avanzamento_ore: Decimal | None
+    budget_pro_rata: Decimal | None
+    scostamento_valore: Decimal | None
+    scostamento_ore: Decimal | None
+    tariffa_media_preventivata: Decimal | None
+    tariffa_media_consuntivata: Decimal | None
+    # An absent estimate is not an estimate of zero: the row says so, is excluded from
+    # the budget aggregates, and is never counted as a 100% overrun (§9.2).
+    non_preventivato: bool
+    # `valore_preventivato` set with `ore_preventivate` null: no progress figure exists
+    # to derive a pro-rata from, so only the absolute comparison is shown rather than a
+    # progress invented from the invoiced value -- which would be circular, because the
+    # invoiced value is the very quantity being judged.
+    pro_rata_non_calcolabile: bool
+
+
+class BudgetPage(BaseModel):
+    items: list[BudgetVsActualRow]
+    next_cursor: UUID | None
+    # Only over rows with both estimate columns populated: including the unestimated ones
+    # would make the aggregate depend on how many deals nobody estimated.
+    totale_preventivato: Decimal
+    totale_ricavi: Decimal
+    deal_preventivati: int
+    deal_non_preventivati: int
+
+
+class FiscalEstimate(BaseModel):
+    """§8. Declared an **estimate** in its own payload, not only in the UI copy: a
+    labelled estimate is useful, an estimate presented as an actual is the original
+    defect in a new form."""
+
+    model_config = ConfigDict(frozen=True)
+
+    anno: int
+    stima: Literal[True] = True
+    avvertenza: str
+    ricavi: Decimal
+    coefficiente_redditivita: Decimal | None
+    imponibile: Decimal | None
+    aliquota_imposta_sostitutiva: Decimal | None
+    imposta_sostitutiva: Decimal | None
+    aliquota_inps: Decimal | None
+    contributi: Decimal | None
+    reddito_netto_stimato: Decimal | None
+
+
+class BindTimeRequest(BaseModel):
+    """Which hours become invoice lines. `entry_ids` explicit rather than "everything
+    billable": choosing *which* hours to invoice is a commercial decision, and a default
+    of "all of them" is that decision made silently."""
+
+    entry_ids: list[UUID] = Field(min_length=1)
+    raggruppa_per_mese: bool = True
+
+
+__all__ = [
+    "BindTimeRequest",
+    "BudgetPage",
+    "BudgetQuery",
+    "BudgetVsActualRow",
+    "DealPnl",
+    "DealStato",
+    "FiscalEstimate",
+    "PeriodPnl",
+    "PeriodPnlQuery",
+    "PnlTotals",
+]
