@@ -34,6 +34,9 @@ const BASE_DEAL: Deal = {
   note: null,
   ore_preventivate: null,
   valore_preventivato: null,
+  // Slice 4A added the per-deal hourly rate to `DealRead`; a deal that has never had
+  // one set reads `null` and falls back to the user's own default (§7.2).
+  tariffa_oraria: null,
   custom_fields: {},
   created_at: '2026-08-06T00:00:00Z',
   updated_at: '2026-08-06T00:00:00Z',

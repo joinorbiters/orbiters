@@ -1,0 +1,125 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { api, unwrap } from '@/lib/api'
+import type { components } from '@/lib/api-types'
+import { queryKeys } from '@/lib/query'
+
+/**
+ * Wire shapes taken from the generated OpenAPI schema, never hand-declared: the single
+ * source of truth is `timetracking/schemas.py` and `pnpm generate:api` tracks it.
+ *
+ * Note that `ore`, `tariffa_applicata`, `valore_riga` and every other `Decimal` come
+ * through as `string`, never `number` -- which is what lets `lib/decimal.ts` read them
+ * digit by digit instead of through a binary float.
+ */
+export type TimeEntry = components['schemas']['TimeEntryRead']
+export type DealTimeSummary = components['schemas']['DealTimeSummary']
+export type RateDescription = components['schemas']['RateDescription']
+
+type TimeEntryCreateBody = components['schemas']['TimeEntryCreate']
+type TimeEntryUpdateBody = components['schemas']['TimeEntryUpdate']
+
+export interface TimeEntriesListParams {
+  deal_id?: string
+  user_id?: string
+  da?: string
+  a?: string
+  fatturabile?: boolean
+  fatturato?: boolean
+}
+
+export function useTimeEntries(params: TimeEntriesListParams = {}) {
+  return useQuery({
+    queryKey: queryKeys.timeEntries(params),
+    queryFn: () =>
+      unwrap(api.GET('/api/time-entries', { params: { query: { ...params, limit: 200 } } })),
+  })
+}
+
+export function useDealTimeSummary(dealId: string) {
+  return useQuery({
+    queryKey: queryKeys.dealTimeSummary(dealId),
+    queryFn: () =>
+      unwrap(
+        api.GET('/api/deals/{deal_id}/time-summary', {
+          params: { path: { deal_id: dealId } },
+        }),
+      ),
+  })
+}
+
+/**
+ * `enabled` on a real `userId`, not a `?? ''` fallback: an empty path segment does not
+ * match the route, Starlette's trailing-slash redirect lands the request on the *list*
+ * endpoint with an absolute URL that escapes the Vite dev proxy, and it still resolves
+ * 200 with nothing to show -- the exact live defect `features/people/$personId.tsx`
+ * found first.
+ */
+export function useDealRates(dealId: string, userId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.dealRates(dealId, userId ?? ''),
+    enabled: Boolean(userId),
+    queryFn: () =>
+      unwrap(
+        api.GET('/api/deals/{deal_id}/rates', {
+          params: { path: { deal_id: dealId }, query: { user_id: userId as string } },
+        }),
+      ),
+  })
+}
+
+/** Invalidates the summary and the deal's own timeline alongside the list: an hour
+ *  changes all three, and a stale summary next to a fresh list is the shape of bug
+ *  that makes people stop trusting the screen. */
+function invalidateAfterWrite(queryClient: ReturnType<typeof useQueryClient>, dealId?: string) {
+  void queryClient.invalidateQueries({ queryKey: queryKeys.timeEntries() })
+  if (dealId) {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.dealTimeSummary(dealId) })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.timeline('deal', dealId) })
+  }
+}
+
+export function useLogTime() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      unwrap(api.POST('/api/time-entries', { body: body as unknown as TimeEntryCreateBody })),
+    onSuccess: (entry) => invalidateAfterWrite(queryClient, entry.deal_id),
+  })
+}
+
+export function useUpdateTimeEntry(entryId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      unwrap(
+        api.PATCH('/api/time-entries/{entry_id}', {
+          params: { path: { entry_id: entryId } },
+          body: body as unknown as TimeEntryUpdateBody,
+        }),
+      ),
+    onSuccess: (entry) => invalidateAfterWrite(queryClient, entry.deal_id),
+  })
+}
+
+export function useDeleteTimeEntry() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ entryId }: { entryId: string; dealId?: string }) =>
+      unwrap(
+        api.DELETE('/api/time-entries/{entry_id}', { params: { path: { entry_id: entryId } } }),
+      ),
+    // The 204 carries no body, so the deal to refresh has to come from the caller's own
+    // variables rather than from a response that says nothing.
+    onSuccess: (_data, variables) => invalidateAfterWrite(queryClient, variables.dealId),
+  })
+}
+
+/**
+ * A plain URL, not a fetch: the browser downloads the file itself, so the bytes never
+ * pass through JavaScript. Same-origin, so the session cookie travels with it and no
+ * token has to be put in a query string.
+ */
+export function timeReportUrl(dealId: string, mese: string, formato: 'pdf' | 'xlsx'): string {
+  const query = new URLSearchParams({ mese, formato })
+  return `/api/deals/${dealId}/time-report?${query.toString()}`
+}

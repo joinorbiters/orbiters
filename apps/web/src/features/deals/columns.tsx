@@ -1,6 +1,7 @@
 import type { ColumnDef } from '@tanstack/react-table'
 import type { DataTableFeatures } from '@/components/DataTable'
 import { renderFieldValue } from '@/components/DynamicFieldRenderer'
+import { MONEY_SCALE, scaledFromDecimalString } from '@/lib/decimal'
 import type { FieldDefinition } from '@/lib/schema'
 import type { Deal } from './queries'
 
@@ -88,62 +89,26 @@ export function formatDate(value: string | null): string {
 }
 
 /**
- * Exact money arithmetic for the one place on this screen that adds several
- * deals' values together: a Kanban column's total (`sumValorePrevisto` below).
- * `Deal.valore_previsto` is `Numeric(12, 2)` in Postgres specifically so money is
- * never a binary float (deals/models.py's own comment: "a binary float cannot
- * represent 1234.56 exactly, and that drift is a bug the moment it reaches an
- * invoice"). `deals.reduce((sum, deal) => sum + Number(deal.valore_previsto ??
- * 0), 0)` throws that guarantee away the moment two or more deals are summed on
- * the client, by routing the addition back through the exact representation
- * `Numeric` exists to avoid.
+ * The Kanban column total: every deal's `valore_previsto` in the stage, summed
+ * in exact integer cents and divided back to euros exactly once, purely for
+ * display -- never re-summed as a float. A `null` (unpriced) deal contributes
+ * nothing, the same way `formatMoney` shows it as a dash rather than as zero.
  *
- * The fix is to never let a fractional value touch a floating-point operation at
- * all: split the decimal string into its integer and fractional parts as
- * *strings*, parse each half separately, and combine with integer arithmetic.
- * This is not pedantry -- checked directly in this project's own Node runtime,
- * `Number("0.29") * 100` equals `28.999999999999996`, not `29`. Multiplying a
- * parsed fractional float by 100 to get cents reintroduces the exact drift this
- * function exists to avoid, so the fractional digits are read off the string
- * instead of ever being multiplied; only the whole-number part (already an
- * integer) is multiplied by 100, which is always exact.
- *
- * Every value `Numeric(12, 2)` can hold is at most 10 integer digits, so its
- * cents representation is at most 12 digits -- far under `Number.
- * MAX_SAFE_INTEGER`'s 16, even summed across thousands of rows. Plain `number`
- * integer arithmetic is therefore exact here; nothing about this needs `BigInt`,
- * only the discipline of never multiplying or dividing a fractional value.
- *
- * Empirically, a *small* realistic portfolio (a handful of ordinary deal
- * amounts) essentially never shows a *visibly* wrong two-decimal total under the
- * naive float approach either -- the per-term error is far below the rounding
- * threshold. It takes several hundred deals priced near the top of `Numeric(12,
- * 2)`'s range summed together to push the naive total's *displayed* cents off by
- * one (verified directly: 300 deals priced from 9999999999.99 down by 1000003
- * each cent sum to exactly 2955149865447.00 -- cross-checked independently with
- * Python's `Decimal` -- while summing the same 300 values as plain floats
- * displays 2955149865447.02, two cents high; see `columns.test.ts`). That does
- * not make the naive version merely a theoretical nit: it fails exactly the way
- * `Numeric` over `Float` fails on the backend, silently and only once the numbers
- * get big enough for anyone to actually notice.
+ * The cents conversion used to live here as a private `centsFromDecimalString`;
+ * it is now `lib/decimal.ts`'s `scaledFromDecimalString`, unchanged in behaviour
+ * (this file's own 300-deal assertion in `columns.test.ts` is what proves that)
+ * but generalised over the scale, because slice 4's week grid and costs panel
+ * need the identical arithmetic on hours and on rates. A second copy is how two
+ * screens start disagreeing about the same euro; `lib/decimal.ts`'s docstring
+ * carries the full reasoning for why money never touches a float here.
  */
-function centsFromDecimalString(value: string): number {
-  const negative = value.startsWith('-')
-  const unsigned = negative ? value.slice(1) : value
-  const [wholePart, fractionPart = ''] = unsigned.split('.')
-  const cents = Number(wholePart || '0') * 100 + Number((fractionPart + '00').slice(0, 2))
-  return negative ? -cents : cents
-}
-
-/** The Kanban column total: every deal's `valore_previsto` in the stage, summed
- *  in exact integer cents (see `centsFromDecimalString`) and divided back to
- *  euros exactly once, purely for display -- never re-summed as a float. A
- *  `null` (unpriced) deal contributes nothing, the same way `formatMoney` shows
- *  it as a dash rather than as zero. */
 export function sumValorePrevisto(deals: Deal[]): string {
   const totalCents = deals.reduce(
     (sum, deal) =>
-      sum + (deal.valore_previsto === null ? 0 : centsFromDecimalString(deal.valore_previsto)),
+      sum +
+      (deal.valore_previsto === null
+        ? 0
+        : scaledFromDecimalString(deal.valore_previsto, MONEY_SCALE)),
     0,
   )
   return euro.format(totalCents / 100)

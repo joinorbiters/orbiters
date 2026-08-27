@@ -43,6 +43,9 @@ const BASE_DEAL: Deal = {
   note: null,
   ore_preventivate: null,
   valore_preventivato: null,
+  // See `columns.test.ts`: `DealRead.tariffa_oraria` arrived with slice 4A and is
+  // `null` for a deal that never overrode the user's default rate.
+  tariffa_oraria: null,
   custom_fields: {},
   created_at: '2026-08-06T00:00:00Z',
   updated_at: '2026-08-06T00:00:00Z',

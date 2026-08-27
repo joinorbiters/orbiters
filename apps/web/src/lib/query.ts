@@ -50,4 +50,13 @@ export const queryKeys = {
   invoice: (id: string) => ['invoice', id] as const,
   invoiceLines: (id: string) => ['invoice-lines', id] as const,
   fiscalProfile: ['fiscal-profile'] as const,
+  timeEntries: (params?: unknown) => ['time-entries', params ?? {}] as const,
+  timeEntry: (id: string) => ['time-entry', id] as const,
+  dealTimeSummary: (dealId: string) => ['deal-time-summary', dealId] as const,
+  // Keyed by both ids: the answer depends on the deal's rate *and* the user's default,
+  // so a single-id key would serve one user's rate for another's.
+  dealRates: (dealId: string, userId: string) => ['deal-rates', dealId, userId] as const,
+  costs: (params?: unknown) => ['costs', params ?? {}] as const,
+  costCategories: (includeArchived: boolean) => ['cost-categories', includeArchived] as const,
+  periodLocks: (anno?: number) => ['period-locks', anno ?? null] as const,
 }
