@@ -82,11 +82,19 @@ describe('EmitterPanel', () => {
     expect(screen.getByLabelText('Nazione')).toHaveValue('IT')
   })
 
-  it('shows any other failure as an alert', async () => {
+  /**
+   * The alert, and *nothing else*. A 404 means "not configured yet" and gets the form;
+   * anything else means the row may exist and simply could not be read, and a blank
+   * form in that state invites somebody to fill it in and save -- a PUT of every key,
+   * overwriting a profile the panel never managed to show them.
+   */
+  it('shows any other failure as an alert, and hides the form behind it', async () => {
     vi.mocked(api.GET).mockResolvedValue(failed({ detail: 'database non raggiungibile' }, 503))
     renderPanel()
 
     expect(await screen.findByRole('alert')).toHaveTextContent('database non raggiungibile')
+    expect(screen.queryByLabelText(/Ragione sociale/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Salva' })).not.toBeInTheDocument()
   })
 
   /**
