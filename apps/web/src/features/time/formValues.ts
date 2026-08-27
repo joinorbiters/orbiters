@@ -1,3 +1,4 @@
+import { toIsoDate } from '@/lib/dates'
 import type { FieldDefinition } from '@/lib/schema'
 import type { TimeEntry } from './queries'
 
@@ -56,15 +57,10 @@ export interface TimeEntryFormValues {
  * anywhere east of Greenwich late in the evening the form would open pre-filled with
  * *tomorrow* -- and `_check_not_future` refuses a future date, so the user would meet a
  * server error on a date they never chose. The mirror image of the read-side trap
- * `formatIsoDate` (columns.tsx) closes.
+ * `formatIsoDateItalian` (@/lib/dates) closes.
  */
 export function defaultFormValues(today: Date = new Date()): TimeEntryFormValues {
-  const month = String(today.getMonth() + 1).padStart(2, '0')
-  const day = String(today.getDate()).padStart(2, '0')
-  return {
-    native: { fatturabile: true, data: `${today.getFullYear()}-${month}-${day}` },
-    custom: {},
-  }
+  return { native: { fatturabile: true, data: toIsoDate(today) }, custom: {} }
 }
 
 /**

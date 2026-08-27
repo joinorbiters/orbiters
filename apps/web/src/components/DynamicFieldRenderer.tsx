@@ -10,6 +10,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { formatIsoDateItalian } from '@/lib/dates'
 import type { FieldDefinition } from '@/lib/schema'
 
 interface Props {
@@ -187,26 +188,6 @@ export function DynamicFieldRenderer({ field, value, onChange, error }: Props) {
   )
 }
 
-/** `value` is the ISO "YYYY-MM-DD" string a date field always stores (see
- *  packages/core/src/pigrocrm/core/fields/validator.py's `_coerce_date`, which
- *  calls `date.fromisoformat(...).isoformat()` — never a full timestamp).
- *
- *  `new Date("2026-08-06")` parses that as UTC midnight; formatting it with
- *  `Intl.DateTimeFormat` then renders in whichever zone the browser is in. East of
- *  Greenwich that is still 6 August, but anywhere *behind* UTC (all of the
- *  Americas) UTC midnight is still the *previous* evening, so the formatted date
- *  silently loses a day. Building the `Date` from its year/month/day parts in
- *  local time instead means both the construction and the formatting happen in the
- *  same zone, so the calendar day survives no matter where this code runs. */
-function formatIsoDateItalian(value: string): string {
-  const [year, month, day] = value.split('-').map(Number)
-  // The backend's own contract (see the comment above) guarantees all three, but
-  // `noUncheckedIndexedAccess` has no way to know that from a `.split` result --
-  // and an actually-malformed value is exactly when falling back to the raw string
-  // beats either throwing out of a read-only cell or silently formatting "NaN/NaN".
-  if (year === undefined || month === undefined || day === undefined) return value
-  return new Intl.DateTimeFormat('it-IT').format(new Date(year, month - 1, day))
-}
 
 /** The read-only counterpart, used by tables and detail panels.
  *

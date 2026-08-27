@@ -1,6 +1,7 @@
 import type { ColumnDef } from '@tanstack/react-table'
 import type { DataTableFeatures } from '@/components/DataTable'
 import { renderFieldValue } from '@/components/DynamicFieldRenderer'
+import { formatIsoDateItalian } from '@/lib/dates'
 import type { FieldDefinition } from '@/lib/schema'
 import type { TimeEntry } from './queries'
 
@@ -49,29 +50,6 @@ export function formatRateValue(value: string | null): string {
   return value === null ? EMPTY : `${rate.format(Number(value))} €/h`
 }
 
-/**
- * `value` is the ISO `YYYY-MM-DD` string a `Date` column always stores.
- * `new Date("2026-03-10")` parses as UTC midnight, and formatting that with
- * `Intl.DateTimeFormat` renders in the browser's zone -- anywhere behind UTC that is
- * still the previous evening, so the date silently loses a day. Building the `Date`
- * from its parts in local time keeps construction and formatting in one zone. It is the
- * same trap the previous system fell into from the other direction, with `toISOString()` on write.
- *
- * Copied rather than imported, following the precedent `features/deals/columns.tsx`
- * already set for its own `formatIsoDateItalian`: `DynamicFieldRenderer`'s copy is
- * deliberately private to that module (its eslint `allowExportNames` lists only
- * `renderFieldValue`), and widening that override to share four lines would trade a
- * documented copy for a rule loosened across a whole file.
- */
-export function formatIsoDate(value: string): string {
-  const [year, month, day] = value.split('-').map(Number)
-  // The backend's own contract guarantees all three parts, but `noUncheckedIndexedAccess`
-  // cannot know that from a `.split` result -- and a genuinely malformed value is exactly
-  // when showing the raw string beats rendering "NaN/NaN/NaN".
-  if (year === undefined || month === undefined || day === undefined) return value
-  return new Intl.DateTimeFormat('it-IT').format(new Date(year, month - 1, day))
-}
-
 const ORIGIN_LABELS: Record<string, string> = {
   manuale: 'manuale',
   deal: 'dal deal',
@@ -83,7 +61,7 @@ export function buildTimeEntryColumns(
   customFields: FieldDefinition[],
 ): ColumnDef<DataTableFeatures, TimeEntry>[] {
   const native: ColumnDef<DataTableFeatures, TimeEntry>[] = [
-    { header: 'Data', id: 'data', accessorFn: (row) => formatIsoDate(row.data) },
+    { header: 'Data', id: 'data', accessorFn: (row) => formatIsoDateItalian(row.data) },
     { header: 'Ore', id: 'ore', accessorFn: (row) => formatHoursValue(row.ore) },
     { header: 'Descrizione', accessorKey: 'descrizione' },
     {

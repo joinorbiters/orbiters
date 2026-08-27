@@ -1,6 +1,7 @@
 import type { ColumnDef } from '@tanstack/react-table'
 import type { DataTableFeatures } from '@/components/DataTable'
 import { renderFieldValue } from '@/components/DynamicFieldRenderer'
+import { formatIsoDateItalian } from '@/lib/dates'
 import { MONEY_SCALE, scaledFromDecimalString } from '@/lib/decimal'
 import type { FieldDefinition } from '@/lib/schema'
 import type { Deal } from './queries'
@@ -60,28 +61,6 @@ export function formatMoney(value: string | null): string {
  *  the identical reason on a custom numeric field. */
 export function formatHours(value: string | null): string {
   return value === null ? EMPTY : number.format(Number(value))
-}
-
-/**
- * `value` is the ISO "YYYY-MM-DD" string `data_chiusura_prevista` always stores
- * (a `Date` column, deals/models.py) -- the same shape, and the same timezone
- * trap, as a custom `date` field. Duplicated from DynamicFieldRenderer.tsx's
- * `formatIsoDateItalian` rather than imported: that function is deliberately
- * private to that module (only `renderFieldValue` is in its own eslint
- * `allowExportNames`), and `displayNative` above is already this project's
- * precedent for a tiny per-feature display helper living next to its one caller
- * instead of in a shared module.
- *
- * `new Date("2026-08-06")` parses as UTC midnight; formatting it with
- * `Intl.DateTimeFormat` then renders in whichever zone the browser is in --
- * anywhere *behind* UTC, that is still the *previous* evening, so the formatted
- * date silently loses a day. Building the `Date` from its year/month/day parts in
- * local time keeps construction and formatting in the same zone.
- */
-function formatIsoDateItalian(value: string): string {
-  const [year, month, day] = value.split('-').map(Number)
-  if (year === undefined || month === undefined || day === undefined) return value
-  return new Intl.DateTimeFormat('it-IT').format(new Date(year, month - 1, day))
 }
 
 export function formatDate(value: string | null): string {
