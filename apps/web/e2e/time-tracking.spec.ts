@@ -186,20 +186,22 @@ test.describe('time tracking', () => {
     expect(bytes.length).toBeGreaterThan(0)
     expect(bytes.subarray(0, 4).toString('latin1')).toBe('PK')
 
-    // The PDF is deliberately *not* driven by clicking its own button here. That anchor
-    // does not produce a download at all: `GET .../time-report?formato=pdf` archives the
-    // report through the slice 2 document pipeline and answers **201 with the document's
-    // JSON**, so a click navigates the tab to that JSON rather than saving a file. What
-    // is worth proving is the thing that JSON stands for -- that the PDF really was
-    // rendered (pandoc + Typst) and really was archived on this deal -- so the request
-    // goes through `page.request` and the *Documenti* tab is then read for the result.
-    const risposta = await page.request.get(
-      `/api/deals/${dealId}/time-report?mese=${mese}&formato=pdf`,
-    )
-    expect(risposta.status(), await risposta.text()).toBe(201)
-    const documento = (await risposta.json()) as { titolo: string; tipo: string }
-    expect(documento.tipo).toBe('rapporto_ore')
-    expect(documento.titolo).toBe(`Rapporto ore ${mesePerEsteso}`)
+    // The PDF, driven by its own button. It is not an anchor and cannot be one:
+    // `GET .../time-report?formato=pdf` archives the report through the slice 2 document
+    // pipeline and answers **201 with the document's JSON**, so the button renders,
+    // reads that answer, and downloads the archived document through
+    // `/api/documents/{id}/download` -- the one path that carries authorisation on
+    // either storage backend. Clicking it therefore has to produce a real file *and*
+    // leave a document behind, and both halves are asserted here: while the button was
+    // still a plain anchor pointed at that JSON, the archived half passed on its own
+    // and the file half was the one nobody was making.
+    const scaricamentoPdf = page.waitForEvent('download')
+    await page.getByRole('button', { name: 'PDF' }).click()
+    const rapporto = await scaricamentoPdf
+    const pdfBytes = readFileSync(await rapporto.path())
+    // "%PDF-". A name is not a file here either, and Typst either ran or it did not.
+    expect(pdfBytes.subarray(0, 5).toString('latin1')).toBe('%PDF-')
+
     await page.getByRole('tab', { name: 'Documenti' }).click()
     await expect(page.getByText(`Rapporto ore ${mesePerEsteso}`)).toBeVisible()
 
