@@ -1,3 +1,4 @@
+import { toIsoMonth } from '@/lib/dates'
 import { Download, FileSpreadsheet } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -13,13 +14,8 @@ import { timeReportUrl } from './queries'
  * string.
  */
 export function TimeReportButtons({ dealId }: { dealId: string }) {
-  const now = new Date()
-  // The local calendar month, never `toISOString().slice(0, 7)`: that converts to UTC
-  // first, so on the last evening of a month east of Greenwich the picker would open on
-  // the month that has not started yet.
-  const [mese, setMese] = useState(
-    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`,
-  )
+  // `toIsoMonth`, never `toISOString().slice(0, 7)` -- see @/lib/dates for why.
+  const [mese, setMese] = useState(() => toIsoMonth(new Date()))
 
   return (
     <div className="flex flex-wrap items-end gap-3">
