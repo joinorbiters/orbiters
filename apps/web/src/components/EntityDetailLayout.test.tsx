@@ -109,4 +109,33 @@ describe('EntityDetailLayout', () => {
     await userEvent.click(tab)
     expect(screen.getByText('lista documenti')).toBeInTheDocument()
   })
+
+  it('has no Ore tab when hours is not given -- only a Deal has hours', () => {
+    renderLayout()
+    expect(screen.queryByRole('tab', { name: 'Ore' })).not.toBeInTheDocument()
+  })
+
+  it('shows an Ore tab with its own contents when hours is given', async () => {
+    renderLayout({ hours: <p>voci di ore</p> })
+    const tab = screen.getByRole('tab', { name: 'Ore' })
+    expect(tab).toBeInTheDocument()
+    await userEvent.click(tab)
+    expect(screen.getByText('voci di ore')).toBeInTheDocument()
+  })
+
+  // Nothing fills `economics` in slice 4A. The tab must therefore be absent, not
+  // present and empty: a user reads "not yet" from a missing tab, and cannot tell a
+  // real zero from a missing feature inside one that opens onto nothing.
+  it('has no Economia tab when economics is not given', () => {
+    renderLayout()
+    expect(screen.queryByRole('tab', { name: 'Economia' })).not.toBeInTheDocument()
+  })
+
+  it('shows an Economia tab with its own contents when economics is given', async () => {
+    renderLayout({ economics: <p>conto economico</p> })
+    const tab = screen.getByRole('tab', { name: 'Economia' })
+    expect(tab).toBeInTheDocument()
+    await userEvent.click(tab)
+    expect(screen.getByText('conto economico')).toBeInTheDocument()
+  })
 })

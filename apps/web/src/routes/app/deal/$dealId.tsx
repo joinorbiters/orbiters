@@ -15,6 +15,7 @@ import { displayNative, formatDate, formatHours, formatMoney } from '@/features/
 import { useDeal, useDeleteDeal, useStages, useUpdateDeal } from '@/features/deals/queries'
 import { DocumentsTab } from '@/features/documents/DocumentsTab'
 import { InvoicesTab } from '@/features/invoices/InvoicesTab'
+import { TimeEntriesTab } from '@/features/time/TimeEntriesTab'
 import { toProblem, type ProblemDetail } from '@/lib/api'
 import { useCanWrite } from '@/lib/auth'
 import { useEntitySchema } from '@/lib/schema'
@@ -119,6 +120,7 @@ export function DealDetail() {
         entityId={dealId}
         documents={<DocumentsTab owner={{ dealId }} />}
         invoices={<InvoicesTab owner={{ dealId }} />}
+        hours={<TimeEntriesTab dealId={dealId} />}
         actions={
           canWrite && (
             <>
@@ -162,9 +164,12 @@ export function DealDetail() {
                 <h2 className="mb-3 font-semibold">Preventivo</h2>
                 <Row label="Ore preventivate" value={formatHours(deal.ore_preventivate)} />
                 <Row label="Valore preventivato" value={formatMoney(deal.valore_preventivato)} />
+                {/* The honest 4A statement: the actuals exist now, the comparison
+                    against this card's two figures does not -- it lands with the conto
+                    economico in 4B. */}
                 <p className="mt-3 text-xs text-muted-foreground">
-                  Il confronto preventivo/consuntivo arriva nello slice 4, insieme al time
-                  tracking.
+                  Le ore consuntivate sono nella tab «Ore». Il confronto
+                  preventivo/consuntivo arriva con il conto economico.
                 </p>
               </CardContent>
             </Card>
