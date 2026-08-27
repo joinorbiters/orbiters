@@ -2361,6 +2361,12 @@ export interface components {
             giorni_scadenza: number;
             /** Iban */
             iban: string | null;
+            /** Coefficiente Redditivita */
+            coefficiente_redditivita: string | null;
+            /** Aliquota Imposta Sostitutiva */
+            aliquota_imposta_sostitutiva: string | null;
+            /** Aliquota Inps */
+            aliquota_inps: string | null;
             /**
              * Created At
              * Format: date-time
@@ -2435,6 +2441,21 @@ export interface components {
             giorni_scadenza: number;
             /** Iban */
             iban?: string | null;
+            /**
+             * Coefficiente Redditivita
+             * @default 67.00
+             */
+            coefficiente_redditivita: number | string | null;
+            /**
+             * Aliquota Imposta Sostitutiva
+             * @default 5.00
+             */
+            aliquota_imposta_sostitutiva: number | string | null;
+            /**
+             * Aliquota Inps
+             * @default 26.07
+             */
+            aliquota_inps: number | string | null;
         };
         /** InvoiceAnnul */
         InvoiceAnnul: {
