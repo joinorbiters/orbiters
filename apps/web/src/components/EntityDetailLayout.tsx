@@ -20,6 +20,21 @@ interface EntityDetailLayoutProps {
    *  never will. An absent prop means the tab is not rendered at all, rather than a tab
    *  that opens onto an empty explanation of why it is empty. */
   invoices?: ReactNode
+  /**
+   * The Ore tab's contents. Optional because only a Deal has hours: an hour is
+   * attached to a deal, always and only (`time_entries.deal_id` is required), so
+   * neither a Customer nor a Person can have this tab. Absent means the tab is not
+   * rendered at all rather than rendered empty -- an empty tab invites the user to look
+   * for something that does not exist for this entity.
+   */
+  hours?: ReactNode
+  /**
+   * The Economia tab's contents -- a Deal's own profit and loss, or a Customer's as the
+   * sum of their deals. Filled by slice 4B; absent for the whole of 4A, which is why it
+   * is optional rather than required. A tab showing zeros is worse than no tab: the
+   * user understands "not yet", and cannot tell a real zero from a missing feature.
+   */
+  economics?: ReactNode
   entityType: TimelineEntityType
   entityId: string
   /**
@@ -49,6 +64,8 @@ export function EntityDetailLayout({
   links,
   documents,
   invoices,
+  hours,
+  economics,
   entityType,
   entityId,
   timelineLimit,
@@ -68,6 +85,8 @@ export function EntityDetailLayout({
           <TabsTrigger value="panoramica">Panoramica</TabsTrigger>
           {documents && <TabsTrigger value="documenti">Documenti</TabsTrigger>}
           {invoices && <TabsTrigger value="fatture">Fatture</TabsTrigger>}
+          {hours && <TabsTrigger value="ore">Ore</TabsTrigger>}
+          {economics && <TabsTrigger value="economia">Economia</TabsTrigger>}
           <TabsTrigger value="timeline">Timeline</TabsTrigger>
           <TabsTrigger value="collegamenti">Collegamenti</TabsTrigger>
         </TabsList>
@@ -83,6 +102,16 @@ export function EntityDetailLayout({
         {invoices && (
           <TabsContent value="fatture" className="mt-6">
             {invoices}
+          </TabsContent>
+        )}
+        {hours && (
+          <TabsContent value="ore" className="mt-6">
+            {hours}
+          </TabsContent>
+        )}
+        {economics && (
+          <TabsContent value="economia" className="mt-6">
+            {economics}
           </TabsContent>
         )}
         <TabsContent value="timeline" className="mt-6">
