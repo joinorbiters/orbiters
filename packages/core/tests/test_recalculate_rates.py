@@ -5,7 +5,7 @@ MCP, and it never reaches an hour that has been invoiced. Criterion 3."""
 
 from datetime import date
 from decimal import Decimal
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import pytest
 from sqlalchemy import text
@@ -78,7 +78,10 @@ def test_it_rewrites_the_interval_and_records_one_activity_per_entry(
 
 
 def test_a_billed_entry_in_the_interval_refuses_the_whole_call_and_changes_nothing(
-    db_session: Session, seeded_deal_id: UUID, seeded_user_id: UUID
+    db_session: Session,
+    seeded_deal_id: UUID,
+    seeded_user_id: UUID,
+    issued_invoice_line_id: UUID,
 ) -> None:
     """All-or-nothing, and verified by re-reading the others after the refusal -- a
     partial rewrite would leave the interval in a state nobody chose."""
@@ -88,7 +91,10 @@ def test_a_billed_entry_in_the_interval_refuses_the_whole_call_and_changes_nothi
     db_session.flush()
     service = TimeEntryService(db_session)
     entries = [_log(service, seeded_deal_id, seeded_user_id, day) for day in (2, 3, 4)]
-    line_id = uuid4()
+    # A line of a genuinely issued invoice: those figures have been handed to a client,
+    # which is the whole reason this call refuses. A draft's would not refuse, and since
+    # 4B-3 made the column a foreign key it could not even be a stand-in UUID.
+    line_id = issued_invoice_line_id
     db_session.execute(
         text("UPDATE time_entries SET invoice_line_id = :line WHERE id = :id"),
         {"line": line_id, "id": entries[1].id},

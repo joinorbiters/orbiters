@@ -3,6 +3,7 @@ from datetime import UTC, date, datetime
 from typing import Any, Literal
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.activities.service import ActivityService
@@ -19,6 +20,7 @@ from pigrocrm.core.errors import (
 from pigrocrm.core.fields.schemas import EntityType
 from pigrocrm.core.fields.service import FieldDefinitionService
 from pigrocrm.core.fields.validator import validate_custom_fields
+from pigrocrm.core.invoices.models import Invoice, InvoiceLine
 from pigrocrm.core.money import line_value, sum_hours, sum_money
 from pigrocrm.core.pipeline.service import PipelineService
 from pigrocrm.core.schemas import reject_cleared_columns, supplied_changes
@@ -79,20 +81,48 @@ def to_read(entry: TimeEntry) -> TimeEntryRead:
 
 
 def billed_entry_ids(session: Session, entries: Sequence[TimeEntry]) -> set[UUID]:
-    """Which of `entries` belong to a fiscal document and are therefore frozen.
+    """Which of `entries` belong to a **line of an issued invoice** and are therefore
+    frozen (§4.3).
 
-    **Slice 4A definition:** any entry with a non-null `invoice_line_id`. That is a
-    deliberate *superset* of §4.3's real rule ("a line of an **issued** invoice"),
-    and it is exactly right for 4A: `invoice_lines` does not exist yet, nothing in 4A
-    writes the column, so the "bound" state is unreachable and the superset is
-    unobservable.
+    The rule attaches to the state of the invoice, not to the presence of the link,
+    because a draft is still freely editable: while the invoice is a draft the hours stay
+    modifiable and slice 3's wholesale line replacement unbinds and rebinds them without
+    orphans; the moment `issue()` commits, the bound hours are frozen without `issue()`
+    having had to know they exist.
 
-    **Task 4B-3 replaces this body** with the real rule -- join `invoice_lines` to
-    `invoices` and keep only `stato = 'emessa'` -- and changes not one call site. That
-    is why this is one function and not an inline `is not None` in three places: the
-    narrowing has to happen once.
+    Only `emessa`. An **annulled** invoice keeps its number but not its revenue (§7.1) --
+    the struck-through page of a paper register -- so its hours are CRM data again and can
+    be re-invoiced. A **proforma** never freezes anything: it does not touch the register
+    at all (slice 3 §5), and `confermata` is close enough to an emission in spirit that
+    `tipo` is filtered alongside `stato` rather than trusted to differ.
+
+    A soft-deleted invoice does not freeze either, and it cannot be an issued one: slice
+    3's `ck_invoices_deleted_unnumbered` allows `deleted_at` only on a row with no number.
+    The filter is there so the two facts cannot drift apart.
+
+    One query, never one per entry: `deal_summary` calls this with every entry of a deal,
+    and a per-row lookup would make the P&L quadratic in a deal's hours. Slice 4A's body
+    was the superset "any non-null `invoice_line_id`", which was unobservable while
+    `invoice_lines` did not exist; this is the narrowing that superset was placeholding
+    for, and it changes not one of the four call sites -- which is why the four go through
+    one function instead of writing `is not None` four times.
     """
-    return {entry.id for entry in entries if entry.invoice_line_id is not None}
+    line_ids = {entry.invoice_line_id for entry in entries if entry.invoice_line_id is not None}
+    if not line_ids:
+        return set()
+    issued = set(
+        session.execute(
+            select(InvoiceLine.id)
+            .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
+            .where(
+                InvoiceLine.id.in_(line_ids),
+                Invoice.tipo == "fattura",
+                Invoice.stato == "emessa",
+                Invoice.deleted_at.is_(None),
+            )
+        ).scalars()
+    )
+    return {entry.id for entry in entries if entry.invoice_line_id in issued}
 
 
 class TimeEntryService:
