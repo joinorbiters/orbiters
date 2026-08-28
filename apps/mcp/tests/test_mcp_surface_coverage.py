@@ -110,6 +110,8 @@ _INTERNE: dict[Method, str] = {
     ("EmitterProfileService", "as_template_values"): "alimenta il renderer dei template",
     ("FieldDefinitionService", "specs_for"): "alimenta la validazione dei campi custom",
     ("FiscalProfileService", "snapshot"): "lettura interna del regime, senza actor",
+    ("GmailOAuthService", "redirect_uri"): "e' l'URL fisso che Google confronta "
+    "carattere per carattere, non un'operazione",
     ("PeriodLockService", "assert_writable"): "guardia invocata dagli altri servizi",
     ("PeriodLockService", "is_closed"): "guardia invocata dagli altri servizi",
     ("PipelineService", "default_stage"): "risolve lo stage iniziale di un nuovo deal",
@@ -124,7 +126,23 @@ _INTERNE: dict[Method, str] = {
 #    which inherits its owner's full role and never expires (residuo R10), so a tool that
 #    minted or revoked one would let a token extend or destroy its own access. Creating
 #    users is the same hole with a longer fuse.
+#    Il flusso OAuth di Gmail sta qui per lo stesso motivo, e in modo *permanente*: non
+#    e' una decisione rinviata a B1-14, che sceglie quali strumenti Gmail esporre fra
+#    lettura, ricerca e invio. `start` restituisce un URL di consenso che solo un
+#    browser umano puo' percorrere -- un agente che lo ricevesse non potrebbe fare
+#    altro che passarlo a qualcuno -- e `complete` richiede un `code` che esiste solo
+#    dentro quel redirect, quindi nessuno dei due e' eseguibile da un canale
+#    strumentale. `disconnect` e' il verso opposto: distrugge una credenziale verso un
+#    servizio *terzo* e, con `delete_messages`, la corrispondenza archiviata. Nessuna
+#    delle tre e' un'operazione che l'agente compie al posto della persona: sono la
+#    persona che decide quale casella il CRM puo' leggere.
 _CREDENZIALI: dict[Method, str] = {
+    ("GmailOAuthService", "start"): "il consenso Google si da' da un browser, non da "
+    "un tool: l'URL di autorizzazione non e' percorribile da un agente",
+    ("GmailOAuthService", "complete"): "il `code` esiste solo dentro il redirect di "
+    "Google verso il callback: nessun agente puo' averlo",
+    ("GmailOAuthService", "disconnect"): "revocare l'accesso a una casella di terzi (e "
+    "cancellarne la corrispondenza) e' una decisione della persona",
     ("PatService", "create"): "un agente non conia le proprie credenziali",
     ("PatService", "list"): "l'elenco dei token e' materiale di sicurezza",
     ("PatService", "revoke"): "revocare token e' amministrazione dell'account",

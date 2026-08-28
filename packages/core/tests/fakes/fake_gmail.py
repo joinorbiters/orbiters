@@ -13,6 +13,7 @@ transport -- not by a convention written in a comment."
 """
 
 import base64
+import hashlib
 import json
 from dataclasses import dataclass, field
 from typing import Any
@@ -79,6 +80,17 @@ class FakeGmail:
     # The trap `prompt=consent` exists to avoid: a second authorisation for a user who
     # already consented comes back 200, complete, and without a refresh token at all.
     omit_refresh_token: bool = False
+    # PKCE, verified the way Google verifies it. When set, an `authorization_code`
+    # exchange is refused with the real `invalid_grant` body unless the posted
+    # `code_verifier` hashes (S256, base64url, unpadded) to this challenge. Off by
+    # default because the refresh-token tests have no authorisation request behind
+    # them and there is no challenge to compare against.
+    expected_code_challenge: str | None = None
+    # Google's authorisation codes are single-use; a replay answers `invalid_grant`.
+    # Opt-in rather than always-on: a test that exchanges the same placeholder code
+    # twice on purpose is usually testing something else entirely.
+    single_use_codes: bool = False
+    used_codes: set[str] = field(default_factory=set)
     expires_in: int = 3599
     granted_scopes: tuple[str, ...] = ()
     # A queue of (status, body, headers) consumed FIFO before normal handling. One
@@ -108,7 +120,7 @@ class FakeGmail:
             return self.fail_with.pop(0)
 
         if parsed.netloc == TOKEN_HOST:
-            return self._token()
+            return self._token(recorded)
         if recorded.is_messages_send:
             return self._send()
         if recorded.is_messages_list:
@@ -125,22 +137,44 @@ class FakeGmail:
     def _not_found() -> tuple[int, bytes, dict[str, str]]:
         return 404, json.dumps({"error": {"status": "NOT_FOUND"}}).encode(), {}
 
-    def _token(self) -> tuple[int, bytes, dict[str, str]]:
+    @staticmethod
+    def _invalid_grant(description: str) -> tuple[int, bytes, dict[str, str]]:
+        """The exact shape Google returns for a grant it will not honour -- a bare
+        string under "error", not an object. That is the dialect a parser reading only
+        the Gmail API's shape loses, and losing it is the the previous system defect."""
+        return (
+            400,
+            json.dumps({"error": "invalid_grant", "error_description": description}).encode(),
+            {},
+        )
+
+    def _check_authorization_code(
+        self, fields: dict[str, list[str]]
+    ) -> tuple[int, bytes, dict[str, str]] | None:
+        """The two checks Google performs on a code exchange that a fake ignoring the
+        request body cannot perform at all -- and which are precisely the two an
+        attacker has to defeat. `None` means the exchange may proceed."""
+        if self.expected_code_challenge is not None:
+            verifier = (fields.get("code_verifier") or [""])[0]
+            digest = hashlib.sha256(verifier.encode()).digest()
+            challenge = base64.urlsafe_b64encode(digest).decode().rstrip("=")
+            if challenge != self.expected_code_challenge:
+                return self._invalid_grant("code_verifier does not match code_challenge")
+        code = (fields.get("code") or [""])[0]
+        if self.single_use_codes and code in self.used_codes:
+            return self._invalid_grant("Code was already redeemed.")
+        self.used_codes.add(code)
+        return None
+
+    def _token(self, recorded: RecordedRequest) -> tuple[int, bytes, dict[str, str]]:
         self.token_requests += 1
+        fields = parse_qs((recorded.body or b"").decode())
+        if fields.get("grant_type") == ["authorization_code"]:
+            refusal = self._check_authorization_code(fields)
+            if refusal is not None:
+                return refusal
         if self.revoked:
-            # The exact shape Google returns for a revoked or expired grant. A bare
-            # string under "error", not an object -- the dialect that gets lost when a
-            # parser only reads the API's shape.
-            return (
-                400,
-                json.dumps(
-                    {
-                        "error": "invalid_grant",
-                        "error_description": "Token has been expired or revoked.",
-                    }
-                ).encode(),
-                {},
-            )
+            return self._invalid_grant("Token has been expired or revoked.")
         payload: dict[str, Any] = {
             "access_token": self.access_token,
             "expires_in": self.expires_in,
