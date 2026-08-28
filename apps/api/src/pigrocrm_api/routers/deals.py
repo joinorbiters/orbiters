@@ -9,6 +9,13 @@ from pydantic import BaseModel
 
 from pigrocrm.core.activities.schemas import ActivityRead
 from pigrocrm.core.activities.service import ActivityService
+from pigrocrm.core.analytics.schemas import (
+    BindTimeRequest,
+    BudgetQuery,
+    BudgetVsActualRow,
+    DealPnl,
+)
+from pigrocrm.core.analytics.service import AnalyticsService
 from pigrocrm.core.deals.schemas import (
     DealCreate,
     DealListQuery,
@@ -17,6 +24,8 @@ from pigrocrm.core.deals.schemas import (
     DealUpdate,
 )
 from pigrocrm.core.deals.service import DealService
+from pigrocrm.core.errors import NotFound
+from pigrocrm.core.invoices.schemas import InvoiceRead
 from pigrocrm.core.timetracking.report import TimeReportService
 from pigrocrm.core.timetracking.schemas import (
     DealRateUpdate,
@@ -189,3 +198,64 @@ def time_report(
         )
     document = service.render_pdf(deal_id, mese, actor)
     return JSONResponse(status_code=status.HTTP_201_CREATED, content=jsonable_encoder(document))
+
+
+@router.get("/{deal_id}/pnl", response_model=DealPnl)
+def deal_pnl(deal_id: UUID, session: SessionDep, actor: ActorDep) -> DealPnl:
+    """Every row of §7.1, already summed. No role gate, deliberately: a deal's P&L is not
+    more sensitive than the deal, the hours and the invoices it is derived from, each of
+    which a `readonly` actor can already list."""
+    return AnalyticsService(session).deal_pnl(deal_id, actor)
+
+
+@router.get("/{deal_id}/budget", response_model=BudgetVsActualRow)
+def deal_budget(
+    deal_id: UUID,
+    session: SessionDep,
+    actor: ActorDep,
+    da: Annotated[date, Query(alias="from", description="Inizio del periodo, YYYY-MM-DD")],
+    a: Annotated[date, Query(alias="to", description="Fine del periodo, YYYY-MM-DD")],
+) -> BudgetVsActualRow:
+    """One deal's row of the estimate-versus-actual report. Served from the same method as
+    the list so the two can never disagree: a per-deal reimplementation is how the detail
+    page and the report start showing different variances.
+
+    `limit=200` -- the schema's own ceiling -- rather than a paged scan: `deals_in_range`
+    orders by `(nome, id)`, so the row wanted here can sit anywhere in that order, and one
+    page at the maximum is the widest single window this query is allowed to open. Above
+    that the answer is a 404 the caller can act on (narrow the window) instead of a page
+    walk hidden behind a detail endpoint.
+    """
+    page = AnalyticsService(session).budget_vs_actual(BudgetQuery(da=da, a=a, limit=200), actor)
+    for row in page.items:
+        if row.deal_id == deal_id:
+            return row
+    # Not a row of zeroes: a deal with no activity in the window did not spend nothing,
+    # it was not in the report at all.
+    raise NotFound("deal_budget", deal_id)
+
+
+@router.post("/{deal_id}/time-entries/to-invoice-draft", response_model=InvoiceRead)
+def to_invoice_draft(
+    deal_id: UUID,
+    data: BindTimeRequest,
+    session: SessionDep,
+    actor: ActorDep,
+    storage: StorageDep,
+) -> InvoiceRead:
+    """Builds a draft; issues nothing. `InvoiceService` stays the sole owner of numbering,
+    fiscal validation, rounding and freezing.
+
+    `admin`, enforced by the service like every other role check in this codebase -- and
+    with no MCP tool at all (§11's exclusion list), since choosing *which* hours to
+    invoice is a commercial decision. The invoice state it may target is decided there
+    too: hours sitting on a *draft* can be rebound, because that draft may be a mistake
+    somebody is redoing, while hours on an *issued* invoice come back as a 409 naming the
+    document -- one does not invoice the same work twice.
+
+    `storage` is passed rather than left to the service's own settings fallback: this is
+    the one method in `AnalyticsService` that constructs an `InvoiceService`, whose
+    backend is the same process-wide one every other document route resolves through
+    `StorageDep`.
+    """
+    return AnalyticsService(session, storage).bind_time_to_invoice(deal_id, data, actor)

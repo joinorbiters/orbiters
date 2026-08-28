@@ -21,7 +21,7 @@ from sqlalchemy.orm import InstrumentedAttribute, Session
 
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.invoices.models import Invoice
-from pigrocrm.core.money import ZERO_MONEY, line_value, sum_money
+from pigrocrm.core.money import ZERO_MONEY, line_value, round_money, sum_money
 from pigrocrm.core.timetracking.models import Cost, TimeEntry
 
 # `Self`-preserving, so a scoped statement keeps the row type its `select()` gave it and
@@ -70,15 +70,25 @@ class AnalyticsRepository:
                 Invoice.deal_id == deal_id, *_revenue_filter()
             )
         ).one()
-        return Decimal(total), int(count)
+        # `round_money`, not a bare `Decimal(...)`: `coalesce(sum(...), 0)` returns the
+        # *integer literal* when a deal has no invoices at all, and `Decimal("0")`
+        # reaches the wire as `"0"` while every other money field reaches it as
+        # `"0.00"`. Numerically identical, and identical in every core test, since
+        # `Decimal("0") == Decimal("0.00")` -- but the browser prints what it is given,
+        # and money that sometimes has two decimal places and sometimes none is the
+        # visible half of a defect nobody sees in a unit test. The same reason applies
+        # to each of the three aggregates below.
+        return round_money(Decimal(total)), int(count)
 
     def deal_direct_costs(self, deal_id: UUID) -> Decimal:
-        return Decimal(
-            self.session.execute(
-                select(func.coalesce(func.sum(Cost.importo), 0)).where(
-                    Cost.deal_id == deal_id, Cost.deleted_at.is_(None)
-                )
-            ).scalar_one()
+        return round_money(
+            Decimal(
+                self.session.execute(
+                    select(func.coalesce(func.sum(Cost.importo), 0)).where(
+                        Cost.deal_id == deal_id, Cost.deleted_at.is_(None)
+                    )
+                ).scalar_one()
+            )
         )
 
     def _customer_scope(
@@ -133,15 +143,17 @@ class AnalyticsRepository:
 
         if customer_id is not None:
             return per_deal, ZERO_MONEY
-        general = Decimal(
-            self.session.execute(
-                select(func.coalesce(func.sum(Cost.importo), 0)).where(
-                    Cost.deal_id.is_(None),
-                    Cost.data >= da,
-                    Cost.data <= a,
-                    Cost.deleted_at.is_(None),
-                )
-            ).scalar_one()
+        general = round_money(
+            Decimal(
+                self.session.execute(
+                    select(func.coalesce(func.sum(Cost.importo), 0)).where(
+                        Cost.deal_id.is_(None),
+                        Cost.data >= da,
+                        Cost.data <= a,
+                        Cost.deleted_at.is_(None),
+                    )
+                ).scalar_one()
+            )
         )
         return per_deal, general
 
@@ -206,12 +218,14 @@ class AnalyticsRepository:
     def annual_revenue(self, anno: int) -> Decimal:
         """Every issued invoice of the year, deal or no deal: the fiscal estimate is
         about the person's income, so an invoice with no `deal_id` counts too."""
-        return Decimal(
-            self.session.execute(
-                select(func.coalesce(func.sum(Invoice.imponibile), 0)).where(
-                    Invoice.anno == anno, *_revenue_filter()
-                )
-            ).scalar_one()
+        return round_money(
+            Decimal(
+                self.session.execute(
+                    select(func.coalesce(func.sum(Invoice.imponibile), 0)).where(
+                        Invoice.anno == anno, *_revenue_filter()
+                    )
+                ).scalar_one()
+            )
         )
 
     def deals_in_range(self, da: date, a: date, customer_id: UUID | None) -> list[Deal]:

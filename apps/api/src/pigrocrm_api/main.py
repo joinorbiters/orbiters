@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pigrocrm.core.errors import DomainError
 from pigrocrm_api.errors import domain_error_handler, ensure_validation_error_schemas_are_declared
 from pigrocrm_api.routers import (
+    analytics,
     auth,
     cost_categories,
     costs,
@@ -68,6 +69,7 @@ def create_app() -> FastAPI:
         costs,
         cost_categories,
         period_locks,
+        analytics,
     ):
         app.include_router(module.router)
 
