@@ -538,7 +538,16 @@ class AnalyticsService:
                     # Names the month and the hours, which is what makes a six-line
                     # invoice legible next to a timesheet the client can check it
                     # against.
-                    descrizione=f"Attività{etichetta} — {ore} ore",
+                    #
+                    # A plain hyphen, never the em dash this codebase uses everywhere
+                    # else in prose: `Descrizione` goes into the FatturaPA XML, whose
+                    # FPR12 profile admits only basic-latin and Latin-1 code points, and
+                    # U+2014 is in neither. With an em dash here every draft this method
+                    # built was refused at `issue` -- and only there, one step after the
+                    # user had already selected the hours -- with a message about
+                    # characters they never typed. Found by taking a bound draft all the
+                    # way to `emessa` over HTTP in `apps/api/tests/test_analytics_api.py`.
+                    descrizione=f"Attività{etichetta} - {ore} ore",
                     quantita=ore,
                     unita_misura="ore",
                     prezzo_unitario=tariffa,
