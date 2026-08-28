@@ -38,6 +38,23 @@ COLLABORATORE = Actor(id=None, type="user", role="collaboratore")
 # suite -- a bare `date.today()` here would only coincidentally match the service if
 # the test machine happened to be configured for Europe/Rome, which nothing enforces.
 TODAY = oggi_in_italia()
+# The other end of the legal issue window. `issue()` refuses a `data_emissione` after
+# today *and* one before 1 January, so `CAPODANNO` and `TODAY` are the only pair of dates
+# guaranteed to be accepted whatever day the suite runs on. The obvious "some date in
+# this year" -- `date(TODAY.year, 6, 1)`, which these tests used to spell -- is in the
+# future from 1 January to 31 May and is refused by the *other* limit, so writing it that
+# way only moves the annual failure from one January to five months of winter.
+CAPODANNO = date(TODAY.year, 1, 1)
+# On 1 January those two are the same date: the register is one day old and the whole
+# legal window is a single day, so there is no *pair* of dates for a rule about ordering
+# between them to be about. The two tests that need two are skipped on that one day
+# rather than left to assert the wrong thing -- a back-date to 31 December is refused by
+# the closed-year check, which reports the same `field`, so the assertions below would
+# still pass while proving nothing at all.
+DUE_DATE_LEGALI = pytest.mark.skipif(
+    TODAY == CAPODANNO,
+    reason="il 1 gennaio l'unica data di emissione ammessa e' quella di oggi",
+)
 
 
 @pytest.fixture
@@ -163,14 +180,14 @@ def test_the_issue_date_is_a_date_in_the_issuer_s_own_calendar(
     assert invoice.anno == invoice.data_emissione.year
 
 
+@DUE_DATE_LEGALI
 def test_back_dating_inside_the_current_year_is_allowed(
     service: InvoiceService, db_session: Session
 ) -> None:
-    earlier = date(TODAY.year, 1, 2)
     invoice = service.issue(
-        _draft(service, _customer(db_session)), InvoiceIssue(data_emissione=earlier), ADMIN
+        _draft(service, _customer(db_session)), InvoiceIssue(data_emissione=CAPODANNO), ADMIN
     )
-    assert invoice.data_emissione == earlier
+    assert invoice.data_emissione == CAPODANNO
     assert invoice.anno == TODAY.year
 
 
@@ -198,29 +215,32 @@ def test_a_date_before_the_first_of_january_is_refused(
     assert caught.value.details["field"] == "data_emissione"
 
 
+@DUE_DATE_LEGALI
 def test_the_register_must_stay_chronologically_monotonic(
     service: InvoiceService, db_session: Session
 ) -> None:
     """Read inside the locked transaction, where "the date of the previous number" is
     a safe thing to read."""
     customer_id = _customer(db_session)
-    service.issue(
-        _draft(service, customer_id), InvoiceIssue(data_emissione=date(TODAY.year, 6, 1)), ADMIN
-    )
+    service.issue(_draft(service, customer_id), InvoiceIssue(data_emissione=TODAY), ADMIN)
     with pytest.raises(ValidationFailed) as caught:
         service.issue(
             _draft(service, customer_id),
-            InvoiceIssue(data_emissione=date(TODAY.year, 5, 31)),
+            InvoiceIssue(data_emissione=CAPODANNO),
             ADMIN,
         )
     assert caught.value.details["field"] == "data_emissione"
+    # The message, not only the field: `CAPODANNO` is a legal date on its own, so the
+    # only refusal it can draw is this one. Asserting the field alone would also accept
+    # the closed-year refusal, which is what a back-date across 31 December would raise.
+    assert "cronologicamente monotono" in caught.value.message
 
 
 def test_the_same_date_as_the_previous_invoice_is_allowed(
     service: InvoiceService, db_session: Session
 ) -> None:
     customer_id = _customer(db_session)
-    same = date(TODAY.year, 6, 1)
+    same = CAPODANNO
     service.issue(_draft(service, customer_id), InvoiceIssue(data_emissione=same), ADMIN)
     assert (
         service.issue(_draft(service, customer_id), InvoiceIssue(data_emissione=same), ADMIN).numero

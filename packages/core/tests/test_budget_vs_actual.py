@@ -13,6 +13,7 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
+from periodo_fiscale import OGGI, PRIMO_DEL_MESE
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
@@ -21,12 +22,16 @@ from pigrocrm.core.analytics.service import AnalyticsService
 from pigrocrm.core.errors import ValidationFailed
 
 READER = Actor(id=None, type="user", role="readonly")
-MARCH = BudgetQuery(da=date(2026, 3, 1), a=date(2026, 3, 31))
+# Derived, never a literal month: `budgeted_deal` builds its revenue by *issuing* a real
+# invoice, and `issue()` refuses a `data_emissione` outside the current fiscal year, so a
+# literal `2026-03` was a date on which every test in this file would begin failing at
+# once. See `periodo_fiscale.py` -- "this year, March" would not have been a fix either.
+PERIODO = BudgetQuery(da=PRIMO_DEL_MESE, a=OGGI)
 
 BudgetedDeal = Callable[..., UUID]
 
 
-def _row(db_session: Session, deal_id: UUID, query: BudgetQuery = MARCH) -> BudgetVsActualRow:
+def _row(db_session: Session, deal_id: UUID, query: BudgetQuery = PERIODO) -> BudgetVsActualRow:
     return next(
         row
         for row in AnalyticsService(db_session).budget_vs_actual(query, READER).items
@@ -84,7 +89,7 @@ def test_an_absent_estimate_is_not_an_estimate_of_zero(
         ore_registrate="40.00",
         ricavi="4000.00",
     )
-    page = AnalyticsService(db_session).budget_vs_actual(MARCH, READER)
+    page = AnalyticsService(db_session).budget_vs_actual(PERIODO, READER)
     row = next(r for r in page.items if r.deal_id == deal_id)
     assert row.non_preventivato is True
     assert row.avanzamento_ore is None
@@ -127,7 +132,7 @@ def test_zero_estimated_hours_behave_identically_to_null(
         nome="Senza preventivo ore",
     )
     items = {
-        r.deal_id: r for r in AnalyticsService(db_session).budget_vs_actual(MARCH, READER).items
+        r.deal_id: r for r in AnalyticsService(db_session).budget_vs_actual(PERIODO, READER).items
     }
     for field in ("avanzamento_ore", "budget_pro_rata", "scostamento_valore", "scostamento_ore"):
         assert getattr(items[zero], field) == getattr(items[null], field)
@@ -247,7 +252,7 @@ def test_the_list_is_paginated_from_the_first_commit(
             nome=f"Deal {index}",
         )
     service = AnalyticsService(db_session)
-    page = service.budget_vs_actual(BudgetQuery(da=MARCH.da, a=MARCH.a, limit=2), READER)
+    page = service.budget_vs_actual(BudgetQuery(da=PERIODO.da, a=PERIODO.a, limit=2), READER)
     assert len(page.items) == 2
     assert page.next_cursor is not None
 
@@ -257,7 +262,7 @@ def test_the_list_is_paginated_from_the_first_commit(
     seen = [row.deal_id for row in page.items]
     while page.next_cursor is not None:
         page = service.budget_vs_actual(
-            BudgetQuery(da=MARCH.da, a=MARCH.a, limit=2, cursor=page.next_cursor), READER
+            BudgetQuery(da=PERIODO.da, a=PERIODO.a, limit=2, cursor=page.next_cursor), READER
         )
         seen.extend(row.deal_id for row in page.items)
     assert len(seen) == 5

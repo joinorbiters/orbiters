@@ -1,11 +1,12 @@
 import subprocess
 from collections.abc import Callable, Iterator
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from periodo_fiscale import OGGI
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 from testcontainers.community.postgres import PostgresContainer
@@ -398,8 +399,11 @@ def _issue(
     data_emissione: date | None = None,
 ) -> None:
     """`data_emissione` explicit where the period matters: a period P&L attributes
-    revenue by that column, and the default -- today -- would put every fixture invoice
-    in the month the suite happens to run in rather than the one the test names."""
+    revenue by that column, so the caller says which day the revenue lands on rather than
+    inheriting the default. The callers now name `periodo_fiscale.OGGI`, which is the
+    same day the default would have produced -- passing it anyway keeps the date visible
+    at the call site next to the hours and costs it has to share a window with, which is
+    the coupling that has to stay obvious."""
     from pigrocrm.core.invoices.schemas import InvoiceIssue
 
     _invoice_service(session, storage).issue(
@@ -548,13 +552,18 @@ def deal_with_bollo_invoice(db_session: Session, local_storage: LocalFileStorage
 # `period_pnl` splits deals into `chiusi` and `in corso` and refuses to add the two
 # together. Testing that refusal needs one deal of each kind inside the same window,
 # each carrying figures of its own that a wrong implementation could move.
+#
+# That window is `periodo_fiscale.OGGI` and the month it belongs to, never a literal
+# month: one of these deals carries an *issued* invoice, and `issue()` refuses a
+# `data_emissione` outside the current fiscal year. See `periodo_fiscale.py` for why the
+# derivation cannot simply be "this year, March" either.
 
 
 @pytest.fixture
 def open_deal_with_hours(
     db_session: Session, seeded_user_id: UUID, seeded_category_id: UUID
 ) -> UUID:
-    """March 2026: 10 priced hours at an internal cost of 40, and 150.00 of licences.
+    """Today: 10 priced hours at an internal cost of 40, and 150.00 of licences.
 
     Labour cost 400.00, direct costs 150.00, revenue nothing -- an unfinished job, whose
     margin is provisional by construction and must never be added to a finished one's.
@@ -569,7 +578,7 @@ def open_deal_with_hours(
         TimeEntryCreate(
             deal_id=deal_id,
             user_id=seeded_user_id,
-            data=date(2026, 3, 5),
+            data=OGGI,
             ore=Decimal("10.00"),
             descrizione="Sviluppo",
             tariffa_applicata=Decimal("100.000000"),
@@ -581,7 +590,7 @@ def open_deal_with_hours(
         CostCreate(
             deal_id=deal_id,
             category_id=seeded_category_id,
-            data=date(2026, 3, 6),
+            data=OGGI,
             importo=Decimal("150.00"),
             descrizione="Licenze",
         ),
@@ -594,7 +603,7 @@ def open_deal_with_hours(
 def closed_deal_with_invoice(
     db_session: Session, local_storage: LocalFileStorage, seeded_category_id: UUID
 ) -> UUID:
-    """March 2026: 2000.00 invoiced and issued, 200.00 of direct costs, no hours.
+    """Today: 2000.00 invoiced and issued, 200.00 of direct costs, no hours.
 
     On a won stage and with no billable hour left unbilled, which is what makes
     `deal_summary` call it `chiuso` -- the state `period_pnl` reads to choose a column.
@@ -615,13 +624,13 @@ def closed_deal_with_invoice(
             deal_id=deal_id,
             importo=Decimal("2000.00"),
         ),
-        date(2026, 3, 20),
+        OGGI,
     )
     CostService(db_session).create(
         CostCreate(
             deal_id=deal_id,
             category_id=seeded_category_id,
-            data=date(2026, 3, 21),
+            data=OGGI,
             importo=Decimal("200.00"),
             descrizione="Stampa",
         ),
@@ -637,8 +646,8 @@ def closed_deal_with_invoice(
 def budgeted_deal(
     db_session: Session, local_storage: LocalFileStorage, seeded_user_id: UUID
 ) -> Callable[..., UUID]:
-    """A factory: one deal with the given estimate columns, hours and revenue, in March
-    2026.
+    """A factory: one deal with the given estimate columns, hours and revenue, all dated
+    today.
 
     The revenue is built by creating and **issuing** a real invoice rather than by
     inserting a row, because criterion 1 of this slice is precisely that the figure comes
@@ -671,27 +680,29 @@ def budgeted_deal(
         db_session.flush()
 
         if ore_registrate is not None:
-            # Spread over consecutive working days at up to 8 hours each, not written as
-            # one entry: `TimeEntryCreate.ore` is capped at 24 because an entry is one
-            # person's one day, and the totals this fixture exists to feed are tens of
-            # hours. The dates stay inside March so the window still selects all of them
-            # -- 120 hours, the largest any test asks for, reaches 24 March.
+            # Several entries at up to 8 hours each, not one: `TimeEntryCreate.ore` is
+            # capped at 24 because an entry is one person's one day, and the totals this
+            # fixture exists to feed are tens of hours. They all carry today's date
+            # rather than consecutive days, which the model allows on purpose -- there is
+            # no unique key on (deal, user, data), because "two 14-hour entries on one
+            # day are a likely error but not an impossible one". Spreading them forward
+            # from a fixed day was what made this fixture expire: the days have to stay
+            # inside the reporting window *and* not run past today, and only today itself
+            # satisfies both on every run day (see `periodo_fiscale.py`).
             residuo = Decimal(ore_registrate)
-            giorno = date(2026, 3, 10)
             while residuo > 0:
                 quota = min(residuo, Decimal("8.00"))
                 TimeEntryService(db_session).create(
                     TimeEntryCreate(
                         deal_id=deal_id,
                         user_id=seeded_user_id,
-                        data=giorno,
+                        data=OGGI,
                         ore=quota,
                         descrizione="Lavorazione",
                     ),
                     Actor(id=None, type="user", role="collaboratore"),
                 )
                 residuo -= quota
-                giorno += timedelta(days=1)
         if ricavi is not None:
             _issue(
                 db_session,
@@ -703,7 +714,7 @@ def budgeted_deal(
                     deal_id=deal_id,
                     importo=Decimal(ricavi),
                 ),
-                date(2026, 3, 15),
+                OGGI,
             )
         return deal_id
 
