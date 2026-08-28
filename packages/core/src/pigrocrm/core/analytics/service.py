@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
+from pigrocrm.core.analytics.fiscal import estimate_income
 from pigrocrm.core.analytics.repository import AnalyticsRepository
 from pigrocrm.core.analytics.schemas import (
     BindTimeRequest,
@@ -15,6 +16,7 @@ from pigrocrm.core.analytics.schemas import (
     BudgetQuery,
     BudgetVsActualRow,
     DealPnl,
+    FiscalEstimate,
     PeriodPnl,
     PeriodPnlQuery,
     PnlTotals,
@@ -22,6 +24,7 @@ from pigrocrm.core.analytics.schemas import (
 from pigrocrm.core.config import get_settings
 from pigrocrm.core.deals.repository import DealRepository
 from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
+from pigrocrm.core.fiscal.service import FiscalProfileService
 from pigrocrm.core.invoices.models import Invoice, InvoiceLine
 from pigrocrm.core.invoices.schemas import InvoiceCreate, InvoiceLineIn, InvoiceRead
 from pigrocrm.core.invoices.service import InvoiceService
@@ -344,6 +347,47 @@ class AnalyticsService:
             totale_ricavi=sum_money([row.ricavi for row in budgeted]),
             deal_preventivati=len(budgeted),
             deal_non_preventivati=len(rows) - len(budgeted),
+        )
+
+    def get_fiscal_estimate(self, anno: int, actor: Actor) -> FiscalEstimate:
+        """A **period** report, never per deal (§8).
+
+        the previous system computed this per offer, and the level was the defect rather than the
+        formula. INPS gestione separata has a floor owed at zero income and a ceiling, so
+        a pro-rata share attributes to a job an amount that does not depend on it; the
+        profitability coefficient applies to the year, so applying it to slices and
+        adding them gives a different number; and the result moves retroactively, because
+        a March project's "profit" would depend on what is invoiced in November. There is
+        deliberately no per-deal variant of this method, and `DealPnl` carries no tax
+        field for one to be read into.
+
+        The three rates come from `fiscal_profile` (task 4B-2), never from a literal in
+        this package: the ATECO coefficient depends on the activity code, the INPS rate
+        is re-set by the Legge di Bilancio most years, and `FiscalPanel.tsx` already lets
+        their owner edit all three. Nothing is defaulted here -- a column nobody
+        configured produces a `None` line, not an assumed one.
+
+        `admin`, and **no MCP tool** -- the only *read* on §11's exclusion list, and for a
+        reason unlike the other nine. It is not about reversibility: taxable income,
+        contributions and estimated net for a real person are the most sensitive figures
+        this product holds, and while residual R10 leaves a PAT without scopes and
+        inheriting its owner's full role -- while "give Claude a token" still means "give
+        it your account" -- that figure does not enter a conversational context on the
+        back of a generic question about deals.
+        """
+        actor.require_admin("get_fiscal_estimate")
+        # Raises `NotFound("fiscal_profile", "singleton")` when nothing is configured,
+        # which tells the user which screen to go to -- better than an estimate of zero
+        # computed from three nulls, which reads as "you owe nothing".
+        profile = FiscalProfileService(self.session).get(actor)
+        return estimate_income(
+            anno=anno,
+            # Every issued invoice of the year, deal or no deal: the estimate is about
+            # the person's income, and an invoice attached to no deal is still income.
+            ricavi=self.repo.annual_revenue(anno),
+            coefficiente=profile.coefficiente_redditivita,
+            aliquota_sostitutiva=profile.aliquota_imposta_sostitutiva,
+            aliquota_inps=profile.aliquota_inps,
         )
 
     def bind_time_to_invoice(
