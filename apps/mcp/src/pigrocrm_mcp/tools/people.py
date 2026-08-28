@@ -38,3 +38,11 @@ def search(context: McpContext, query: PersonListQuery) -> dict[str, Any]:
 def archive(context: McpContext, person_id: str) -> dict[str, str]:
     PersonService(context.session).soft_delete(UUID(person_id), context.actor)
     return {"status": "archiviato", "person_id": person_id}
+
+
+def restore(context: McpContext, person_id: str) -> dict[str, Any]:
+    return (
+        PersonService(context.session)
+        .restore(UUID(person_id), context.actor)
+        .model_dump(mode="json")
+    )

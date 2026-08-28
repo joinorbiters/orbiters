@@ -39,3 +39,9 @@ def move(context: McpContext, deal_id: str, stage_id: str) -> dict[str, Any]:
 def archive(context: McpContext, deal_id: str) -> dict[str, str]:
     DealService(context.session).soft_delete(UUID(deal_id), context.actor)
     return {"status": "archiviato", "deal_id": deal_id}
+
+
+def restore(context: McpContext, deal_id: str) -> dict[str, Any]:
+    return (
+        DealService(context.session).restore(UUID(deal_id), context.actor).model_dump(mode="json")
+    )
