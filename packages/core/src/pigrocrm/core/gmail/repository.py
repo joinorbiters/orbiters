@@ -1,11 +1,12 @@
 """Queries only. Never commits -- the service owns the transaction."""
 
+import hashlib
 from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import delete, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import delete, select, text, update
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.gmail.models import (
@@ -15,6 +16,40 @@ from pigrocrm.core.gmail.models import (
     GoogleOAuthState,
 )
 from pigrocrm.core.gmail.roster import EntityRef
+
+# An arbitrary but stable first key for `pg_try_advisory_lock(int, int)`, so this
+# project's locks cannot collide with another application sharing the database. The
+# two-integer form is used rather than the single bigint one precisely because it
+# namespaces: hashing a UUID into 64 bits alone risks colliding with anything else that
+# also hashes something into 64 bits.
+SYNC_LOCK_NAMESPACE = 0x7091
+
+
+def _lock_key(account_id: UUID) -> int:
+    """A signed 32-bit integer derived from the account id. Postgres advisory-lock keys
+    are `int4`, and passing an out-of-range value is an error rather than a truncation,
+    so the 128 bits have to be folded into 32 somehow.
+
+    Two ways of folding them are wrong here, and both look right:
+
+    * **The leading bytes of the UUID.** Every primary key in this schema is a **uuid7**
+      (`db/base.py`), whose first six bytes are a millisecond timestamp. The first four
+      of them therefore only change once every 65 seconds, so every mailbox connected in
+      the same minute would share a lock and one user's cron would silently suppress
+      everyone else's sync. `test_gmail_lock.py` catches exactly that: two accounts made
+      in the same test collide on the nose.
+    * **`hash()`.** Python randomises the hash of `bytes` per process, so the API worker
+      and the cron container would compute different keys for the same mailbox and the
+      lock would not exist at all.
+
+    A short blake2b digest has neither problem: it spreads uuid7's ordered bits over the
+    whole range and it is the same number in every process, forever. A collision -- one
+    in 2^32 per pair -- costs one user's sync answering "già in corso" and being picked
+    up by the next cycle, which is why this is worth less than a lock table of its own.
+    """
+    return int.from_bytes(
+        hashlib.blake2b(account_id.bytes, digest_size=4).digest(), "big", signed=True
+    )
 
 
 class GmailRepository:
@@ -77,6 +112,67 @@ class GmailRepository:
         # `Any`-free only on `CursorResult`, and this table is small and short-lived
         # by construction, so counting the returned ids costs nothing worth naming.
         return len(deleted.scalars().all())
+
+    # --- the per-mailbox sync lock ---------------------------------------------------
+
+    def try_sync_lock(self, account_id: UUID) -> bool:
+        """Non-blocking. A caller that does not get the lock must answer "already in
+        progress" -- it must not wait, and it must not fail.
+
+        Session-scoped and not `pg_try_advisory_xact_lock`, so the lock covers the whole
+        cycle regardless of how the cycle chooses to commit. That is also why it has to
+        be handed back explicitly: see `release_sync_lock`.
+        """
+        return bool(
+            self.session.execute(
+                text("SELECT pg_try_advisory_lock(:ns, :key)"),
+                {"ns": SYNC_LOCK_NAMESPACE, "key": _lock_key(account_id)},
+            ).scalar_one()
+        )
+
+    def release_sync_lock(self, account_id: UUID) -> None:
+        """Hands the lock back on the connection that holds it.
+
+        This must not be a statement that can fail. A session-level advisory lock
+        outlives its transaction *and* its SQLAlchemy `Session`: the connection returns
+        to the pool still holding it, and every later sync for that mailbox then answers
+        "already running" for the life of the process -- indistinguishable from a hung
+        job, and unfixable without a restart.
+
+        The one way the unlock can fail is on a transaction Postgres has already
+        aborted, which refuses every further statement until it is rolled back. Hence
+        the retry, and hence the `rollback` -- which is not the wide one it looks like:
+        the server threw that work away itself when it aborted, so there is nothing left
+        to discard. Deliberately *not* pre-emptive. `Session.is_active` stays `True`
+        after a failed raw `execute` (it only goes false on a failed flush), so a check
+        before the fact would not fire, and rolling back unconditionally would throw
+        away a healthy caller's uncommitted work for nothing.
+        """
+        try:
+            self._advisory_unlock(account_id)
+        except DBAPIError:
+            self.session.rollback()
+            self._advisory_unlock(account_id)
+
+    def _advisory_unlock(self, account_id: UUID) -> None:
+        self.session.execute(
+            text("SELECT pg_advisory_unlock(:ns, :key)"),
+            {"ns": SYNC_LOCK_NAMESPACE, "key": _lock_key(account_id)},
+        )
+
+    def sync_started_at(self, account_id: UUID) -> datetime | None:
+        """When the last cycle that *committed* began, or `None` if none ever has.
+
+        Read from the row rather than from an in-memory attribute, because it is asked
+        on behalf of a run happening on another connection: that run has not published
+        its own `last_sync_at` yet and cannot, so the honest answer is the last one that
+        finished. It is what makes "già in corso da stamattina" possible to tell apart
+        from "già in corso da quaranta secondi", which is the whole reason a caller who
+        lost the lock is given a time at all.
+        """
+        return self.session.execute(
+            select(GoogleAccount.last_sync_at).where(GoogleAccount.id == account_id)
+        ).scalar_one_or_none()
 
     # --- messages --------------------------------------------------------------------
 
