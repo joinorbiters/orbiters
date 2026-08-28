@@ -1,11 +1,12 @@
-"""Thin calls into `TimeEntryService`/`CostService`/`CostCategoryService`, like every
-other tool module -- see `tools/invoices.py`'s own docstring for the shape this one
-mirrors.
+"""Thin calls into `TimeEntryService`/`CostService`/`CostCategoryService`/
+`AnalyticsService`, like every other tool module -- see `tools/invoices.py`'s own
+docstring for the shape this one mirrors.
 
-An agent may record and read. It may not change what an already-recorded number means:
-`recalculate_rates`, `update_user_rates`, `update_deal_rate`, the three cost-category
-writes, `close_period` and `reopen_period` have deliberately no call-through here at
-all, and `apps/mcp/tests/test_mcp_invoice_ban.py` fails the build if any of those
+An agent may record and read. It may not change what an already-recorded number means,
+and it may not read the owner's tax position: `recalculate_rates`, `update_user_rates`,
+`update_deal_rate`, the three cost-category writes, `close_period`, `reopen_period`,
+`bind_time_to_invoice` and `get_fiscal_estimate` have deliberately no call-through here
+at all, and `apps/mcp/tests/test_mcp_invoice_ban.py` fails the build if any of those
 methods is ever reached from anywhere under `tools/`, not only from this file. A tool
 that contained business logic would be logic the web app cannot reach -- the failure
 this architecture exists to prevent. Every function here builds a core schema from
@@ -17,6 +18,8 @@ guidance instead of a raw pydantic dump (see `tools/__init__.py`'s own note on
 from typing import Any
 from uuid import UUID
 
+from pigrocrm.core.analytics.schemas import BudgetQuery, PeriodPnlQuery
+from pigrocrm.core.analytics.service import AnalyticsService
 from pigrocrm.core.timetracking.categories import CostCategoryService
 from pigrocrm.core.timetracking.costs import CostService
 from pigrocrm.core.timetracking.schemas import (
@@ -134,3 +137,33 @@ def list_cost_categories(context: McpContext, include_archived: bool) -> dict[st
         include_archived=include_archived
     )
     return {"categories": [c.model_dump(mode="json") for c in categories]}
+
+
+# ---- analytics ------------------------------------------------------------------
+# Three reads, and only three. `bind_time_to_invoice` and `get_fiscal_estimate` are
+# absent by decision, not by omission -- see `tools/__init__.py`'s own block comment for
+# the two (different) reasons, and `apps/mcp/tests/test_mcp_invoice_ban.py`, which scans
+# every file in this package and fails the build if either method is ever called from
+# one of them, whatever the tool that reaches it is called.
+
+
+def get_deal_pnl(context: McpContext, deal_id: str) -> dict[str, Any]:
+    return (
+        AnalyticsService(context.session)
+        .deal_pnl(UUID(deal_id), context.actor)
+        .model_dump(mode="json")
+    )
+
+
+def get_period_pnl(context: McpContext, query: PeriodPnlQuery) -> dict[str, Any]:
+    return (
+        AnalyticsService(context.session).period_pnl(query, context.actor).model_dump(mode="json")
+    )
+
+
+def get_budget_vs_actual(context: McpContext, query: BudgetQuery) -> dict[str, Any]:
+    return (
+        AnalyticsService(context.session)
+        .budget_vs_actual(query, context.actor)
+        .model_dump(mode="json")
+    )
