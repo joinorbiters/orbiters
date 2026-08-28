@@ -71,6 +71,14 @@ class FakeGmail:
     # grant does. It never heals.
     revoked: bool = False
     access_token: str = "ya29.fake-access-token"
+    refresh_token: str = "1//0gFakeRefresh"
+    # Google only ever returns an ID token from the *code* exchange, and only because
+    # `openid` is among the requested scopes. Empty by default so a test that does not
+    # care about identity does not have to build one.
+    id_token: str = ""
+    # The trap `prompt=consent` exists to avoid: a second authorisation for a user who
+    # already consented comes back 200, complete, and without a refresh token at all.
+    omit_refresh_token: bool = False
     expires_in: int = 3599
     granted_scopes: tuple[str, ...] = ()
     # A queue of (status, body, headers) consumed FIFO before normal handling. One
@@ -140,6 +148,10 @@ class FakeGmail:
         }
         if self.granted_scopes:
             payload["scope"] = " ".join(self.granted_scopes)
+        if not self.omit_refresh_token:
+            payload["refresh_token"] = self.refresh_token
+        if self.id_token:
+            payload["id_token"] = self.id_token
         return 200, json.dumps(payload).encode(), {}
 
     def _send(self) -> tuple[int, bytes, dict[str, str]]:
