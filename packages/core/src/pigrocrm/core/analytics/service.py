@@ -1,12 +1,16 @@
+from collections import defaultdict
 from datetime import date
 from decimal import Decimal
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.analytics.repository import AnalyticsRepository
 from pigrocrm.core.analytics.schemas import (
+    BindTimeRequest,
     BudgetPage,
     BudgetQuery,
     BudgetVsActualRow,
@@ -15,17 +19,25 @@ from pigrocrm.core.analytics.schemas import (
     PeriodPnlQuery,
     PnlTotals,
 )
+from pigrocrm.core.config import get_settings
 from pigrocrm.core.deals.repository import DealRepository
-from pigrocrm.core.errors import NotFound, ValidationFailed
+from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
+from pigrocrm.core.invoices.models import Invoice, InvoiceLine
+from pigrocrm.core.invoices.schemas import InvoiceCreate, InvoiceLineIn, InvoiceRead
+from pigrocrm.core.invoices.service import InvoiceService
 from pigrocrm.core.money import (
     ZERO_HOURS,
     ZERO_MONEY,
     percentage_of,
     round_money,
+    sum_hours,
     sum_money,
 )
-from pigrocrm.core.timetracking.locks import PeriodLockService
-from pigrocrm.core.timetracking.service import TimeEntryService
+from pigrocrm.core.storage.base import DocumentStorage
+from pigrocrm.core.storage.factory import storage_from_settings
+from pigrocrm.core.timetracking.locks import PeriodLockService, period_label
+from pigrocrm.core.timetracking.models import TimeEntry
+from pigrocrm.core.timetracking.service import TimeEntryService, billed_entry_ids
 
 ENTITY = "analytics"
 
@@ -81,6 +93,19 @@ def _totals(rows: list[tuple[Decimal, Decimal, Decimal]]) -> PnlTotals:
     )
 
 
+def _group_order(key: tuple[Decimal, tuple[int, int] | None]) -> tuple[int, int, Decimal]:
+    """Month first, rate within it -- the order the lines are printed in.
+
+    A `sorted(..., key=...)` on the raw key would compare `tuple[int, int] | None`
+    against `tuple[int, int]` and fail; flattening it to `(0, 0)` puts the un-dated
+    groups of `raggruppa_per_mese = False` first, which is where they belong when they
+    are also the only ones.
+    """
+    tariffa, mese = key
+    anno, numero_mese = mese if mese is not None else (0, 0)
+    return (anno, numero_mese, tariffa)
+
+
 class AnalyticsService:
     """Reads only, except for `bind_time_to_invoice` (Task 4B-7).
 
@@ -96,8 +121,19 @@ class AnalyticsService:
     a reader can already list.
     """
 
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, storage: DocumentStorage | None = None) -> None:
+        """`storage` is optional and is used by `bind_time_to_invoice` alone.
+
+        Every read method in this file needs none, and the twenty-odd call sites that
+        only want a figure keep building `AnalyticsService(session)` with one argument.
+        The one writer needs an `InvoiceService`, whose constructor requires a backend
+        because the artefacts a *later* emission produces are written through it -- not
+        because creating a draft writes anything. Defaulted to `None` and resolved from
+        settings inside that one method, so no read path ever constructs a storage
+        backend, and in particular a misconfigured `gdrive` cannot make a P&L fail.
+        """
         self.session = session
+        self.storage = storage
         self.repo = AnalyticsRepository(session)
         self.deals = DealRepository(session)
         self.entries = TimeEntryService(session)
@@ -308,6 +344,217 @@ class AnalyticsService:
             totale_ricavi=sum_money([row.ricavi for row in budgeted]),
             deal_preventivati=len(budgeted),
             deal_non_preventivati=len(rows) - len(budgeted),
+        )
+
+    def bind_time_to_invoice(
+        self, deal_id: UUID, data: BindTimeRequest, actor: Actor
+    ) -> InvoiceRead:
+        """Turns selected hours into the lines of a **draft** invoice, and writes the
+        link back onto each of them.
+
+        **Issues nothing and computes no total.** It builds an `InvoiceCreate` with its
+        lines and calls `InvoiceService`, which stays the sole owner of numbering,
+        fiscal validation, rounding and freezing (slice 3 §3, §6, §9). Nothing here
+        joins slice 3's locked transaction -- the part of the system that least wants
+        new participants.
+
+        `admin`, and **no MCP tool** (§11's exclusion list). Binding hours to a draft is
+        harmless while the draft is a draft, but it is the step that determines their
+        freezing at issue, and choosing *which* hours to invoice is a commercial
+        decision. Slice 3 §11 withdrew `issue_invoice` from MCP with the same reasoning;
+        this is the rung immediately below it.
+
+        Which reading of "already invoiced" applies, since task 4B-3 deliberately left
+        two that differ: the double-invoicing guard below uses the **invoice-state** one,
+        through `billed_entry_ids`, which joins to `invoices` and asks whether the line
+        belongs to an *issued* document. The **link-based** reading -- `invoice_line_id
+        IS NOT NULL`, one indexed column, what the `fatturato` list filter applies --
+        would refuse to rebind an hour sitting on a draft nobody ever issued, and that
+        draft may be a mistake somebody is trying to redo. This method is what writes the
+        link, so it is what makes the two readings differ at all; every P&L figure
+        downstream reads the invoice-state one for the same reason, because a draft is
+        not revenue.
+
+        The link is written **when the draft line is born**, not at issue: the FK is
+        `ON DELETE SET NULL`, so while the invoice is a draft the hours stay modifiable
+        and slice 3's wholesale line replacement unbinds and rebinds them without
+        orphans; the moment `issue()` commits, the bound hours are frozen without
+        `issue()` having had to know they exist.
+
+        **The rounding disagreement, and which figure wins.** A line's `prezzo_totale`
+        is `ROUND(Σ ore × tariffa, 2)`, while the timesheet prints
+        `Σ ROUND(ore × tariffa, 2)`. The two differ by cents -- three entries of 0.10 h
+        at 33.333333 EUR/h are 9.99 per entry and 10.00 as one line -- and §6.2 states
+        this as its one exception rather than reconciling it: hours × rate is an
+        *estimate* (`valore_maturato`), and it stops being consulted the moment an
+        invoice exists. From then on the revenue is the invoice's own `imponibile`, the
+        figure on the document the client received.
+        """
+        actor.require_admin("bind_time_to_invoice")
+        deal = self.deals.get(deal_id)
+        if deal is None:
+            raise NotFound("deal", deal_id)
+
+        # De-duplicated, order preserved. The same id twice in one request would land in
+        # one group twice and bill those hours twice on a single line -- silently, since
+        # every count downstream would still agree with itself.
+        wanted = list(dict.fromkeys(data.entry_ids))
+        rows: list[TimeEntry] = []
+        for entry_id in wanted:
+            entry = self.session.get(TimeEntry, entry_id)
+            # Never a silent skip: a dropped id produces a draft missing work the user
+            # believed they had selected, and they find out from the client.
+            if entry is None:
+                raise NotFound("time_entry", entry_id)
+            rows.append(entry)
+
+        stray = [str(e.id) for e in rows if e.deal_id != deal_id or e.deleted_at is not None]
+        if stray:
+            raise ValidationFailed(
+                "time_entry",
+                "entry_ids",
+                f"{len(stray)} voci non appartengono a questo deal o sono archiviate",
+                expected=f"solo voci del deal {deal_id}: {', '.join(stray)}",
+            )
+
+        # A property of the work itself, decided when it was logged -- an internal
+        # meeting, a rewrite nobody agreed to pay for -- so it never belongs on a draft,
+        # whatever rate it happens to carry.
+        internal = [str(e.id) for e in rows if not e.fatturabile]
+        if internal:
+            raise ValidationFailed(
+                "time_entry",
+                "entry_ids",
+                f"{len(internal)} voci non sono fatturabili",
+                expected=f"solo voci fatturabili: {', '.join(internal)}",
+            )
+
+        # Split in one pass rather than filtered twice, so that below `tariffa` is a
+        # `Decimal` the type checker can follow instead of a `Decimal | None` narrowed
+        # by an `assert` standing exactly where the missing price would come through.
+        priced: list[tuple[Decimal, TimeEntry]] = []
+        unpriced: list[TimeEntry] = []
+        for entry in rows:
+            tariffa = entry.tariffa_applicata
+            if tariffa is None:
+                unpriced.append(entry)
+            else:
+                priced.append((tariffa, entry))
+        if unpriced:
+            # Counted in the reason and listed in `expected`, so the refusal is an
+            # instruction -- "give these two entries a rate" -- and not an obstacle. An
+            # invoice line with no unit price is not issuable, and inventing one here
+            # would decide on the user's behalf what their work is worth.
+            raise ValidationFailed(
+                "time_entry",
+                "entry_ids",
+                f"{len(unpriced)} voci non hanno una tariffa: assegnane una prima di "
+                "generare la bozza",
+                expected=(
+                    "una tariffa su ogni voce selezionata: "
+                    f"{', '.join(str(e.id) for e in unpriced)}"
+                ),
+            )
+
+        already = billed_entry_ids(self.session, rows)
+        if already:
+            frozen = [e.invoice_line_id for e in rows if e.id in already]
+            numero, anno = self.session.execute(
+                select(Invoice.numero, Invoice.anno)
+                .join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id)
+                .where(InvoiceLine.id == frozen[0])
+            ).one()
+            # The document is named, because "already invoiced" is only actionable if
+            # the user can go and look at the invoice in question.
+            raise Conflict(
+                "time_entry",
+                f"{len(already)} voci sono già su una fattura emessa: non si fattura "
+                "due volte lo stesso lavoro",
+                voci=len(already),
+                numero=numero,
+                anno=anno,
+            )
+
+        # One line per `(tariffa, mese)`. Not one per entry: a forty-line invoice is
+        # unreadable for the client, and the detail already has its place -- the
+        # timesheet attached to it (§10.2). `raggruppa_per_mese = False` collapses to one
+        # line per rate, which is a presentation choice the caller makes and not a rule.
+        groups: dict[tuple[Decimal, tuple[int, int] | None], list[TimeEntry]] = defaultdict(list)
+        for tariffa, entry in priced:
+            mese = (entry.data.year, entry.data.month) if data.raggruppa_per_mese else None
+            groups[(tariffa, mese)].append(entry)
+        ordered = sorted(groups.items(), key=lambda item: _group_order(item[0]))
+
+        righe: list[InvoiceLineIn] = []
+        for (tariffa, mese), members in ordered:
+            ore = sum_hours([m.ore for m in members])
+            etichetta = f" {period_label(*mese)}" if mese is not None else ""
+            righe.append(
+                InvoiceLineIn(
+                    # Names the month and the hours, which is what makes a six-line
+                    # invoice legible next to a timesheet the client can check it
+                    # against.
+                    descrizione=f"Attività{etichetta} — {ore} ore",
+                    quantita=ore,
+                    unita_misura="ore",
+                    prezzo_unitario=tariffa,
+                    # `aliquota_iva` deliberately omitted: `None` means "the regime's
+                    # answer", and `natura`/`riferimento_normativo` are not on this
+                    # schema at all, precisely so that a caller cannot put the table
+                    # constraint `(aliquota_iva = 0) = (natura IS NOT NULL)` within reach
+                    # of a request body. The fiscal profile is `InvoiceService`'s to read.
+                )
+            )
+
+        storage = (
+            self.storage if self.storage is not None else storage_from_settings(get_settings())
+        )
+        invoice = InvoiceService(self.session, storage).create(
+            InvoiceCreate(
+                customer_id=deal.customer_id,
+                deal_id=deal_id,
+                tipo="fattura",
+                righe=righe,
+            ),
+            actor,
+        )
+
+        # The line ids read back in `numero_linea` order, which `_computed_lines`
+        # assigns from the order `righe` was built in -- so the group-to-line mapping is
+        # positional and deterministic, rather than matched on a description string that
+        # two groups could share.
+        line_ids = list(
+            self.session.execute(
+                select(InvoiceLine.id)
+                .where(InvoiceLine.invoice_id == invoice.id)
+                .order_by(InvoiceLine.numero_linea)
+            ).scalars()
+        )
+        for line_id, (_, members) in zip(line_ids, ordered, strict=True):
+            for entry in members:
+                entry.invoice_line_id = line_id
+        self._activities_for_binding(deal_id, invoice, rows, actor)
+        self.session.commit()
+        return invoice
+
+    def _activities_for_binding(
+        self, deal_id: UUID, invoice: InvoiceRead, rows: list[TimeEntry], actor: Actor
+    ) -> None:
+        """One activity on the deal, not one per entry: binding is a single commercial
+        act over a selection, unlike `recalculate_rates`, which changes each row's
+        meaning individually and therefore records per row.
+
+        Called after `InvoiceService.create` has committed, never before: `record`
+        flushes into the caller's transaction, so an activity written ahead of another
+        service's own commit would be persisted by that commit even if this method later
+        failed.
+        """
+        ActivityService(self.session).record(
+            "deal",
+            deal_id,
+            "time_bound_to_invoice",
+            actor,
+            {"invoice_id": str(invoice.id), "voci": len(rows)},
         )
 
 
