@@ -603,7 +603,7 @@ def test_disconnect_overwrites_the_credential_rather_than_dereferencing_it(
     account = db_session.execute(select(GoogleAccount)).scalars().one()
     assert account.refresh_token_ciphertext == b""
     assert account.refresh_token_nonce == b""
-    assert account.status == "revoked"
+    assert account.status == "disconnected"
     assert account.disconnected_at is not None
     kinds = db_session.execute(select(Activity.kind)).scalars().all()
     assert "gmail.account_scollegato" in kinds

@@ -162,6 +162,27 @@ _CREDENZIALI: dict[Method, str] = {
         "B1-14 possiede la superficie MCP di 5B e prevede `backfill_gmail`; quando "
         "quello strumento esiste questa voce sparisce"
     ),
+    ("GoogleAccountService", "health"): (
+        "esclusione provvisoria: B1-14 possiede la superficie MCP di 5B e prevede "
+        "`describe_gmail_account`, che e' esattamente questa risposta. Finche' quello "
+        "strumento non esiste non c'e' niente da coprire"
+    ),
+    ("GoogleAccountService", "usable"): (
+        "non e' un'operazione ma un cancello: lo chiamano `sync` e il percorso di invio "
+        "*prima* di comporre qualsiasi cosa. Un tool che lo esponesse offrirebbe "
+        "all'agente di chiedere un permesso invece di esercitarlo"
+    ),
+    ("GoogleAccountService", "mark_revoked"): (
+        "registra un fatto che comunica Google, non una decisione di qualcuno: la "
+        "chiama il solo punto che puo' apprenderlo, il rinnovo del token che riceve "
+        "`invalid_grant`. Un agente che potesse marcare revocata una credenziale sana "
+        "spegnerebbe Gmail a una persona senza che nulla sia successo"
+    ),
+    ("GoogleAccountService", "set_store_bodies"): (
+        "decide se il CRM conserva il *corpo* della corrispondenza di qualcuno: e' la "
+        "stessa famiglia di `disconnect`, una scelta della persona sui propri dati e "
+        "non un'operazione che l'agente compie al posto suo"
+    ),
     ("PatService", "create"): "un agente non conia le proprie credenziali",
     ("PatService", "list"): "l'elenco dei token e' materiale di sicurezza",
     ("PatService", "revoke"): "revocare token e' amministrazione dell'account",

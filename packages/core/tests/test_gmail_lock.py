@@ -29,6 +29,7 @@ from sqlalchemy import Engine, delete, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.activities.models import Activity
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.auth.models import User
 from pigrocrm.core.customers.models import Customer
@@ -251,9 +252,10 @@ def committed_account(db_engine: Engine) -> Iterator[tuple[UUID, UUID, str]]:
     address = f"lock-{uuid4().hex[:8]}@acme.it"
     with factory() as session:
         account = connected_account(session)
-        session.add(Customer(ragione_sociale=f"Lock {uuid4().hex[:6]}", email=address))
+        customer = Customer(ragione_sociale=f"Lock {uuid4().hex[:6]}", email=address)
+        session.add(customer)
         session.commit()
-        ids = (account.user_id, account.id)
+        ids = (account.user_id, account.id, customer.id)
     try:
         yield ids[0], ids[1], address
     finally:
@@ -263,6 +265,13 @@ def committed_account(db_engine: Engine) -> Iterator[tuple[UUID, UUID, str]]:
             # whatever state the test left it in.
             session.execute(delete(User).where(User.id == ids[0]))
             session.execute(delete(Customer).where(Customer.email == address))
+            # `activities` deliberately has no foreign key to anything -- `entity_id`
+            # addresses whichever table `entity_type` names -- so nothing cascades and
+            # the cycles these tests really committed would leave their timeline entries
+            # in a database every other test shares. That is not hypothetical: it makes
+            # `test_gmail_links.py`'s "recorded once per cycle" assertions depend on
+            # pytest's collection order, which is not a property any test should have.
+            session.execute(delete(Activity).where(Activity.entity_id.in_(ids[1:])))
             session.commit()
 
 

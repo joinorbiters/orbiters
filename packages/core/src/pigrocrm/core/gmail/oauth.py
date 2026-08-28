@@ -202,7 +202,11 @@ class GmailOAuthService:
 
         deleted = self.repo.delete_messages_for(account.id) if delete_messages else 0
 
-        account.status = "revoked"
+        # `disconnected`, not `revoked`. The two used to share one value, told apart
+        # only by `disconnected_at` -- which meant every banner and every gate reading
+        # `status` told a person who had just pressed «scollega» that Google had revoked
+        # their consent, and offered to reconnect what they had deliberately unhooked.
+        account.status = "disconnected"
         account.disconnected_at = datetime.now(UTC)
         # Overwritten, not merely dereferenced: leaving the ciphertext behind means the
         # credential is still in every backup taken after the disconnect.
