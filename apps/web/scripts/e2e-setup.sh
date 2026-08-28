@@ -52,7 +52,7 @@ until docker exec "$PIGROCRM_E2E_CONTAINER" pg_isready -U pigrocrm >/dev/null 2>
 echo "== pigrocrm e2e: running migrations =="
 (cd packages/core && uv run alembic upgrade head)
 
-echo "== pigrocrm e2e: seeding the admin the specs log in as, the pipeline, the timesheet template and the cost categories =="
+echo "== pigrocrm e2e: seeding the admin the specs log in as, the pipeline, the timesheet template, the cost categories and the fiscal profile =="
 uv run python - <<'PY'
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.auth.schemas import UserCreate
@@ -61,6 +61,8 @@ from pigrocrm.core.config import get_settings
 from pigrocrm.core.db import create_engine_from_settings, session_factory
 from pigrocrm.core.emitter.schemas import EmitterProfileUpsert
 from pigrocrm.core.emitter.service import EmitterProfileService
+from pigrocrm.core.fiscal.schemas import FiscalProfileUpsert
+from pigrocrm.core.fiscal.service import FiscalProfileService
 from pigrocrm.core.pipeline.service import PipelineService
 from pigrocrm.core.templates.service import TemplateService
 from pigrocrm.core.timetracking.categories import CostCategoryService
@@ -106,6 +108,20 @@ with session_factory(engine)() as session:
             provincia="RM",
             email="e2e@pigro.it",
         ),
+        Actor.system(),
+    )
+    # The regime. `InvoiceService.issue` reads this singleton before it consumes a
+    # register number (`_regime`), so without this row every emission -- and therefore
+    # the whole of e2e/economics.spec.ts -- fails with `404 fiscal_profile singleton not
+    # found`; and `AnalyticsService.get_fiscal_estimate` refuses for the same reason,
+    # which is what «Analisi › Fiscale» renders as "Profilo fiscale non configurato".
+    # Both are honest failures at exactly the wrong time, and configuring the regime is
+    # a step a real installation performs on «Impostazioni → Fiscale» before it issues
+    # anything. The three rates are the forfettario's own published numbers, which is
+    # also `FiscalProfileUpsert`'s own default for each of them; `codice_regime` has no
+    # default and is the whole point of the row.
+    FiscalProfileService(session).upsert(
+        FiscalProfileUpsert(codice_regime="RF19"),
         Actor.system(),
     )
 print("seed completato")

@@ -184,10 +184,21 @@ export async function relaunchApi(): Promise<void> {
  */
 export async function seedDealWithRate(
   request: APIRequestContext,
-  { nome, tariffa }: { nome: string; tariffa: string },
+  {
+    nome,
+    tariffa,
+    cliente,
+  }: { nome: string; tariffa: string; cliente?: Record<string, string> },
 ): Promise<{ dealId: string; customerId: string }> {
   const customerResponse = await request.post('/api/customers', {
-    data: { ragione_sociale: `${nome} SRL` },
+    // Merged over the default, never replacing it: `time-tracking.spec.ts` needs
+    // nothing but a name, and `economics.spec.ts` needs a customer complete enough to
+    // be *invoiced* -- `check_party_exportable` and `check_recipient_routing` both run
+    // inside `InvoiceService.issue`, before a register number is consumed, and refuse a
+    // recipient with no address, no P.IVA or no `codice_sdi`. A second seeding helper
+    // for that one difference would be two fixtures to keep in step; an override on the
+    // one that exists is the same fixture with more of the record filled in.
+    data: { ragione_sociale: `${nome} SRL`, ...cliente },
   })
   expect(customerResponse.status(), await customerResponse.text()).toBe(201)
   const customer = (await customerResponse.json()) as { id: string }
