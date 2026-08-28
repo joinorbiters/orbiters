@@ -200,13 +200,7 @@ class GmailOAuthService:
         if account is None:
             raise Conflict("google_account", "nessuna casella Google collegata")
 
-        if delete_messages:
-            # `gmail_messages` does not exist yet: Task B1-8 adds the table together
-            # with `GmailRepository.delete_messages_for` and the test that proves the
-            # deletion. Until then there is nothing stored to delete, so the request is
-            # already satisfied -- and the choice is recorded either way, so B1-8
-            # replaces this branch rather than discovering it.
-            pass
+        deleted = self.repo.delete_messages_for(account.id) if delete_messages else 0
 
         account.status = "revoked"
         account.disconnected_at = datetime.now(UTC)
@@ -220,7 +214,14 @@ class GmailOAuthService:
             account.id,
             "gmail.account_scollegato",
             actor,
-            {"email_address": account.email_address, "messaggi_cancellati": delete_messages},
+            {
+                "email_address": account.email_address,
+                "messaggi_cancellati": delete_messages,
+                # The count, not the messages: the timeline has to be able to say how
+                # much correspondence this irreversible choice destroyed, and it is the
+                # one place that answer survives the deletion.
+                "messaggi_cancellati_conteggio": deleted,
+            },
         )
         self.session.commit()
 

@@ -1,12 +1,14 @@
 """Queries only. Never commits -- the service owns the transaction."""
 
+from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import delete, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from pigrocrm.core.gmail.models import GoogleAccount, GoogleOAuthState
+from pigrocrm.core.gmail.models import GmailMessage, GoogleAccount, GoogleOAuthState
 
 
 class GmailRepository:
@@ -68,4 +70,72 @@ class GmailRepository:
         # `RETURNING` rather than `rowcount`: the DBAPI's row count is typed as
         # `Any`-free only on `CursorResult`, and this table is small and short-lived
         # by construction, so counting the returned ids costs nothing worth naming.
+        return len(deleted.scalars().all())
+
+    # --- messages --------------------------------------------------------------------
+
+    def message_ids_present(self, account_id: UUID, gmail_ids: Sequence[str]) -> set[str]:
+        """Which of these Gmail ids this account has already stored.
+
+        One query per thread rather than one per message: a cycle re-reads a whole day
+        of already-stored conversations by design, so the common case is a thread in
+        which every message is known and the interesting number is how many round trips
+        finding that out costs.
+        """
+        if not gmail_ids:
+            return set()
+        rows = (
+            self.session.execute(
+                select(GmailMessage.gmail_message_id).where(
+                    GmailMessage.google_account_id == account_id,
+                    GmailMessage.gmail_message_id.in_(list(gmail_ids)),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return set(rows)
+
+    def add_message_if_absent(self, message: GmailMessage) -> bool:
+        """Inserts, and answers `False` if the unique constraint refused it.
+
+        The insert runs inside a SAVEPOINT, and that is the point of the method. A
+        duplicate is expected -- the watermark's overlap produces them on every cycle --
+        so it must cost exactly the failed statement and nothing else. Catching the
+        `IntegrityError` and calling `Session.rollback()` instead would discard every
+        message stored earlier in the same cycle, because the cycle commits once at the
+        end: one duplicate in a thread of thirty would throw away the twenty-nine before
+        it. `test_gmail_sync.py` proves that difference on a single connection, and the
+        two-thread race proves why the constraint is needed at all.
+        """
+        try:
+            with self.session.begin_nested():
+                self.session.add(message)
+                self.session.flush()
+        except IntegrityError:
+            return False
+        return True
+
+    def message_by_gmail_id(self, account_id: UUID, gmail_id: str) -> GmailMessage | None:
+        return self.session.execute(
+            select(GmailMessage).where(
+                GmailMessage.google_account_id == account_id,
+                GmailMessage.gmail_message_id == gmail_id,
+            )
+        ).scalar_one_or_none()
+
+    def delete_messages_for(self, account_id: UUID) -> int:
+        """Called only when the user explicitly chose to on disconnect. The
+        `gmail_message_links` rows go with them by ON DELETE CASCADE.
+
+        `RETURNING` and not `rowcount`, for the reason `prune_states` states: the
+        DBAPI's row count is only typed on `CursorResult`. The count matters here --
+        it is what the timeline entry records about an irreversible deletion -- so it
+        has to come from somewhere the type system agrees exists.
+        """
+        deleted = self.session.execute(
+            delete(GmailMessage)
+            .where(GmailMessage.google_account_id == account_id)
+            .returning(GmailMessage.id)
+        )
         return len(deleted.scalars().all())
