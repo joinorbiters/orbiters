@@ -29,11 +29,20 @@ from pigrocrm_mcp.context import McpContext
 #
 # Not a tidying. They claimed to be enforced -- "asserted to be exactly these four names
 # by the ban test" -- and nothing imported them: no test read a single one, so all three
-# had already drifted. `MCP_FORBIDDEN_OPERATIONS` named `update_fiscal_profile`, which
-# `test_mcp_invoice_ban.py` does not ban; `MCP_UNEXPOSED_OPERATIONS` was keyed on bare
-# method names, so its `get` and `update` entries silently spoke for a dozen services
-# that also define one. Documentation that describes a guarantee nobody checks is worse
-# than none: it reads exactly like the guarantee.
+# had already drifted. `MCP_FORBIDDEN_OPERATIONS` named `update_fiscal_profile` while the
+# ban test's own list did not; `MCP_UNEXPOSED_OPERATIONS` was keyed on bare method names,
+# so its `get` and `update` entries silently spoke for a dozen services that also define
+# one. Documentation that describes a guarantee nobody checks is worse than none: it
+# reads exactly like the guarantee.
+#
+# The `update_fiscal_profile` disagreement has since been settled in the ban's favour --
+# this table was the statement that was right, and slice 3 §11's own four names include
+# it. `FiscalProfileService.upsert` is now banned as a `(service, method)` pair, because
+# `EmitterProfileService` has an `upsert` too and banning the bare name would have
+# refused an unrelated write. Reading the profile stays exposed
+# (`describe_fiscal_profile`, below): an agent has to know the regime to compose a
+# proforma a person will be able to issue, and choosing what the regime *is* is the part
+# it must not do.
 
 
 def _invoices(context: McpContext) -> InvoiceService:

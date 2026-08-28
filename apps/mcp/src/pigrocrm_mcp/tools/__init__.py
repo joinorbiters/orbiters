@@ -532,13 +532,21 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
 
     # -- Invoices -------------------------------------------------------------
     #
-    # Reads, and the proforma. `issue`, `annul`, `mark_transmitted_externally` and
-    # `export_xml` are deliberately absent, and the absence is the mechanism: a
-    # personal access token inherits its owner's full role and never expires, so a
-    # permission check inside a registered tool would be a check an admin's token
-    # passes. A tool that does not exist cannot be called by anyone.
+    # Reads, and the proforma. `issue`, `annul`, `mark_transmitted_externally`,
+    # `export_xml` and the write behind the fiscal profile
+    # (`FiscalProfileService.upsert`) are deliberately absent, and the absence is the
+    # mechanism: a personal access token inherits its owner's full role and never
+    # expires, so a permission check inside a registered tool would be a check an
+    # admin's token passes. A tool that does not exist cannot be called by anyone.
     #
-    # `test_mcp_invoice_ban.py` reads this module's AST and fails if any of those four
+    # Reading the profile is exposed and writing it is not, which is the whole line
+    # this surface draws: `describe_fiscal_profile` tells an agent which VAT rate,
+    # natura and bollo its proforma will inherit, and deciding what those are is the
+    # part a person does. The write is banned as a `(service, method)` pair rather
+    # than by name, since `EmitterProfileService.upsert` is a different operation
+    # spelled identically.
+    #
+    # `test_mcp_invoice_ban.py` reads this module's AST and fails if any of those five
     # names appears as a registered tool, so the guarantee survives someone adding one
     # later without reading this comment.
 
@@ -636,10 +644,13 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
 
     # ---- time tracking -----------------------------------------------------
     # An agent may record and read. It may not change what already-recorded numbers
-    # mean. Ten methods are therefore deliberately absent from this module and from
+    # mean. Eleven methods are therefore deliberately absent from this module and from
     # `tools/timetracking.py` -- `recalculate_rates`, `update_user_rates`,
-    # `update_deal_rate`, the three cost-category writes, `bind_time_to_invoice`,
-    # `close_period`, `reopen_period`, `get_fiscal_estimate` -- and
+    # `update_deal_rate`, the four cost-category writes (`unarchive_cost_category`
+    # included: slice 4 §11 listed only the other three, but bringing a category back
+    # is the same decision as archiving it, taken in the other direction),
+    # `bind_time_to_invoice`, `close_period`, `reopen_period`, `get_fiscal_estimate` --
+    # and
     # `apps/mcp/tests/test_mcp_invoice_ban.py` fails the build if a tool for any of
     # them appears anywhere under `tools/`, or if that list changes. The defence is
     # structural rather than permission-based because residual R10 is open: a PAT has
@@ -841,8 +852,8 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
     @mcp.tool()
     @guard
     def list_cost_categories(include_archived: bool = False) -> dict[str, Any]:
-        """Elenca le categorie di costo configurate. Crearle e archiviarle è
-        un'operazione di configurazione e si fa dall'app, non da qui."""
+        """Elenca le categorie di costo configurate. Crearle, archiviarle e
+        ripristinarle è configurazione e si fa dall'app, non da qui."""
         return timetracking.list_cost_categories(context, include_archived)
 
     # ---- analytics ---------------------------------------------------------

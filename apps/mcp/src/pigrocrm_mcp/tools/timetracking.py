@@ -4,10 +4,12 @@ docstring for the shape this one mirrors.
 
 An agent may record and read. It may not change what an already-recorded number means,
 and it may not read the owner's tax position: `recalculate_rates`, `update_user_rates`,
-`update_deal_rate`, the three cost-category writes, `close_period`, `reopen_period`,
+`update_deal_rate`, the four cost-category writes, `close_period`, `reopen_period`,
 `bind_time_to_invoice` and `get_fiscal_estimate` have deliberately no call-through here
 at all, and `apps/mcp/tests/test_mcp_invoice_ban.py` fails the build if any of those
-methods is ever reached from anywhere under `tools/`, not only from this file. A tool
+methods is ever reached from anywhere under `tools/`, not only from this file. Four, not
+three, since `unarchive_cost_category` joined the ban: it is `archive_cost_category` in
+the other direction and settles the same question -- which categories the CRM offers. A tool
 that contained business logic would be logic the web app cannot reach -- the failure
 this architecture exists to prevent. Every function here builds a core schema from
 caller-supplied data *inside* the guarded call, so a bad value becomes rendered
