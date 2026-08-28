@@ -3,6 +3,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
+from orologio import OGGI_IN_ITALIA, congela
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -17,6 +18,7 @@ from pigrocrm.core.errors import (
     PermissionDenied,
     ValidationFailed,
 )
+from pigrocrm.core.timetracking import service as timetracking_service_module
 from pigrocrm.core.timetracking.locks import PeriodLockService
 from pigrocrm.core.timetracking.schemas import (
     PeriodLockCreate,
@@ -340,3 +342,31 @@ def test_the_fatturato_filter_answers_how_much_is_left_to_invoice(
         e.id for e in unbilled.items if e.invoice_line_id is None
     ]
     assert len(unbilled.items) == 1
+
+
+def test_the_future_limit_is_italys_own_day_not_the_processs(
+    db_session: Session,
+    seeded_deal_id: UUID,
+    seeded_user_id: UUID,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§6.3's limit is a day in the issuer's calendar, so it must be read off Italy's
+    clock and not the host's -- see `clock.py` and `orologio.py`.
+
+    Frozen at 00:30 on 1 January in Rome, which is still 23:30 on 31 December for a
+    process running in UTC (the API image does). Against the host's day, an hour logged
+    for the day it is *actually* being logged on is a day in the future and gets refused
+    as `data futura`: a legal entry rejected, at the one hour of the day when a
+    freelancer closing the year is most likely to be writing it, with a message that
+    reads as a product defect. The refusal of tomorrow is asserted in the same test so
+    the fix cannot be "stop checking".
+    """
+    congela(monkeypatch, timetracking_service_module)
+    service = TimeEntryService(db_session)
+
+    entry = _create(service, seeded_deal_id, seeded_user_id, data=OGGI_IN_ITALIA)
+    assert entry.data == OGGI_IN_ITALIA
+
+    with pytest.raises(ValidationFailed) as excinfo:
+        _create(service, seeded_deal_id, seeded_user_id, data=OGGI_IN_ITALIA + timedelta(days=1))
+    assert excinfo.value.details["field"] == "data"

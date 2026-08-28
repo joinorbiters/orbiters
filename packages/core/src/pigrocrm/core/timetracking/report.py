@@ -14,6 +14,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
+from pigrocrm.core.clock import oggi_in_italia
 from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.customers.repository import CustomerRepository
 from pigrocrm.core.customers.schemas import CustomerRead
@@ -94,7 +95,13 @@ def report_variables(
     """
     return {
         "periodo": period_label(anno, mese),
-        "oggi": _italian_date(date.today()),
+        # `oggi_in_italia()`, never a bare `date.today()`: see `clock.py`. This is the
+        # compilation date printed at the head of the timesheet that goes to the client
+        # next to the invoice. On the API image, which runs in UTC, every report
+        # produced between midnight and 01:00 CET carries the previous day -- and one
+        # produced just after midnight on 1 January carries the previous *year*, on the
+        # document that justifies the hours billed for the year that just closed.
+        "oggi": _italian_date(oggi_in_italia()),
         "deal": {"nome": deal.nome},
         "cliente": (
             CustomerRead.model_validate(customer).model_dump(mode="json") if customer else {}
