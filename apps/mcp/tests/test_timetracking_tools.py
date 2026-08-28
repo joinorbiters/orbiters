@@ -4,6 +4,13 @@ makes the criterion of existence for every feature. It is the opposite of
 `issue_invoice`: reversible, attributed, and bounded to one deal and one day."""
 
 from mcp import Client
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.timetracking.locks import PeriodLockService
+from pigrocrm.core.timetracking.schemas import PeriodLockCreate
+
+ADMIN = Actor(id=None, type="mcp", role="admin")
 
 
 async def test_log_time_writes_and_is_attributable_to_the_agent(
@@ -58,7 +65,61 @@ async def test_the_eleven_excluded_tools_do_not_exist(server) -> None:
         "get_fiscal_estimate",
     ):
         assert forbidden not in names
-    assert {"log_time", "describe_rates", "list_cost_categories"} <= names
+    # The reads beside them, and the line they draw: an agent may see which categories
+    # exist and which months are closed, and may change neither.
+    assert {"log_time", "describe_rates", "list_cost_categories", "list_period_locks"} <= names
+
+
+async def test_list_period_locks_shows_the_months_log_time_will_refuse(
+    server, seeded_deal_id, seeded_user_id, mcp_session: Session
+) -> None:
+    """The read that turns a refusal into a plan. `log_time`'s `Conflict` names the one
+    month it hit, which leaves an agent with a backlog of entries to write discovering
+    the closed months one rejection at a time. Closing a period is still absent from the
+    surface: seeing which months are closed is not deciding which ones are.
+
+    The close is performed here through the service, with an admin actor, exactly as
+    `test_full_cycle.py` drives the human half of its own cycle -- the point is that the
+    agent can *read* a decision a person took, not that it could take it."""
+    PeriodLockService(mcp_session).close_period(PeriodLockCreate(anno=2026, mese=1), ADMIN)
+
+    async with Client(server) as client:
+        listed = (await client.call_tool("list_period_locks", {})).structured_content
+        assert [(lock["anno"], lock["mese"]) for lock in listed["locks"]] == [(2026, 1)]
+
+        # The same month, from the writing end: the two answers have to agree, or the
+        # list is decoration.
+        blocked = await client.call_tool(
+            "log_time",
+            {
+                "deal_id": str(seeded_deal_id),
+                "user_id": str(seeded_user_id),
+                "data": "2026-01-15",
+                "ore": "2.00",
+                "descrizione": "Voce arretrata",
+            },
+        )
+        assert blocked.is_error
+        assert "chiuso" in blocked.content[0].text
+
+        other_year = (
+            await client.call_tool("list_period_locks", {"anno": 2025})
+        ).structured_content
+        assert other_year["locks"] == []
+
+
+async def test_list_period_locks_rejects_a_wrong_typed_year_with_guidance(server) -> None:
+    """`list_locks` has no schema of its own -- `anno` goes straight into a `WHERE` --
+    so a non-numeric year would reach the query as a raw database error. `OptionalAnno`
+    keeps the SDK from rejecting it ahead of `_guard`, and `_ANNO` validates it inside
+    the guarded call so the answer is a diagnosis rather than a stack trace."""
+    async with Client(server) as client:
+        result = await client.call_tool("list_period_locks", {"anno": "scorso"})
+
+    assert result.is_error
+    message = result.content[0].text
+    assert "numero intero" in message
+    assert "errors.pydantic.dev" not in message
 
 
 async def test_a_bad_argument_comes_back_as_guidance_not_a_pydantic_dump(

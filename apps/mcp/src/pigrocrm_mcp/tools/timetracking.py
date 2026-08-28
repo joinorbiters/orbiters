@@ -9,22 +9,29 @@ and it may not read the owner's tax position: `recalculate_rates`, `update_user_
 at all, and `apps/mcp/tests/test_mcp_invoice_ban.py` fails the build if any of those
 methods is ever reached from anywhere under `tools/`, not only from this file. Four, not
 three, since `unarchive_cost_category` joined the ban: it is `archive_cost_category` in
-the other direction and settles the same question -- which categories the CRM offers. A tool
-that contained business logic would be logic the web app cannot reach -- the failure
-this architecture exists to prevent. Every function here builds a core schema from
-caller-supplied data *inside* the guarded call, so a bad value becomes rendered
-guidance instead of a raw pydantic dump (see `tools/__init__.py`'s own note on
+the other direction and settles the same question -- which categories the CRM offers.
+Reading is a different act, and `list_cost_categories` and `list_period_locks` are both
+here: an agent may see which categories exist and which months are closed, and may
+change neither. A tool that contained business logic would be logic the web app cannot
+reach -- the failure this architecture exists to prevent. Every function here builds a
+core schema from caller-supplied data *inside* the guarded call, so a bad value becomes
+rendered guidance instead of a raw pydantic dump (see `tools/__init__.py`'s own note on
 `WithJsonSchema` and `_guard`).
 """
 
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
+
+from pydantic import Field, TypeAdapter
 
 from pigrocrm.core.analytics.schemas import BudgetQuery, PeriodPnlQuery
 from pigrocrm.core.analytics.service import AnalyticsService
 from pigrocrm.core.timetracking.categories import CostCategoryService
 from pigrocrm.core.timetracking.costs import CostService
+from pigrocrm.core.timetracking.locks import PeriodLockService
 from pigrocrm.core.timetracking.schemas import (
+    ANNO_MAX,
+    ANNO_MIN,
     CostCreate,
     CostListQuery,
     CostUpdate,
@@ -34,6 +41,14 @@ from pigrocrm.core.timetracking.schemas import (
 )
 from pigrocrm.core.timetracking.service import TimeEntryService
 from pigrocrm_mcp.context import McpContext
+
+# `list_locks` takes no schema of its own -- `anno` goes straight into a `WHERE` -- so
+# the year is validated here, inside the guarded call, against the same bounds
+# `PeriodLockCreate` declares. Through pydantic rather than a bare `int(...)` for the
+# reason `tools/documents.py::_NUMERO` states: `int("scorso")` would be rendered to the
+# agent as "non è un identificativo valido", and a non-numeric year reaching the query
+# would be a raw DataError instead of guidance.
+_ANNO: TypeAdapter[int] = TypeAdapter(Annotated[int, Field(ge=ANNO_MIN, le=ANNO_MAX)])
 
 
 def log_time(context: McpContext, data: dict[str, Any]) -> dict[str, Any]:
@@ -132,6 +147,17 @@ def list_costs(context: McpContext, query: CostListQuery) -> dict[str, Any]:
         "items": [item.model_dump(mode="json") for item in page.items],
         "next_cursor": str(page.next_cursor) if page.next_cursor else None,
     }
+
+
+def list_period_locks(context: McpContext, anno: int | str | None) -> dict[str, Any]:
+    """The months already closed. A read, and the answer to the refusal `log_time`
+    raises: that `Conflict` names the one month it hit, which leaves an agent that has a
+    week of entries to write guessing at the rest. `close_period`/`reopen_period` stay
+    absent from this module -- seeing which months are closed is not deciding it."""
+    locks = PeriodLockService(context.session).list_locks(
+        anno=_ANNO.validate_python(anno) if anno is not None else None
+    )
+    return {"locks": [lock.model_dump(mode="json") for lock in locks]}
 
 
 def list_cost_categories(context: McpContext, include_archived: bool) -> dict[str, Any]:

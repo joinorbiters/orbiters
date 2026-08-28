@@ -147,7 +147,6 @@ _CREDENZIALI: dict[Method, str] = {
 _CONFIGURAZIONE: dict[Method, str] = {
     ("CostCategoryService", "seed_defaults"): "installa le categorie iniziali",
     ("EmitterProfileService", "upsert"): "identita' fiscale dell'emittente",
-    ("EmitterProfileService", "get"): "dato di configurazione senza audience agentica",
     ("FieldDefinitionService", "create"): "definisce lo schema, non lo popola",
     ("FieldDefinitionService", "update"): "definisce lo schema, non lo popola",
     ("FieldDefinitionService", "archive"): "definisce lo schema, non lo popola",
@@ -181,17 +180,22 @@ _BYTE: dict[Method, str] = {
 #    that are deliberately the human's half of a two-step. They are not forbidden -- a
 #    future slice could expose any of them -- which is exactly why they are not in the
 #    ban list and why each has to say so out loud.
+#
+#    Five entries left this block, and they are the reason it must stay small.
+#    `PeriodLockService.list_locks`, `TemplateService.preview`,
+#    `DocumentService.regenerate`, `soft_delete` and `restore` were all recorded here as
+#    "non ha ancora un tool" / "e' una decisione della persona" -- and each turned out to
+#    be a plain read, or a reversible audited write whose inverse this surface already
+#    exposes for customers, deals, people, costs and time entries. A reason that only
+#    says "nobody wrote the tool" is a placeholder wearing the clothes of a decision;
+#    this category is for the ones that survive being asked why, and the only way to keep
+#    that true is to delete the ones that do not the moment the tool is written.
 _COPERTE_O_UMANE: dict[Method, str] = {
     ("DocumentService", "create"): "create_document_from_template e' l'unica creazione "
     "che non richieda di caricare byte",
     ("DocumentService", "update"): "titolo e campi custom: nessun agente ha motivo di "
     "riscriverli su un documento gia' reso",
     ("DocumentService", "add_version"): "richiede byte gia' resi, che l'MCP non produce",
-    ("DocumentService", "regenerate"): "rigenerare una versione resa e' una decisione "
-    "della persona che l'ha vista",
-    ("DocumentService", "soft_delete"): "l'MCP non archivia documenti: non esiste il "
-    "verso opposto di create_document_from_template",
-    ("DocumentService", "restore"): "simmetrico a soft_delete, che non e' esposto",
     ("FiscalProfileService", "get"): "describe_fiscal_profile espone gia' il regime",
     ("InvoiceService", "update"): "note interne e campi custom, congelati dopo "
     "l'emissione: nessuna audience agentica",
@@ -199,11 +203,7 @@ _COPERTE_O_UMANE: dict[Method, str] = {
     "decisione della persona",
     ("InvoiceService", "confirm_proforma"): "e' la conferma umana che precede "
     "l'emissione: l'agente prepara, la persona conferma",
-    ("PeriodLockService", "list_locks"): "il rifiuto di log_time nomina gia' il mese "
-    "chiuso; l'elenco completo non ha ancora un tool",
     ("TemplateService", "get"): "describe_template espone gia' il template",
-    ("TemplateService", "preview"): "rendere un template senza produrne un documento "
-    "non ha ancora un'audience agentica",
 }
 
 
