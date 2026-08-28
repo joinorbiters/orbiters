@@ -19,6 +19,13 @@ const SRC = join(import.meta.dirname, '..')
  * The API fields that are money, hours or rates. Every one of them arrives as a
  * decimal string and must reach the screen either as that string or through
  * `lib/decimal.ts` -- never through `Number()`, `parseFloat`, or `+`.
+ *
+ * The kind of thing this catches is rarely a total anybody set out to compute. The
+ * Economia tab wanted to know whether a deal has hours left to invoice, and the obvious
+ * spelling is `Number(pnl.ore_fatturabili_non_fatturate) > 0` -- a float parse of a
+ * decimal column, written as a *question* rather than as a sum, and one this list flags
+ * on sight. `EconomicsTab.tsx` asks `!== '0.00'` instead, comparing the string the API
+ * sent, which is also the only spelling `Numeric(12,2)` serialises for zero.
  */
 const ECONOMIC_FIELDS = new Set([
   'importo',
