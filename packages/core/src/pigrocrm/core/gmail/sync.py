@@ -32,6 +32,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.config import Settings, decode_google_token_key, require_gmail_configured
 from pigrocrm.core.errors import Conflict
@@ -40,7 +41,7 @@ from pigrocrm.core.gmail.models import GmailMessage, GoogleAccount
 from pigrocrm.core.gmail.parse import ParsedMessage, parse_message
 from pigrocrm.core.gmail.query import build_list_queries, messages_list_url, thread_get_url
 from pigrocrm.core.gmail.repository import GmailRepository
-from pigrocrm.core.gmail.roster import AddressRoster
+from pigrocrm.core.gmail.roster import AddressRoster, EntityRef
 from pigrocrm.core.gmail.schemas import SyncReport
 from pigrocrm.core.gmail.tokens import GoogleTokenClient
 from pigrocrm.core.gmail.transport import GmailTransport
@@ -68,6 +69,7 @@ class GmailSyncService:
         self.tokens = tokens
         self.repo = GmailRepository(session)
         self.roster = AddressRoster(session)
+        self.activities = ActivityService(session)
 
     def sync(self, actor: Actor) -> SyncReport:
         require_gmail_configured(self.settings)
@@ -96,7 +98,7 @@ class GmailSyncService:
             token = self._access_token(account)
             for thread_id in self._relevant_threads(queries, token):
                 report.threads_fetched += 1
-                self._store_thread(account, thread_id, token, report)
+                self._store_thread(account, thread_id, token, report, actor)
 
         account.last_sync_at = started_at
         # The watermark is rolled back by the configured overlap on every cycle. It is
@@ -104,6 +106,26 @@ class GmailSyncService:
         # what absorbs a message that arrived across the boundary of two runs.
         account.sync_watermark = started_at - timedelta(
             hours=self.settings.gmail_watermark_overlap_hours
+        )
+        # Last, deliberately: `ActivityService.record` flushes into the caller's
+        # transaction and its docstring forbids anything that commits on its own behalf
+        # from running after it. Everything below this line is the commit itself.
+        #
+        # Only the counters go in. There is no subject, no address and no body in a
+        # `SyncReport`, which is what makes this entry safe to show and to hand to an
+        # agent -- the cycle is recorded, not its contents.
+        self.activities.record(
+            "google_account",
+            account.id,
+            "gmail.sync_eseguito",
+            actor,
+            {
+                "queries_issued": report.queries_issued,
+                "threads_fetched": report.threads_fetched,
+                "messages_stored": report.messages_stored,
+                "messages_skipped": report.messages_skipped,
+                "links_created": report.links_created,
+            },
         )
         self.session.commit()
         return report
@@ -173,7 +195,12 @@ class GmailSyncService:
                 return entries
 
     def _store_thread(
-        self, account: GoogleAccount, thread_id: str, token: str, report: SyncReport
+        self,
+        account: GoogleAccount,
+        thread_id: str,
+        token: str,
+        report: SyncReport,
+        actor: Actor,
     ) -> None:
         payload = self.transport.json(
             "GET", thread_get_url(thread_id), token=token, what=_WHAT_THREAD
@@ -187,6 +214,7 @@ class GmailSyncService:
             )
             for raw in raw_messages
         ]
+        thread_refs = self._thread_refs(parsed_messages)
         # One membership query for the whole conversation: after the first cycle almost
         # every thread comes back entirely known, and asking that per message would
         # spend a round trip apiece to learn nothing.
@@ -197,14 +225,80 @@ class GmailSyncService:
             if not parsed.gmail_message_id or parsed.gmail_message_id in present:
                 report.messages_skipped += 1
                 continue
-            if self._store(account, parsed):
-                report.messages_stored += 1
-            else:
+            row = self._store(account, parsed)
+            if row is None:
                 report.messages_skipped += 1
+                continue
+            report.messages_stored += 1
+            self._file(account, parsed, row, thread_refs, actor, report)
 
-    def _store(self, account: GoogleAccount, parsed: ParsedMessage) -> bool:
-        """Returns True when a new row was written. A duplicate is not an error: it is
-        the overlap doing its job, or a second cycle running at the same time.
+    def _thread_refs(self, parsed_messages: list[ParsedMessage]) -> list[EntityRef]:
+        """Every CRM entity the *conversation* touches, in the order it was met.
+
+        Computed once for the thread and not per message, which is the whole of spec
+        4.3 in one place: a sibling message from somebody nobody registered is filed
+        against the same customer as the rest of the exchange, because it is part of
+        that exchange. A per-message resolution would file half the thread and leave the
+        other half invisible, which is the conversation that lies.
+
+        Resolving does not widen relevance: `AddressRoster.resolve` only ever answers
+        with entities that already exist, and an address met inside a thread still does
+        not join `known_addresses`.
+        """
+        refs: list[EntityRef] = []
+        for parsed in parsed_messages:
+            for address in [parsed.from_address, *parsed.to_addresses, *parsed.cc_addresses]:
+                for ref in self.roster.resolve(address):
+                    if ref not in refs:
+                        refs.append(ref)
+        return refs
+
+    def _file(
+        self,
+        account: GoogleAccount,
+        parsed: ParsedMessage,
+        row: GmailMessage,
+        thread_refs: list[EntityRef],
+        actor: Actor,
+        report: SyncReport,
+    ) -> None:
+        """Links one stored message to the thread's entities, and puts an inbound one on
+        their timelines.
+
+        Only inbound: `gmail.messaggio_ricevuto` is a claim about direction, and an
+        entry written for our own reply would tell the user their message had arrived.
+
+        The payload carries the subject and the sender and stops there. That is the case
+        `activities/sanitize.py` names in its own docstring -- "recording, say, an
+        inbound email's subject line" -- and it is also the limit: a body in a timeline
+        entry is published to the UI, to the REST timeline route and to `get_timeline`.
+        """
+        for ref in thread_refs:
+            if self.repo.add_link(row.id, ref):
+                report.links_created += 1
+        if not parsed.direction_is_inbound(account.email_address):
+            return
+        for ref in thread_refs:
+            self.activities.record(
+                ref.entity_type,
+                ref.entity_id,
+                "gmail.messaggio_ricevuto",
+                actor,
+                {
+                    "subject": parsed.subject,
+                    "from_address": parsed.from_address,
+                    "gmail_message_id": parsed.gmail_message_id,
+                    "gmail_thread_id": parsed.gmail_thread_id,
+                },
+            )
+
+    def _store(self, account: GoogleAccount, parsed: ParsedMessage) -> GmailMessage | None:
+        """Returns the stored row, or `None` when the constraint refused it. A duplicate
+        is not an error: it is the overlap doing its job, or a second cycle running at
+        the same time.
+
+        The row and not a flag, because the caller has to file it: a link needs the
+        primary key the insert has just assigned.
 
         The `message_ids_present` check above never replaces the constraint -- two
         overlapping cycles both pass it, and only the database can arbitrate -- which is
@@ -217,11 +311,8 @@ class GmailSyncService:
             message_id_header=parsed.message_id_header[:998],
             in_reply_to=parsed.in_reply_to[:998],
             references=parsed.references,
-            # Compared against the connected mailbox and not against the roster: the
-            # roster holds the people written *to*, so asking it would call every
-            # message inbound.
             direction=(
-                "outbound" if parsed.from_address == account.email_address.lower() else "inbound"
+                "inbound" if parsed.direction_is_inbound(account.email_address) else "outbound"
             ),
             from_address=parsed.from_address,
             to_addresses=list(parsed.to_addresses),
@@ -236,4 +327,4 @@ class GmailSyncService:
                 {"filename": a.filename, "mime": a.mime, "size": a.size} for a in parsed.attachments
             ],
         )
-        return self.repo.add_message_if_absent(row)
+        return row if self.repo.add_message_if_absent(row) else None
