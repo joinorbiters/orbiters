@@ -1,0 +1,259 @@
+"""An in-memory Gmail that speaks the same HTTP surface `GmailTransport` uses.
+
+A fake of the *transport*, on the model of `fakes/fake_drive.py`, and for the same
+reason: URL building, the `q` string, the RFC822 body and the error handling are the
+parts most likely to be wrong, so they must run for real. What is replaced is the
+network, nothing above it.
+
+`requests` is the point of this class. Every request is recorded with its parsed query
+string, so a test can assert on **what was asked of Google** and not merely on what
+ended up in the database. Spec 4.1 requires exactly that: "a `list` without a `q` is a
+bug, and it is verified by a test that inspects the requests received by the fake
+transport -- not by a convention written in a comment."
+"""
+
+import base64
+import json
+from dataclasses import dataclass, field
+from typing import Any
+from urllib.parse import parse_qs, urlparse
+
+from fakes.gmail_query import matches
+
+TOKEN_HOST = "oauth2.googleapis.com"
+API_HOST = "gmail.googleapis.com"
+
+
+@dataclass(frozen=True)
+class RecordedRequest:
+    method: str
+    host: str
+    path: str
+    query: dict[str, list[str]]
+    body: bytes | None
+
+    @property
+    def q(self) -> str | None:
+        """The Gmail search expression, if this was a listing."""
+        values = self.query.get("q")
+        return values[0] if values else None
+
+    @property
+    def is_messages_list(self) -> bool:
+        return self.method == "GET" and self.path.endswith("/messages")
+
+    @property
+    def is_messages_send(self) -> bool:
+        return self.method == "POST" and self.path.endswith("/messages/send")
+
+
+@dataclass
+class FakeMessage:
+    id: str
+    thread_id: str
+    headers: dict[str, str]
+    body_text: str = ""
+    body_html: str = ""
+    internal_date_ms: int = 0
+    label_ids: list[str] = field(default_factory=lambda: ["INBOX"])
+    attachments: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class FakeGmail:
+    """Configure the mailbox, then hand `self` to `GmailTransport(http=fake)`."""
+
+    messages: dict[str, FakeMessage] = field(default_factory=dict)
+    requests: list[RecordedRequest] = field(default_factory=list)
+    token_requests: int = 0
+    # A refresh token that Google has revoked. When set, the token endpoint answers
+    # the real 400 body, once per call, forever -- because that is what a revoked
+    # grant does. It never heals.
+    revoked: bool = False
+    access_token: str = "ya29.fake-access-token"
+    expires_in: int = 3599
+    granted_scopes: tuple[str, ...] = ()
+    # A queue of (status, body, headers) consumed FIFO before normal handling. One
+    # transient failure is `fail_with=[(503, b"{}", {})]`; a rate limit that names its
+    # delay is `[(429, b"{}", {"Retry-After": "2"})]`.
+    fail_with: list[tuple[int, bytes, dict[str, str]]] = field(default_factory=list)
+    # Set to answer a send with a socket-level failure instead of a result, for the
+    # "unknown outcome" path of spec 6.3(b).
+    timeout_on_send: bool = False
+
+    # ---- the seam ---------------------------------------------------------------
+
+    def __call__(
+        self, method: str, url: str, headers: dict[str, str], body: bytes | None
+    ) -> tuple[int, bytes, dict[str, str]]:
+        parsed = urlparse(url)
+        recorded = RecordedRequest(
+            method=method,
+            host=parsed.netloc,
+            path=parsed.path,
+            query=parse_qs(parsed.query),
+            body=body,
+        )
+        self.requests.append(recorded)
+
+        if self.fail_with:
+            return self.fail_with.pop(0)
+
+        if parsed.netloc == TOKEN_HOST:
+            return self._token()
+        if recorded.is_messages_send:
+            return self._send()
+        if recorded.is_messages_list:
+            return self._list(recorded)
+        if "/threads/" in parsed.path:
+            return self._thread(parsed.path.rsplit("/", 1)[-1])
+        if "/messages/" in parsed.path:
+            return self._message(parsed.path.rsplit("/", 1)[-1])
+        return self._not_found()
+
+    # ---- endpoints --------------------------------------------------------------
+
+    @staticmethod
+    def _not_found() -> tuple[int, bytes, dict[str, str]]:
+        return 404, json.dumps({"error": {"status": "NOT_FOUND"}}).encode(), {}
+
+    def _token(self) -> tuple[int, bytes, dict[str, str]]:
+        self.token_requests += 1
+        if self.revoked:
+            # The exact shape Google returns for a revoked or expired grant. A bare
+            # string under "error", not an object -- the dialect that gets lost when a
+            # parser only reads the API's shape.
+            return (
+                400,
+                json.dumps(
+                    {
+                        "error": "invalid_grant",
+                        "error_description": "Token has been expired or revoked.",
+                    }
+                ).encode(),
+                {},
+            )
+        payload: dict[str, Any] = {
+            "access_token": self.access_token,
+            "expires_in": self.expires_in,
+            "token_type": "Bearer",
+        }
+        if self.granted_scopes:
+            payload["scope"] = " ".join(self.granted_scopes)
+        return 200, json.dumps(payload).encode(), {}
+
+    def _send(self) -> tuple[int, bytes, dict[str, str]]:
+        if self.timeout_on_send:
+            # The synthetic status `_urllib_call` produces when no HTTP response was
+            # ever received. This is the "we do not know" case of spec 6.3(b).
+            return 599, json.dumps({"error": {"message": "timed out"}}).encode(), {}
+        message_id = f"sent-{len([r for r in self.requests if r.is_messages_send])}"
+        return (
+            200,
+            json.dumps({"id": message_id, "threadId": f"thread-{message_id}"}).encode(),
+            {},
+        )
+
+    def _list(self, recorded: RecordedRequest) -> tuple[int, bytes, dict[str, str]]:
+        """Matches on the `q` the way Gmail does for the operators this slice uses:
+        `from:`, `to:`, `after:` and `rfc822msgid:`. Deliberately not a full Gmail
+        query engine -- but deliberately *not* a stub that ignores `q` either, because
+        a fake that returns everything regardless would make the relevance test
+        vacuous."""
+        query = recorded.q or ""
+        hits = [message for message in self.messages.values() if matches(message, query)]
+        hits.sort(key=lambda message: message.internal_date_ms)
+        return (
+            200,
+            json.dumps(
+                {
+                    "messages": [{"id": m.id, "threadId": m.thread_id} for m in hits],
+                    "resultSizeEstimate": len(hits),
+                }
+            ).encode(),
+            {},
+        )
+
+    def _thread(self, thread_id: str) -> tuple[int, bytes, dict[str, str]]:
+        members = [m for m in self.messages.values() if m.thread_id == thread_id]
+        if not members:
+            return self._not_found()
+        members.sort(key=lambda message: message.internal_date_ms)
+        return (
+            200,
+            json.dumps({"id": thread_id, "messages": [self._as_api(m) for m in members]}).encode(),
+            {},
+        )
+
+    def _message(self, message_id: str) -> tuple[int, bytes, dict[str, str]]:
+        message = self.messages.get(message_id)
+        if message is None:
+            return self._not_found()
+        return 200, json.dumps(self._as_api(message)).encode(), {}
+
+    # ---- shaping ----------------------------------------------------------------
+
+    def _as_api(self, message: FakeMessage) -> dict[str, Any]:
+        """Gmail's own `format=full` shape: base64url parts, headers as a list of
+        name/value pairs, `multipart/alternative` when both a text and an HTML part
+        exist. The parser under test has to cope with the real shape."""
+
+        def b64(text: str) -> str:
+            return base64.urlsafe_b64encode(text.encode()).decode().rstrip("=")
+
+        parts: list[dict[str, Any]] = []
+        if message.body_text:
+            parts.append(
+                {
+                    "mimeType": "text/plain",
+                    "body": {"data": b64(message.body_text), "size": len(message.body_text)},
+                }
+            )
+        if message.body_html:
+            parts.append(
+                {
+                    "mimeType": "text/html",
+                    "body": {"data": b64(message.body_html), "size": len(message.body_html)},
+                }
+            )
+        for index, attachment in enumerate(message.attachments, start=1):
+            parts.append(
+                {
+                    "mimeType": attachment["mime"],
+                    "filename": attachment["filename"],
+                    # A distinct id per attachment: Gmail gives each one its own, and a
+                    # fake that hands out "att-1" for all of them would let a parser
+                    # that overwrites by id look correct.
+                    "body": {"attachmentId": f"att-{index}", "size": attachment["size"]},
+                }
+            )
+        return {
+            "id": message.id,
+            "threadId": message.thread_id,
+            "labelIds": message.label_ids,
+            "snippet": (message.body_text or message.body_html)[:120],
+            "internalDate": str(message.internal_date_ms),
+            "payload": {
+                "mimeType": self._payload_mime_type(message, parts),
+                "headers": [{"name": k, "value": v} for k, v in message.headers.items()],
+                "parts": parts if len(parts) > 1 else [],
+                "body": parts[0]["body"] if len(parts) == 1 else {"size": 0},
+            },
+        }
+
+    @staticmethod
+    def _payload_mime_type(message: FakeMessage, parts: list[dict[str, Any]]) -> str:
+        """The real distinction, not a stand-in for it: Gmail sends
+        `multipart/alternative` for a text+HTML message and `multipart/mixed` only
+        once an attachment is involved. A parser that walks `parts` on `mixed` alone
+        would drop every body in the mailbox, and a fake that always said `mixed`
+        would never catch it."""
+        if message.attachments:
+            return "multipart/mixed"
+        if len(parts) > 1:
+            return "multipart/alternative"
+        if parts:
+            mime_type = parts[0]["mimeType"]
+            assert isinstance(mime_type, str)
+            return mime_type
+        return "text/plain"
