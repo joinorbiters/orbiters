@@ -1,7 +1,7 @@
 """The complement of `test_mcp_invoice_ban.py`, and the half of the product's central
 claim that had no test at all.
 
-That file proves fourteen named operations are **not** reachable as MCP tools. Nothing
+That file proves sixteen named operations are **not** reachable as MCP tools. Nothing
 proved the other direction: that every *other* public service method is. The claim the
 product actually makes is "an agent can do anything a user can, minus a deliberate,
 named, tested list of exclusions", and a ban list on its own only tests the subtraction.
@@ -19,7 +19,7 @@ be a tool for this" are different statements and only one of them is a policy.
 
 Adding a public service method therefore fails this file until somebody either writes
 the tool or writes down why not. That is the entire point: the decision is forced at the
-moment it is cheap, and it is recorded next to the fourteen refusals it has to live
+moment it is cheap, and it is recorded next to the sixteen refusals it has to live
 beside.
 
 Two properties of the walk are worth stating, because they are what makes the result
@@ -43,7 +43,7 @@ import ast
 from pathlib import Path
 
 import pytest
-from test_mcp_invoice_ban import FORBIDDEN_SERVICE_CALLS
+from test_mcp_invoice_ban import FORBIDDEN_QUALIFIED_CALLS, FORBIDDEN_SERVICE_CALLS
 
 MCP_SRC = Path(__file__).resolve().parents[1] / "src" / "pigrocrm_mcp"
 TOOLS_DIR = MCP_SRC / "tools"
@@ -63,10 +63,14 @@ Method = tuple[str, str]
 # half a dozen services.
 
 
-# 1. Forbidden. The fourteen operations of `test_mcp_invoice_ban.py`, which owns the
+# 1. Forbidden. The sixteen operations of `test_mcp_invoice_ban.py`, which owns the
 #    policy; they appear here only so that the sweep's arithmetic accounts for them, and
 #    a test below asserts this block names exactly the same methods that file bans. If
 #    the two ever disagree, one of them is out of date and neither can be trusted.
+#    `FiscalProfileService.upsert` is the one banned as a `(service, method)` pair rather
+#    than by bare name -- `EmitterProfileService` has an `upsert` too -- which is the
+#    shape this table has used all along, and the reason the comparison test below
+#    compares the qualified bans as pairs and the rest as names.
 _VIETATE: dict[Method, str] = {
     ("InvoiceService", "issue"): "atto fiscale irreversibile (slice 3 §11)",
     ("InvoiceService", "annul"): "atto fiscale irreversibile (slice 3 §11)",
@@ -78,6 +82,14 @@ _VIETATE: dict[Method, str] = {
     ("CostCategoryService", "create_cost_category"): "configurazione (slice 4 §11)",
     ("CostCategoryService", "update_cost_category"): "configurazione (slice 4 §11)",
     ("CostCategoryService", "archive_cost_category"): "configurazione (slice 4 §11)",
+    ("CostCategoryService", "unarchive_cost_category"): (
+        "configurazione: e' `archive_cost_category` nel verso opposto, e slice 4 §11 "
+        "non l'aveva elencata per omissione, non per distinzione"
+    ),
+    ("FiscalProfileService", "upsert"): (
+        "decide aliquota, natura, bollo e riferimento normativo di ogni riga emessa "
+        "(slice 3 §11: `update_fiscal_profile`)"
+    ),
     ("PeriodLockService", "close_period"): "chiusura di periodo (slice 4 §11)",
     ("PeriodLockService", "reopen_period"): "riapertura di periodo (slice 4 §11)",
     ("AnalyticsService", "bind_time_to_invoice"): "precede l'emissione (slice 4 §11)",
@@ -134,11 +146,6 @@ _CREDENZIALI: dict[Method, str] = {
 #    definitions its own `describe_schema` output is derived from.
 _CONFIGURAZIONE: dict[Method, str] = {
     ("CostCategoryService", "seed_defaults"): "installa le categorie iniziali",
-    ("CostCategoryService", "unarchive_cost_category"): (
-        "stessa categoria delle tre scritture su cost_categories gia' vietate; "
-        "non compare nell'elenco di slice 4 §11, quindi resta un'esclusione e non "
-        "un divieto finche' il prodotto non lo decide"
-    ),
     ("EmitterProfileService", "upsert"): "identita' fiscale dell'emittente",
     ("EmitterProfileService", "get"): "dato di configurazione senza audience agentica",
     ("FieldDefinitionService", "create"): "definisce lo schema, non lo popola",
@@ -146,7 +153,6 @@ _CONFIGURAZIONE: dict[Method, str] = {
     ("FieldDefinitionService", "archive"): "definisce lo schema, non lo popola",
     ("FieldDefinitionService", "unarchive"): "definisce lo schema, non lo popola",
     ("FieldDefinitionService", "list"): "describe_schema espone gia' i campi vivi",
-    ("FiscalProfileService", "upsert"): "regime fiscale del titolare",
     ("PipelineService", "create"): "la forma della pipeline e' una decisione umana",
     ("PipelineService", "update"): "la forma della pipeline e' una decisione umana",
     ("PipelineService", "delete"): "la forma della pipeline e' una decisione umana",
@@ -379,9 +385,26 @@ def test_no_declared_exclusion_is_actually_reachable(service: str, method: str) 
 def test_the_forbidden_block_names_exactly_what_the_ban_test_bans() -> None:
     """The two files must not drift. `test_mcp_invoice_ban.py` owns the policy; this file
     re-states it as a category so that the arithmetic of the sweep adds up, and
-    re-stating a list is how lists diverge. Compared on bare method names, which is what
-    the ban test's own scan is written in terms of."""
-    assert {method for _, method in _VIETATE} == set(FORBIDDEN_SERVICE_CALLS)
+    re-stating a list is how lists diverge. Compared the way each half of the ban is
+    written: the bare-name bans on names, and the qualified ones as the `(service,
+    method)` pairs they are -- comparing those on the name alone would accept
+    `EmitterProfileService.upsert` standing in for `FiscalProfileService.upsert`, which
+    is the exact confusion the qualified list exists to prevent."""
+    assert {method for _, method in _VIETATE} == set(FORBIDDEN_SERVICE_CALLS) | {
+        method for _, method in FORBIDDEN_QUALIFIED_CALLS
+    }
+    assert set(FORBIDDEN_QUALIFIED_CALLS) <= set(_VIETATE)
+
+
+@pytest.mark.parametrize(("service", "method"), FORBIDDEN_QUALIFIED_CALLS)
+def test_no_qualified_ban_is_reachable_from_a_resource_either(service: str, method: str) -> None:
+    """The same extension for the qualified half, asserted on the pair: a resource that
+    called `FiscalProfileService(...).upsert(...)` would be as agent-reachable as a tool
+    that did, while the ban test's own scan reads `tools/` only."""
+    assert (service, method) not in REACHABLE, (
+        f"'{service}.{method}' e' raggiungibile attraverso tools/ o resources/, ma e' "
+        "una delle operazioni escluse per costruzione dalla superficie MCP"
+    )
 
 
 @pytest.mark.parametrize("method", sorted(set(FORBIDDEN_SERVICE_CALLS)))

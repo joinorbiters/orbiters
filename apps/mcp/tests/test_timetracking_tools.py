@@ -35,9 +35,13 @@ async def test_log_time_writes_and_is_attributable_to_the_agent(
         assert timeline.structured_content["entries"][0]["actor_type"] == "mcp"
 
 
-async def test_the_ten_excluded_tools_do_not_exist(server) -> None:
+async def test_the_eleven_excluded_tools_do_not_exist(server) -> None:
     """Criterion 9's first half, from the client's own point of view: an agent trying to
-    recalculate rates finds no tool to call."""
+    recalculate rates finds no tool to call. Eleven, not the ten slice 4 §11 enumerated:
+    `unarchive_cost_category` was missing from that list by omission -- it is
+    `archive_cost_category` in the other direction, and settles the same question of
+    which categories the CRM offers -- and was added to the ban rather than left as a
+    method nobody had decided about."""
     async with Client(server) as client:
         names = {tool.name for tool in (await client.list_tools()).tools}
     for forbidden in (
@@ -47,6 +51,7 @@ async def test_the_ten_excluded_tools_do_not_exist(server) -> None:
         "create_cost_category",
         "update_cost_category",
         "archive_cost_category",
+        "unarchive_cost_category",
         "bind_time_to_invoice",
         "close_period",
         "reopen_period",
