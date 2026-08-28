@@ -14,6 +14,7 @@ from pigrocrm.core.emitter.models import EmitterProfile  # noqa: F401
 from pigrocrm.core.fields.models import FieldDefinition  # noqa: F401
 from pigrocrm.core.fiscal.models import FiscalProfile  # noqa: F401
 from pigrocrm.core.gmail.models import (  # noqa: F401
+    GmailKnownAddress,
     GmailMessage,
     GmailMessageLink,
     GoogleAccount,

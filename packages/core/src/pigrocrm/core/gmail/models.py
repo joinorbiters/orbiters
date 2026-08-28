@@ -175,3 +175,39 @@ class GmailMessageLink(Base, PrimaryKeyMixin, TimestampMixin):
     # depending on `entity_type`, and no single FK can express that. The `resolve` of
     # `gmail/roster.py` is what keeps it pointing at rows that exist.
     entity_id: Mapped[UUID] = mapped_column(nullable=False)
+
+
+class GmailKnownAddress(Base, PrimaryKeyMixin, TimestampMixin):
+    """Which roster addresses this account has already looked for.
+
+    This is how "an address added to the CRM gets backfilled" happens *without*
+    `PersonService` learning what Gmail is. The Gmail service compares the roster
+    against this table at the start of each cycle and treats the difference as a
+    backfill -- so a new address is synchronised on the next cycle, not in the instant
+    it was saved, and the interface says so (spec 4.4) instead of leaving the user to
+    discover it.
+
+    Per account, and the unique constraint says so: two users may both correspond with
+    the same client, and each mailbox has to be searched back over that address once on
+    its own. A global register would give whichever mailbox synced second nothing.
+
+    Deliberately not a column on `people` or `customers`. A CRM row is not the place to
+    record what one particular Google mailbox has been asked; putting it there would
+    also mean a customer's address could only ever be backfilled for one user, and it
+    would make the address book carry Gmail's bookkeeping into every other feature.
+    """
+
+    __tablename__ = "gmail_known_addresses"
+    __table_args__ = (
+        UniqueConstraint("google_account_id", "address", name="uq_gmail_known_addresses"),
+    )
+
+    google_account_id: Mapped[UUID] = mapped_column(
+        ForeignKey("google_accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    address: Mapped[str] = mapped_column(String(320), nullable=False)
+    # When this mailbox first went looking for that address. Kept because it is the only
+    # answer to "why did three months of mail from this person appear on Tuesday".
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

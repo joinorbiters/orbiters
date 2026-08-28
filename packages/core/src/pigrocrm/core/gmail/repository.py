@@ -6,10 +6,12 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import delete, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.gmail.models import (
+    GmailKnownAddress,
     GmailMessage,
     GmailMessageLink,
     GoogleAccount,
@@ -173,6 +175,50 @@ class GmailRepository:
         return self.session.execute(
             select(GoogleAccount.last_sync_at).where(GoogleAccount.id == account_id)
         ).scalar_one_or_none()
+
+    # --- the addresses this mailbox has already looked for ---------------------------
+
+    def seen_addresses(self, account_id: UUID) -> set[str]:
+        """The register the backfill is derived from: roster minus this is "new"."""
+        return set(
+            self.session.execute(
+                select(GmailKnownAddress.address).where(
+                    GmailKnownAddress.google_account_id == account_id
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    def remember_addresses(self, account_id: UUID, addresses: Sequence[str]) -> int:
+        """Records that this mailbox has now been searched over these addresses, and
+        answers how many of them were not already recorded.
+
+        One `INSERT ... ON CONFLICT DO NOTHING`, and that is the point of the method. A
+        duplicate is expected -- two cycles overlapping, or an explicit backfill on an
+        address the automatic one had already covered -- so it must cost exactly nothing
+        beyond the statement. Catching an `IntegrityError` and calling
+        `Session.rollback()` instead would discard every message and every link stored
+        earlier in the same cycle, because the cycle commits once at the end: that is the
+        same defect `add_message_if_absent` documents at length, and it would fire here
+        on the *expected* outcome rather than on a rare one.
+
+        Not the SAVEPOINT loop that method uses, because this one needs no row back: the
+        count comes from `RETURNING`, so the whole thing is a single round trip however
+        long the roster is.
+        """
+        if not addresses:
+            return 0
+        unique = list(dict.fromkeys(address.strip().lower() for address in addresses if address))
+        if not unique:
+            return 0
+        inserted = self.session.execute(
+            pg_insert(GmailKnownAddress)
+            .values([{"google_account_id": account_id, "address": address} for address in unique])
+            .on_conflict_do_nothing(constraint="uq_gmail_known_addresses")
+            .returning(GmailKnownAddress.id)
+        )
+        return len(inserted.scalars().all())
 
     # --- messages --------------------------------------------------------------------
 

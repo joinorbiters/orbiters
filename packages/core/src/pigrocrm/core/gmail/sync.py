@@ -29,13 +29,16 @@ failure carries the counters and Google's own status, which is all a caller can 
 """
 
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.config import Settings, decode_google_token_key, require_gmail_configured
-from pigrocrm.core.errors import Conflict
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 from pigrocrm.core.gmail.crypto import unseal
 from pigrocrm.core.gmail.models import GmailMessage, GoogleAccount
 from pigrocrm.core.gmail.parse import ParsedMessage, parse_message
@@ -45,11 +48,13 @@ from pigrocrm.core.gmail.roster import AddressRoster, EntityRef
 from pigrocrm.core.gmail.schemas import SyncReport
 from pigrocrm.core.gmail.tokens import GoogleTokenClient
 from pigrocrm.core.gmail.transport import GmailTransport
+from pigrocrm.core.people.models import Person
 
 # How far back the first cycle looks when there is no watermark yet.
 _FIRST_CYCLE_DAYS = 30
 
 _SYNC_ACTION = "sincronizzare Gmail"
+_BACKFILL_ACTION = "sincronizzare lo storico Gmail"
 _WHAT_LIST = "elenco dei messaggi"
 _WHAT_THREAD = "lettura di una conversazione"
 
@@ -103,25 +108,61 @@ class GmailSyncService:
 
         report.states_pruned = self.repo.prune_states(started_at)
 
+        # Two windows, not one. An address the roster gained since the last cycle has a
+        # history behind it that no watermark has ever covered, so it is searched over
+        # the backfill horizon; an established one is searched only from the watermark,
+        # because re-reading three months of it every fifteen minutes would spend the
+        # user's Gmail quota to learn nothing. The difference is read from
+        # `gmail_known_addresses` and not guessed from `created_at`: a person may have
+        # been in the CRM for a year before this mailbox was connected.
         addresses = self.roster.known_addresses()
-        queries = (
-            build_list_queries(
-                addresses,
-                after_epoch=int(self._window_start(account).timestamp()),
-                batch_size=self.settings.gmail_sync_address_batch_size,
+        seen = self.repo.seen_addresses(account.id)
+        fresh = [address for address in addresses if address not in seen]
+        established = [address for address in addresses if address in seen]
+
+        queries: list[str] = []
+        if established:
+            queries.extend(
+                build_list_queries(
+                    established,
+                    after_epoch=int(self._window_start(account).timestamp()),
+                    batch_size=self.settings.gmail_sync_address_batch_size,
+                )
             )
-            if addresses
-            else ()
-        )
+        if fresh:
+            queries.extend(
+                build_list_queries(
+                    fresh,
+                    after_epoch=self._backfill_epoch(full=False),
+                    batch_size=self.settings.gmail_sync_address_batch_size,
+                )
+            )
         report.queries_issued = len(queries)
 
         if queries:
             # The token is fetched here and not above it: an empty roster must produce
             # no request to Google at all, and a refresh is a request.
             token = self._access_token(account)
-            for thread_id in self._relevant_threads(queries, token):
-                report.threads_fetched += 1
-                self._store_thread(account, thread_id, token, report, actor)
+            self._ingest(account, actor, tuple(queries), token, report)
+
+        if fresh:
+            # After the ingest, deliberately: an address is "already looked for" only
+            # once the looking has happened. Recording it first and then failing on the
+            # token refresh would mark a backfill done that never ran, and nothing would
+            # ever try it again.
+            self.repo.remember_addresses(account.id, fresh)
+            # Recorded, because a backfill is a wider and slower cycle than the user
+            # asked for and its result reads differently: "nothing new" and "we looked
+            # back three months and there was nothing" are two different answers. Only
+            # counts go in -- no address, for the same reason `SyncReport` has no room
+            # for one.
+            self.activities.record(
+                "google_account",
+                account.id,
+                "gmail.backfill_eseguito",
+                actor,
+                {"addresses": len(fresh), "days": self.settings.gmail_backfill_days},
+            )
 
         account.last_sync_at = started_at
         # The watermark is rolled back by the configured overlap on every cycle. It is
@@ -153,7 +194,144 @@ class GmailSyncService:
         self.session.commit()
         return report
 
+    def backfill(
+        self, entity_type: str, entity_id: UUID, *, full: bool, actor: Actor
+    ) -> SyncReport:
+        """One entity's correspondence, on demand.
+
+        `full=True` drops the time horizon and keeps the address filter: "no horizon" is
+        about time, never about relevance. It is explicit and human-initiated because on
+        a ten-year mailbox it is slow, and nobody wants it by accident -- which is why
+        it is not what the automatic path of `_run_cycle` does.
+
+        It reads *backwards*, and therefore deliberately touches neither `last_sync_at`
+        nor `sync_watermark`. Advancing the watermark here would make the next ordinary
+        cycle skip everything that arrived while the backfill was running: a hole in the
+        one direction nobody would think to look.
+        """
+        require_gmail_configured(self.settings)
+        actor.require_write(_BACKFILL_ACTION)
+        account = self._account(actor)
+        addresses = self._addresses_of(entity_type, entity_id)
+        if not addresses:
+            # A report of zero would be indistinguishable from "we looked and there was
+            # nothing", which is the answer to a different question entirely.
+            raise Conflict(
+                "gmail_backfill",
+                f"{entity_type} {entity_id} non ha nessun indirizzo email da sincronizzare",
+            )
+
+        started_at = datetime.now(UTC)
+        if not self.repo.try_sync_lock(account.id):
+            return SyncReport(
+                started_at=started_at,
+                already_running=True,
+                running_since=self.repo.sync_started_at(account.id),
+            )
+        try:
+            report = SyncReport(started_at=started_at)
+            queries = build_list_queries(
+                addresses,
+                after_epoch=self._backfill_epoch(full=full),
+                batch_size=self.settings.gmail_sync_address_batch_size,
+            )
+            report.queries_issued = len(queries)
+            token = self._access_token(account)
+            self._ingest(account, actor, queries, token, report)
+            # These addresses have now been searched at least as far back as the
+            # automatic backfill would have gone, so the next cycle must not do it
+            # again -- and on `full=True` it went further still.
+            self.repo.remember_addresses(account.id, addresses)
+            self.activities.record(
+                "google_account",
+                account.id,
+                "gmail.backfill_eseguito",
+                actor,
+                {
+                    "entity_type": entity_type,
+                    "entity_id": str(entity_id),
+                    "full": full,
+                    "messages_stored": report.messages_stored,
+                },
+            )
+            self.session.commit()
+            return report
+        finally:
+            self.repo.release_sync_lock(account.id)
+
     # ---- internals ---------------------------------------------------------------
+
+    def _backfill_epoch(self, *, full: bool) -> int:
+        """`after:` for a backfill. `0` is the beginning of the mailbox, which
+        `build_list_queries` accepts and a negative number would not."""
+        if full:
+            return 0
+        horizon = datetime.now(UTC) - timedelta(days=self.settings.gmail_backfill_days)
+        return max(0, int(horizon.timestamp()))
+
+    def _addresses_of(self, entity_type: str, entity_id: UUID) -> list[str]:
+        """The addresses one entity is reachable at.
+
+        Raises `NotFound` for an entity that does not exist or has been archived, so a
+        typo in an id is a 404 rather than a silent backfill of nothing -- and so that
+        archiving somebody is enough to stop the CRM going off to read their mail.
+
+        A customer brings its people with it: a client is an organisation, and
+        backfilling "Acme" while ignoring the person one actually writes to would return
+        an empty result that looks like an answer.
+        """
+        if entity_type == "person":
+            person = self.session.get(Person, entity_id)
+            if person is None or person.deleted_at is not None:
+                raise NotFound("person", entity_id)
+            return [person.email.strip().lower()] if person.email else []
+        if entity_type == "customer":
+            customer = self.session.get(Customer, entity_id)
+            if customer is None or customer.deleted_at is not None:
+                raise NotFound("customer", entity_id)
+            addresses = [customer.email.strip().lower()] if customer.email else []
+            addresses.extend(
+                email.strip().lower()
+                for email in self.session.execute(
+                    select(Person.email).where(
+                        Person.customer_id == entity_id,
+                        Person.email.is_not(None),
+                        Person.deleted_at.is_(None),
+                    )
+                )
+                .scalars()
+                .all()
+                if email
+            )
+            return list(dict.fromkeys(addresses))
+        # A deal has no address of its own -- it borrows its customer's -- so the answer
+        # names the two types that do rather than returning an empty list.
+        raise ValidationFailed(
+            "gmail_backfill",
+            "entity_type",
+            "il backfill si esegue su una persona o su un cliente",
+            expected="person | customer",
+        )
+
+    def _ingest(
+        self,
+        account: GoogleAccount,
+        actor: Actor,
+        queries: tuple[str, ...],
+        token: str,
+        report: SyncReport,
+    ) -> None:
+        """List, then fetch each thread whole, then file it.
+
+        One code path for the ordinary cycle and for the explicit backfill, which is
+        what keeps the guarantees of spec 4 single-sourced: the two differ only in the
+        `after:` of their queries, and every query either builds came out of
+        `build_list_queries` with an address list. A second copy of this loop would be a
+        second place for an unfiltered listing to appear.
+        """
+        for thread_id in self._relevant_threads(queries, token):
+            report.threads_fetched += 1
+            self._store_thread(account, thread_id, token, report, actor)
 
     def _account(self, actor: Actor) -> GoogleAccount:
         if actor.id is None:
