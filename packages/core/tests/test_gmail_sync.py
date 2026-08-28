@@ -463,6 +463,28 @@ def test_the_same_gmail_id_under_another_account_is_not_a_duplicate(db_session: 
     assert db_session.execute(select(func.count()).select_from(GmailMessage)).scalar_one() == 2
 
 
+def test_a_message_is_looked_up_within_its_own_account_and_no_other(db_session: Session) -> None:
+    """Gmail's ids are unique per mailbox, not globally, so the account is half of the
+    question. B1-9 and B1-11 both reach for a single stored message by id; a lookup that
+    forgot the account would hand one mailbox a row belonging to another."""
+    first = connected_account(db_session)
+    second = connected_account(db_session, email_address="altra@example.it")
+    repo = GmailRepository(db_session)
+    repo.add_message_if_absent(_row(first.id, "m1"))
+
+    found = repo.message_by_gmail_id(first.id, "m1")
+    assert found is not None
+    assert found.gmail_message_id == "m1"
+    assert repo.message_by_gmail_id(second.id, "m1") is None
+    assert repo.message_by_gmail_id(first.id, "sconosciuto") is None
+
+
+def test_asking_about_no_ids_at_all_asks_the_database_nothing(db_session: Session) -> None:
+    """An empty thread would otherwise produce `IN ()`, which Postgres rejects."""
+    account = connected_account(db_session)
+    assert GmailRepository(db_session).message_ids_present(account.id, []) == set()
+
+
 def _row(account_id: UUID, gmail_id: str, thread: str = "t1") -> GmailMessage:
     return GmailMessage(
         google_account_id=account_id,
