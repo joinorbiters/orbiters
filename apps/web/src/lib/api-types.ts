@@ -423,6 +423,89 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/deals/{deal_id}/pnl": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Deal Pnl
+         * @description Every row of §7.1, already summed. No role gate, deliberately: a deal's P&L is not
+         *     more sensitive than the deal, the hours and the invoices it is derived from, each of
+         *     which a `readonly` actor can already list.
+         */
+        get: operations["deal_pnl_api_deals__deal_id__pnl_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/deals/{deal_id}/budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Deal Budget
+         * @description One deal's row of the estimate-versus-actual report. Served from the same method as
+         *     the list so the two can never disagree: a per-deal reimplementation is how the detail
+         *     page and the report start showing different variances.
+         *
+         *     `limit=200` -- the schema's own ceiling -- rather than a paged scan: `deals_in_range`
+         *     orders by `(nome, id)`, so the row wanted here can sit anywhere in that order, and one
+         *     page at the maximum is the widest single window this query is allowed to open. Above
+         *     that the answer is a 404 the caller can act on (narrow the window) instead of a page
+         *     walk hidden behind a detail endpoint.
+         */
+        get: operations["deal_budget_api_deals__deal_id__budget_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/deals/{deal_id}/time-entries/to-invoice-draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * To Invoice Draft
+         * @description Builds a draft; issues nothing. `InvoiceService` stays the sole owner of numbering,
+         *     fiscal validation, rounding and freezing.
+         *
+         *     `admin`, enforced by the service like every other role check in this codebase -- and
+         *     with no MCP tool at all (§11's exclusion list), since choosing *which* hours to
+         *     invoice is a commercial decision. The invoice state it may target is decided there
+         *     too: hours sitting on a *draft* can be rebound, because that draft may be a mistake
+         *     somebody is redoing, while hours on an *issued* invoice come back as a 409 naming the
+         *     document -- one does not invoice the same work twice.
+         *
+         *     `storage` is passed rather than left to the service's own settings fallback: this is
+         *     the one method in `AnalyticsService` that constructs an `InvoiceService`, whose
+         *     backend is the same process-wide one every other document route resolves through
+         *     `StorageDep`.
+         */
+        post: operations["to_invoice_draft_api_deals__deal_id__time_entries_to_invoice_draft_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/field-definitions": {
         parameters: {
             query?: never;
@@ -1471,6 +1554,72 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/analytics/pnl": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Period Pnl
+         * @description Two columns, closed deals and deals in progress. There is deliberately no combined
+         *     total: adding a finished job's margin to a half-done one produces a figure that is
+         *     neither.
+         */
+        get: operations["period_pnl_api_analytics_pnl_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analytics/budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Budget Vs Actual
+         * @description The period filter is mandatory and the list is paginated from the first commit
+         *     (residual B3): a margins view is by its nature a list of deals, so unbounded growth
+         *     stops being invisible here.
+         */
+        get: operations["budget_vs_actual_api_analytics_budget_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analytics/fiscale": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fiscal Estimate
+         * @description `admin` -- enforced by the service, not here. A router containing an authorisation
+         *     `if` is a router the MCP adapter cannot reuse, and this figure has no MCP tool at all
+         *     (§11's exclusion list), so the check has to live where both adapters share it.
+         */
+        get: operations["fiscal_estimate_api_analytics_fiscale_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -1522,10 +1671,74 @@ export interface components {
              */
             occurred_at: string;
         };
+        /**
+         * BindTimeRequest
+         * @description Which hours become invoice lines. `entry_ids` explicit rather than "everything
+         *     billable": choosing *which* hours to invoice is a commercial decision, and a default
+         *     of "all of them" is that decision made silently.
+         */
+        BindTimeRequest: {
+            /** Entry Ids */
+            entry_ids: string[];
+            /**
+             * Raggruppa Per Mese
+             * @default true
+             */
+            raggruppa_per_mese: boolean;
+        };
         /** Body_upload_version_api_documents__document_id__versions_post */
         Body_upload_version_api_documents__document_id__versions_post: {
             /** File */
             file: string;
+        };
+        /** BudgetPage */
+        BudgetPage: {
+            /** Items */
+            items: components["schemas"]["BudgetVsActualRow"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Totale Preventivato */
+            totale_preventivato: string;
+            /** Totale Ricavi */
+            totale_ricavi: string;
+            /** Deal Preventivati */
+            deal_preventivati: number;
+            /** Deal Non Preventivati */
+            deal_non_preventivati: number;
+        };
+        /** BudgetVsActualRow */
+        BudgetVsActualRow: {
+            /**
+             * Deal Id
+             * Format: uuid
+             */
+            deal_id: string;
+            /** Nome */
+            nome: string;
+            /** Ore Preventivate */
+            ore_preventivate: string | null;
+            /** Ore Consuntivate */
+            ore_consuntivate: string;
+            /** Valore Preventivato */
+            valore_preventivato: string | null;
+            /** Ricavi */
+            ricavi: string;
+            /** Avanzamento Ore */
+            avanzamento_ore: string | null;
+            /** Budget Pro Rata */
+            budget_pro_rata: string | null;
+            /** Scostamento Valore */
+            scostamento_valore: string | null;
+            /** Scostamento Ore */
+            scostamento_ore: string | null;
+            /** Tariffa Media Preventivata */
+            tariffa_media_preventivata: string | null;
+            /** Tariffa Media Consuntivata */
+            tariffa_media_consuntivata: string | null;
+            /** Non Preventivato */
+            non_preventivato: boolean;
+            /** Pro Rata Non Calcolabile */
+            pro_rata_non_calcolabile: boolean;
         };
         /** CostCategoryCreate */
         CostCategoryCreate: {
@@ -1882,6 +2095,49 @@ export interface components {
             items: components["schemas"]["DealRead"][];
             /** Next Cursor */
             next_cursor: string | null;
+        };
+        /**
+         * DealPnl
+         * @description One deal's profit and loss, every figure computed by the service and returned
+         *     already summed -- the browser adds nothing (§6).
+         *
+         *     `valore_maturato` is deliberately a separate field from `ricavi` and not a variant of
+         *     it: it is the estimate of §3 decision 2, it is **not revenue**, it enters no P&L row,
+         *     and it lives under a heading of its own. On an `in corso` deal it is the honest number
+         *     to look at and the margin is provisional; the margin is only reportable in the
+         *     `chiuso` state.
+         */
+        DealPnl: {
+            /**
+             * Deal Id
+             * Format: uuid
+             */
+            deal_id: string;
+            /**
+             * Stato
+             * @enum {string}
+             */
+            stato: "in corso" | "da fatturare" | "chiuso";
+            /** Ricavi */
+            ricavi: string;
+            /** Costi Diretti */
+            costi_diretti: string;
+            /** Costo Lavoro */
+            costo_lavoro: string;
+            /** Margine Lordo */
+            margine_lordo: string;
+            /** Margine Percentuale */
+            margine_percentuale: string | null;
+            /** Ore Totali */
+            ore_totali: string;
+            /** Ore Fatturabili Non Fatturate */
+            ore_fatturabili_non_fatturate: string;
+            /** Valore Maturato */
+            valore_maturato: string;
+            /** Ore Senza Tariffa */
+            ore_senza_tariffa: number;
+            /** Fatture Emesse */
+            fatture_emesse: number;
         };
         /** DealRateUpdate */
         DealRateUpdate: {
@@ -2331,6 +2587,40 @@ export interface components {
             required?: boolean | null;
             /** Position */
             position?: number | null;
+        };
+        /**
+         * FiscalEstimate
+         * @description §8. Declared an **estimate** in its own payload, not only in the UI copy: a
+         *     labelled estimate is useful, an estimate presented as an actual is the original
+         *     defect in a new form.
+         */
+        FiscalEstimate: {
+            /** Anno */
+            anno: number;
+            /**
+             * Stima
+             * @default true
+             * @constant
+             */
+            stima: true;
+            /** Avvertenza */
+            avvertenza: string;
+            /** Ricavi */
+            ricavi: string;
+            /** Coefficiente Redditivita */
+            coefficiente_redditivita: string | null;
+            /** Imponibile */
+            imponibile: string | null;
+            /** Aliquota Imposta Sostitutiva */
+            aliquota_imposta_sostitutiva: string | null;
+            /** Imposta Sostitutiva */
+            imposta_sostitutiva: string | null;
+            /** Aliquota Inps */
+            aliquota_inps: string | null;
+            /** Contributi */
+            contributi: string | null;
+            /** Reddito Netto Stimato */
+            reddito_netto_stimato: string | null;
         };
         /** FiscalProfileRead */
         FiscalProfileRead: {
@@ -2805,6 +3095,36 @@ export interface components {
             /** Chiuso Da */
             chiuso_da: string | null;
         };
+        /**
+         * PeriodPnl
+         * @description Two columns, never one total (§7.4).
+         *
+         *     Adding a finished job's margin to a half-done one produces a figure that is neither,
+         *     and that changes every week for reasons which are not business performance. The
+         *     reportable number is `chiusi`.
+         */
+        PeriodPnl: {
+            /**
+             * Da
+             * Format: date
+             */
+            da: string;
+            /**
+             * A
+             * Format: date
+             */
+            a: string;
+            /** Customer Id */
+            customer_id: string | null;
+            chiusi: components["schemas"]["PnlTotals"];
+            in_corso: components["schemas"]["PnlTotals"];
+            /** Spese Generali */
+            spese_generali: string;
+            /** Periodo Chiuso */
+            periodo_chiuso: boolean;
+            /** Voci Scritte In Ritardo */
+            voci_scritte_in_ritardo: number;
+        };
         /** PersonCreate */
         PersonCreate: {
             /** Nome */
@@ -2962,6 +3282,21 @@ export interface components {
             probabilita_default?: number | null;
             /** Tipo */
             tipo?: ("open" | "won" | "lost") | null;
+        };
+        /** PnlTotals */
+        PnlTotals: {
+            /** Ricavi */
+            ricavi: string;
+            /** Costi Diretti */
+            costi_diretti: string;
+            /** Costo Lavoro */
+            costo_lavoro: string;
+            /** Margine Lordo */
+            margine_lordo: string;
+            /** Margine Percentuale */
+            margine_percentuale: string | null;
+            /** Deal */
+            deal: number;
         };
         /** PreviewBody */
         PreviewBody: {
@@ -7185,6 +7520,372 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Permesso negato: l'actor non ha il ruolo richiesto. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La risorsa richiesta non esiste o è stata rimossa. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La richiesta è in conflitto con lo stato attuale della risorsa. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Una regola di dominio non è stata rispettata (application/problem+json), oppure il corpo, i parametri o il path della richiesta non hanno la forma attesa e non hanno mai raggiunto l'endpoint (application/json). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    deal_pnl_api_deals__deal_id__pnl_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DealPnl"];
+                };
+            };
+            /** @description Permesso negato: l'actor non ha il ruolo richiesto. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La risorsa richiesta non esiste o è stata rimossa. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La richiesta è in conflitto con lo stato attuale della risorsa. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Una regola di dominio non è stata rispettata (application/problem+json), oppure il corpo, i parametri o il path della richiesta non hanno la forma attesa e non hanno mai raggiunto l'endpoint (application/json). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    deal_budget_api_deals__deal_id__budget_get: {
+        parameters: {
+            query: {
+                /** @description Inizio del periodo, YYYY-MM-DD */
+                from: string;
+                /** @description Fine del periodo, YYYY-MM-DD */
+                to: string;
+            };
+            header?: never;
+            path: {
+                deal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetVsActualRow"];
+                };
+            };
+            /** @description Permesso negato: l'actor non ha il ruolo richiesto. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La risorsa richiesta non esiste o è stata rimossa. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La richiesta è in conflitto con lo stato attuale della risorsa. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Una regola di dominio non è stata rispettata (application/problem+json), oppure il corpo, i parametri o il path della richiesta non hanno la forma attesa e non hanno mai raggiunto l'endpoint (application/json). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    to_invoice_draft_api_deals__deal_id__time_entries_to_invoice_draft_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BindTimeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvoiceRead"];
                 };
             };
             /** @description Permesso negato: l'actor non ha il ruolo richiesto. */
@@ -16822,6 +17523,373 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Permesso negato: l'actor non ha il ruolo richiesto. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La risorsa richiesta non esiste o è stata rimossa. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La richiesta è in conflitto con lo stato attuale della risorsa. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Una regola di dominio non è stata rispettata (application/problem+json), oppure il corpo, i parametri o il path della richiesta non hanno la forma attesa e non hanno mai raggiunto l'endpoint (application/json). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    period_pnl_api_analytics_pnl_get: {
+        parameters: {
+            query: {
+                /** @description Inizio del periodo, YYYY-MM-DD */
+                from: string;
+                /** @description Fine del periodo, YYYY-MM-DD */
+                to: string;
+                customer_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PeriodPnl"];
+                };
+            };
+            /** @description Permesso negato: l'actor non ha il ruolo richiesto. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La risorsa richiesta non esiste o è stata rimossa. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La richiesta è in conflitto con lo stato attuale della risorsa. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Una regola di dominio non è stata rispettata (application/problem+json), oppure il corpo, i parametri o il path della richiesta non hanno la forma attesa e non hanno mai raggiunto l'endpoint (application/json). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    budget_vs_actual_api_analytics_budget_get: {
+        parameters: {
+            query: {
+                /** @description Inizio del periodo, YYYY-MM-DD */
+                from: string;
+                /** @description Fine del periodo, YYYY-MM-DD */
+                to: string;
+                customer_id?: string | null;
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetPage"];
+                };
+            };
+            /** @description Permesso negato: l'actor non ha il ruolo richiesto. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La risorsa richiesta non esiste o è stata rimossa. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La richiesta è in conflitto con lo stato attuale della risorsa. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Una regola di dominio non è stata rispettata (application/problem+json), oppure il corpo, i parametri o il path della richiesta non hanno la forma attesa e non hanno mai raggiunto l'endpoint (application/json). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fiscal_estimate_api_analytics_fiscale_get: {
+        parameters: {
+            query: {
+                anno: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FiscalEstimate"];
+                };
             };
             /** @description Permesso negato: l'actor non ha il ruolo richiesto. */
             403: {
