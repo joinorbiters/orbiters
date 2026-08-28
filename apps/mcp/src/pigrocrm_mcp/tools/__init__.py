@@ -6,6 +6,7 @@ from mcp.server import MCPServer
 from pydantic import WithJsonSchema
 
 from pigrocrm.core.activities.service import ActivityService
+from pigrocrm.core.analytics.schemas import BudgetQuery, PeriodPnlQuery
 from pigrocrm.core.customers.schemas import CustomerListQuery, CustomerUpdate
 from pigrocrm.core.deals.schemas import DealListQuery, DealUpdate
 from pigrocrm.core.documents.schemas import DocumentListQuery
@@ -824,3 +825,61 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
         """Elenca le categorie di costo configurate. Crearle e archiviarle è
         un'operazione di configurazione e si fa dall'app, non da qui."""
         return timetracking.list_cost_categories(context, include_archived)
+
+    # ---- analytics ---------------------------------------------------------
+    # Reads only. `bind_time_to_invoice` has no tool because binding hours to a draft
+    # is the step that determines their freezing at issue, and choosing *which* hours
+    # to invoice is a commercial decision -- slice 3 §11 withdrew `issue_invoice` with
+    # the same reasoning and this is the rung below it. `get_fiscal_estimate` has no
+    # tool for a different reason: taxable income, contributions and estimated net for
+    # a real person are the most sensitive data this product holds, and residual R10
+    # leaves a PAT indistinguishable from full account access.
+
+    @mcp.tool()
+    @guard
+    def get_deal_pnl(deal_id: str) -> dict[str, Any]:
+        """Conto economico di un deal: ricavi fatturati, costi diretti, costo del lavoro,
+        margine e stato. `margine_percentuale` è `null` quando i ricavi sono zero — non
+        zero per cento: significa che non è ancora stato incassato niente, non che tutto
+        se n'è andato in costi. `valore_maturato` non è un ricavo: è una stima."""
+        return timetracking.get_deal_pnl(context, deal_id)
+
+    @mcp.tool()
+    @guard
+    def get_period_pnl(da: str, a: str, customer_id: str | None = None) -> dict[str, Any]:
+        """Conto economico di periodo, in due colonne: deal chiusi e deal in corso. Il
+        numero riportabile è il primo. `periodo_chiuso` e `voci_scritte_in_ritardo` dicono
+        se la cifra può ancora muoversi. Le spese generali stanno in una riga a parte e non
+        vengono ripartite su nessun deal."""
+        return timetracking.get_period_pnl(
+            context,
+            PeriodPnlQuery(
+                da=da,  # type: ignore[arg-type]
+                a=a,  # type: ignore[arg-type]
+                customer_id=UUID(customer_id) if customer_id else None,
+            ),
+        )
+
+    @mcp.tool()
+    @guard
+    def get_budget_vs_actual(
+        da: str,
+        a: str,
+        customer_id: str | None = None,
+        limit: BoundedLimit = 50,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        """Preventivo contro consuntivo per deal. Lo scostamento di valore è calcolato
+        contro il preventivo **pro-rata** (preventivo × avanzamento ore), non contro quello
+        pieno. Una riga con `non_preventivato = true` non ha alcun preventivo: non è un
+        preventivo di zero, ed è esclusa dagli aggregati."""
+        return timetracking.get_budget_vs_actual(
+            context,
+            BudgetQuery(
+                da=da,  # type: ignore[arg-type]
+                a=a,  # type: ignore[arg-type]
+                customer_id=UUID(customer_id) if customer_id else None,
+                limit=cast(int, limit),
+                cursor=UUID(cursor) if cursor else None,
+            ),
+        )

@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from pigrocrm.core.activities.service import ActivityService
+from pigrocrm.core.analytics.service import AnalyticsService
 from pigrocrm.core.customers.schemas import CustomerRead
 from pigrocrm.core.customers.service import CustomerService
 from pigrocrm.core.deals.service import DealService
@@ -142,9 +143,9 @@ def render_deal(context: McpContext, deal_id: UUID) -> str:
     lines += _custom_lines(deal.custom_fields)
 
     # Reading before acting (slice 1 §8.4), applied to the one thing an agent wants to
-    # know before logging an hour. No revenue figure here on purpose: revenue is the
-    # invoice (§3, decision 2), and 4A has no invoices -- printing a zero would read as
-    # a real number.
+    # know before logging an hour. Still no revenue figure in *this* block: revenue is
+    # the invoice (§3, decision 2), and the hours half has to be readable on a deal that
+    # has none. The economics live in their own section below.
     summary = TimeEntryService(context.session).deal_summary(deal.id, context.actor)
     lines += [
         "",
@@ -159,6 +160,32 @@ def render_deal(context: McpContext, deal_id: UUID) -> str:
             f"- Voci senza tariffa: {summary.ore_senza_tariffa} "
             "(escluse dal valore maturato e dal margine)"
         )
+
+    # 4A deliberately printed no revenue here, because there were no invoices to read and
+    # a zero would have looked like a real figure. There are now: `deal_pnl` reads the
+    # issued ones and this block is the payoff -- an agent asked "how is this project
+    # going" sees the economics in the same read as the hours, instead of inferring them.
+    pnl = AnalyticsService(context.session).deal_pnl(deal.id, context.actor)
+    lines += [
+        "",
+        "## Economia",
+        f"- Ricavi fatturati: {pnl.ricavi} EUR ({pnl.fatture_emesse} fatture emesse)",
+        f"- Costi diretti: {pnl.costi_diretti} EUR",
+        f"- Costo del lavoro: {pnl.costo_lavoro} EUR",
+    ]
+    if pnl.stato == "chiuso":
+        lines.append(f"- Margine lordo: {pnl.margine_lordo} EUR (definitivo)")
+    else:
+        # Never a margin without the qualifier on an unfinished deal: the figure is
+        # provisional, and an agent handed a bare number will quote it as final.
+        lines.append(f"- Margine lordo: {pnl.margine_lordo} EUR — **provvisorio**")
+        lines.append(f"- Valore maturato (stima, non un ricavo): {pnl.valore_maturato} EUR")
+    if pnl.margine_percentuale is None:
+        # `null` is not zero per cent: nothing has been invoiced yet, which is a
+        # different sentence from "every euro earned went out in costs".
+        lines.append("- Margine %: non calcolabile, nessun ricavo fatturato")
+    else:
+        lines.append(f"- Margine %: {pnl.margine_percentuale}")
 
     lines += ["", "## Timeline", ""] + _timeline_lines(context, "deal", deal_id)
     if deal.note:
