@@ -1,7 +1,17 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, LargeBinary, String, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    LargeBinary,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -88,3 +98,80 @@ class GoogleOAuthState(Base, PrimaryKeyMixin, TimestampMixin):
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+class GmailMessage(Base, PrimaryKeyMixin, TimestampMixin):
+    """One synchronised message.
+
+    The unique constraint on `(google_account_id, gmail_message_id)` is what makes the
+    watermark's deliberate 24-hour overlap free and every re-run idempotent, *and* it is
+    the only thing that holds when two cycles overlap in time: a `SELECT` before the
+    `INSERT` is a check both of them pass. Acme kept its send record in a JSON file on
+    disk with a non-atomic read-modify-write, so two concurrent sends lost the count; a
+    unique constraint cannot lose anything.
+
+    Like `GoogleAccount`, this class deliberately has no `__repr__`. `body_text` holds
+    somebody's private correspondence, and a generated `repr` would print it into every
+    traceback, every `logger.debug("%s", row)` and every pytest failure dump.
+
+    `String(998)` on the header columns is RFC 5322's maximum line length minus the
+    field name: the real bound rather than a guessed one.
+    """
+
+    __tablename__ = "gmail_messages"
+    __table_args__ = (
+        UniqueConstraint(
+            "google_account_id", "gmail_message_id", name="uq_gmail_messages_account_message"
+        ),
+        # The thread view reads a whole conversation in date order, which is the only
+        # access pattern this table has that is not a lookup by gmail id.
+        Index("ix_gmail_messages_thread_date", "gmail_thread_id", "internal_date"),
+    )
+
+    google_account_id: Mapped[UUID] = mapped_column(
+        ForeignKey("google_accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    gmail_message_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    gmail_thread_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    message_id_header: Mapped[str] = mapped_column(String(998), nullable=False, default="")
+    in_reply_to: Mapped[str] = mapped_column(String(998), nullable=False, default="")
+    # `Text`, not `String(998)`: `References` accumulates one Message-ID per reply and a
+    # long thread runs past any line limit, folded across several lines.
+    references: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    direction: Mapped[str] = mapped_column(String(8), nullable=False)
+    from_address: Mapped[str] = mapped_column(String(320), nullable=False, default="")
+    to_addresses: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    cc_addresses: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    subject: Mapped[str] = mapped_column(String(998), nullable=False, default="")
+    snippet: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    internal_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    body_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    body_truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    body_html_scartato: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # name, mime, size. No bytes, ever (spec 5.4).
+    attachments: Mapped[list[dict[str, object]]] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
+
+
+class GmailMessageLink(Base, PrimaryKeyMixin, TimestampMixin):
+    """Many-to-many, and not three nullable foreign keys: one email concerns the
+    person, that person's customer and a deal all at once, and a single FK would force
+    a choice the data does not support."""
+
+    __tablename__ = "gmail_message_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "gmail_message_id", "entity_type", "entity_id", name="uq_gmail_message_links_triple"
+        ),
+        Index("ix_gmail_message_links_entity", "entity_type", "entity_id"),
+    )
+
+    gmail_message_id: Mapped[UUID] = mapped_column(
+        ForeignKey("gmail_messages.id", ondelete="CASCADE"), nullable=False
+    )
+    entity_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    # Deliberately not a foreign key: it points at a customer, a person or a deal
+    # depending on `entity_type`, and no single FK can express that. The `resolve` of
+    # `gmail/roster.py` is what keeps it pointing at rows that exist.
+    entity_id: Mapped[UUID] = mapped_column(nullable=False)
