@@ -153,6 +153,15 @@ _CREDENZIALI: dict[Method, str] = {
         "persona tengono aggiornata, ed e' su quella che B1-14 decide gli strumenti di "
         "lettura e ricerca"
     ),
+    ("GmailSyncService", "backfill"): (
+        "stessa ragione di `sync`, e con una scala diversa: `backfill(full=True)` "
+        "rilegge una casella dall'inizio, quindi e' la richiesta piu' costosa che "
+        "questa fetta sappia fare sulla quota Gmail di quella persona, e la spec 4.4 la "
+        "vuole esplicita e iniziata da un umano proprio per questo. Esclusione "
+        "provvisoria e non permanente, a differenza di quelle di `GmailOAuthService`: "
+        "B1-14 possiede la superficie MCP di 5B e prevede `backfill_gmail`; quando "
+        "quello strumento esiste questa voce sparisce"
+    ),
     ("PatService", "create"): "un agente non conia le proprie credenziali",
     ("PatService", "list"): "l'elenco dei token e' materiale di sicurezza",
     ("PatService", "revoke"): "revocare token e' amministrazione dell'account",
