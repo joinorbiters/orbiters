@@ -708,3 +708,24 @@ def budgeted_deal(
         return deal_id
 
     return _make
+
+
+# --- slice 4B-7: hours that become an invoice line ---------------------------------
+
+
+@pytest.fixture
+def billable_deal_id(db_session: Session, local_storage: LocalFileStorage) -> UUID:
+    """A deal whose customer carries enough identity to be **issued** against, with the
+    fiscal and emitter profiles already installed.
+
+    `seeded_deal_id`'s customer has a `ragione_sociale` and nothing else, which is right
+    for every test that only needs a deal to hang hours off. `bind_time_to_invoice` goes
+    the whole way -- draft, then emission -- so it needs the opposite, and it also needs
+    a fiscal profile to exist before `InvoiceService.create` will resolve a regime at
+    all. `_invoice_service` is called for its side effect of installing both profiles;
+    the service it returns is discarded, because the point of these tests is that
+    `AnalyticsService` builds its own.
+    """
+    _invoice_service(db_session, local_storage)
+    deal_id, _ = _deal_of_fiscal_customer(db_session, "Progetto da fatturare")
+    return deal_id
