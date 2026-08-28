@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate, useParams } from '@tanstack/react-router'
+import { Link, createFileRoute, useNavigate, useParams } from '@tanstack/react-router'
 import { Pencil, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
@@ -170,8 +170,12 @@ export function DealDetail() {
                     one tab away -- the 4A note that promised it for later would send a
                     reader looking for something that has since arrived. */}
                 <p className="mt-3 text-xs text-muted-foreground">
-                  Le ore consuntivate sono nella tab «Ore»; il confronto con il
-                  preventivo è nella tab «Economia».
+                  Le ore consuntivate sono nella tab «Ore»; il confronto con il consuntivo
+                  è nella tab «Economia» e in{' '}
+                  <Link to="/app/analisi/preventivo-consuntivo" className="underline">
+                    Analisi › Preventivo/consuntivo
+                  </Link>
+                  .
                 </p>
               </CardContent>
             </Card>

@@ -9,6 +9,7 @@ import {
   PanelLeftIcon,
   Receipt,
   Settings,
+  TrendingUp,
   Users,
 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
@@ -31,6 +32,11 @@ const NAV = [
   // invoice is later built from, so the sidebar reads in the order the work happens.
   { to: '/app/ore', label: 'Ore', icon: Clock },
   { to: '/app/fatture', label: 'Fatture', icon: Receipt },
+  // After Fatture, because every figure it reports is derived from what comes before it
+  // in this list. Not admin-gated: margins and estimate-versus-actual carry no role check
+  // at the service layer, and only the fiscal tab inside does -- gating the whole entry
+  // would hide two ordinary reads to protect a third.
+  { to: '/app/analisi/margini', label: 'Analisi', icon: TrendingUp },
   { to: '/app/token', label: 'Token', icon: KeyRound },
 ] as const
 
