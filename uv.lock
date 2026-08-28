@@ -741,6 +741,7 @@ source = { editable = "packages/core" }
 dependencies = [
     { name = "alembic" },
     { name = "argon2-cffi" },
+    { name = "cryptography" },
     { name = "email-validator" },
     { name = "lxml" },
     { name = "openpyxl" },
@@ -757,6 +758,7 @@ dependencies = [
 requires-dist = [
     { name = "alembic", specifier = "==1.19.0" },
     { name = "argon2-cffi", specifier = "==25.1.0" },
+    { name = "cryptography", specifier = "==50.0.0" },
     { name = "email-validator", specifier = "==2.3.0" },
     { name = "lxml", specifier = "==6.1.2" },
     { name = "openpyxl", specifier = "==3.1.5" },

@@ -80,6 +80,8 @@ def test_every_table_the_slice_needs_exists() -> None:
         "costs",
         "cost_categories",
         "period_locks",
+        "google_accounts",
+        "google_oauth_states",
     }
     assert expected <= set(Base.metadata.tables)
 
@@ -176,7 +178,7 @@ def test_env_prefers_an_explicit_config_url_over_settings(monkeypatch: pytest.Mo
     finally:
         get_settings.cache_clear()
 
-    assert revision == "0013"
+    assert revision == "0014"
 
 
 def test_env_falls_back_to_settings_when_config_has_no_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -198,4 +200,4 @@ def test_env_falls_back_to_settings_when_config_has_no_url(monkeypatch: pytest.M
         finally:
             get_settings.cache_clear()
 
-    assert revision == "0013"
+    assert revision == "0014"

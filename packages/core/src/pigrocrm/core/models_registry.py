@@ -13,6 +13,7 @@ from pigrocrm.core.documents.models import Document, DocumentVersion  # noqa: F4
 from pigrocrm.core.emitter.models import EmitterProfile  # noqa: F401
 from pigrocrm.core.fields.models import FieldDefinition  # noqa: F401
 from pigrocrm.core.fiscal.models import FiscalProfile  # noqa: F401
+from pigrocrm.core.gmail.models import GoogleAccount, GoogleOAuthState  # noqa: F401
 from pigrocrm.core.invoices.models import Invoice, InvoiceCounter, InvoiceLine  # noqa: F401
 from pigrocrm.core.people.models import Person  # noqa: F401
 from pigrocrm.core.pipeline.models import PipelineStage  # noqa: F401
