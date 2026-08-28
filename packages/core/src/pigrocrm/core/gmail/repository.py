@@ -8,7 +8,13 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from pigrocrm.core.gmail.models import GmailMessage, GoogleAccount, GoogleOAuthState
+from pigrocrm.core.gmail.models import (
+    GmailMessage,
+    GmailMessageLink,
+    GoogleAccount,
+    GoogleOAuthState,
+)
+from pigrocrm.core.gmail.roster import EntityRef
 
 
 class GmailRepository:
@@ -139,3 +145,85 @@ class GmailRepository:
             .returning(GmailMessage.id)
         )
         return len(deleted.scalars().all())
+
+    # --- links -----------------------------------------------------------------------
+
+    def add_link(self, message_id: UUID, ref: EntityRef) -> bool:
+        """Files one message against one entity, and answers `False` when the triple
+        already existed.
+
+        Concurrency-safe by constraint and not by pre-check: two overlapping cycles both
+        pass a `SELECT`, and only `uq_gmail_message_links_triple` can arbitrate. And, for
+        the reason `add_message_if_absent` states at length, the refusal is absorbed by a
+        SAVEPOINT rather than by `Session.rollback()`: a cycle commits once at the end,
+        so a session-wide rollback here would discard every message and every link
+        written earlier in the same cycle -- on the *expected* outcome of the watermark's
+        overlap re-reading a conversation that is already filed.
+        """
+        try:
+            with self.session.begin_nested():
+                self.session.add(
+                    GmailMessageLink(
+                        gmail_message_id=message_id,
+                        entity_type=ref.entity_type,
+                        entity_id=ref.entity_id,
+                    )
+                )
+                self.session.flush()
+        except IntegrityError:
+            return False
+        return True
+
+    def messages_for_entity(
+        self, entity_type: str, entity_id: UUID, *, limit: int
+    ) -> list[GmailMessage]:
+        """Everything filed against one customer, person or deal.
+
+        Ordered by thread and then by date, because the reader of a customer page is
+        reading conversations rather than a flat mailbox: interleaving two threads by
+        timestamp alone produces a page on which no exchange can be followed.
+        """
+        return list(
+            self.session.execute(
+                select(GmailMessage)
+                .join(GmailMessageLink, GmailMessageLink.gmail_message_id == GmailMessage.id)
+                .where(
+                    GmailMessageLink.entity_type == entity_type,
+                    GmailMessageLink.entity_id == entity_id,
+                )
+                .order_by(GmailMessage.gmail_thread_id, GmailMessage.internal_date)
+                .limit(limit)
+            )
+            .scalars()
+            .all()
+        )
+
+    def last_inbound_from(
+        self, account_id: UUID, addresses: Sequence[str], since: datetime
+    ) -> GmailMessage | None:
+        """The most recent inbound message from any of `addresses` after `since`.
+
+        This is the signal the previous system could not have had: from the moment the CRM reads the
+        mail, the reminder candidate list can say "the client replied on 12 August".
+        Chasing someone who has already replied is the mistake a CRM that does not read
+        email cannot even notice it is making.
+
+        Scoped to one account, because Gmail's message ids and the addresses in them
+        belong to a mailbox: another user's correspondence must not answer this user's
+        question about whether the client wrote back.
+        """
+        if not addresses:
+            # Not merely an optimisation: an empty sequence would render as `IN ()`,
+            # which Postgres refuses outright.
+            return None
+        return self.session.execute(
+            select(GmailMessage)
+            .where(
+                GmailMessage.google_account_id == account_id,
+                GmailMessage.direction == "inbound",
+                GmailMessage.from_address.in_([address.strip().lower() for address in addresses]),
+                GmailMessage.internal_date > since,
+            )
+            .order_by(GmailMessage.internal_date.desc())
+            .limit(1)
+        ).scalar_one_or_none()

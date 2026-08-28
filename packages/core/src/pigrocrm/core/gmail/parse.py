@@ -69,6 +69,18 @@ class ParsedMessage:
     body_html_scartato: bool
     attachments: list[ParsedAttachment] = field(default_factory=list)
 
+    def direction_is_inbound(self, mailbox_address: str) -> bool:
+        """Compared against the *connected mailbox* and never against the roster: the
+        roster holds the people written to, so asking it would call every message
+        inbound.
+
+        It lives on the parsed message, and not inline in the sync, because two callers
+        need the same answer -- the `direction` column and the timeline entry, which
+        must not announce our own reply as something that arrived -- and a rule stated
+        twice is a rule that will eventually be stated differently.
+        """
+        return self.from_address != mailbox_address.strip().lower()
+
 
 def header_addresses(raw: str) -> list[str]:
     """Every address in a `To`/`Cc` header, lowercased and deduplicated. A regex rather
