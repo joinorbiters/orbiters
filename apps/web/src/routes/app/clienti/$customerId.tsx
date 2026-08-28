@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { EconomicsTab } from '@/features/analytics/EconomicsTab'
 import { CustomerForm, customerToFormValues } from '@/features/customers/CustomerForm'
 import { displayNative } from '@/features/customers/columns'
 import {
@@ -163,6 +164,7 @@ export function CustomerDetail() {
         entityId={customerId}
         documents={<DocumentsTab owner={{ customerId }} />}
         invoices={<InvoicesTab owner={{ customerId }} />}
+        economics={<EconomicsTab customerId={customerId} />}
         actions={
           canWrite && (
             <>

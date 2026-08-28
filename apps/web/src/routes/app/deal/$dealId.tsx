@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { EconomicsTab } from '@/features/analytics/EconomicsTab'
 import { useCustomer } from '@/features/customers/queries'
 import { DealForm, dealToFormValues } from '@/features/deals/DealForm'
 import { displayNative, formatDate, formatHours, formatMoney } from '@/features/deals/columns'
@@ -121,6 +122,7 @@ export function DealDetail() {
         documents={<DocumentsTab owner={{ dealId }} />}
         invoices={<InvoicesTab owner={{ dealId }} />}
         hours={<TimeEntriesTab dealId={dealId} />}
+        economics={<EconomicsTab dealId={dealId} />}
         actions={
           canWrite && (
             <>
@@ -164,12 +166,12 @@ export function DealDetail() {
                 <h2 className="mb-3 font-semibold">Preventivo</h2>
                 <Row label="Ore preventivate" value={formatHours(deal.ore_preventivate)} />
                 <Row label="Valore preventivato" value={formatMoney(deal.valore_preventivato)} />
-                {/* The honest 4A statement: the actuals exist now, the comparison
-                    against this card's two figures does not -- it lands with the conto
-                    economico in 4B. */}
+                {/* The comparison against this card's two figures exists now, and it is
+                    one tab away -- the 4A note that promised it for later would send a
+                    reader looking for something that has since arrived. */}
                 <p className="mt-3 text-xs text-muted-foreground">
-                  Le ore consuntivate sono nella tab «Ore». Il confronto
-                  preventivo/consuntivo arriva con il conto economico.
+                  Le ore consuntivate sono nella tab «Ore»; il confronto con il
+                  preventivo è nella tab «Economia».
                 </p>
               </CardContent>
             </Card>
