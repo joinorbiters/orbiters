@@ -7,12 +7,14 @@ from pydantic import BaseModel, ConfigDict
 # Mirror the column widths in gmail/models.py exactly.
 GOOGLE_SUB_MAX_LENGTH = 255
 EMAIL_ADDRESS_MAX_LENGTH = 320
-STATUS_MAX_LENGTH = 10
+STATUS_MAX_LENGTH = 20
 LAST_ERROR_MAX_LENGTH = 500
 JTI_MAX_LENGTH = 64
 CODE_VERIFIER_MAX_LENGTH = 128
 
-GmailStatus = Literal["active", "expired", "revoked"]
+# Four states, and every one of them calls for something different from the person:
+# nothing, wait-and-retry, re-consent, and re-connect. See `GoogleAccount.status`.
+GmailStatus = Literal["active", "expired", "revoked", "disconnected"]
 
 SCOPE_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
 SCOPE_SEND = "https://www.googleapis.com/auth/gmail.send"
@@ -90,3 +92,29 @@ class GmailMessageRead(BaseModel):
     body_truncated: bool
     body_html_scartato: bool
     attachments: list[dict[str, object]]
+
+
+# The four things that can be wrong, and `None` for "nothing is". `disconnected` is
+# deliberately absent: a mailbox the user unhooked on purpose is not a fault to warn
+# about, and a banner there would be an error message for a decision they made.
+GmailBannerReason = Literal["revoked", "expiring", "expired", "scope_missing"] | None
+
+
+class GmailHealth(BaseModel):
+    """Everything the shell banner needs, in one response.
+
+    A cause *and* its own sentence, because a single banner reading "problema con
+    Gmail" helps nobody: re-consenting, waiting, and re-authorising for one missing
+    scope are three different actions, and the banner is where the person finds out
+    which one is theirs.
+
+    `missing_scopes` is reported even when `banner` is `None`. A credential missing only
+    `gmail.send` is healthy and syncing, and the settings page still has to be able to
+    say that sending is off -- which is the same "status is the credential, capability
+    is the scopes" split the whole module turns on.
+    """
+
+    account: GoogleAccountRead | None
+    banner: GmailBannerReason
+    banner_text: str | None
+    missing_scopes: list[str]

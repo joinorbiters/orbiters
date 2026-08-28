@@ -54,6 +54,28 @@ class CredentialRevoked(Conflict):
         )
 
 
+class ConsentExpired(Conflict):
+    """The consent window ran out. Terminal in the same way `CredentialRevoked` is, and
+    cured by the same action, but it is not the same sentence.
+
+    Google told us nothing here: this is the state we *predicted*, from
+    `consent_expires_at`. Saying "è stato revocato" for it would be a small version of
+    exactly the defect this module exists to prevent -- a true-sounding message about a
+    thing that did not happen -- and it would also be the difference between "Google cut
+    you off" and "the seven days Testing mode gives you are up", which are very
+    different things to read about your own installation.
+    """
+
+    def __init__(self, account_id: UUID, email_address: str) -> None:
+        super().__init__(
+            "google_account",
+            f"il consenso Google per {email_address} è scaduto: "
+            "ricollega la casella da Impostazioni → Gmail",
+            account_id=str(account_id),
+            email_address=email_address,
+        )
+
+
 class ScopeMissing(Conflict):
     """A healthy credential that was granted less than was asked for. `status` stays
     `active` -- it is the feature that is unavailable, not the credential."""

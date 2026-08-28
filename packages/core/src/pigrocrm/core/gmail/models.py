@@ -21,11 +21,25 @@ from pigrocrm.core.db import Base, PrimaryKeyMixin, TimestampMixin
 class GoogleAccount(Base, PrimaryKeyMixin, TimestampMixin):
     """One connected mailbox, per CRM user.
 
-    `status` has three values and not four, and the distinction is load-bearing:
-    `expired` is what we *predicted* (the consent window has passed with no successful
-    refresh since), `revoked` is what Google *told us* (`invalid_grant`). They call for
-    different reactions -- the first is a warning to show early, the second a fact to
-    record -- so they are two states.
+    `status` has four values, and every distinction between them is load-bearing
+    because each calls for something different from the person:
+
+    * `active` -- nothing to do.
+    * `expired` is what we *predicted*: the consent window has passed with no successful
+      refresh since. A warning to show early.
+    * `revoked` is what Google *told us* (`invalid_grant`). A fact to record.
+    * `disconnected` is what the *user* did, from Impostazioni → Gmail.
+
+    The last one used to share `revoked`'s value, told apart only by `disconnected_at`
+    being non-null. That was a real defect and not a tidiness point: every screen and
+    every gate reading `status` told somebody who had just unhooked their own mailbox
+    that Google had revoked their consent, and offered to reconnect what they had
+    deliberately disconnected. Two events, two states -- the same argument that keeps
+    `expired` and `revoked` apart, and a view is not the place to reconstruct it from a
+    nullable timestamp.
+
+    `disconnected_at` stays, because *when* is still worth knowing; it is no longer what
+    carries the meaning.
 
     `scopes_granted` deliberately does not feed `status`. Capability is derived from it
     at the point of use; the health of the credential is `status`. Google may grant a
@@ -50,7 +64,7 @@ class GoogleAccount(Base, PrimaryKeyMixin, TimestampMixin):
     refresh_token_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     refresh_token_nonce: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     scopes_granted: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
-    status: Mapped[str] = mapped_column(String(10), nullable=False, default="active")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     # When the *consent* must be renewed, not when an access token expires. Set to
     # connected_at + 7 days while PIGROCRM_GOOGLE_APP_UNVERIFIED is true, because that
     # is Google's Testing-mode behaviour and Google exposes no API to detect it.

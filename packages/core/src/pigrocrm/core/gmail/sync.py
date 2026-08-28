@@ -39,13 +39,15 @@ from pigrocrm.core.actor import Actor
 from pigrocrm.core.config import Settings, decode_google_token_key, require_gmail_configured
 from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
+from pigrocrm.core.gmail.account import GoogleAccountService
 from pigrocrm.core.gmail.crypto import unseal
+from pigrocrm.core.gmail.errors import CredentialRevoked
 from pigrocrm.core.gmail.models import GmailMessage, GoogleAccount
 from pigrocrm.core.gmail.parse import ParsedMessage, parse_message
 from pigrocrm.core.gmail.query import build_list_queries, messages_list_url, thread_get_url
 from pigrocrm.core.gmail.repository import GmailRepository
 from pigrocrm.core.gmail.roster import AddressRoster, EntityRef
-from pigrocrm.core.gmail.schemas import SyncReport
+from pigrocrm.core.gmail.schemas import SCOPE_READONLY, SyncReport
 from pigrocrm.core.gmail.tokens import GoogleTokenClient
 from pigrocrm.core.gmail.transport import GmailTransport
 from pigrocrm.core.people.models import Person
@@ -75,11 +77,17 @@ class GmailSyncService:
         self.repo = GmailRepository(session)
         self.roster = AddressRoster(session)
         self.activities = ActivityService(session)
+        self.accounts = GoogleAccountService(session, settings=settings)
 
     def sync(self, actor: Actor) -> SyncReport:
         require_gmail_configured(self.settings)
         actor.require_write(_SYNC_ACTION)
         account = self._account(actor)
+        # Before the lock, deliberately. A credential that is revoked, expired or was
+        # never granted `gmail.readonly` cannot produce a cycle, and refusing it here
+        # means the refusal costs nothing and -- because no lock was taken -- cannot
+        # make the *next* call answer "già in corso".
+        self.accounts.usable(actor, scope=SCOPE_READONLY, feature="la sincronizzazione")
         started_at = datetime.now(UTC)
 
         if not self.repo.try_sync_lock(account.id):
@@ -212,6 +220,9 @@ class GmailSyncService:
         require_gmail_configured(self.settings)
         actor.require_write(_BACKFILL_ACTION)
         account = self._account(actor)
+        # Before the lock and before the entity lookup: a dead credential is the more
+        # actionable of the two problems, and answering it costs nothing.
+        self.accounts.usable(actor, scope=SCOPE_READONLY, feature="la sincronizzazione")
         addresses = self._addresses_of(entity_type, entity_id)
         if not addresses:
             # A report of zero would be indistinguishable from "we looked and there was
@@ -347,11 +358,30 @@ class GmailSyncService:
             account.refresh_token_nonce,
             decode_google_token_key(self.settings),
         )
-        return self.tokens.access_token(
-            account_id=account.id,
-            email_address=account.email_address,
-            refresh_token=refresh_token,
-        )
+        try:
+            return self.tokens.access_token(
+                account_id=account.id,
+                email_address=account.email_address,
+                refresh_token=refresh_token,
+            )
+        except CredentialRevoked:
+            # The one place in the system that can *learn* this: only a refresh gets
+            # `invalid_grant` back. Recorded here, therefore, and not swallowed --
+            # `mark_revoked` commits the state and the timeline entry on its own behalf
+            # so the fact outlives this cycle's rollback, and then the exception
+            # continues so the caller stops rather than carrying on against a dead
+            # credential.
+            #
+            # The sentence is written here rather than derived from the exception: it is
+            # what the user reads, so it carries no error code, no upstream prose and no
+            # token.
+            GoogleAccountService(self.session, settings=self.settings).mark_revoked(
+                account,
+                Actor.system(),
+                f"Il consenso Google per {account.email_address} è stato revocato: "
+                "ricollega la casella da Impostazioni → Gmail.",
+            )
+            raise
 
     def _window_start(self, account: GoogleAccount) -> datetime:
         if account.sync_watermark is not None:

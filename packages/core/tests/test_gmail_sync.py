@@ -33,6 +33,7 @@ from fakes.gmail_fixtures import (
 from sqlalchemy import Engine, delete, func, select
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.activities.models import Activity
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.auth.models import User
 from pigrocrm.core.customers.models import Customer
@@ -520,9 +521,9 @@ def committed_account(db_engine: Engine) -> Iterator[tuple[UUID, UUID, str]]:
     address = f"race-{uuid4().hex[:8]}@acme.it"
     with factory() as session:
         account = connected_account(session)
-        _customer(session, address, f"Race {uuid4().hex[:6]}")
+        customer = _customer(session, address, f"Race {uuid4().hex[:6]}")
         session.commit()
-        ids = (account.user_id, account.id)
+        ids = (account.user_id, account.id, customer.id)
     try:
         yield ids[0], ids[1], address
     finally:
@@ -532,6 +533,13 @@ def committed_account(db_engine: Engine) -> Iterator[tuple[UUID, UUID, str]]:
             # whatever state the test left it in.
             session.execute(delete(User).where(User.id == ids[0]))
             session.execute(delete(Customer).where(Customer.email == address))
+            # `activities` deliberately has no foreign key to anything -- `entity_id`
+            # addresses whichever table `entity_type` names -- so nothing cascades, and
+            # the cycles these two tests really commit would leave their timeline
+            # entries behind in a database every other test shares. Alphabetical
+            # collection order happened to hide it; that is not a property any test
+            # should depend on.
+            session.execute(delete(Activity).where(Activity.entity_id.in_(ids[1:])))
             session.commit()
 
 
