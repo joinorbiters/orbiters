@@ -33,7 +33,10 @@ class Customer(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     comune: Mapped[str | None] = mapped_column(String(120), default=None)
     provincia: Mapped[str | None] = mapped_column(String(2), default=None)
     nazione: Mapped[str] = mapped_column(String(2), nullable=False, default="IT")
-    email: Mapped[str | None] = mapped_column(String(320), default=None)
+    # Indexed for the same reason people.email is: Gmail relevance resolution
+    # (gmail/roster.py) looks an address up in both tables on every message it
+    # considers, and an unindexed lookup there is a sequential scan per message.
+    email: Mapped[str | None] = mapped_column(String(320), default=None, index=True)
     telefono: Mapped[str | None] = mapped_column(String(40), default=None)
     sito_web: Mapped[str | None] = mapped_column(String(255), default=None)
     stato: Mapped[str | None] = mapped_column(String(40), default=None)
