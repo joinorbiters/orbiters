@@ -76,6 +76,29 @@ class GmailSyncService:
         actor.require_write(_SYNC_ACTION)
         account = self._account(actor)
         started_at = datetime.now(UTC)
+
+        if not self.repo.try_sync_lock(account.id):
+            # A cron every fifteen minutes and a human pressing the button is not a
+            # hypothetical. Not an error and not a wait: the second caller gets a report
+            # that says what is happening and since when, and spends nothing -- no token
+            # refresh, no listing, no thread fetch.
+            return SyncReport(
+                started_at=started_at,
+                already_running=True,
+                running_since=self.repo.sync_started_at(account.id),
+            )
+        try:
+            return self._run_cycle(account, actor, started_at)
+        finally:
+            # `finally`, so a raised cycle does not leak the lock. A leaked advisory lock
+            # travels back into the connection pool with its connection and makes every
+            # later sync for this mailbox answer "already running" for the life of the
+            # process, which is indistinguishable from a hung job.
+            self.repo.release_sync_lock(account.id)
+
+    def _run_cycle(self, account: GoogleAccount, actor: Actor, started_at: datetime) -> SyncReport:
+        """One whole cycle, holding the mailbox's lock from the first statement to the
+        commit. Never called except through `sync`, which owns that lock."""
         report = SyncReport(started_at=started_at)
 
         report.states_pruned = self.repo.prune_states(started_at)
