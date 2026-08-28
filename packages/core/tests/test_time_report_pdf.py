@@ -10,6 +10,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
+from orologio import congela
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
@@ -17,6 +18,7 @@ from pigrocrm.core.emitter.schemas import EmitterProfileUpsert
 from pigrocrm.core.emitter.service import EmitterProfileService
 from pigrocrm.core.errors import PermissionDenied, ValidationFailed
 from pigrocrm.core.templates.service import TemplateService
+from pigrocrm.core.timetracking import report as report_module
 from pigrocrm.core.timetracking.report import (
     TIME_REPORT_TEMPLATE_NOME,
     TimeReportService,
@@ -183,3 +185,36 @@ def test_the_pdf_renders_and_contains_the_hostile_description_verbatim(
         assert fragment in text, fragment
     assert "\\@mario" not in text and "\\[fase 1\\]" not in text
     assert "Totale ore" in text and "3,75" not in text  # the PDF prints 2.50 for one entry
+
+
+def test_the_compilation_date_is_italys_own_day_not_the_processs(
+    db_session: Session,
+    seeded_deal_id: UUID,
+    seeded_user_id: UUID,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`oggi` is the date printed at the head of the timesheet the client receives next
+    to the invoice, so it is a date in the issuer's calendar -- `clock.py`'s rule, and
+    the same rule `_italian_date` already states for every row.
+
+    Frozen at 00:30 on 1 January in Rome, which a process running in UTC (the API image
+    does) still reads as 31 December. The entries are written before the freeze, because
+    what is under test is the compilation date and not the rows.
+    """
+    service = TimeEntryService(db_session)
+    service.create(
+        TimeEntryCreate(
+            deal_id=seeded_deal_id,
+            user_id=seeded_user_id,
+            data=date(2025, 12, 3),
+            ore=Decimal("2.00"),
+            descrizione="Dicembre",
+        ),
+        WRITER,
+    )
+
+    congela(monkeypatch, report_module)
+    variables = TimeReportService(db_session, storage=None).variables_for(
+        seeded_deal_id, "2025-12", WRITER
+    )
+    assert variables["oggi"] == "01/01/2026"

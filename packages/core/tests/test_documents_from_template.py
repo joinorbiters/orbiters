@@ -2,10 +2,12 @@ import shutil
 from pathlib import Path
 
 import pytest
+from orologio import OGGI_IN_ITALIA, congela
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.documents import service as documents_service_module
 from pigrocrm.core.documents.schemas import DocumentCreate, DocumentFromTemplate
 from pigrocrm.core.documents.service import OFFER_TRANSITIONS, DocumentService
 from pigrocrm.core.emitter.schemas import EmitterProfileUpsert
@@ -248,3 +250,50 @@ def test_a_state_change_leaves_a_timeline_entry(setup: tuple, db_session: Sessio
     service.set_offer_state(document.id, "inviata", ADMIN)
     kinds = [a.kind for a in ActivityService(db_session).timeline("document", document.id)]
     assert "state_changed" in kinds
+
+
+def test_oggi_defaults_to_italys_own_day_not_the_processs(
+    db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`{{oggi}}` is the date a template prints on the document itself. It is a date in
+    the issuer's calendar, so it comes off Italy's clock and not the host's -- see
+    `clock.py`.
+
+    Frozen at 00:30 on 1 January in Rome, which a process running in UTC (the API image
+    does) still reads as 31 December: same hour, different day, different *year*, on a
+    document whose rendered markdown and PDF are then frozen into an immutable version
+    that `regenerate` faithfully reproduces. Nothing downstream corrects it, which is
+    why the assertion is on the compiled source rather than on which function was
+    called.
+    """
+    EmitterProfileService(db_session).upsert(
+        EmitterProfileUpsert(ragione_sociale="Humancraft di Ivan Sala", partita_iva="14518240966"),
+        ADMIN,
+    )
+    template = TemplateService(db_session).create(
+        TemplateCreate(
+            nome="Offerta datata",
+            tipo="offerta",
+            corpo_markdown="Milano, {{oggi}}\n",
+            variabili_dichiarate=[],
+        ),
+        ADMIN,
+    )
+    customer = Customer(ragione_sociale="ACME S.r.l.")
+    db_session.add(customer)
+    db_session.flush()
+    service = DocumentService(db_session, LocalFileStorage(tmp_path))
+
+    congela(monkeypatch, documents_service_module)
+    document = service.create_from_template(
+        DocumentFromTemplate(
+            template_id=template.id, customer_id=customer.id, titolo="Offerta", variabili={}
+        ),
+        ADMIN,
+    )
+
+    stored = service.repo.version(document.id, 1)
+    assert stored is not None
+    # `escape_markdown` backslash-escapes every ASCII punctuation character, so the ISO
+    # date never reaches the compiled markdown literally -- only in its escaped form.
+    assert escape_markdown(OGGI_IN_ITALIA.isoformat()) in stored.sorgente_markdown
