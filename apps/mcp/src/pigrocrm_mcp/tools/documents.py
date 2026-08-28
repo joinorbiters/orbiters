@@ -1,11 +1,22 @@
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
+
+from pydantic import Field, TypeAdapter
 
 from pigrocrm.core.documents.schemas import DocumentFromTemplate, DocumentListQuery
 from pigrocrm.core.documents.service import DocumentService
 from pigrocrm.core.templates.schemas import TemplateListQuery
 from pigrocrm.core.templates.service import TemplateService
 from pigrocrm_mcp.context import McpContext
+
+# A version number arrives as `int | str` (see `tools/__init__.py`'s note on why every
+# scalar tool parameter has to stay permissive at the SDK boundary) and is validated
+# here, inside the guarded call, where a bad value becomes rendered guidance instead of
+# the SDK's own raw dump. Through pydantic rather than a bare `int(...)`: `int("prima")`
+# raises a `ValueError` the guard renders with `_malformed_identifier_error`'s text --
+# "non è un identificativo valido", true of a UUID and nonsense about a version number --
+# whereas pydantic's `int_parsing` already has its own translation in `errors.py`.
+_NUMERO: TypeAdapter[int] = TypeAdapter(Annotated[int, Field(ge=1)])
 
 
 def _documents(context: McpContext) -> DocumentService:
@@ -61,3 +72,31 @@ def list_templates(context: McpContext, include_archived: bool) -> dict[str, Any
 def describe_template(context: McpContext, template_id: str) -> dict[str, Any]:
     described = TemplateService(context.session).describe(UUID(template_id), context.actor)
     return described.model_dump(mode="json")
+
+
+def preview_template(
+    context: McpContext, template_id: str, variabili: dict[str, Any]
+) -> dict[str, Any]:
+    """Markdown, not a document and not bytes: `preview` renders and returns, storing
+    nothing. It is the read `describe_template` leads to -- what the values an agent is
+    about to pass would actually produce -- so it is exposed for the same reason
+    `describe_template` is, and returns a string because that is all `TemplateService.
+    preview` has to give."""
+    markdown = TemplateService(context.session).preview(UUID(template_id), variabili, context.actor)
+    return {"template_id": template_id, "markdown": markdown}
+
+
+def regenerate_version(context: McpContext, document_id: str, numero: int | str) -> dict[str, Any]:
+    version = _documents(context).regenerate(
+        UUID(document_id), _NUMERO.validate_python(numero), context.actor
+    )
+    return version.model_dump(mode="json")
+
+
+def archive(context: McpContext, document_id: str) -> dict[str, str]:
+    _documents(context).soft_delete(UUID(document_id), context.actor)
+    return {"status": "archiviato", "document_id": document_id}
+
+
+def restore(context: McpContext, document_id: str) -> dict[str, Any]:
+    return _documents(context).restore(UUID(document_id), context.actor).model_dump(mode="json")

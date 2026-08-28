@@ -15,6 +15,8 @@ from pigrocrm.core.invoices.schemas import InvoiceListQuery
 from pigrocrm.core.people.schemas import PersonListQuery, PersonUpdate
 from pigrocrm.core.pipeline.service import PipelineService
 from pigrocrm.core.timetracking.schemas import (
+    ANNO_MAX,
+    ANNO_MIN,
     CostListQuery,
     CostUpdate,
     TimeEntryListQuery,
@@ -132,6 +134,26 @@ OptionalFactor = Annotated[
         {"anyOf": [{"type": "number", "minimum": 0}, {"type": "null"}], "default": None}
     ),
 ]
+
+# Two more integers on the same pattern, and for the same reason as `BoundedLimit`: a
+# bare `int` lets the SDK reject a wrong-typed argument ahead of `_guard`. Neither has a
+# `*ListQuery` behind it to do the validating, so the call-throughs
+# (`tools/timetracking.py::_ANNO`, `tools/documents.py::_NUMERO`) each carry a
+# `TypeAdapter` for the bounds advertised here -- the alias decides what `list_tools()`
+# shows, never what is enforced.
+OptionalAnno = Annotated[
+    int | str | None,
+    WithJsonSchema(
+        {
+            "anyOf": [
+                {"type": "integer", "minimum": ANNO_MIN, "maximum": ANNO_MAX},
+                {"type": "null"},
+            ],
+            "default": None,
+        }
+    ),
+]
+VersionNumber = Annotated[int | str, WithJsonSchema({"type": "integer", "minimum": 1})]
 
 
 def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[..., Any]) -> None:
@@ -445,6 +467,12 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
     # base64 PDF inside a model's own context is waste and risk. Every tool below
     # returns an identifier -- the bytes are fetched separately, over the REST API,
     # by whatever already holds the download URL.
+    #
+    # `preview_template` is the one that returns text, and it is not an exception to
+    # that rule: it renders the Markdown from values the caller just supplied and
+    # stores nothing, so there is no artefact being pulled out of the storage layer
+    # that versions and audits it. `DocumentService.download` remains unexposed;
+    # so does `add_version`, which would need bytes MCP does not produce.
 
     @mcp.tool()
     @guard
@@ -501,6 +529,17 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
 
     @mcp.tool()
     @guard
+    def preview_template(
+        template_id: str, variabili: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Rende un template con le variabili indicate e restituisce il Markdown, senza
+        creare nessun documento e senza produrre nessun file. Serve a verificare un
+        testo prima di `create_document_from_template`: se una variabile obbligatoria
+        manca lo dice qui, dove non resta niente da annullare."""
+        return documents.preview_template(context, template_id, variabili or {})
+
+    @mcp.tool()
+    @guard
     def create_document_from_template(
         template_id: str,
         titolo: str,
@@ -529,6 +568,31 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
         """Cambia lo stato di un'offerta. Transizioni ammesse: bozza -> inviata;
         inviata -> accettata | rifiutata | bozza. Accettata e rifiutata sono finali."""
         return documents.set_state(context, document_id, stato)
+
+    @mcp.tool()
+    @guard
+    def regenerate_document_version(document_id: str, numero: VersionNumber) -> dict[str, Any]:
+        """Rigenera una versione gia' prodotta come nuova versione, dal template e dalle
+        variabili congelate su quella di partenza: non decide niente di nuovo, e la
+        versione originale resta nello storico. `cliente`, `emittente` e la data vengono
+        riletti al momento del rendering, quindi il PDF coincide con l'originale finche'
+        quei dati non cambiano. Non si rigenera una versione caricata a mano: senza
+        template non c'e' niente da riprodurre. Restituisce l'identificativo della nuova
+        versione, non i byte."""
+        return documents.regenerate_version(context, document_id, numero)
+
+    @mcp.tool()
+    @guard
+    def archive_document(document_id: str) -> dict[str, str]:
+        """Archivia un documento (reversibile con `restore_document`). I file restano
+        dove sono: un ripristino che tornasse senza il PDF non sarebbe un ripristino."""
+        return documents.archive(context, document_id)
+
+    @mcp.tool()
+    @guard
+    def restore_document(document_id: str) -> dict[str, Any]:
+        """Ripristina un documento archiviato."""
+        return documents.restore(context, document_id)
 
     # -- Invoices -------------------------------------------------------------
     #
@@ -641,6 +705,14 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
         """Il regime fiscale configurato e i parametri che decidono aliquote, natura
         e bollo. Utile per capire perche' una riga ha una certa IVA."""
         return invoices.describe_fiscal_profile(context)
+
+    @mcp.tool()
+    @guard
+    def describe_emitter_profile() -> dict[str, Any]:
+        """Chi emette: ragione sociale, partita IVA, indirizzo e recapiti che finiscono
+        nell'intestazione di ogni fattura e di ogni documento. Da leggere prima di
+        scrivere un testo che li ripete, invece di chiederli all'utente."""
+        return invoices.describe_emitter_profile(context)
 
     # ---- time tracking -----------------------------------------------------
     # An agent may record and read. It may not change what already-recorded numbers
@@ -855,6 +927,15 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
         """Elenca le categorie di costo configurate. Crearle, archiviarle e
         ripristinarle è configurazione e si fa dall'app, non da qui."""
         return timetracking.list_cost_categories(context, include_archived)
+
+    @mcp.tool()
+    @guard
+    def list_period_locks(anno: OptionalAnno = None) -> dict[str, Any]:
+        """Elenca i mesi chiusi, dal più recente. Un mese chiuso rifiuta ogni scrittura
+        di ore e costi datata in quel mese: leggi qui prima di registrare voci vecchie,
+        invece di scoprirlo un rifiuto alla volta. Chiudere e riaprire un periodo si fa
+        dall'app, non da qui."""
+        return timetracking.list_period_locks(context, anno)
 
     # ---- analytics ---------------------------------------------------------
     # Reads only. `bind_time_to_invoice` has no tool because binding hours to a draft

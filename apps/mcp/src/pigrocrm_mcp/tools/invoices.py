@@ -11,6 +11,7 @@ from datetime import date
 from typing import Any
 from uuid import UUID
 
+from pigrocrm.core.emitter.service import EmitterProfileService
 from pigrocrm.core.errors import Conflict
 from pigrocrm.core.fiscal.service import FiscalProfileService
 from pigrocrm.core.invoices.schemas import (
@@ -155,3 +156,15 @@ def set_payment_state(
 
 def describe_fiscal_profile(context: McpContext) -> dict[str, Any]:
     return FiscalProfileService(context.session).describe(context.actor)
+
+
+def describe_emitter_profile(context: McpContext) -> dict[str, Any]:
+    """Who the invoices and the documents say they come from.
+
+    `EmitterProfileService.get` is one of the two reads in this product deliberately
+    left un-role-gated at the service layer, because the PDF header needs it for every
+    role -- so there is no role for which this is agent-only knowledge. `logo_key` and
+    `firma_key` are storage keys, not bytes, exactly like every other identifier this
+    surface returns; the write on the same row (`upsert`) has no tool at all.
+    """
+    return EmitterProfileService(context.session).get(context.actor).model_dump(mode="json")
