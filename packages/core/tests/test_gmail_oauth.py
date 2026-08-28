@@ -21,6 +21,7 @@ import json
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
+from uuid import uuid4
 
 import pytest
 from fakes.fake_gmail import FakeGmail
@@ -33,7 +34,12 @@ from pigrocrm.core.auth.models import User
 from pigrocrm.core.config import Settings
 from pigrocrm.core.errors import Conflict, DomainError, PermissionDenied
 from pigrocrm.core.gmail.crypto import unseal
-from pigrocrm.core.gmail.models import GoogleAccount, GoogleOAuthState
+from pigrocrm.core.gmail.models import (
+    GmailMessage,
+    GmailMessageLink,
+    GoogleAccount,
+    GoogleOAuthState,
+)
 from pigrocrm.core.gmail.oauth import GmailOAuthService
 from pigrocrm.core.gmail.repository import GmailRepository
 from pigrocrm.core.gmail.schemas import REQUESTED_SCOPES, SCOPE_READONLY, SCOPE_SEND
@@ -563,6 +569,26 @@ def test_a_readonly_actor_can_neither_start_nor_disconnect(db_session: Session) 
 # --- disconnect ----------------------------------------------------------------------
 
 
+def _stored_message(session: Session, account: GoogleAccount, gmail_id: str) -> GmailMessage:
+    message = GmailMessage(
+        google_account_id=account.id,
+        gmail_message_id=gmail_id,
+        gmail_thread_id="t1",
+        direction="inbound",
+        from_address="info@acme.it",
+        to_addresses=[account.email_address],
+        cc_addresses=[],
+        subject="Oggetto",
+        snippet="anteprima",
+        internal_date=datetime.now(UTC),
+        body_text="corpo",
+        attachments=[],
+    )
+    session.add(message)
+    session.flush()
+    return message
+
+
 def test_disconnect_overwrites_the_credential_rather_than_dereferencing_it(
     db_session: Session,
 ) -> None:
@@ -584,11 +610,14 @@ def test_disconnect_overwrites_the_credential_rather_than_dereferencing_it(
 
 
 def test_disconnect_records_the_choice_about_the_stored_messages(db_session: Session) -> None:
-    """The choice is audited because it is destructive and irreversible; B1-8 attaches
-    the deletion itself to the same flag."""
+    """The choice is audited because it is destructive and irreversible, and the count
+    goes into the same entry: it is the only place the size of what was destroyed
+    survives the destruction."""
     user = _user(db_session)
     service = _service(db_session, _fake())
     service.complete(code="c", state=_state_of(service, _actor(user)), actor=_actor(user))
+    account = db_session.execute(select(GoogleAccount)).scalars().one()
+    _stored_message(db_session, account, "m1")
 
     service.disconnect(delete_messages=True, actor=_actor(user))
 
@@ -600,6 +629,45 @@ def test_disconnect_records_the_choice_about_the_stored_messages(db_session: Ses
         .one()
     )
     assert payload["messaggi_cancellati"] is True
+    assert payload["messaggi_cancellati_conteggio"] == 1
+
+
+def test_disconnecting_with_deletion_removes_the_messages_and_their_links(
+    db_session: Session,
+) -> None:
+    """The other half of the choice above, which until this task did nothing at all.
+    The links go with the messages by ON DELETE CASCADE rather than by a second
+    statement: a link to a message that no longer exists is a row nothing can render
+    and nothing would ever clean up."""
+    user = _user(db_session)
+    service = _service(db_session, _fake())
+    service.complete(code="c", state=_state_of(service, _actor(user)), actor=_actor(user))
+    account = db_session.execute(select(GoogleAccount)).scalars().one()
+    message = _stored_message(db_session, account, "m1")
+    db_session.add(
+        GmailMessageLink(gmail_message_id=message.id, entity_type="customer", entity_id=uuid4())
+    )
+    db_session.flush()
+
+    service.disconnect(delete_messages=True, actor=_actor(user))
+
+    assert db_session.execute(select(GmailMessage)).scalars().all() == []
+    assert db_session.execute(select(GmailMessageLink)).scalars().all() == []
+
+
+def test_disconnecting_without_deletion_keeps_the_correspondence(db_session: Session) -> None:
+    """Deleting a customer's correspondence because a token expired would be a
+    disaster. The default is to keep it, and the credential is destroyed either way."""
+    user = _user(db_session)
+    service = _service(db_session, _fake())
+    service.complete(code="c", state=_state_of(service, _actor(user)), actor=_actor(user))
+    account = db_session.execute(select(GoogleAccount)).scalars().one()
+    _stored_message(db_session, account, "m1")
+
+    service.disconnect(delete_messages=False, actor=_actor(user))
+
+    kept = db_session.execute(select(GmailMessage.gmail_message_id)).scalars().all()
+    assert kept == ["m1"]
 
 
 def test_disconnecting_nothing_is_a_refusal_and_not_a_silent_success(

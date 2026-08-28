@@ -143,6 +143,16 @@ _CREDENZIALI: dict[Method, str] = {
     "Google verso il callback: nessun agente puo' averlo",
     ("GmailOAuthService", "disconnect"): "revocare l'accesso a una casella di terzi (e "
     "cancellarne la corrispondenza) e' una decisione della persona",
+    ("GmailSyncService", "sync"): (
+        "il consenso a leggere la casella e' della persona, e lo e' anche il momento in "
+        "cui viene esercitato: `sync` va a prendere posta da un servizio terzo, sotto "
+        "l'autorizzazione OAuth di quella persona e a carico della sua quota Gmail, "
+        "quindi un agente che lo invocasse (o lo ritentasse) spenderebbe una risorsa "
+        "che non e' sua. Non toglie nulla all'agente: quello che serve leggere e' la "
+        "copia gia' archiviata in `gmail_messages`, che il pulsante o il cron della "
+        "persona tengono aggiornata, ed e' su quella che B1-14 decide gli strumenti di "
+        "lettura e ricerca"
+    ),
     ("PatService", "create"): "un agente non conia le proprie credenziali",
     ("PatService", "list"): "l'elenco dei token e' materiale di sicurezza",
     ("PatService", "revoke"): "revocare token e' amministrazione dell'account",

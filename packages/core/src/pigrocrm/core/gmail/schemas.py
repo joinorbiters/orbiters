@@ -40,3 +40,53 @@ class GoogleAccountRead(BaseModel):
     gmail_store_bodies: bool
     connected_at: datetime
     disconnected_at: datetime | None
+
+
+class SyncReport(BaseModel):
+    """What one cycle did. Returned by the REST endpoint and by the MCP tool, so an
+    agent can diagnose instead of retrying.
+
+    Deliberately not `frozen`: `sync()` fills the counters in as the cycle runs, so that
+    a report exists -- and is truthful about how far the cycle got -- at every point
+    rather than only at the end.
+
+    Every field is a number, a timestamp or a flag. There is no room in it for a
+    subject, an address or a body, which is what makes it safe to log and to hand to an
+    agent.
+    """
+
+    started_at: datetime
+    already_running: bool = False
+    running_since: datetime | None = None
+    queries_issued: int = 0
+    threads_fetched: int = 0
+    messages_stored: int = 0
+    messages_skipped: int = 0
+    links_created: int = 0
+    states_pruned: int = 0
+
+
+class GmailMessageRead(BaseModel):
+    """One stored message, as the API and the MCP surface show it.
+
+    Read-only, so no `max_length` and no `SafeStr` anywhere: nothing here is ever an
+    input. `body_text` is empty when the account has `gmail_store_bodies` off, which is
+    the declared degradation of spec 5.4 and not a missing value.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    gmail_message_id: str
+    gmail_thread_id: str
+    direction: Literal["inbound", "outbound"]
+    from_address: str
+    to_addresses: list[str]
+    cc_addresses: list[str]
+    subject: str
+    snippet: str
+    internal_date: datetime
+    body_text: str
+    body_truncated: bool
+    body_html_scartato: bool
+    attachments: list[dict[str, object]]
