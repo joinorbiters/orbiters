@@ -322,8 +322,35 @@ async def test_archive_customer_is_reversible_and_blocks_on_active_deals(
 
         await client.call_tool("archive_deal", {"deal_id": deal["id"]})
         ok = await client.call_tool("archive_customer", {"customer_id": customer["id"]})
+        assert not ok.is_error
 
-    assert not ok.is_error
+        # "Reversibile" in the tool's own description, now actually reversed. The three
+        # archive tools promised it while no restore tool existed at all: an agent that
+        # archived the wrong customer had no way back through MCP, although a person had
+        # one over REST the whole time. `test_mcp_surface_coverage.py` is what found the
+        # asymmetry -- `CustomerService.restore`, `DealService.restore` and
+        # `PersonService.restore` were the only `restore` methods with no tool, while
+        # `restore_cost` and `restore_time_entry` have had one since slice 4.
+        restored = _payload(
+            await client.call_tool("restore_customer", {"customer_id": customer["id"]})
+        )
+        assert restored["id"] == customer["id"]
+        deal_again = _payload(await client.call_tool("restore_deal", {"deal_id": deal["id"]}))
+        assert deal_again["id"] == deal["id"]
+
+
+async def test_a_person_archived_by_an_agent_can_be_restored_by_one(server) -> None:
+    """The same round trip on `people`, which has no "deal attivi" guard to complicate
+    it: archiving is exposed, so its inverse has to be, or the agent's own mistake is
+    correctable only by a human with a browser."""
+    async with Client(server) as client:
+        person = _payload(await client.call_tool("create_person", {"nome": "Giulia"}))
+        assert not (await client.call_tool("archive_person", {"person_id": person["id"]})).is_error
+        assert (await client.call_tool("get_person", {"person_id": person["id"]})).is_error
+
+        restored = _payload(await client.call_tool("restore_person", {"person_id": person["id"]}))
+        assert restored["id"] == person["id"]
+        assert not (await client.call_tool("get_person", {"person_id": person["id"]})).is_error
 
 
 async def test_create_person_without_a_customer_is_allowed(server) -> None:

@@ -226,8 +226,15 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
     @mcp.tool()
     @guard
     def archive_customer(customer_id: str) -> dict[str, str]:
-        """Archivia un cliente (reversibile). Fallisce se ha deal attivi."""
+        """Archivia un cliente (reversibile con `restore_customer`). Fallisce se ha
+        deal attivi."""
         return customers.archive(context, customer_id)
+
+    @mcp.tool()
+    @guard
+    def restore_customer(customer_id: str) -> dict[str, Any]:
+        """Ripristina un cliente archiviato."""
+        return customers.restore(context, customer_id)
 
     # ---- people ----------------------------------------------------------
 
@@ -308,8 +315,14 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
     @mcp.tool()
     @guard
     def archive_person(person_id: str) -> dict[str, str]:
-        """Archivia una persona (reversibile)."""
+        """Archivia una persona (reversibile con `restore_person`)."""
         return people.archive(context, person_id)
+
+    @mcp.tool()
+    @guard
+    def restore_person(person_id: str) -> dict[str, Any]:
+        """Ripristina una persona archiviata."""
+        return people.restore(context, person_id)
 
     # ---- deals -----------------------------------------------------------
 
@@ -397,8 +410,14 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
     @mcp.tool()
     @guard
     def archive_deal(deal_id: str) -> dict[str, str]:
-        """Archivia un deal (reversibile)."""
+        """Archivia un deal (reversibile con `restore_deal`)."""
         return deals.archive(context, deal_id)
+
+    @mcp.tool()
+    @guard
+    def restore_deal(deal_id: str) -> dict[str, Any]:
+        """Ripristina un deal archiviato."""
+        return deals.restore(context, deal_id)
 
     # ---- shared ------------------------------------------------------------
 

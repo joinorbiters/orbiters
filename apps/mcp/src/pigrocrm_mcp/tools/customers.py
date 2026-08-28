@@ -36,3 +36,11 @@ def search(context: McpContext, query: CustomerListQuery) -> dict[str, Any]:
 def archive(context: McpContext, customer_id: str) -> dict[str, str]:
     CustomerService(context.session).soft_delete(UUID(customer_id), context.actor)
     return {"status": "archiviato", "customer_id": customer_id}
+
+
+def restore(context: McpContext, customer_id: str) -> dict[str, Any]:
+    return (
+        CustomerService(context.session)
+        .restore(UUID(customer_id), context.actor)
+        .model_dump(mode="json")
+    )

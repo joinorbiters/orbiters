@@ -22,55 +22,18 @@ from pigrocrm.core.invoices.schemas import (
 from pigrocrm.core.invoices.service import InvoiceService
 from pigrocrm_mcp.context import McpContext
 
-# Operations that must **never** be reachable from MCP. Asserted to be exactly these
-# four names by the ban test: adding a tool for one of them breaks the build, and
-# removing a name without adding the tool breaks it too.
-MCP_FORBIDDEN_OPERATIONS: frozenset[str] = frozenset(
-    {
-        "issue_invoice",
-        "annul_invoice",
-        "mark_transmitted_externally",
-        "update_fiscal_profile",
-    }
-)
-
-# Public service methods with no tool that are **not** forbidden -- they simply have no
-# audience on the agentic surface. Each carries its reason, so the distinction between
-# "must never be exposed" and "happens not to be exposed" stays visible.
+# Three tables used to live here: which operations are forbidden, which public methods
+# are simply unexposed and why, and which method backs which tool name. They are gone,
+# and their content lives in `apps/mcp/tests/test_mcp_surface_coverage.py`, keyed by
+# `(service class, method)` and covering every service rather than these two.
 #
-# `render_pdf` is deliberately absent from this table: it names a method that was
-# never implemented. `InvoiceService`'s only artefact method is `produce_artifacts`,
-# which is classified below and is what `render_proforma_pdf` actually calls.
-MCP_UNEXPOSED_OPERATIONS: dict[str, str] = {
-    "update": "note interne e campi custom: nessun agente ha motivo di scriverli, e "
-    "la causale e' congelata dopo l'emissione",
-    "soft_delete": "la spec dello slice 1 ha gia' deciso che l'MCP non espone delete distruttivi",
-    "confirm_proforma": "e' la conferma umana che precede l'emissione: l'agente "
-    "prepara, la persona conferma",
-    "export_xml": "l'XML esiste solo per una fattura emessa, e l'MCP non emette; "
-    "get_invoice_xml_url restituisce l'URL di uno gia' prodotto",
-    "produce_artifacts": "esposto come render_proforma_pdf, che rifiuta una fattura "
-    "e restituisce solo l'artefatto PDF",
-    "download": "l'MCP non restituisce mai byte, solo identificativi e URL (spec slice 2 §7)",
-    "lines": "get_invoice restituisce gia' la fattura con le sue righe",
-    "snapshot": "lettura interna del profilo fiscale, senza actor e senza audience",
-    "get": "esposto come get_invoice / describe_fiscal_profile",
-}
-
-# Which operation name each public service method belongs to, for the operations that
-# *are* exposed or forbidden. `get` appears in MCP_UNEXPOSED_OPERATIONS because both
-# services define one and the tools call the domain-specific wrappers below.
-SERVICE_METHOD_TO_OPERATION: dict[str, str] = {
-    "list": "list_invoices",
-    "create": "create_proforma",
-    "replace_lines": "replace_proforma_lines",
-    "set_payment_state": "set_invoice_payment_state",
-    "describe": "describe_fiscal_profile",
-    "issue": "issue_invoice",
-    "annul": "annul_invoice",
-    "mark_transmitted_externally": "mark_transmitted_externally",
-    "upsert": "update_fiscal_profile",
-}
+# Not a tidying. They claimed to be enforced -- "asserted to be exactly these four names
+# by the ban test" -- and nothing imported them: no test read a single one, so all three
+# had already drifted. `MCP_FORBIDDEN_OPERATIONS` named `update_fiscal_profile`, which
+# `test_mcp_invoice_ban.py` does not ban; `MCP_UNEXPOSED_OPERATIONS` was keyed on bare
+# method names, so its `get` and `update` entries silently spoke for a dozen services
+# that also define one. Documentation that describes a guarantee nobody checks is worse
+# than none: it reads exactly like the guarantee.
 
 
 def _invoices(context: McpContext) -> InvoiceService:
