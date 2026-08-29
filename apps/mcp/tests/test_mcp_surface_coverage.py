@@ -126,16 +126,30 @@ _INTERNE: dict[Method, str] = {
 #    which inherits its owner's full role and never expires (residuo R10), so a tool that
 #    minted or revoked one would let a token extend or destroy its own access. Creating
 #    users is the same hole with a longer fuse.
-#    Il flusso OAuth di Gmail sta qui per lo stesso motivo, e in modo *permanente*: non
-#    e' una decisione rinviata a B1-14, che sceglie quali strumenti Gmail esporre fra
-#    lettura, ricerca e invio. `start` restituisce un URL di consenso che solo un
-#    browser umano puo' percorrere -- un agente che lo ricevesse non potrebbe fare
-#    altro che passarlo a qualcuno -- e `complete` richiede un `code` che esiste solo
-#    dentro quel redirect, quindi nessuno dei due e' eseguibile da un canale
-#    strumentale. `disconnect` e' il verso opposto: distrugge una credenziale verso un
-#    servizio *terzo* e, con `delete_messages`, la corrispondenza archiviata. Nessuna
-#    delle tre e' un'operazione che l'agente compie al posto della persona: sono la
-#    persona che decide quale casella il CRM puo' leggere.
+#    Tutto Gmail, tranne le tre letture, sta qui -- e la decisione e' stata presa in
+#    B1-14, che possiede la superficie MCP di 5B. La riga che la divide non e'
+#    "lettura contro scrittura" ma *di chi e' la risorsa, e di chi la decisione*:
+#
+#      * quello che l'agente puo' fare e' leggere lo specchio gia' archiviato in
+#        `gmail_messages` e lo stato della credenziale (`list_gmail_messages`,
+#        `get_gmail_message`, `describe_gmail_account`). Nessuna delle tre chiama
+#        Google, nessuna consuma la quota Gmail di qualcuno, nessuna esercita un
+#        consenso: leggono righe che questo CRM ha gia' deciso di tenere;
+#      * quello che non puo' fare e' *andare a prendere* la posta (`sync`,
+#        `backfill`), collegare o scollegare una casella, decidere cosa il CRM
+#        conserva, e inviare. In ognuno di questi casi la risorsa o la decisione
+#        appartengono alla persona, non all'agente.
+#
+#    `start` restituisce un URL di consenso che solo un browser umano puo' percorrere
+#    -- un agente che lo ricevesse non potrebbe fare altro che passarlo a qualcuno --
+#    e `complete` richiede un `code` che esiste solo dentro quel redirect, quindi
+#    nessuno dei due e' eseguibile da un canale strumentale. `disconnect` e' il verso
+#    opposto: distrugge una credenziale verso un servizio *terzo* e, con
+#    `delete_messages`, la corrispondenza archiviata.
+#
+#    L'assenza dell'invio non e' registrata qui perche' in 5B-1 non esiste ancora un
+#    servizio che invii: il divieto strutturale sui nomi degli strumenti vive in
+#    `test_mcp_invoice_ban.py`, che possiede i divieti per costruzione.
 _CREDENZIALI: dict[Method, str] = {
     ("GmailOAuthService", "start"): "il consenso Google si da' da un browser, non da "
     "un tool: l'URL di autorizzazione non e' percorribile da un agente",
@@ -150,22 +164,19 @@ _CREDENZIALI: dict[Method, str] = {
         "quindi un agente che lo invocasse (o lo ritentasse) spenderebbe una risorsa "
         "che non e' sua. Non toglie nulla all'agente: quello che serve leggere e' la "
         "copia gia' archiviata in `gmail_messages`, che il pulsante o il cron della "
-        "persona tengono aggiornata, ed e' su quella che B1-14 decide gli strumenti di "
-        "lettura e ricerca"
+        "persona tengono aggiornata, ed e' su quella che B1-14 ha costruito "
+        "`list_gmail_messages` e `get_gmail_message`"
     ),
     ("GmailSyncService", "backfill"): (
         "stessa ragione di `sync`, e con una scala diversa: `backfill(full=True)` "
         "rilegge una casella dall'inizio, quindi e' la richiesta piu' costosa che "
         "questa fetta sappia fare sulla quota Gmail di quella persona, e la spec 4.4 la "
-        "vuole esplicita e iniziata da un umano proprio per questo. Esclusione "
-        "provvisoria e non permanente, a differenza di quelle di `GmailOAuthService`: "
-        "B1-14 possiede la superficie MCP di 5B e prevede `backfill_gmail`; quando "
-        "quello strumento esiste questa voce sparisce"
-    ),
-    ("GoogleAccountService", "health"): (
-        "esclusione provvisoria: B1-14 possiede la superficie MCP di 5B e prevede "
-        "`describe_gmail_account`, che e' esattamente questa risposta. Finche' quello "
-        "strumento non esiste non c'e' niente da coprire"
+        "vuole esplicita e iniziata da un umano proprio per questo. B1-14 aveva "
+        "previsto un `backfill_gmail` e ha deciso di non scriverlo: esporre la "
+        "richiesta *piu'* costosa mentre `sync` -- la meno costosa, e per la stessa "
+        "ragione -- resta chiusa non e' una superficie che qualcuno possa spiegare. "
+        "L'esclusione e' quindi permanente come le tre di `GmailOAuthService`, non piu' "
+        "provvisoria"
     ),
     ("GoogleAccountService", "usable"): (
         "non e' un'operazione ma un cancello: lo chiamano `sync` e il percorso di invio "
