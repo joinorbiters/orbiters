@@ -48,6 +48,25 @@ QUERY_MODULE = REPO_ROOT / "packages" / "core" / "src" / "pigrocrm" / "core" / "
 # past a scan for the host alone.
 URL_FRAGMENTS = ("gmail.googleapis.com", "/messages", "/threads")
 
+# The one class of false positive the fragments above cannot tell apart from a Gmail
+# URL: a route path on *our own* API. `GET /api/gmail/messages` reads the CRM's stored
+# copy and never leaves the database, so it is not a listing and cannot escape the
+# address filter -- but its path literal is `/messages` all the same.
+#
+# Named as exact (file, literal) pairs rather than by excluding the file, so a *second*
+# literal in the same module still fails, and rechecked below so a stale entry cannot
+# quietly outlive the route it describes. Concatenating the string to slip past the
+# scan was the alternative and is worse: it would leave the guard green while teaching
+# the next reader the way around it.
+OUR_OWN_ROUTE_PATHS = frozenset(
+    {
+        (
+            REPO_ROOT / "apps" / "api" / "src" / "pigrocrm_api" / "routers" / "gmail.py",
+            "/messages",
+        ),
+    }
+)
+
 
 def test_the_default_batch_is_twenty_addresses() -> None:
     # Twenty, because Gmail's `q` has a practical length limit and twenty addresses
@@ -241,6 +260,8 @@ def test_no_other_module_can_build_a_gmail_listing_url() -> None:
             if path == QUERY_MODULE:
                 continue
             for literal in _string_constants(path):
+                if (path, literal) in OUR_OWN_ROUTE_PATHS:
+                    continue
                 for fragment in URL_FRAGMENTS:
                     if fragment in literal:
                         offenders.append(f"{path.relative_to(REPO_ROOT)}: {literal!r}")
@@ -249,6 +270,18 @@ def test_no_other_module_can_build_a_gmail_listing_url() -> None:
         "altrove sfugge al filtro sugli indirizzi noti (spec 4.1). Usa "
         "messages_list_url / thread_get_url / message_get_url.\n" + "\n".join(offenders)
     )
+
+
+def test_every_allowed_route_path_is_still_a_route_path_in_that_file() -> None:
+    """The allowlist's own guard. An entry that outlived its route would silently widen
+    the scan's blind spot by exactly one literal in exactly the file somebody is most
+    likely to add a Gmail call to."""
+    for path, literal in OUR_OWN_ROUTE_PATHS:
+        assert path.exists(), f"{path} non esiste piu': l'eccezione va rimossa"
+        assert literal in _string_constants(path), (
+            f"{path.relative_to(REPO_ROOT)} non contiene piu' {literal!r}: "
+            "l'eccezione va rimossa insieme alla rotta"
+        )
 
 
 def test_the_guard_above_would_notice_a_hand_built_listing_url(tmp_path: Path) -> None:

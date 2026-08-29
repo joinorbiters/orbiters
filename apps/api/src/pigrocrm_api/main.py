@@ -16,6 +16,7 @@ from pigrocrm_api.routers import (
     emitter,
     fields,
     fiscal_profile,
+    gmail,
     invoices,
     people,
     period_locks,
@@ -70,6 +71,7 @@ def create_app() -> FastAPI:
         cost_categories,
         period_locks,
         analytics,
+        gmail,
     ):
         app.include_router(module.router)
 
