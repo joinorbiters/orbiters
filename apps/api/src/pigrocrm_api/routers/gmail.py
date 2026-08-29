@@ -121,7 +121,12 @@ def _sync(session: Session, settings: Settings) -> GmailSyncService:
 def read_account(session: SessionDep, actor: ActorDep, settings: SettingsDep) -> GmailHealth:
     """200 even when Gmail is not configured -- see the module docstring."""
     if not gmail_configured(settings):
-        return GmailHealth(account=None, banner=None, banner_text=None, missing_scopes=[])
+        # `configured=False` is the whole difference between "questa installazione non
+        # ha Google" and "non hai ancora collegato la casella". Both answer with no
+        # account, and they ask opposite things of the person.
+        return GmailHealth(
+            account=None, banner=None, banner_text=None, missing_scopes=[], configured=False
+        )
     return GoogleAccountService(session, settings=settings).health(actor)
 
 
