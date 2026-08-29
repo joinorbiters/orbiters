@@ -2919,6 +2919,14 @@ export interface components {
          *     `gmail.send` is healthy and syncing, and the settings page still has to be able to
          *     say that sending is off -- which is the same "status is the credential, capability
          *     is the scopes" split the whole module turns on.
+         *
+         *     `configured` is what tells *absent* from *not yet connected*, and it exists because
+         *     `account is None` alone cannot: an installation with no Google client and one whose
+         *     owner simply has not consented yet both answer with no account, and they ask
+         *     opposite things of the person -- "this feature does not exist here" versus "press
+         *     Collega". Without it the settings page has to choose one sentence and be wrong half
+         *     the time, which is the same collapse of two states into one that `disconnected` and
+         *     `revoked` were split apart to avoid.
          */
         GmailHealth: {
             account: components["schemas"]["GoogleAccountRead"] | null;
@@ -2928,6 +2936,8 @@ export interface components {
             banner_text: string | null;
             /** Missing Scopes */
             missing_scopes: string[];
+            /** Configured */
+            configured: boolean;
         };
         /**
          * GmailMessageRead

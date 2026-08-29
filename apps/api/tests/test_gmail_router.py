@@ -123,7 +123,22 @@ def test_the_account_endpoint_is_readable_even_with_gmail_off(logged_in: TestCli
         "banner": None,
         "banner_text": None,
         "missing_scopes": [],
+        # Not the same fact as "no mailbox connected", and the settings page renders two
+        # different screens for the two.
+        "configured": False,
     }
+
+
+def test_a_configured_installation_with_no_mailbox_says_so_differently(
+    logged_in: TestClient, gmail_ready: TestClient
+) -> None:
+    """The other half of the same response, and the reason `configured` exists at all.
+    "Gmail non esiste qui" and "non hai ancora collegato la casella" both answer with no
+    account, and the second one has a button under it."""
+    payload = logged_in.get("/api/gmail/account").json()
+    assert payload["configured"] is True
+    assert payload["account"] is None
+    assert payload["banner"] is None
 
 
 # --- who may call it -----------------------------------------------------------------

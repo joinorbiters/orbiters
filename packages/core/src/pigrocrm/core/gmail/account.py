@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 
 from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
-from pigrocrm.core.config import Settings
+from pigrocrm.core.config import Settings, gmail_configured
 from pigrocrm.core.errors import Conflict
 from pigrocrm.core.gmail.errors import ConsentExpired, CredentialRevoked, ScopeMissing
 from pigrocrm.core.gmail.models import GoogleAccount
@@ -79,9 +79,19 @@ class GoogleAccountService:
         connected Gmail has nothing to say about Gmail, and a banner there would be an
         error message for a feature nobody switched on.
         """
+        # Read here rather than taken from the caller: this method is the one place that
+        # answers "what is the state of Gmail for this person", and an adapter that had
+        # to remember to say whether Gmail exists at all would eventually forget.
+        configured = gmail_configured(self.settings)
         account = self.repo.account_for_user(actor.id) if actor.id else None
         if account is None:
-            return GmailHealth(account=None, banner=None, banner_text=None, missing_scopes=[])
+            return GmailHealth(
+                account=None,
+                banner=None,
+                banner_text=None,
+                missing_scopes=[],
+                configured=configured,
+            )
 
         read = GoogleAccountRead.model_validate(account)
         missing = [
@@ -94,7 +104,11 @@ class GoogleAccountService:
             only the cause and its sentence differ. Written once so a new cause cannot
             be added that forgets to report `missing_scopes`."""
             return GmailHealth(
-                account=read, banner=banner, banner_text=text, missing_scopes=missing
+                account=read,
+                banner=banner,
+                banner_text=text,
+                missing_scopes=missing,
+                configured=configured,
             )
 
         # Order matters, and it is an order of actionability. Revoked is the most final,
