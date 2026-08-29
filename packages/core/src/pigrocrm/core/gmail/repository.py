@@ -264,6 +264,16 @@ class GmailRepository:
             return False
         return True
 
+    def message(self, message_id: UUID) -> GmailMessage | None:
+        """One stored message by *our* id, not Gmail's.
+
+        Returns `None` rather than raising, like `account` and `message_by_gmail_id`
+        above: a repository answers what is there, and which of "not found" and "not
+        yours" a caller should say is the caller's decision. The MCP surface turns this
+        into `NotFound`.
+        """
+        return self.session.get(GmailMessage, message_id)
+
     def message_by_gmail_id(self, account_id: UUID, gmail_id: str) -> GmailMessage | None:
         return self.session.execute(
             select(GmailMessage).where(

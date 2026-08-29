@@ -9,7 +9,7 @@ from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ResourceError, ResourceNotFoundError
 
-from pigrocrm.core.config import get_settings
+from pigrocrm.core.config import Settings, get_settings, gmail_configured
 from pigrocrm.core.errors import DomainError
 from pigrocrm.core.fields.schemas import EntityType
 from pigrocrm.core.storage import DocumentStorage, storage_from_settings
@@ -52,6 +52,7 @@ def build_server(
     session_provider: SessionProvider,
     actor_provider: ActorProvider,
     storage: DocumentStorage | None = None,
+    settings: Settings | None = None,
 ) -> MCPServer:
     # One session per logical call (Task 4A-1, residual R1). `_guard` opens the
     # scope via `session_provider.scope()` when the provider exposes one --
@@ -73,6 +74,13 @@ def build_server(
     # repository's own working tree under the default `./var/documents` root.
     # `__main__.py` never passes one, so production still gets exactly one
     # `storage_from_settings(get_settings())` per process, same as the API.
+    #
+    # `settings` is optional for the same reason and resolved the same way. It decides
+    # one thing only: whether the Gmail tools are registered at all. A test that wants
+    # them passes a configured `Settings`; every other caller, `__main__.py` included,
+    # gets the process's own -- and an installation with no Google client therefore has
+    # no Gmail surface rather than a broken one (spec 5.3).
+    resolved_settings = settings or get_settings()
     context = McpContext(
         session_provider, actor_provider, storage or storage_from_settings(get_settings())
     )
@@ -247,4 +255,12 @@ def build_server(
     from pigrocrm_mcp.tools import register_entity_tools
 
     register_entity_tools(mcp, context, _guard)
+
+    if gmail_configured(resolved_settings):
+        # Conditional, and this is the whole of "absent, not broken": not registered
+        # means not listed and not callable. An installation that self-hosts precisely
+        # in order not to have Google does not get three tools that answer 409.
+        from pigrocrm_mcp.tools import gmail as gmail_tools
+
+        gmail_tools.register(mcp, context, _guard, resolved_settings)
     return mcp

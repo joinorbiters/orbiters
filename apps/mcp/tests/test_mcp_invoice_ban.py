@@ -26,7 +26,6 @@ from pathlib import Path
 import pytest
 
 TOOLS_DIR = Path(__file__).resolve().parents[1] / "src" / "pigrocrm_mcp" / "tools"
-TOOLS_INIT = TOOLS_DIR / "__init__.py"
 
 # Sixteen operations: the five fiscal ones that turn a draft into a fiscal fact or
 # change what one says after the fact, and the eleven that are closer to configuration
@@ -113,37 +112,96 @@ _REASON = (
 )
 
 
-def _module(path: Path = TOOLS_INIT) -> ast.Module:
-    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+# Gmail (slice 5B). Nomi di strumenti, non metodi di servizio, e per due ragioni
+# diverse fra loro.
+#
+# I primi due non hanno ancora un metodo dietro: l'invio arriva in 5B-2, e il divieto e'
+# una decisione presa adesso -- come per `bind_time_to_invoice`, dichiarato qui prima
+# che `AnalyticsService` esistesse. Un'email partita dalla tua casella non si richiama e
+# il cliente la legge come parole tue; e un agente che tiene la *lettura* della posta e
+# l'*invio* sulla stessa cintura ha la sorgente di injection e il canale di
+# esfiltrazione sullo stesso canale. Il corpo di un'email che arriva a un agente e'
+# testo scritto da qualcun altro: quello che impedisce che sia un buco e' che non ci sia
+# niente con cui mandare fuori qualcosa. La persona preme Invia.
+#
+# Gli altri quattro hanno un metodo dietro, gia' escluso in `test_mcp_surface_coverage.
+# py`, e sono ripetuti qui come *nomi* perche' le due liste rispondono a domande
+# diverse: quella e' "questo metodo e' raggiungibile", questa e' "questo strumento
+# esiste". Uno strumento chiamato `sync_gmail` che chiamasse qualcosa d'altro passerebbe
+# la prima e fallirebbe questa.
+#
+# Non c'e' `FORBIDDEN_GMAIL_SERVICE_CALLS`: i metodi corrispondenti sono gia' coperti
+# dal divieto per costruzione dell'altro file, e aggiungerli qui romperebbe l'uguaglianza
+# fra `_VIETATE` e queste tuple che `test_the_forbidden_block_names_exactly_what_the_
+# ban_test_bans` verifica -- due liste che si ripetono divergono, ed e' esattamente il
+# difetto che quel test esiste per prendere.
+FORBIDDEN_GMAIL = (
+    "send_email",
+    "send_payment_reminder",
+    "sync_gmail",
+    "backfill_gmail",
+    "connect_google_account",
+    "disconnect_google_account",
+    "set_gmail_settings",
+    "search_gmail",
+)
+
+# Il substring che nessun nome di strumento puo' contenere. Piu' forte dell'elenco
+# sopra, che sa solo le grafie a cui qualcuno ha pensato: la garanzia e' che nessuno
+# strumento invii, non che quattro nomi particolari siano assenti.
+FORBIDDEN_TOOL_NAME_FRAGMENTS = ("send", "invia")
+
+_REASON_GMAIL = (
+    "e' escluso dalla superficie MCP di slice 5B per costruzione. La riga non e' "
+    "lettura contro scrittura ma di chi e' la risorsa e di chi la decisione: l'agente "
+    "legge la copia gia' archiviata in `gmail_messages` e lo stato della credenziale, "
+    "mentre andare a prendere la posta (quota e consenso della persona), collegare o "
+    "scollegare una casella, decidere se il CRM conserva i corpi, e inviare, "
+    "appartengono alla persona. Come per gli atti fiscali, non e' un controllo di "
+    "permessi: un PAT eredita il ruolo pieno del proprietario e non scade (residuo "
+    "R10), quindi l'assenza del tool e' l'unico meccanismo che regge."
+)
 
 
-def _registered_tool_names(module: ast.Module) -> set[str]:
-    """Every function carrying an `@mcp.tool()` decorator, at any nesting depth.
+def _modules(base: Path = TOOLS_DIR) -> list[ast.Module]:
+    return [
+        ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for path in sorted(base.rglob("*.py"))
+    ]
+
+
+def _registered_tool_names(base: Path = TOOLS_DIR) -> set[str]:
+    """Every function carrying an `@mcp.tool()` decorator, at any nesting depth, in any
+    module under `tools/`.
 
     Walks the whole tree rather than the top level: the registrations live inside
-    `build_server`'s body, so a top-level-only scan would report nothing and pass
-    vacuously -- which is the failure mode this file exists to avoid in the code it
-    guards. Scoped to `tools/__init__.py` deliberately: `@mcp.tool()` decorators exist
-    only there -- `tools/invoices.py` and `tools/timetracking.py` are plain modules of
-    call-through functions with no decorator of their own -- so this is the one file
-    where "is a name registered as a tool" can even be asked.
+    `build_server`'s body and inside each `register(...)` function, so a top-level-only
+    scan would report nothing and pass vacuously -- which is the failure mode this file
+    exists to avoid in the code it guards.
+
+    It used to be scoped to `tools/__init__.py`, on the true-at-the-time observation
+    that every `@mcp.tool()` decorator lived there. Slice 5B's `tools/gmail.py` carries
+    its own, and that is exactly the shape a future forbidden tool would take: a new
+    domain module registering its own tools, invisible to a scan of one file. A ban that
+    only reads the file the last author happened to use is not a ban.
     """
     names: set[str] = set()
-    for node in ast.walk(module):
-        if not isinstance(node, ast.FunctionDef):
-            continue
-        for decorator in node.decorator_list:
-            target = decorator.func if isinstance(decorator, ast.Call) else decorator
-            if isinstance(target, ast.Attribute) and target.attr == "tool":
-                names.add(node.name)
+    for module in _modules(base):
+        for node in ast.walk(module):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            for decorator in node.decorator_list:
+                target = decorator.func if isinstance(decorator, ast.Call) else decorator
+                if isinstance(target, ast.Attribute) and target.attr == "tool":
+                    names.add(node.name)
     return names
 
 
 def _tools_source(base: Path = TOOLS_DIR) -> str:
     """Every `.py` file under `tools/`, concatenated.
 
-    Unlike `_registered_tool_names`, this deliberately is not scoped to
-    `tools/__init__.py`: the actual call into a service lives one file over, in the
+    Whole-package, like `_registered_tool_names` above and for a second reason of its
+    own: the actual call into a service lives one file over, in the
     domain-specific module a registered tool calls through (`tools/invoices.py`,
     `tools/timetracking.py`, ...). A forbidden method reached only from there --
     directly, or through a same-named wrapper function called under a different tool
@@ -217,7 +275,7 @@ def test_the_ast_walk_actually_finds_the_registered_tools() -> None:
     decorator spelling changed, or because the registrations moved -- every ban test
     below would pass while checking nothing. Anchored on tools that exist today and on a
     plausible count, so a silent break is a failure and not a green run."""
-    names = _registered_tool_names(_module())
+    names = _registered_tool_names()
     assert "list_invoices" in names
     assert "get_invoice" in names
     assert "create_customer" in names
@@ -236,11 +294,36 @@ def test_the_source_scan_actually_reads_more_than_one_file() -> None:
     assert "def log_time(" in source  # tools/timetracking.py
 
 
+def test_the_registration_scan_reads_every_module_and_not_only_the_first() -> None:
+    """Guards the widening. `tools/gmail.py` is the first module outside
+    `tools/__init__.py` to register tools of its own, and it is the shape every future
+    domain module will take. If the scan silently narrowed back to one file, the Gmail
+    bans below would pass while checking a file that contains none of them."""
+    names = _registered_tool_names()
+    assert "list_gmail_messages" in names  # tools/gmail.py
+    assert "create_customer" in names  # tools/__init__.py
+
+
 @pytest.mark.parametrize("forbidden", FORBIDDEN)
 def test_no_tool_is_registered_for_a_forbidden_operation(forbidden: str) -> None:
-    assert forbidden not in _registered_tool_names(_module()), (
+    assert forbidden not in _registered_tool_names(), (
         f"'{forbidden}' e' registrato come tool MCP, ma {_REASON}"
     )
+
+
+@pytest.mark.parametrize("forbidden", FORBIDDEN_GMAIL)
+def test_no_tool_is_registered_for_a_forbidden_gmail_operation(forbidden: str) -> None:
+    assert forbidden not in _registered_tool_names(), (
+        f"'{forbidden}' e' registrato come tool MCP, ma {_REASON_GMAIL}"
+    )
+
+
+@pytest.mark.parametrize("fragment", FORBIDDEN_TOOL_NAME_FRAGMENTS)
+def test_no_registered_tool_name_can_even_suggest_sending(fragment: str) -> None:
+    """The stronger form of the two send bans above. A list of names knows only the
+    spellings somebody thought of; this knows that nothing on this surface sends."""
+    offenders = sorted(name for name in _registered_tool_names() if fragment in name)
+    assert not offenders, f"{offenders} contengono '{fragment}', ma l'invio {_REASON_GMAIL}"
 
 
 @pytest.mark.parametrize("method", FORBIDDEN_SERVICE_CALLS)
