@@ -118,3 +118,36 @@ class GmailHealth(BaseModel):
     banner: GmailBannerReason
     banner_text: str | None
     missing_scopes: list[str]
+
+
+class GmailBackfillRequest(BaseModel):
+    """One entity's history, on demand (spec 4.4).
+
+    No free-text field, so no `SafeStr` anywhere -- and that absence is the point:
+    nothing a caller can type reaches Gmail. The addresses searched are read from the
+    entity by `GmailSyncService._addresses_of`, never supplied by the request.
+
+    `deal` is deliberately absent from `entity_type` even though messages are *filed*
+    against deals: a deal has no address of its own, and the only sensible reading of
+    "backfill this deal" is "backfill its customer", which the caller can ask for
+    directly and unambiguously.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    entity_type: Literal["person", "customer"]
+    entity_id: UUID
+    full: bool = False
+
+
+class GmailSettingsUpdate(BaseModel):
+    """Whether the CRM keeps the body of the correspondence it reads.
+
+    One field, and it is the whole payload: `status`, `scopes_granted` and the
+    watermarks are facts about the credential and the cycle, not settings, so a wider
+    update model would offer to write things nothing may write.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    gmail_store_bodies: bool
