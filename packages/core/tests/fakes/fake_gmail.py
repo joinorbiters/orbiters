@@ -254,7 +254,19 @@ class FakeGmail:
             thread_id=f"thread-{gmail_id}",
             headers={
                 name: str(raw[name] or "")
-                for name in ("From", "To", "Cc", "Subject", "Message-ID")
+                # `In-Reply-To`/`References` are carried because Gmail carries them, and
+                # because they are how a reminder stays attached to the invoice above it
+                # (spec 6.2 rule 2). A fake that dropped them would make a detached
+                # reminder -- the defect -- indistinguishable from a threaded one.
+                for name in (
+                    "From",
+                    "To",
+                    "Cc",
+                    "Subject",
+                    "Message-ID",
+                    "In-Reply-To",
+                    "References",
+                )
                 if raw[name] is not None
             },
             body_text=self._body_text(raw),
@@ -268,12 +280,19 @@ class FakeGmail:
 
     @staticmethod
     def _body_text(raw: EmailMessage) -> str:
+        """The decoded body, verbatim -- CRLF line endings and trailing newline included.
+
+        Not tidied, because Gmail does not tidy it: `format=full` hands back the body as
+        it travelled, and a fake that stripped the wire's own line endings would let a
+        caller compare against `\\n`-terminated text and never notice that what actually
+        reaches a recipient is `\\r\\n`.
+        """
         body = raw.get_body(preferencelist=("plain",))
         if body is None:
             return ""
         content = body.get_content()
         assert isinstance(content, str)
-        return content.rstrip("\n")
+        return content
 
     def _list(self, recorded: RecordedRequest) -> tuple[int, bytes, dict[str, str]]:
         """Matches on the `q` the way Gmail does for the operators this slice uses:
