@@ -17,6 +17,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useCustomers } from '@/features/customers/queries'
+import { EmailSyncNotice } from '@/features/gmail/EmailSyncNotice'
 import type { ProblemDetail } from '@/lib/api'
 import { clearedNativeValue, type FieldDefinition } from '@/lib/schema'
 import type { Person } from './queries'
@@ -208,6 +209,13 @@ export function PersonForm({
     )
   }
 
+  // `values.native.email` and not the flattened bag handed to `DynamicForm`: email is a
+  // native column (`NATIVE_FIELDS`), and reading it out of the merged object would pick
+  // up a custom field somebody happened to key `email` instead.
+  const email = values.native.email
+  const emailIsNew =
+    typeof email === 'string' && email.trim() !== '' && email !== initial?.native.email
+
   function submit() {
     const native: Record<string, unknown> = {}
     for (const [key, value] of Object.entries(values.native)) {
@@ -304,6 +312,16 @@ export function PersonForm({
           // `DynamicForm`'s own docstring on this required prop.
           mode={initial === undefined ? 'create' : 'edit'}
         />
+
+        {/* Only for an address that is actually new to the CRM. An email already on
+            this record is already in the roster and already being searched from the
+            watermark, so repeating "at the next sync" on every edit would train the
+            reader to ignore the one time it means something. `EmailSyncNotice` itself
+            stays silent unless a cycle is really going to run -- see its docstring.
+            Rendered here, inside `DialogContent`, for the same reason `CustomerPicker`
+            is: Radix mounts none of these children while the dialog is closed, so the
+            health query is not read by every Persone list page. */}
+        {emailIsNew ? <EmailSyncNotice /> : null}
 
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>

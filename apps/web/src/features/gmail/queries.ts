@@ -9,6 +9,11 @@ export type SyncReport = components['schemas']['SyncReport']
 
 export type GmailEntityType = 'customer' | 'person' | 'deal'
 
+/** The scope without which nothing is read at all. Named here rather than in a
+ *  component, because both the settings panel and the sync notice have to agree on
+ *  what "the sync will run" means. */
+export const GMAIL_READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly'
+
 /**
  * Keyed locally rather than in `lib/query.ts`'s central `queryKeys`, which is where
  * every other feature's keys live. The prefix matters more than the location here:
@@ -33,6 +38,43 @@ export function useGmailHealth() {
     queryKey: gmailKeys.health,
     queryFn: () => unwrap(api.GET('/api/gmail/account')),
   })
+}
+
+/**
+ * Whether this installation has Gmail at all -- the `configured` half of `GmailHealth`,
+ * which is a fact about the environment and not about whether anybody consented yet.
+ *
+ * It is what decides whether an entity page grows an Email tab. An installation with no
+ * Google client will never file a message against a customer, so a tab there would open
+ * onto a permanent "nessuna email" -- the same "a tab showing zeros is worse than no
+ * tab" rule `EntityDetailLayout` already applies to Economia. A *configured* install
+ * whose owner has not consented yet does get the tab: for them the emptiness is
+ * temporary and the tab's own text says how to end it.
+ *
+ * Free to call from anywhere: it shares `gmailKeys.health` with the shell banner, which
+ * is mounted on every authenticated page, so this is a cache read rather than a request
+ * (`staleTime` is 30s -- see `lib/query.ts`). A failed or pending health read answers
+ * `false`, which hides a tab for a moment rather than showing one that then errors.
+ */
+export function useGmailConfigured(): boolean {
+  return useGmailHealth().data?.configured === true
+}
+
+/**
+ * Whether another cycle is actually going to run: a mailbox that is connected, whose
+ * credential is `active`, and which was granted the read scope. Exactly the condition
+ * the settings panel enables «Sincronizza adesso» on, stated once so the panel and any
+ * screen that *promises* a future sync cannot disagree about it.
+ *
+ * The distinction earns its keep in the person form: "these conversations will appear
+ * at the next sync" is a claim about the future, and on a revoked credential -- or with
+ * no mailbox at all -- it is a claim about an event that will never happen.
+ */
+export function useGmailSyncing(): boolean {
+  const health = useGmailHealth()
+  const data = health.data
+  if (!data?.account) return false
+  return data.account.status === 'active' && !data.missing_scopes.includes(GMAIL_READONLY_SCOPE)
 }
 
 /**

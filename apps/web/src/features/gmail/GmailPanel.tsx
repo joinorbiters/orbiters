@@ -5,7 +5,9 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { toProblem } from '@/lib/api'
+import { formatInstant } from './instants'
 import {
+  GMAIL_READONLY_SCOPE,
   useDisconnectGmail,
   useGmailHealth,
   useSetStoreBodies,
@@ -15,23 +17,7 @@ import {
   type SyncReport,
 } from './queries'
 
-const READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly'
 const OAUTH_START = '/api/gmail/oauth/start'
-
-/**
- * A *timestamp* formatter, not a fifth copy of `lib/dates.ts`. Those four helpers exist
- * for `date` columns -- bare `YYYY-MM-DD` strings, where `new Date(value)` parses as UTC
- * midnight and silently loses a day west of Greenwich. Everything on this panel is an
- * instant with a zone in it (`2026-08-20T09:30:00Z`), so `new Date` is unambiguous and
- * that trap does not exist here. Same shape as `PeriodsPanel`/`TokensPanel`/`Timeline`,
- * which all format instants this way.
- */
-const stamp = new Intl.DateTimeFormat('it-IT', { dateStyle: 'medium', timeStyle: 'short' })
-
-function formatInstant(value: string | null): string {
-  if (!value) return 'mai'
-  return stamp.format(new Date(value))
-}
 
 /** The four statuses, in the words their owner would use. */
 const STATUS_LABEL: Record<string, string> = {
@@ -101,7 +87,7 @@ export function GmailPanel() {
     return <NotConnected account={account} />
   }
 
-  const canSync = account.status === 'active' && !data.missing_scopes.includes(READONLY_SCOPE)
+  const canSync = account.status === 'active' && !data.missing_scopes.includes(GMAIL_READONLY_SCOPE)
 
   return (
     <section className="max-w-3xl space-y-6">

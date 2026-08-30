@@ -39,6 +39,14 @@ beforeEach(() => {
   mockGet.mockReset()
 })
 
+/** Enough of a `CustomerRead` for the page to render past its guards. Cast rather than
+ *  typed in full: the fields this file asserts on are the tab strip, not the overview. */
+const CUSTOMER = {
+  id: 'c1',
+  ragione_sociale: 'ACME Srl',
+  custom_fields: {},
+} as never
+
 function renderWithClient(ui: ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>)
@@ -75,5 +83,38 @@ describe('CustomerDetail', () => {
     renderWithClient(<CustomerDetail />)
     expect(await screen.findByRole('alert')).toHaveTextContent('Il server non risponde.')
     expect(screen.queryByText('Cliente non trovato.')).not.toBeInTheDocument()
+  })
+
+  /**
+   * The Email tab exists only where Gmail could ever fill it. An installation with no
+   * Google client answers `configured: false`, and a tab there would open onto a
+   * permanent "nessuna email" -- the same reason `EntityDetailLayout` renders no
+   * Economia tab rather than a tab full of zeros.
+   */
+  describe('the Email tab', () => {
+    function mockPage(health: unknown) {
+      mockGet.mockImplementation(
+        ((path: string) => {
+          if (path === '/api/customers/{customer_id}') return ok(CUSTOMER)
+          if (path === '/api/gmail/account') return ok(health)
+          return ok({ items: [] })
+        }) as never,
+      )
+    }
+
+    it('is offered when this installation has Gmail', async () => {
+      mockPage({ account: null, banner: null, banner_text: null, missing_scopes: [], configured: true })
+      renderWithClient(<CustomerDetail />)
+      expect(await screen.findByRole('tab', { name: 'Email' })).toBeInTheDocument()
+    })
+
+    it('is absent when Gmail is not configured on this installation', async () => {
+      mockPage({ account: null, banner: null, banner_text: null, missing_scopes: [], configured: false })
+      renderWithClient(<CustomerDetail />)
+      // Awaited on a tab that is always present, so this is an assertion about the
+      // rendered page rather than about a page that had not rendered yet.
+      expect(await screen.findByRole('tab', { name: 'Panoramica' })).toBeInTheDocument()
+      expect(screen.queryByRole('tab', { name: 'Email' })).not.toBeInTheDocument()
+    })
   })
 })

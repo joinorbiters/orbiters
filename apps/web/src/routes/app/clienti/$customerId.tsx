@@ -22,6 +22,8 @@ import {
   type RelatedPerson,
 } from '@/features/customers/queries'
 import { DocumentsTab } from '@/features/documents/DocumentsTab'
+import { EmailTab } from '@/features/gmail/EmailTab'
+import { useGmailConfigured } from '@/features/gmail/queries'
 import { InvoicesTab } from '@/features/invoices/InvoicesTab'
 import { toProblem, type ProblemDetail } from '@/lib/api'
 import { useCanWrite } from '@/lib/auth'
@@ -97,6 +99,10 @@ export function CustomerDetail() {
   const remove = useDeleteCustomer()
   const people = useCustomerPeople(customerId)
   const deals = useCustomerDeals(customerId)
+  // Not a request of its own: the shell banner already holds `gmailKeys.health`, so
+  // this reads the same cache entry. See `useGmailConfigured` for why an installation
+  // without Google gets no Email tab at all rather than a permanently empty one.
+  const gmailConfigured = useGmailConfigured()
 
   if (isLoading) return <Skeleton className="m-8 h-96" />
   // A failed fetch and a genuine 404 both leave `customer` undefined once loading
@@ -165,6 +171,7 @@ export function CustomerDetail() {
         documents={<DocumentsTab owner={{ customerId }} />}
         invoices={<InvoicesTab owner={{ customerId }} />}
         economics={<EconomicsTab customerId={customerId} />}
+        emails={gmailConfigured ? <EmailTab entityType="customer" entityId={customerId} /> : undefined}
         actions={
           canWrite && (
             <>

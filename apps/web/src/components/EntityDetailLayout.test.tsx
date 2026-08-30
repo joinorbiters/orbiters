@@ -138,4 +138,46 @@ describe('EntityDetailLayout', () => {
     await userEvent.click(tab)
     expect(screen.getByText('conto economico')).toBeInTheDocument()
   })
+
+  // An installation with no Gmail connected passes nothing here, and a tab that opens
+  // onto "nothing yet" for a feature that was never switched on is worse than no tab:
+  // it invites the user to look for something that does not exist for them.
+  it('has no Email tab when emails is not given', () => {
+    renderLayout()
+    expect(screen.queryByRole('tab', { name: 'Email' })).not.toBeInTheDocument()
+  })
+
+  it('shows an Email tab with its own contents when emails is given', async () => {
+    renderLayout({ emails: <p>conversazioni</p> })
+    const tab = screen.getByRole('tab', { name: 'Email' })
+    expect(tab).toBeInTheDocument()
+    await userEvent.click(tab)
+    expect(screen.getByText('conversazioni')).toBeInTheDocument()
+  })
+
+  /**
+   * Every optional slot at once, which is what a Deal actually passes. Guards the two
+   * ways this component has been changed before: a new tab added to `TabsList` but not
+   * to `TabsContent` (a tab that opens onto nothing), and an existing entry dropped
+   * while adding the new one.
+   */
+  it('keeps every other tab when the Email tab is added', () => {
+    renderLayout({
+      documents: <p>lista documenti</p>,
+      invoices: <p>fatture</p>,
+      hours: <p>ore</p>,
+      economics: <p>conto economico</p>,
+      emails: <p>conversazioni</p>,
+    })
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+      'Panoramica',
+      'Documenti',
+      'Fatture',
+      'Ore',
+      'Economia',
+      'Email',
+      'Timeline',
+      'Collegamenti',
+    ])
+  })
 })
