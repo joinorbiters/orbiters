@@ -1,6 +1,7 @@
 import { Outlet, createFileRoute, useLocation, useNavigate } from '@tanstack/react-router'
 import { useEffect } from 'react'
 import { AppShell } from '@/components/AppShell'
+import { GmailBanner } from '@/components/GmailBanner'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
 
@@ -38,6 +39,12 @@ function AppLayout() {
 
   return (
     <AppShell>
+      {/* Outside the <Outlet />, so it survives every navigation within the shell
+          rather than being remounted (and re-announced) per page -- and inside this
+          component's `!user` guard, so the health query is never issued by an
+          unauthenticated visitor, who has no google_accounts row to have an opinion
+          about and would collect a 401 on every load of the login screen. */}
+      <GmailBanner />
       <Outlet />
     </AppShell>
   )
