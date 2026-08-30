@@ -225,3 +225,65 @@ class GmailKnownAddress(Base, PrimaryKeyMixin, TimestampMixin):
     first_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class EmailDraft(Base, PrimaryKeyMixin, TimestampMixin):
+    """A message being written, and the record of what happened to it.
+
+    Written to the database **before** Gmail is called. Two reasons, and the second is
+    the load-bearing one: losing hand-written text to an HTTP error is unforgivable, and
+    the `message_id_header` minted here is what makes an unknown send outcome resolvable
+    by an exact lookup instead of a guess (spec 6.3).
+
+    Acme kept this in a JSON file with a non-atomic read-modify-write, so two
+    concurrent sends lost the count. The columns are the same ones -- they were the right
+    columns -- on a support that cannot lose a write.
+
+    Like `GmailMessage`, this class deliberately has no `__repr__`: `body_markdown` and
+    `to_addresses` are somebody's private correspondence, and a generated one would put
+    them in every traceback and every test failure dump.
+    """
+
+    __tablename__ = "email_drafts"
+    __table_args__ = (
+        UniqueConstraint("message_id_header", name="uq_email_drafts_message_id"),
+        Index("ix_email_drafts_entity", "entity_type", "entity_id"),
+        Index("ix_email_drafts_send_state", "send_state"),
+    )
+
+    entity_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    # Deliberately not a foreign key, for the same reason as `GmailMessageLink.entity_id`:
+    # it points at a customer, a person or a deal depending on `entity_type`, and no
+    # single FK can express that. `EmailDraftService` validates it against the table
+    # `entity_type` names, so a well-formed UUID is a `NotFound` and never an
+    # `IntegrityError` from the driver.
+    entity_id: Mapped[UUID] = mapped_column(nullable=False)
+    to_addresses: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    cc_addresses: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    subject: Mapped[str] = mapped_column(String(998), nullable=False, default="")
+    body_markdown: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    attachment_version_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    # Ours, minted at creation. Unique, because the reconciliation looks a draft up by
+    # it: two drafts sharing one id would make that lookup ambiguous exactly when it
+    # matters most. The constraint is the database's and not uuid7's good luck --
+    # `test_email_drafts.py` races two concurrent creates onto one id to prove it.
+    message_id_header: Mapped[str] = mapped_column(String(998), nullable=False)
+    # The thread this reply or reminder belongs to, so In-Reply-To/References can be set.
+    # `SET NULL` rather than `CASCADE`: a draft is the user's own text, and the message
+    # it answers going away is no reason to delete it -- it only stops being a reply.
+    in_reply_to_message_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("gmail_messages.id", ondelete="SET NULL"), default=None
+    )
+    send_state: Mapped[str] = mapped_column(String(10), nullable=False, default="bozza")
+    send_attempted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    # The sentence the user reads, in Italian. Never an upstream body, never a token,
+    # never the recipient -- same rule as `GoogleAccount.last_error`.
+    last_error: Mapped[str | None] = mapped_column(String(500), default=None)
+    # The sent message, once Gmail has answered. Never before.
+    sent_gmail_message_id: Mapped[str | None] = mapped_column(String(128), default=None)
+    # A plain nullable UUID with **no** foreign key, because `payment_reminders` does not
+    # exist until B2-8. That task adds the constraint in its own migration. Recorded here
+    # so the absence is a decision rather than an oversight.
+    payment_reminder_id: Mapped[UUID | None] = mapped_column(default=None)
