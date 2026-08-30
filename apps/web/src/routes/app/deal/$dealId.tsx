@@ -15,6 +15,8 @@ import { DealForm, dealToFormValues } from '@/features/deals/DealForm'
 import { displayNative, formatDate, formatHours, formatMoney } from '@/features/deals/columns'
 import { useDeal, useDeleteDeal, useStages, useUpdateDeal } from '@/features/deals/queries'
 import { DocumentsTab } from '@/features/documents/DocumentsTab'
+import { EmailTab } from '@/features/gmail/EmailTab'
+import { useGmailConfigured } from '@/features/gmail/queries'
 import { InvoicesTab } from '@/features/invoices/InvoicesTab'
 import { TimeEntriesTab } from '@/features/time/TimeEntriesTab'
 import { toProblem, type ProblemDetail } from '@/lib/api'
@@ -71,6 +73,8 @@ export function DealDetail() {
   const stages = useStages()
   const update = useUpdateDeal(dealId)
   const remove = useDeleteDeal()
+  // Shares the shell banner's cached health row -- see `useGmailConfigured`.
+  const gmailConfigured = useGmailConfigured()
 
   if (isLoading) return <Skeleton className="m-8 h-96" />
   // See `routes/app/clienti/$customerId.tsx`'s identical guard for the full
@@ -123,6 +127,7 @@ export function DealDetail() {
         invoices={<InvoicesTab owner={{ dealId }} />}
         hours={<TimeEntriesTab dealId={dealId} />}
         economics={<EconomicsTab dealId={dealId} />}
+        emails={gmailConfigured ? <EmailTab entityType="deal" entityId={dealId} /> : undefined}
         actions={
           canWrite && (
             <>

@@ -9,6 +9,8 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useCustomer } from '@/features/customers/queries'
+import { EmailTab } from '@/features/gmail/EmailTab'
+import { useGmailConfigured } from '@/features/gmail/queries'
 import { displayNative } from '@/features/people/columns'
 import { PersonForm, personToFormValues } from '@/features/people/PersonForm'
 import { useDeletePerson, usePerson, useUpdatePerson } from '@/features/people/queries'
@@ -59,6 +61,8 @@ export function PersonDetail() {
   const { data: person, isLoading, isError, error } = usePerson(personId)
   const update = useUpdatePerson(personId)
   const remove = useDeletePerson()
+  // Shares the shell banner's cached health row -- see `useGmailConfigured`.
+  const gmailConfigured = useGmailConfigured()
 
   if (isLoading) return <Skeleton className="m-8 h-96" />
   // See `routes/app/clienti/$customerId.tsx`'s identical guard for the full
@@ -109,6 +113,7 @@ export function PersonDetail() {
         subtitle={person.ruolo ?? 'Persona'}
         entityType="person"
         entityId={personId}
+        emails={gmailConfigured ? <EmailTab entityType="person" entityId={personId} /> : undefined}
         actions={
           canWrite && (
             <>

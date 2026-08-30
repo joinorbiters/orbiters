@@ -35,6 +35,16 @@ interface EntityDetailLayoutProps {
    * user understands "not yet", and cannot tell a real zero from a missing feature.
    */
   economics?: ReactNode
+  /**
+   * The Email tab's contents -- the stored Gmail mirror for this entity. Optional like
+   * every slot above it, and for a sharper reason than the others: an installation with
+   * no Google client, or an owner who never connected a mailbox, has no correspondence
+   * to show and never will until they do. A tab that opens onto "nessuna email" would
+   * read as "your mail is not being filed", which is a different and untrue claim.
+   * All three entities can have one -- a message is filed against the person, that
+   * person's customer and that customer's live deals (`gmail/links.py`).
+   */
+  emails?: ReactNode
   entityType: TimelineEntityType
   entityId: string
   /**
@@ -66,6 +76,7 @@ export function EntityDetailLayout({
   invoices,
   hours,
   economics,
+  emails,
   entityType,
   entityId,
   timelineLimit,
@@ -87,6 +98,9 @@ export function EntityDetailLayout({
           {invoices && <TabsTrigger value="fatture">Fatture</TabsTrigger>}
           {hours && <TabsTrigger value="ore">Ore</TabsTrigger>}
           {economics && <TabsTrigger value="economia">Economia</TabsTrigger>}
+          {/* Immediately before Timeline: both are a record of what already happened,
+              and everything to the left of them is a thing the user maintains. */}
+          {emails && <TabsTrigger value="email">Email</TabsTrigger>}
           <TabsTrigger value="timeline">Timeline</TabsTrigger>
           <TabsTrigger value="collegamenti">Collegamenti</TabsTrigger>
         </TabsList>
@@ -112,6 +126,11 @@ export function EntityDetailLayout({
         {economics && (
           <TabsContent value="economia" className="mt-6">
             {economics}
+          </TabsContent>
+        )}
+        {emails && (
+          <TabsContent value="email" className="mt-6">
+            {emails}
           </TabsContent>
         )}
         <TabsContent value="timeline" className="mt-6">

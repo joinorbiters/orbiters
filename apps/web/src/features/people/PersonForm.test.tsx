@@ -68,6 +68,47 @@ const DISPONIBILE: FieldDefinition = {
   options: [],
 }
 
+/**
+ * A health response for `GET /api/gmail/account`. `syncing` is the only distinction the
+ * notice cares about: a mailbox that is connected, active and holds the read scope is
+ * one that will actually run another cycle.
+ */
+function gmailHealth(syncing: boolean) {
+  return {
+    account: syncing
+      ? {
+          id: 'g1',
+          email_address: 'io@example.it',
+          scopes_granted: ['https://www.googleapis.com/auth/gmail.readonly'],
+          status: 'active',
+          consent_expires_at: null,
+          last_error: null,
+          last_error_at: null,
+          last_sync_at: null,
+          sync_watermark: null,
+          gmail_store_bodies: true,
+          connected_at: '2026-08-01T09:00:00Z',
+          disconnected_at: null,
+        }
+      : null,
+    banner: null,
+    banner_text: null,
+    missing_scopes: syncing ? [] : ['https://www.googleapis.com/auth/gmail.readonly'],
+    configured: true,
+  }
+}
+
+/** Routes by path, because this form now reads two endpoints: the customer list for its
+ *  picker and the Gmail health row for the sync notice. */
+function mockGmail(syncing: boolean) {
+  mockGet.mockImplementation(
+    ((path: string) =>
+      path === '/api/gmail/account'
+        ? Promise.resolve({ data: gmailHealth(syncing), response: new Response(null, { status: 200 }) })
+        : customerPage([])) as never,
+  )
+}
+
 function submitted(onSubmit: ReturnType<typeof vi.fn>): Record<string, unknown> {
   const [first] = onSubmit.mock.calls
   if (!first) throw new Error('onSubmit was never called')
@@ -333,6 +374,94 @@ describe('PersonForm', () => {
       const payload = submitted(onSubmit)
       expect(payload.customer_id).toBe('cust-1')
       expect(payload).not.toHaveProperty('detach')
+    })
+  })
+
+  /**
+   * Spec 4.4 and 11. A newly known address is picked up by the *next* cycle -- the sync
+   * splits the roster into established addresses (searched from the watermark) and
+   * fresh ones (searched back over `gmail_backfill_days`), and only then records them
+   * as seen. Saying so beats letting somebody discover it by refreshing an empty tab.
+   */
+  describe('the Gmail sync notice', () => {
+    const NOTICE = /le conversazioni con questo indirizzo compariranno al prossimo sync/i
+
+    it('tells the user when a newly added address will start showing conversations', async () => {
+      mockGmail(true)
+      renderWithClient(
+        <PersonForm
+          title="Nuova persona"
+          open
+          onOpenChange={vi.fn()}
+          customFields={[]}
+          onSubmit={vi.fn()}
+        />,
+      )
+
+      expect(screen.queryByText(NOTICE)).not.toBeInTheDocument()
+      await userEvent.type(screen.getByLabelText('Email'), 'ada@acme.it')
+      expect(await screen.findByText(NOTICE)).toBeInTheDocument()
+    })
+
+    /**
+     * The promise is only true where a cycle will actually run. With no mailbox
+     * connected -- or one whose consent was revoked, or which never got the read scope
+     * -- "al prossimo sync" describes an event that is not going to happen, and a CRM
+     * that says it anyway has told the user something false about its own behaviour.
+     */
+    it('does not promise a sync that is not going to run', async () => {
+      mockGmail(false)
+      renderWithClient(
+        <PersonForm
+          title="Nuova persona"
+          open
+          onOpenChange={vi.fn()}
+          customFields={[]}
+          onSubmit={vi.fn()}
+        />,
+      )
+
+      await userEvent.type(screen.getByLabelText('Email'), 'ada@acme.it')
+      expect(screen.queryByText(NOTICE)).not.toBeInTheDocument()
+    })
+
+    /**
+     * Nothing changed, so nothing is pending: an address already in the roster is
+     * already being searched from the watermark, and repeating "at the next sync" on
+     * every edit would train the reader to ignore the one time it matters.
+     */
+    it('says nothing when an existing address was not touched', async () => {
+      mockGmail(true)
+      renderWithClient(
+        <PersonForm
+          title="Modifica persona"
+          open
+          onOpenChange={vi.fn()}
+          customFields={[]}
+          initial={personToFormValues({ ...BASE_PERSON, email: 'ada@acme.it' })}
+          onSubmit={vi.fn()}
+        />,
+      )
+
+      expect(await screen.findByDisplayValue('ada@acme.it')).toBeInTheDocument()
+      expect(screen.queryByText(NOTICE)).not.toBeInTheDocument()
+    })
+
+    it('says it again when an existing address is changed to a different one', async () => {
+      mockGmail(true)
+      renderWithClient(
+        <PersonForm
+          title="Modifica persona"
+          open
+          onOpenChange={vi.fn()}
+          customFields={[]}
+          initial={personToFormValues({ ...BASE_PERSON, email: 'ada@acme.it' })}
+          onSubmit={vi.fn()}
+        />,
+      )
+
+      await userEvent.type(await screen.findByLabelText('Email'), '.uk')
+      expect(await screen.findByText(NOTICE)).toBeInTheDocument()
     })
   })
 })
