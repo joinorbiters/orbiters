@@ -1,8 +1,10 @@
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+from pigrocrm.core.validation import SafeStr
 
 # Mirror the column widths in gmail/models.py exactly.
 GOOGLE_SUB_MAX_LENGTH = 255
@@ -160,3 +162,85 @@ class GmailSettingsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     gmail_store_bodies: bool
+
+
+# Mirror `EmailDraft`'s own column widths, the same way the constants at the top of this
+# module mirror `GoogleAccount`'s. 998 is RFC 5322's maximum line length minus the field
+# name -- the real bound, not a guessed one.
+SUBJECT_MAX_LENGTH = 998
+# Generous for an email, so it bites only on the anomalous: the same discipline as the
+# 256 KB inbound body limit, and for the same reason -- a limit that fires on ordinary
+# work teaches people to route around the product.
+BODY_MAX_LENGTH = 100_000
+
+# Five states, and none of them is a synonym for another. `incerto` is the whole of spec
+# 6.3(b): the send neither succeeded nor failed, and the interface says «esito da
+# verificare» rather than guessing. Collapsing it into either neighbour is the the previous system
+# defect -- «il CRM crede una cosa diversa da quella che è successa».
+SendState = Literal["bozza", "in_invio", "inviato", "incerto", "fallito"]
+
+
+class EmailDraftCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    entity_type: Literal["customer", "person", "deal"]
+    entity_id: UUID
+    to_addresses: list[Annotated[SafeStr, Field(max_length=EMAIL_ADDRESS_MAX_LENGTH)]]
+    cc_addresses: list[Annotated[SafeStr, Field(max_length=EMAIL_ADDRESS_MAX_LENGTH)]] = []
+    subject: SafeStr = Field(max_length=SUBJECT_MAX_LENGTH)
+    body_markdown: SafeStr = Field(max_length=BODY_MAX_LENGTH)
+    attachment_version_ids: list[UUID] = []
+    in_reply_to_message_id: UUID | None = None
+
+
+class EmailDraftUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    to_addresses: list[Annotated[SafeStr, Field(max_length=EMAIL_ADDRESS_MAX_LENGTH)]] | None = None
+    cc_addresses: list[Annotated[SafeStr, Field(max_length=EMAIL_ADDRESS_MAX_LENGTH)]] | None = None
+    subject: SafeStr | None = Field(default=None, max_length=SUBJECT_MAX_LENGTH)
+    body_markdown: SafeStr | None = Field(default=None, max_length=BODY_MAX_LENGTH)
+    attachment_version_ids: list[UUID] | None = None
+
+
+class EmailDraftRead(BaseModel):
+    """Every column of `EmailDraft`.
+
+    `send_state`, `sent_gmail_message_id` and `message_id_header` are on the way out and
+    never on the way in: they are facts about what happened, and a Create schema that
+    accepted them would let a caller declare a message sent that never left.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    entity_type: str
+    entity_id: UUID
+    to_addresses: list[str]
+    cc_addresses: list[str]
+    subject: str
+    body_markdown: str
+    attachment_version_ids: list[UUID]
+    message_id_header: str
+    in_reply_to_message_id: UUID | None
+    send_state: SendState
+    send_attempted_at: datetime | None
+    last_error: str | None
+    sent_gmail_message_id: str | None
+    payment_reminder_id: UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class EmailDraftListQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    entity_type: Literal["customer", "person", "deal"] | None = None
+    entity_id: UUID | None = None
+    send_state: SendState | None = None
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class EmailDraftPage(BaseModel):
+    items: list[EmailDraftRead]
+    total: int

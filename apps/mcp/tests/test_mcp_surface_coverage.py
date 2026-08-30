@@ -116,6 +116,11 @@ _INTERNE: dict[Method, str] = {
     ("PeriodLockService", "is_closed"): "guardia invocata dagli altri servizi",
     ("PipelineService", "default_stage"): "risolve lo stage iniziale di un nuovo deal",
     ("TemplateService", "declared_variables"): "parsing interno usato da describe",
+    ("EmailDraftService", "repo_draft"): "restituisce la riga ORM al percorso di invio "
+    "(B2-5) e alla riconciliazione (B2-6), che scrivono `send_state` e "
+    "`sent_gmail_message_id`: colonne che nessuno schema accetta in ingresso perche' "
+    "sono fatti, non input. Non prende `actor`, che e' la firma di \"non e' "
+    "un'operazione che qualcuno compie\"",
     ("TimeReportService", "variables_for"): "passo intermedio di render_pdf/build_xlsx",
     ("UserService", "count"): "conta gli utenti per il bootstrap del primo admin",
 }
@@ -273,6 +278,33 @@ _COPERTE_O_UMANE: dict[Method, str] = {
     ("InvoiceService", "confirm_proforma"): "e' la conferma umana che precede "
     "l'emissione: l'agente prepara, la persona conferma",
     ("TemplateService", "get"): "describe_template espone gia' il template",
+    # Le cinque righe qui sotto sono di 5B-2 e hanno una scadenza dichiarata: **B2-10 e'
+    # il task che decide la superficie MCP di questa fetta**, come B1-14 ha deciso quella
+    # di 5B-1. Fino a li' la ragione non e' "nessuno ha scritto il tool" -- che questo
+    # blocco vieta esplicitamente -- ma questa: in `packages/core` non esiste ancora un
+    # servizio che *invii*. Un `create_email_draft` offrirebbe quindi a un agente di
+    # scrivere un messaggio che niente puo' spedire: meta' operazione, e l'altra meta'
+    # non esiste. Quando esistera' (B2-5), o si scrive il tool o queste righe diventano
+    # permanenti con la ragione definitiva.
+    #
+    # Una cosa e' gia' permanente e non aspetta B2-10: **l'invio non sara' mai un tool**.
+    # Una email che parte dall'indirizzo del titolare parla in suo nome a un cliente, e
+    # non e' un atto che un agente possa compiere al posto suo -- e' la stessa famiglia
+    # di `GmailOAuthService.disconnect`, con in piu' che il destinatario e' una persona
+    # esterna al CRM. Il divieto per costruzione sui nomi vive in
+    # `test_mcp_invoice_ban.py`, che possiede i divieti.
+    ("EmailDraftService", "create"): "il composer e' della persona finche' B2-10 non "
+    "decide la superficie di 5B-2: oggi un agente scriverebbe una bozza che nessun tool "
+    "puo' inviare, perche' l'invio non esiste ancora in core e non sara' mai esposto",
+    ("EmailDraftService", "update"): "riscrivere il testo che partira' a nome del "
+    "titolare e' la stessa decisione di `create`, e la prende B2-10",
+    ("EmailDraftService", "get"): "leggere una bozza non ancora inviata non serve a "
+    "nessun tool esistente: `list_gmail_messages` espone la corrispondenza gia' "
+    "archiviata, che e' l'unica di cui un agente abbia bisogno per lavorare",
+    ("EmailDraftService", "delete"): "cancellare il testo non spedito di qualcuno e' "
+    "una decisione della persona, e non ha inverso: la riga sparisce davvero",
+    ("EmailDraftService", "list"): "elenca bozze non inviate, cioe' corrispondenza "
+    "privata che non e' ancora partita: se servira' a un agente lo dira' B2-10",
 }
 
 
