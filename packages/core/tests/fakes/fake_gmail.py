@@ -15,7 +15,11 @@ transport -- not by a convention written in a comment."
 import base64
 import hashlib
 import json
+import time
 from dataclasses import dataclass, field
+from email import message_from_bytes
+from email.message import EmailMessage
+from email.policy import default as default_policy
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -100,6 +104,12 @@ class FakeGmail:
     # Set to answer a send with a socket-level failure instead of a result, for the
     # "unknown outcome" path of spec 6.3(b).
     timeout_on_send: bool = False
+    # And the half of that path that decides everything: a lost answer is not a lost
+    # message. With this set the mail really did arrive and only the response fell on
+    # the floor, so the reconciliation must find it -- which is the case the previous system gets
+    # wrong in production. Off by default: `timeout_on_send` alone means nothing was
+    # delivered, and the two together are the pair the reconciliation has to separate.
+    deliver_on_timeout: bool = False
 
     # ---- the seam ---------------------------------------------------------------
 
@@ -189,16 +199,81 @@ class FakeGmail:
         return 200, json.dumps(payload).encode(), {}
 
     def _send(self) -> tuple[int, bytes, dict[str, str]]:
+        raw = self._decode_raw(self.requests[-1].body)
         if self.timeout_on_send:
+            if self.deliver_on_timeout:
+                self._register_sent(raw)
             # The synthetic status `_urllib_call` produces when no HTTP response was
             # ever received. This is the "we do not know" case of spec 6.3(b).
             return 599, json.dumps({"error": {"message": "timed out"}}).encode(), {}
-        message_id = f"sent-{len([r for r in self.requests if r.is_messages_send])}"
+        message = self._register_sent(raw)
         return (
             200,
-            json.dumps({"id": message_id, "threadId": f"thread-{message_id}"}).encode(),
+            json.dumps({"id": message.id, "threadId": message.thread_id}).encode(),
             {},
         )
+
+    @staticmethod
+    def _decode_raw(body: bytes | None) -> EmailMessage:
+        """The RFC822 out of `{"raw": base64url(...)}`, parsed.
+
+        Parsed rather than regex-scanned because the builder under test folds long
+        headers and RFC 2047-encodes non-ASCII ones, and a fake that read the bytes
+        naively would disagree with Gmail about a subject with an accent in it -- which
+        is exactly the class of defect this slice exists to close.
+        """
+        payload = json.loads((body or b"{}").decode())
+        raw = payload.get("raw")
+        if not isinstance(raw, str):
+            raise AssertionError("messages.send was called without a base64url `raw` field")
+        decoded = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
+        parsed = message_from_bytes(decoded, _class=EmailMessage, policy=default_policy)
+        assert isinstance(parsed, EmailMessage)
+        return parsed
+
+    def _register_sent(self, raw: EmailMessage) -> FakeMessage:
+        """Store the sent message in the mailbox, **keeping the Message-ID we supplied**.
+
+        That is a modelled assumption, not a measured fact: see
+        `docs/superpowers/notes/2026-08-20-gmail-message-id-verification.md`, which
+        records the check as UNVERIFIED, and `test_gmail_message_id_contract.py`, which
+        fails the moment that note records `NO`. Registering the message at all is what
+        makes B2-6's reconciliation tests meaningful -- a fake that could never lose a
+        send would make the one behaviour they are about unobservable.
+        """
+        message_id = str(raw["Message-ID"] or "")
+        if not message_id:
+            raise AssertionError(
+                "messages.send was called with an RFC822 carrying no Message-ID. Spec 6.2 "
+                "rule 1: the id is minted before the call, and the reconciliation of spec "
+                "6.3 has nothing to look the message up by without it."
+            )
+        gmail_id = f"sent-{len([r for r in self.requests if r.is_messages_send])}"
+        message = FakeMessage(
+            id=gmail_id,
+            thread_id=f"thread-{gmail_id}",
+            headers={
+                name: str(raw[name] or "")
+                for name in ("From", "To", "Cc", "Subject", "Message-ID")
+                if raw[name] is not None
+            },
+            body_text=self._body_text(raw),
+            # Gmail stamps its own arrival time, and it is what the fallback match of
+            # spec 6.3 compares against, so it has to be a real instant rather than 0.
+            internal_date_ms=int(time.time() * 1000),
+            label_ids=["SENT"],
+        )
+        self.messages[message.id] = message
+        return message
+
+    @staticmethod
+    def _body_text(raw: EmailMessage) -> str:
+        body = raw.get_body(preferencelist=("plain",))
+        if body is None:
+            return ""
+        content = body.get_content()
+        assert isinstance(content, str)
+        return content.rstrip("\n")
 
     def _list(self, recorded: RecordedRequest) -> tuple[int, bytes, dict[str, str]]:
         """Matches on the `q` the way Gmail does for the operators this slice uses:

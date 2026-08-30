@@ -83,6 +83,17 @@ class Settings(BaseSettings):
     gmail_body_max_bytes: int = 262_144
     gmail_attachment_max_bytes: int = 20_971_520
     gmail_send_grace_minutes: int = 15
+    # Whether reconciliation may rely on Gmail preserving the Message-ID we supply.
+    # Spec 6.3 requires this to be verified rather than assumed, because the fallback
+    # (matching on recipient + subject + internalDate) is an approximate comparison and
+    # cannot tell two near-identical sends apart. The check is recorded in
+    # docs/superpowers/notes/2026-08-20-gmail-message-id-verification.md, and as of
+    # today that note records **UNVERIFIED**: nobody has yet run it against a real
+    # Gmail. The default stays `true` because the exact path is the one the design is
+    # built around and the fallback is worse -- but it is an assumption about a third
+    # party until that note says otherwise, and an operator who sees delivered mail
+    # being reported as `fallito` should try `false` first.
+    gmail_reconcile_by_message_id: bool = True
 
     @field_validator("jwt_secret")
     @classmethod
