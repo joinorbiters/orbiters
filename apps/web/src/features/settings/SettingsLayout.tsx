@@ -14,6 +14,7 @@ const TABS = [
   { value: 'categorie-costo', label: 'Categorie costo' },
   { value: 'tariffe', label: 'Tariffe' },
   { value: 'periodi', label: 'Periodi' },
+  { value: 'gmail', label: 'Gmail' },
 ] as const
 
 /**
