@@ -101,6 +101,15 @@ class FakeGmail:
     # transient failure is `fail_with=[(503, b"{}", {})]`; a rate limit that names its
     # delay is `[(429, b"{}", {"Retry-After": "2"})]`.
     fail_with: list[tuple[int, bytes, dict[str, str]]] = field(default_factory=list)
+    # A refusal aimed at `messages.send` and at nothing else, as `(status, body)`.
+    #
+    # `fail_with` cannot express this and must not be used for it: that queue is
+    # consumed by whichever call arrives first, and the first call of a send is the
+    # *token refresh*. An entry meant for the send would answer the refresh instead,
+    # the send would never happen, and the test would pass while proving nothing about
+    # how a refusal from Gmail is handled. The RFC822 is still decoded and checked
+    # before the refusal is returned, for the same reason `_send` does it at all.
+    refuse_send_with: tuple[int, bytes] | None = None
     # Set to answer a send with a socket-level failure instead of a result, for the
     # "unknown outcome" path of spec 6.3(b).
     timeout_on_send: bool = False
@@ -200,6 +209,11 @@ class FakeGmail:
 
     def _send(self) -> tuple[int, bytes, dict[str, str]]:
         raw = self._decode_raw(self.requests[-1].body)
+        if self.refuse_send_with is not None:
+            # Gmail looked at the message and said no. Nothing is registered, which is
+            # the whole difference between this and `timeout_on_send`.
+            status, body = self.refuse_send_with
+            return status, body, {}
         if self.timeout_on_send:
             if self.deliver_on_timeout:
                 self._register_sent(raw)

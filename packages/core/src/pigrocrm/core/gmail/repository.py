@@ -10,7 +10,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.emitter.models import EmitterProfile
 from pigrocrm.core.gmail.models import (
+    EmailDraft,
     GmailKnownAddress,
     GmailMessage,
     GmailMessageLink,
@@ -18,6 +20,7 @@ from pigrocrm.core.gmail.models import (
     GoogleOAuthState,
 )
 from pigrocrm.core.gmail.roster import EntityRef
+from pigrocrm.core.gmail.schemas import EDITABLE_SEND_STATES
 
 # An arbitrary but stable first key for `pg_try_advisory_lock(int, int)`, so this
 # project's locks cannot collide with another application sharing the database. The
@@ -349,6 +352,59 @@ class GmailRepository:
             .scalars()
             .all()
         )
+
+    # --- the send claim ---------------------------------------------------------------
+
+    def claim_draft_for_send(self, draft_id: UUID, now: datetime) -> bool:
+        """Moves a draft out of an editable state into `in_invio` in one statement, and
+        answers whether *this* caller is the one that moved it.
+
+        A conditional UPDATE and not a SELECT-then-set: two concurrent requests both pass
+        a read, and only the database can arbitrate which of them owns the send.
+        `send_state` is the guard in the WHERE clause, so the second caller updates zero
+        rows and learns it lost -- and the email is sent once. Acme kept this count in a
+        JSON file with a non-atomic read-modify-write and lost it under exactly this race.
+
+        The predicate is `EDITABLE_SEND_STATES` rather than `== "bozza"`, and that is the
+        same fact stated twice on purpose: a draft whose previous attempt was refused is
+        `fallito`, nothing left, and it must be sendable again -- otherwise the only
+        recovery from one 400 from Gmail is retyping the message.
+
+        `last_error` is cleared with the claim: an error sentence next to a send that is
+        currently in flight describes a previous attempt and reads as one happening now.
+
+        `synchronize_session=False` because the default would be actively wrong here.
+        SQLAlchemy's `evaluate` strategy applies the `values()` to any object in this
+        session that matches the criteria *in memory* -- and the loser of the race holds
+        an ORM copy loaded before the winner committed, so it still reads `bozza` and
+        would be marked `in_invio` locally by an UPDATE that touched zero rows. The
+        caller re-reads the committed state instead, which is the only honest source.
+
+        `RETURNING` and not `rowcount`, for the reason `prune_states` and
+        `delete_messages_for` both give: the DBAPI's row count is typed only on
+        `CursorResult`, and this answer decides whether an email is sent -- it has to come
+        from somewhere the type system agrees exists.
+        """
+        claimed = self.session.execute(
+            update(EmailDraft)
+            .where(
+                EmailDraft.id == draft_id,
+                EmailDraft.send_state.in_(sorted(EDITABLE_SEND_STATES)),
+            )
+            .values(send_state="in_invio", send_attempted_at=now, last_error=None)
+            .returning(EmailDraft.id)
+            .execution_options(synchronize_session=False)
+        )
+        return claimed.scalar_one_or_none() is not None
+
+    def emitter_profile(self) -> EmitterProfile | None:
+        """The single issuer row, or `None` on an installation that has not filled it in.
+
+        It supplies the display name on the `From` header. Read through the repository
+        rather than by constructing `EmitterProfileService`, which would pull a whole
+        service (and its `actor` checks) into a path that needs one string.
+        """
+        return self.session.execute(select(EmitterProfile).limit(1)).scalar_one_or_none()
 
     def last_inbound_from(
         self, account_id: UUID, addresses: Sequence[str], since: datetime

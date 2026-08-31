@@ -179,6 +179,18 @@ BODY_MAX_LENGTH = 100_000
 # defect -- «il CRM crede una cosa diversa da quella che è successa».
 SendState = Literal["bozza", "in_invio", "inviato", "incerto", "fallito"]
 
+# The states in which the text is still the user's -- and therefore, necessarily, the
+# states from which it can be sent. One set and not two: "you may edit this" and "you may
+# send this" are the same claim about a draft that has not left, and two frozensets
+# drifting apart would produce a draft the composer offers to edit and the send path
+# refuses, or the reverse.
+#
+# `fallito` is in it on purpose. Spec 6.3(a) says a refused send leaves «la bozza intatta
+# con l'errore accanto, il composer si riapre con il testo dentro»; a draft frozen by its
+# own failure would leave "write it again" as the only recovery, which is exactly the
+# loss the `email_drafts` table exists to prevent.
+EDITABLE_SEND_STATES: frozenset[str] = frozenset({"bozza", "fallito"})
+
 
 class EmailDraftCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
