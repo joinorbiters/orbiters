@@ -147,7 +147,14 @@ class GmailTransport:
         self._sleep: SleepFn = sleep or time.sleep
 
     def _call(
-        self, method: str, url: str, headers: dict[str, str], body: bytes | None, what: str
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        body: bytes | None,
+        what: str,
+        *,
+        retry: bool = True,
     ) -> dict[str, Any]:
         """Every call goes through here so that retry-with-backoff applies uniformly
         rather than being reimplemented -- or forgotten -- at each call site.
@@ -156,8 +163,20 @@ class GmailTransport:
         because a 4xx that is not a rate limit will not go away on its own and
         retrying it only delays the report. `invalid_grant` arrives as a 400 for
         exactly that reason: it is terminal, and this loop must not soften it.
+
+        **`retry=False` exists for one caller and it is not a tuning knob.** A retry is
+        safe only when a failed attempt is known to have had no effect, and that is true
+        of every endpoint here except `users.messages.send`: a 599 or a 502 on a send
+        means *no answer arrived*, not *nothing was sent*, and Gmail offers no idempotency
+        key to make the second attempt the same operation as the first. Retrying it is
+        therefore a mechanism for delivering a second copy of somebody's email to their
+        client -- three of them, at this loop's four attempts -- and
+        `test_gmail_reconcile.py` reproduced exactly that before this parameter existed.
+        A send whose outcome is unknown is `incerto` and is resolved by asking, which is
+        what `EmailSendService.reconcile` is for.
         """
-        for attempt in range(MAX_HTTP_ATTEMPTS):
+        max_attempts = MAX_HTTP_ATTEMPTS if retry else 1
+        for attempt in range(max_attempts):
             status, payload, response_headers = self._http(method, url, headers, body)
             if status < 400:
                 return _decode_success(payload)
@@ -167,7 +186,7 @@ class GmailTransport:
                 error_code=_error_code(payload),
                 retry_after=_parse_retry_after(response_headers),
             )
-            last = attempt == MAX_HTTP_ATTEMPTS - 1
+            last = attempt == max_attempts - 1
             if status not in _RETRYABLE_STATUSES or last:
                 raise GoogleCallFailed(failure, what)
             # The server's own hint wins over our guess when it gave one.
@@ -186,13 +205,14 @@ class GmailTransport:
         token: str,
         body: dict[str, Any] | None = None,
         what: str,
+        retry: bool = True,
     ) -> dict[str, Any]:
         headers = {"Authorization": f"Bearer {token}"}
         encoded: bytes | None = None
         if body is not None:
             headers["Content-Type"] = "application/json"
             encoded = json.dumps(body).encode()
-        return self._call(method, url, headers, encoded, what)
+        return self._call(method, url, headers, encoded, what, retry=retry)
 
     def form(self, url: str, fields: dict[str, str], *, what: str) -> dict[str, Any]:
         """POST `application/x-www-form-urlencoded`, for the OAuth token endpoint and

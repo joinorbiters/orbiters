@@ -119,6 +119,12 @@ class FakeGmail:
     # wrong in production. Off by default: `timeout_on_send` alone means nothing was
     # delivered, and the two together are the pair the reconciliation has to separate.
     deliver_on_timeout: bool = False
+    # Whether this Gmail replaces the `Message-ID` the client supplied. Off by default
+    # because that is what the verification note currently models; it is the switch that
+    # turns `UNVERIFIED` into the `NO` branch, so the reconciliation can be tested
+    # against the assumption being *wrong* rather than only against it holding. See
+    # `docs/superpowers/notes/2026-08-20-gmail-message-id-verification.md`.
+    rewrites_message_id: bool = False
 
     # ---- the seam ---------------------------------------------------------------
 
@@ -263,11 +269,19 @@ class FakeGmail:
                 "6.3 has nothing to look the message up by without it."
             )
         gmail_id = f"sent-{len([r for r in self.requests if r.is_messages_send])}"
+        if self.rewrites_message_id:
+            # The `NO` branch of the note, made observable. Many providers rewrite
+            # `Message-ID` so the right-hand side names their own infrastructure, and
+            # whether Gmail's API path does is the one thing nobody has measured. With
+            # this set the message really is in the mailbox and the `rfc822msgid` lookup
+            # cannot find it -- which is precisely the shape of "reported `fallito` for
+            # mail sitting in Sent".
+            message_id = f"<{gmail_id}@mail.gmail.com>"
         message = FakeMessage(
             id=gmail_id,
             thread_id=f"thread-{gmail_id}",
             headers={
-                name: str(raw[name] or "")
+                name: (message_id if name == "Message-ID" else str(raw[name] or ""))
                 # `In-Reply-To`/`References` are carried because Gmail carries them, and
                 # because they are how a reminder stays attached to the invoice above it
                 # (spec 6.2 rule 2). A fake that dropped them would make a detached

@@ -48,6 +48,7 @@ from pigrocrm.core.gmail.query import build_list_queries, messages_list_url, thr
 from pigrocrm.core.gmail.repository import GmailRepository
 from pigrocrm.core.gmail.roster import AddressRoster, EntityRef
 from pigrocrm.core.gmail.schemas import SCOPE_READONLY, SyncReport
+from pigrocrm.core.gmail.send import reconcile_only
 from pigrocrm.core.gmail.tokens import GoogleTokenClient
 from pigrocrm.core.gmail.transport import GmailTransport
 from pigrocrm.core.people.models import Person
@@ -115,6 +116,17 @@ class GmailSyncService:
         report = SyncReport(started_at=started_at)
 
         report.states_pruned = self.repo.prune_states(started_at)
+
+        # Before anything else: resolve any send whose outcome we do not know (spec 6.3
+        # point 3, «la riconciliazione gira all'inizio di ogni sync»). First, and not
+        # last, for two reasons. A draft left `incerto` because a human never pressed
+        # «verifica» is a state that stays wrong, and this is the only thing that
+        # resolves it without one; and doing it here means the outbound row for an
+        # adopted message exists *before* this cycle's own listing reaches the same
+        # conversation, so the two agree instead of racing over the unique constraint.
+        report.reconciled = reconcile_only(
+            self.session, settings=self.settings, transport=self.transport, tokens=self.tokens
+        ).reconcile_all(actor)
 
         # Two windows, not one. An address the roster gained since the last cycle has a
         # history behind it that no watermark has ever covered, so it is searched over

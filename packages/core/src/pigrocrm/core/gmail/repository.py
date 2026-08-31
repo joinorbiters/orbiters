@@ -397,6 +397,91 @@ class GmailRepository:
         )
         return claimed.scalar_one_or_none() is not None
 
+    # --- resolving an unknown send outcome --------------------------------------------
+
+    def uncertain_draft_ids(self) -> list[UUID]:
+        """Every draft whose outcome nobody knows, oldest attempt first.
+
+        `in_invio` is in here beside `incerto` and it is not an oversight: a process that
+        died between the claim and the record leaves exactly that, and a draft left in it
+        can be neither edited, nor sent, nor verified. `EmailSendService.reconcile` is
+        what decides whether a given `in_invio` is still in flight or abandoned -- this
+        query only says which rows are worth asking about.
+        """
+        return list(
+            self.session.execute(
+                select(EmailDraft.id)
+                .where(EmailDraft.send_state.in_(("incerto", "in_invio")))
+                .order_by(EmailDraft.send_attempted_at)
+            )
+            .scalars()
+            .all()
+        )
+
+    def outbound_by_header(self, message_id_header: str) -> GmailMessage | None:
+        """An already-stored outbound message carrying a `Message-ID` we minted.
+
+        Deliberately **not** scoped to one account, unlike every other read here, and the
+        reason is that the value is ours: `email_drafts.message_id_header` is unique, so
+        this can only ever match the very message this draft produced. It costs no Gmail
+        quota and it is exact, which is why the reconciliation asks it first.
+        """
+        if not message_id_header:
+            return None
+        return self.session.execute(
+            select(GmailMessage).where(
+                GmailMessage.direction == "outbound",
+                GmailMessage.message_id_header == message_id_header,
+            )
+        ).scalar_one_or_none()
+
+    def outbound_candidates(
+        self, account_id: UUID, subject: str, since: datetime
+    ) -> list[GmailMessage]:
+        """This account's own outgoing mail with this exact subject, from `since` on.
+
+        The raw material of the approximate match of spec 6.3. Scoped to the account,
+        because another user's mailbox cannot answer this user's question, and to an
+        exact subject, because the whole value of a declaredly inferior match is that it
+        stays narrow.
+        """
+        return list(
+            self.session.execute(
+                select(GmailMessage)
+                .where(
+                    GmailMessage.google_account_id == account_id,
+                    GmailMessage.direction == "outbound",
+                    GmailMessage.subject == subject,
+                    GmailMessage.internal_date >= since,
+                )
+                .order_by(GmailMessage.internal_date)
+            )
+            .scalars()
+            .all()
+        )
+
+    def claimed_send_ids(self, gmail_ids: Sequence[str]) -> set[str]:
+        """Which of these Gmail ids some draft already records as its own send.
+
+        The guard on the approximate match: without it, a second near-identical message
+        could adopt the id of the first one, and two drafts would both claim one email.
+        """
+        if not gmail_ids:
+            return set()
+        # The column is nullable -- most drafts have never been sent -- so the `IN`
+        # already excludes NULL and the comprehension is what tells the type checker so.
+        return {
+            claimed
+            for claimed in self.session.execute(
+                select(EmailDraft.sent_gmail_message_id).where(
+                    EmailDraft.sent_gmail_message_id.in_(list(gmail_ids))
+                )
+            )
+            .scalars()
+            .all()
+            if claimed is not None
+        }
+
     def emitter_profile(self) -> EmitterProfile | None:
         """The single issuer row, or `None` on an installation that has not filled it in.
 

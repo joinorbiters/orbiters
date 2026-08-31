@@ -37,7 +37,7 @@ recipient either: it is a stored column that the drafts list, the REST layer and
 test failure dump render. The bearer token exists only as a local in `_token`.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select
@@ -52,11 +52,16 @@ from pigrocrm.core.gmail.attach import resolve_attachments
 from pigrocrm.core.gmail.crypto import unseal
 from pigrocrm.core.gmail.errors import GoogleCallFailed
 from pigrocrm.core.gmail.models import EmailDraft, GmailMessage, GoogleAccount
-from pigrocrm.core.gmail.query import GMAIL_SEND_URL
+from pigrocrm.core.gmail.query import GMAIL_SEND_URL, messages_list_url, rfc822msgid_query
 from pigrocrm.core.gmail.repository import GmailRepository
 from pigrocrm.core.gmail.rfc822 import build_rfc822, to_base64url
 from pigrocrm.core.gmail.roster import AddressRoster, EntityRef
-from pigrocrm.core.gmail.schemas import EDITABLE_SEND_STATES, SCOPE_SEND, EmailDraftRead
+from pigrocrm.core.gmail.schemas import (
+    EDITABLE_SEND_STATES,
+    SCOPE_READONLY,
+    SCOPE_SEND,
+    EmailDraftRead,
+)
 from pigrocrm.core.gmail.tokens import GoogleTokenClient
 from pigrocrm.core.gmail.transport import GmailTransport
 from pigrocrm.core.storage.base import DocumentStorage
@@ -64,6 +69,14 @@ from pigrocrm.core.storage.base import DocumentStorage
 ENTITY = "email_draft"
 _SEND_ACTION = "inviare un'email"
 _WHAT_SEND = "invio del messaggio"
+_WHAT_VERIFY = "verifica dell'invio"
+
+# The two states in which nobody knows whether the message left. `incerto` is the one
+# spec 6.3(b) names -- Gmail did not answer. `in_invio` is the same ignorance arrived at
+# differently: the process died between the claim and the record, so the claim is all
+# that is left. Both are resolved the same way, by asking, and leaving `in_invio` out
+# would make a crashed request strand a draft nobody can edit, send or verify.
+_UNRESOLVED = frozenset({"incerto", "in_invio"})
 
 # A definite refusal: Gmail looked at the message and said no, so nothing left and the
 # draft is safe to retry. Anything else -- a timeout, a lost connection, a 5xx after
@@ -84,6 +97,15 @@ _TOKEN_FAILED = (
 _UNCERTAIN = (
     "Non sappiamo se il messaggio sia partito: Gmail non ha risposto. "
     "Usa «verifica» prima di rinviarlo."
+)
+# The sentence for the one case this design cannot make certain. It names where to look
+# rather than only asserting the negative, because the residual risk is exactly that
+# Gmail replaced the `Message-ID` we supplied -- the note on that check still records
+# UNVERIFIED -- and a person who reads «non è partito» about a message sitting in their
+# own Sent folder will send it a second time.
+_NOT_SENT = (
+    "Il messaggio non risulta partito: la bozza è intatta e puoi riprovare. "
+    "Controlla «Posta inviata» su Gmail prima di rinviarlo."
 )
 
 # The sentences a refused send raises with. They name the state, never the correspondence.
@@ -152,7 +174,7 @@ class EmailSendService:
             # real reason travels in the exception, which the adapter renders; the stored
             # sentence stays generic because a storage key or a document title is not
             # something `last_error` may hold.
-            self._finish(draft_id, "fallito", error=_COMPOSE_FAILED)
+            self._finish(draft_id, "fallito", error=_COMPOSE_FAILED, actor=actor)
             raise
 
         try:
@@ -163,18 +185,30 @@ class EmailSendService:
             # sent nothing. `fallito` and not `incerto`: there is no outcome to verify,
             # and making the user press «verifica» for a message that was never composed
             # into a request would be an unknown invented out of a known.
-            self._finish(draft_id, "fallito", error=_TOKEN_FAILED)
+            self._finish(draft_id, "fallito", error=_TOKEN_FAILED, actor=actor)
             raise
 
         try:
             answer = self.transport.json(
-                "POST", GMAIL_SEND_URL, token=token, body={"raw": raw}, what=_WHAT_SEND
+                "POST",
+                GMAIL_SEND_URL,
+                token=token,
+                body={"raw": raw},
+                what=_WHAT_SEND,
+                # **One attempt.** A retry is safe only when the failed attempt is known
+                # to have had no effect, and a 599 or a 502 on a send means "no answer
+                # arrived", not "nothing was sent". Gmail offers no idempotency key, so
+                # the second attempt is a second email -- the transport's four attempts
+                # would deliver up to four copies to somebody's client, which is the
+                # exact defect this task exists to close, arrived at from the inside.
+                # An unknown outcome is `incerto` and is resolved by `reconcile`.
+                retry=False,
             )
         except GoogleCallFailed as failed:
             if failed.failure.status in _DEFINITE_REFUSAL:
                 # (3a) Gmail refused. The clean case of spec 6.3(a): nothing left, so the
                 # draft is intact and editable with the error beside it.
-                self._finish(draft_id, "fallito", error=_REFUSED)
+                self._finish(draft_id, "fallito", error=_REFUSED, actor=actor)
                 raise Conflict(
                     ENTITY,
                     "Gmail ha rifiutato il messaggio: il testo è rimasto nella bozza",
@@ -183,7 +217,16 @@ class EmailSendService:
                 ) from failed
             # (3b) We do not know. The message MAY be in the user's Sent folder. Neither
             # assumption is made -- `reconcile` settles it by asking.
-            self._finish(draft_id, "incerto", error=_UNCERTAIN)
+            # The timeline entry goes in the same transaction as the state, not after it:
+            # «esito da verificare» is a thing that happened to this customer's
+            # correspondence, and a state without its trace is how it goes unnoticed.
+            self._finish(
+                draft_id,
+                "incerto",
+                error=_UNCERTAIN,
+                actor=actor,
+                kind="gmail.invio_incerto",
+            )
             raise Conflict(
                 ENTITY,
                 "esito dell'invio da verificare: Gmail non ha risposto",
@@ -198,6 +241,167 @@ class EmailSendService:
             gmail_thread_id=str(answer.get("threadId") or ""),
             actor=actor,
         )
+
+    # ---- resolving an outcome nobody knows ----------------------------------------
+
+    def reconcile(self, draft_id: UUID, actor: Actor) -> EmailDraftRead:
+        """Resolves a send whose outcome is unknown by *asking*, never by guessing.
+
+        Three lookups, cheapest and most certain first, and the third exists because of
+        an assumption this project has been careful not to promote into a fact:
+
+        1. **Our own `Message-ID` in `gmail_messages`.** If any cycle has already stored
+           an outbound message carrying the id we minted for this draft, the message
+           left. Free, exact, and no request to Google at all.
+        2. **`q=rfc822msgid:<our Message-ID>` at Gmail.** Exact, because we chose that id
+           before calling send (spec 6.2). This is the path the design is built around --
+           *if* Gmail preserves a client-supplied `Message-ID`, which
+           `docs/superpowers/notes/2026-08-20-gmail-message-id-verification.md` records
+           as **UNVERIFIED**: nobody has run the check against a real Gmail.
+        3. **Recipient + subject inside the window, over the mail this account has
+           already synchronised.** The fallback spec 6.3 names, and it runs *always* --
+           not only when `gmail_reconcile_by_message_id` is off. That is the whole point:
+           a `rfc822msgid` lookup coming back empty is exactly what an unpreserved
+           `Message-ID` looks like, and declaring `fallito` on the strength of it would
+           be reporting a message the user can see in Sent as not sent. It is
+           declaredly inferior -- an approximate match -- so it is used only after the
+           exact one has found nothing, and it refuses a message some other draft already
+           records as its own send.
+
+        Found means it left: adopt Gmail's id and mark it `inviato`. Not found, after the
+        grace window, means it did not: `fallito`, with the draft intact and a sentence
+        that tells the person to look in Sent before resending, because that residual
+        case is precisely what `NO` in the note would look like in production.
+
+        Why a grace window at all: Gmail's search index is not instantaneous. Declaring
+        failure at second zero would turn a slow index into a resend, which is the
+        outcome this whole design exists to prevent.
+        """
+        draft = self.session.get(EmailDraft, draft_id)
+        if draft is None:
+            raise NotFound(ENTITY, draft_id)
+        if draft.send_state not in _UNRESOLVED:
+            # `bozza`, `fallito`, `inviato`: nothing to resolve, and no request made. A
+            # draft that was never sent has no outcome to look up, and re-adopting a
+            # message for one already `inviato` is what would make this method
+            # non-idempotent.
+            return EmailDraftRead.model_validate(draft)
+
+        attempted = draft.send_attempted_at or datetime.now(UTC)
+        inside_grace = datetime.now(UTC) - attempted < timedelta(
+            minutes=self.settings.gmail_send_grace_minutes
+        )
+        if draft.send_state == "in_invio" and inside_grace:
+            # Still plausibly in flight on another connection: the transport gives up
+            # after four attempts and a 30-second timeout apiece, which is minutes inside
+            # a fifteen-minute window. Touching it here would race a send that is about
+            # to record its own outcome. Past the window it is an abandoned claim -- a
+            # process that died between the claim and the record -- and that is an
+            # unknown outcome like any other, so it falls through.
+            return EmailDraftRead.model_validate(draft)
+
+        account = self.accounts.usable(
+            # `gmail.readonly`, not `gmail.send`: the lookup is `users.messages.list`,
+            # which `gmail.send` does not authorise. Naming the wrong scope here would
+            # produce a 403 from Google where a legible «manca l'autorizzazione» belongs.
+            actor,
+            scope=SCOPE_READONLY,
+            feature="la verifica dell'invio",
+        )
+        found = self._find_sent(account, draft)
+        if found is not None:
+            gmail_id, thread_id = found
+            return self._record_sent(
+                account,
+                draft_id,
+                gmail_message_id=gmail_id,
+                gmail_thread_id=thread_id,
+                actor=actor,
+            )
+
+        if inside_grace:
+            # "We do not know yet" is a true answer. A resend is not.
+            return EmailDraftRead.model_validate(draft)
+
+        draft.send_state = "fallito"
+        draft.last_error = _NOT_SENT
+        self.session.commit()
+        return EmailDraftRead.model_validate(draft)
+
+    def reconcile_all(self, actor: Actor) -> int:
+        """Every draft whose outcome is unknown, and how many of them this run settled.
+
+        Runs at the start of each sync cycle, so an unresolved outcome does not wait for
+        somebody to remember it -- a state that only resolves when a human presses a
+        button is a state that stays wrong.
+        """
+        resolved = 0
+        for draft_id in self.repo.uncertain_draft_ids():
+            before = self.session.get(EmailDraft, draft_id)
+            state_before = before.send_state if before is not None else ""
+            self.reconcile(draft_id, actor)
+            after = self.session.get(EmailDraft, draft_id)
+            if after is not None and after.send_state != state_before:
+                resolved += 1
+        return resolved
+
+    def _find_sent(self, account: GoogleAccount, draft: EmailDraft) -> tuple[str, str] | None:
+        """`(gmail_message_id, gmail_thread_id)` of the message that left, or `None`."""
+        already = self.repo.outbound_by_header(draft.message_id_header)
+        if already is not None:
+            return already.gmail_message_id, already.gmail_thread_id
+        if self.settings.gmail_reconcile_by_message_id:
+            exact = self._find_by_message_id(account, draft)
+            if exact is not None:
+                return exact
+        return self._find_by_approximation(account, draft)
+
+    def _find_by_message_id(
+        self, account: GoogleAccount, draft: EmailDraft
+    ) -> tuple[str, str] | None:
+        payload = self.transport.json(
+            "GET",
+            messages_list_url(rfc822msgid_query(draft.message_id_header)),
+            token=self._token(account),
+            what=_WHAT_VERIFY,
+        )
+        entries = [entry for entry in (payload.get("messages") or []) if isinstance(entry, dict)]
+        if not entries:
+            return None
+        first = entries[0]
+        return str(first.get("id") or ""), str(first.get("threadId") or "")
+
+    def _find_by_approximation(
+        self, account: GoogleAccount, draft: EmailDraft
+    ) -> tuple[str, str] | None:
+        """The declaredly inferior match of spec 6.3: same recipient, same subject,
+        inside the grace window.
+
+        It reads the CRM and not Gmail, because the per-address sweep of spec 4 is what
+        puts this account's own outgoing mail into `gmail_messages` -- so this costs no
+        quota and cannot itself be a broad search. The cost is latency: it can only find
+        a message a cycle has already stored, which is why it is the third lookup and not
+        the first.
+
+        A candidate some *other* draft already records as its own send is skipped. That
+        is what keeps «two near-identical messages minutes apart are indistinguishable»
+        from being «and the second one steals the first one's id».
+        """
+        if draft.send_attempted_at is None:
+            return None
+        since = draft.send_attempted_at - timedelta(minutes=self.settings.gmail_send_grace_minutes)
+        candidates = self.repo.outbound_candidates(account.id, draft.subject, since=since)
+        if not candidates:
+            return None
+        claimed = self.repo.claimed_send_ids([row.gmail_message_id for row in candidates])
+        wanted = {address.strip().lower() for address in draft.to_addresses}
+        for row in candidates:
+            if row.gmail_message_id in claimed:
+                continue
+            if not wanted & {address.strip().lower() for address in row.to_addresses}:
+                continue
+            return row.gmail_message_id, row.gmail_thread_id
+        return None
 
     # ---- internals ---------------------------------------------------------------
 
@@ -277,7 +481,9 @@ class EmailSendService:
         profile = self.repo.emitter_profile()
         return profile.ragione_sociale if profile else ""
 
-    def _finish(self, draft_id: UUID, state: str, *, error: str) -> None:
+    def _finish(
+        self, draft_id: UUID, state: str, *, error: str, actor: Actor, kind: str | None = None
+    ) -> None:
         """Records the outcome of an attempt, in a transaction of its own so that it
         survives the exception raised immediately after it.
 
@@ -290,6 +496,17 @@ class EmailSendService:
             return
         row.send_state = state
         row.last_error = error
+        if kind is not None:
+            # Last before the commit, per `ActivityService.record`. The payload carries
+            # the subject and our own `Message-ID` -- the two things a person needs to
+            # find the message in their Sent folder -- and no recipient and no body.
+            self.activities.record(
+                row.entity_type,
+                row.entity_id,
+                kind,
+                actor,
+                {"subject": row.subject, "message_id_header": row.message_id_header},
+            )
         self.session.commit()
 
     def _record_sent(
@@ -398,3 +615,46 @@ class EmailSendService:
 
 def _already(state: str) -> str:
     return _ALREADY.get(state, f"questa email non è inviabile nello stato {state}")
+
+
+class _NoDocuments:
+    """The document backend the reconciliation path must never reach.
+
+    Not a stand-in for storage: it is an assertion, the same shape as `UnusedStorage` in
+    the test fixtures. `reconcile` and `reconcile_all` look a message up and adopt an id;
+    they compose nothing, so they read no document -- and a storage whose `get` refuses is
+    how that stays true rather than merely being true today.
+    """
+
+    def put(self, key: str, data: bytes, content_type: str) -> None:
+        raise Conflict("gmail", "la verifica dell'invio non scrive documenti")
+
+    def get(self, key: str) -> bytes:
+        raise Conflict("gmail", "la verifica dell'invio non legge documenti")
+
+    def delete(self, key: str) -> None:
+        raise Conflict("gmail", "la verifica dell'invio non cancella documenti")
+
+    def signed_url(self, key: str, ttl: timedelta) -> str | None:
+        return None
+
+
+def reconcile_only(
+    session: Session,
+    *,
+    settings: Settings,
+    transport: GmailTransport,
+    tokens: GoogleTokenClient,
+) -> EmailSendService:
+    """An `EmailSendService` for `reconcile_all` and nothing else.
+
+    It exists so that `GmailSyncService` -- which has no `DocumentStorage` and no reason
+    to acquire one -- can run the reconciliation at the start of every cycle without
+    widening its constructor across all three of its call sites. A module-level function
+    rather than a classmethod because a public method on a `*Service` class is a
+    surface decision `test_mcp_surface_coverage.py` would (rightly) demand an entry for,
+    and this is plumbing, not an operation anybody performs.
+    """
+    return EmailSendService(
+        session, settings=settings, transport=transport, tokens=tokens, storage=_NoDocuments()
+    )
