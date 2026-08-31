@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, String
+from sqlalchemy import Boolean, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from pigrocrm.core.db import Base, PrimaryKeyMixin, TimestampMixin
@@ -39,4 +39,11 @@ class EmitterProfile(Base, PrimaryKeyMixin, TimestampMixin):
     # DocumentStorage as everything else, so a Drive-backed install keeps them too.
     logo_key: Mapped[str | None] = mapped_column(String(255), default=None)
     firma_key: Mapped[str | None] = mapped_column(String(255), default=None)
+    # A text block -- name and role of the person signing. NOT the same thing as
+    # `firma_key` above, which is the storage key of a signature *image* used on the
+    # PDF: an email does not attach an image of a signature, it wants text. The phone
+    # number, the website and the company name are deliberately NOT repeated here; the
+    # reminder template reads them from their own columns, so the number cannot diverge
+    # between two places. Acme hardcoded all of it, twice, verbatim, in two builders.
+    firma_email: Mapped[str | None] = mapped_column(Text, default=None)
     regime_fiscale: Mapped[str | None] = mapped_column(String(200), default=None)

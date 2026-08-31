@@ -2,7 +2,7 @@ import hashlib
 import re
 import unicodedata
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, get_args
 from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
@@ -25,6 +25,7 @@ from pigrocrm.core.documents.schemas import (
     DocumentListQuery,
     DocumentPage,
     DocumentRead,
+    DocumentTipo,
     DocumentUpdate,
     DocumentVersionRead,
     OfferState,
@@ -42,6 +43,12 @@ from pigrocrm.core.templates.renderer import DeclaredVariable, render_template
 from pigrocrm.core.templates.service import TemplateService
 
 ENTITY: EntityType = "document"
+
+# The template types a `documents` row can legitimately be created from. Derived from
+# `DocumentTipo` itself, never retyped, so a value added there is covered here by
+# construction -- see `_require_template` for why the two vocabularies stopped being
+# the same Literal.
+DOCUMENT_TIPI: frozenset[str] = frozenset(get_args(DocumentTipo))
 _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
 _CUSTOMER_ID_FRAGMENT = 8
 
@@ -391,6 +398,22 @@ class DocumentService:
         template = self.templates.repo.get(template_id)
         if template is None:
             raise NotFound("template", template_id)
+        if template.tipo not in DOCUMENT_TIPI:
+            # `TemplateTipo` and `DocumentTipo` used to be the same Literal, so
+            # `Document.tipo = template.tipo` a few methods down was a copy that could
+            # not go wrong. Slice 5 widened the template side with `email` and
+            # `sollecito` -- neither of which is a thing a `documents` row can be --
+            # and `DocumentRead.tipo` is a plain `str`, so without this check the copy
+            # would succeed silently and put a document of type "sollecito" in the
+            # customer's document list. The conversion between the two vocabularies is
+            # explicit here rather than implicit in the overlap.
+            raise ValidationFailed(
+                ENTITY,
+                "template_id",
+                f"il template '{template.nome}' è di tipo '{template.tipo}', "
+                "che non è un tipo di documento",
+                expected=f"un template fra: {', '.join(sorted(DOCUMENT_TIPI))}",
+            )
         return template
 
     def _template_scope(

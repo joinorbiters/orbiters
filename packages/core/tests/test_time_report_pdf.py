@@ -54,9 +54,11 @@ def test_the_seeded_template_exists_and_names_no_freelancer(db_session: Session)
     """Criterion 10's last clause: a grep over the template sources finds no
     freelancer's name. Every identity value is `{{emittente.*}}`, read from
     `emitter_profile`."""
+    from pigrocrm.core.gmail.solleciti_template import SOLLECITO_TEMPLATE_NOME
+
     created = TemplateService(db_session).seed_defaults(ADMIN)
-    assert [t.nome for t in created] == [TIME_REPORT_TEMPLATE_NOME]
-    assert created[0].tipo == "rapporto_ore"
+    assert [t.nome for t in created] == [TIME_REPORT_TEMPLATE_NOME, SOLLECITO_TEMPLATE_NOME]
+    assert [t.tipo for t in created] == ["rapporto_ore", "sollecito"]
     # Idempotent, deduplicating case-insensitively on `nome` to match uq_templates_nome.
     assert TemplateService(db_session).seed_defaults(ADMIN) == []
 

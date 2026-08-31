@@ -45,7 +45,7 @@ import string
 from typing import Literal
 from urllib.parse import quote, urlsplit
 
-RenderContext = Literal["markdown", "typst", "typst_string", "url", "verbatim", "xml"]
+RenderContext = Literal["markdown", "plain", "typst", "typst_string", "url", "verbatim", "xml"]
 
 # Every ASCII punctuation character, escaped unconditionally, in both contexts -- see
 # the module docstring for why a curated subset per context is exactly the defect this
@@ -178,6 +178,31 @@ def escape_typst_string(value: str) -> str:
     return _escape_each(flattened, _TYPST_STRING_SPECIALS)
 
 
+def escape_plain(value: str) -> str:
+    """For a placeholder whose rendered output is read by a *person*, not a compiler.
+
+    The reminder email of spec 7.3 is the case this exists for: its body is a
+    `text/plain` MIME part that a mail client displays as typed. Nothing downstream
+    re-parses it -- no Pandoc, no Typst, no Markdown reader -- so there is no syntax
+    for a value to escape *out of*, and every backslash `escape_markdown` adds would
+    reach the recipient as a visible backslash. That is not a theoretical cost: the
+    full ASCII punctuation class covers `/`, `.` and `,`, so the invoice number
+    `2026/14` and the amount `1.200,00 €` both arrive at a paying client mangled.
+
+    Line terminators are deliberately *not* collapsed, unlike in every other context
+    here. The two compiler-facing escapers flatten them because their value lands
+    inside one syntactic unit -- a table cell, a header field -- that a stray line
+    break would restructure. A plain-text body has no such unit: it is lines, and a
+    signature block is two of them on purpose.
+
+    NUL is still rejected, on `_reject_nul`'s own terms. This escaper is for *body*
+    text only; a header value is `gmail.rfc822._header`'s job, and that is where CR
+    and LF are refused, because header injection is a real attack and dropping the
+    line-flattening here does not make it this function's problem to solve badly.
+    """
+    return _reject_nul(value)
+
+
 def _is_trustworthy_absolute_url(value: str) -> bool:
     """True for a value this module will write out as a literal link, rather than
     treat as opaque data.
@@ -284,6 +309,8 @@ def escape_for(context: RenderContext, value: str) -> str:
     match context:
         case "markdown":
             return escape_markdown(value)
+        case "plain":
+            return escape_plain(value)
         case "typst":
             return escape_typst(value)
         case "typst_string":

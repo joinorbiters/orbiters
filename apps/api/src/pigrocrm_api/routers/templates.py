@@ -4,13 +4,13 @@ from uuid import UUID
 from fastapi import APIRouter, Query, status
 from pydantic import BaseModel
 
-from pigrocrm.core.documents.schemas import DocumentTipo
 from pigrocrm.core.templates.schemas import (
     TemplateCreate,
     TemplateDescription,
     TemplateListQuery,
     TemplatePage,
     TemplateRead,
+    TemplateTipo,
     TemplateUpdate,
 )
 from pigrocrm.core.templates.service import TemplateService
@@ -86,7 +86,7 @@ def list_templates(
     session: SessionDep,
     actor: ActorDep,
     search: Annotated[SafeStr | None, Query()] = None,
-    tipo: Annotated[DocumentTipo | None, Query()] = None,
+    tipo: Annotated[TemplateTipo | None, Query()] = None,
     include_inactive: Annotated[bool, Query()] = False,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     cursor: Annotated[UUID | None, Query()] = None,

@@ -246,14 +246,19 @@ class TemplateService:
         against a stored "Rapporto ore" and then be refused by the database as a raw
         `IntegrityError`.
 
-        Seeds exactly one template today: the timesheet. `render/assets/
-        template-offer.md` is deliberately left alone -- adopting it would change slice
-        2's shipped behaviour in a slice that is not about offers.
+        Seeds two templates: the timesheet, and slice 5's payment reminder.
+        `render/assets/template-offer.md` is deliberately left alone -- adopting it
+        would change slice 2's shipped behaviour in a slice that is not about offers.
 
         Returns only what it actually created, so a caller can tell "seeded" from
         "already there".
         """
         actor.require_admin("seed_templates")
+        from pigrocrm.core.gmail.solleciti_template import (  # local: avoids a package cycle
+            SOLLECITO_TEMPLATE_NOME,
+            SOLLECITO_TEMPLATE_SOURCE,
+            SOLLECITO_TEMPLATE_VARIABLES,
+        )
         from pigrocrm.core.timetracking.report import (  # local: avoids a package cycle
             TIME_REPORT_TEMPLATE_NOME,
             TIME_REPORT_TEMPLATE_VARIABLES,
@@ -265,6 +270,18 @@ class TemplateService:
                 "rapporto_ore",
                 (ASSETS_DIR / "template-time-report.md").read_text(encoding="utf-8"),
                 TIME_REPORT_TEMPLATE_VARIABLES,
+            ),
+            # The reminder body of spec 7.3, seeded so a user can edit the wording that
+            # goes out in their name without touching Python. Its source lives in
+            # `gmail/solleciti_template.py` rather than in `ASSETS_DIR` because the
+            # reminder path renders that constant directly -- a reminder must go out
+            # even on an install where nobody ran `seed_defaults`, and the row here is
+            # the editable copy, not the only copy.
+            (
+                SOLLECITO_TEMPLATE_NOME,
+                "sollecito",
+                SOLLECITO_TEMPLATE_SOURCE,
+                SOLLECITO_TEMPLATE_VARIABLES,
             ),
         )
         created: list[TemplateRead] = []

@@ -21,6 +21,12 @@ EMAIL_MAX_LENGTH = 320
 SITO_WEB_MAX_LENGTH = 255
 STORAGE_KEY_MAX_LENGTH = 255
 REGIME_FISCALE_MAX_LENGTH = 200
+# `firma_email` is a `Text` column, so it has no width for this to mirror and nothing
+# above breaks if it is exceeded. Bounded anyway, on `templates/schemas.py`'s own
+# reasoning about a string nested in JSONB: an unbounded text field on a signature
+# block is still an unbounded text field, and a signature has no more use for 100 000
+# characters than a template variable name does.
+FIRMA_EMAIL_MAX_LENGTH = 2_000
 
 
 class EmitterProfileUpsert(BaseModel):
@@ -51,6 +57,7 @@ class EmitterProfileUpsert(BaseModel):
     sito_web: SafeStr | None = Field(default=None, max_length=SITO_WEB_MAX_LENGTH)
     logo_key: SafeStr | None = Field(default=None, max_length=STORAGE_KEY_MAX_LENGTH)
     firma_key: SafeStr | None = Field(default=None, max_length=STORAGE_KEY_MAX_LENGTH)
+    firma_email: SafeStr | None = Field(default=None, max_length=FIRMA_EMAIL_MAX_LENGTH)
     regime_fiscale: SafeStr | None = Field(default=None, max_length=REGIME_FISCALE_MAX_LENGTH)
 
 
@@ -73,6 +80,7 @@ class EmitterProfileRead(BaseModel):
     sito_web: str | None
     logo_key: str | None
     firma_key: str | None
+    firma_email: str | None
     regime_fiscale: str | None
     created_at: datetime
     updated_at: datetime

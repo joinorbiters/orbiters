@@ -12,6 +12,7 @@ from pigrocrm.core.templates.escaping import (
     RenderContext,
     escape_for,
     escape_markdown,
+    escape_plain,
     escape_typst,
     escape_typst_string,
     escape_url,
@@ -675,3 +676,32 @@ def test_xml_context_allows_every_code_point_xml_1_0_permits(allowed: str) -> No
 
 def test_xml_is_a_declared_render_context() -> None:
     assert "xml" in get_args(RenderContext)
+
+
+def test_plain_context_leaves_punctuation_alone() -> None:
+    """The reminder body is a `text/plain` MIME part read by a person: nothing
+    downstream re-parses it, so there is no syntax to escape out of, and every
+    backslash the markdown escaper adds is damage a paying client can see. The
+    contrast with `escape_markdown` on the same value is the whole point."""
+    invoice_line = "Fattura 2026/14 - 1.200,00 €"
+    assert escape_plain(invoice_line) == invoice_line
+    assert escape_markdown(invoice_line) != invoice_line
+    assert escape_for("plain", invoice_line) == invoice_line
+
+
+def test_plain_context_keeps_the_line_breaks_a_signature_block_is_made_of() -> None:
+    """Every other escaper here collapses line terminators, because its value lands
+    inside one syntactic unit -- a table cell, a header field -- that a stray break
+    would restructure. A plain-text body *is* lines."""
+    signature = "Mario Rossi\nConsulente"
+    assert escape_plain(signature) == signature
+    assert "\n" not in escape_markdown(signature)
+
+
+def test_plain_context_still_refuses_a_nul_byte() -> None:
+    with pytest.raises(ValueError, match="carattere nullo"):
+        escape_plain("Mario\x00Rossi")
+
+
+def test_plain_is_a_declared_render_context() -> None:
+    assert "plain" in get_args(RenderContext)

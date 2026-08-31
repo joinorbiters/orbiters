@@ -9,14 +9,32 @@ schemas.py`, `fields/schemas.py`, `pipeline/schemas.py`).
 """
 
 from datetime import datetime
-from typing import Self
+from typing import Literal, Self
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from pigrocrm.core.documents.schemas import DocumentTipo
 from pigrocrm.core.fields.types import OPTION_TYPES, FieldType
 from pigrocrm.core.validation import SafeStr
+
+# Templates cover more than documents: slice 5 adds an `email` body and a `sollecito`.
+# `DocumentTipo` -- which this used to reuse -- is deliberately left alone rather than
+# extended, because no `documents` row is ever an email, and appending these two there
+# would make them legal document types on every document endpoint in the API. The
+# document-only values (`fattura`, `fattura_xml`, `proforma`, `rapporto_ore`) are not
+# mirrored back the other way either, with one exception: `rapporto_ore` is the tipo
+# `TemplateService.seed_defaults` already stores on the shipped timesheet template, so
+# dropping it here would make a shipped row unreadable through `TemplateRead`.
+# `Template.tipo` is already `String(20)` with no constraint, so there is no migration.
+TemplateTipo = Literal[
+    "offerta",
+    "contratto",
+    "verbale",
+    "documento",
+    "rapporto_ore",
+    "email",
+    "sollecito",
+]
 
 # Mirrors `Template.nome`'s column width (models.py). Without this an over-length
 # value reaches Postgres and raises sqlalchemy.exc.DataError -- not a subclass of
@@ -66,7 +84,7 @@ class TemplateCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     nome: SafeStr = Field(max_length=NOME_MAX_LENGTH)
-    tipo: DocumentTipo = "offerta"
+    tipo: TemplateTipo = "offerta"
     # No `max_length`: the column is `Text`, unbounded. `SafeStr` still closes the
     # NUL-byte gap a plain `str` would leave open on a native Postgres column.
     corpo_markdown: SafeStr = ""
@@ -78,7 +96,7 @@ class TemplateUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     nome: SafeStr | None = Field(default=None, max_length=NOME_MAX_LENGTH)
-    tipo: DocumentTipo | None = None
+    tipo: TemplateTipo | None = None
     corpo_markdown: SafeStr | None = None
     variabili_dichiarate: list[TemplateVariable] | None = None
     attivo: bool | None = None
@@ -99,7 +117,7 @@ class TemplateRead(BaseModel):
 
 class TemplateListQuery(BaseModel):
     search: str | None = None
-    tipo: DocumentTipo | None = None
+    tipo: TemplateTipo | None = None
     # `Template` has no `deleted_at` (task 6's own decision -- see its model
     # docstring): `attivo` is its lifecycle flag instead, so this is the equivalent
     # of every other domain's default "hide the archived ones" list behaviour.
@@ -148,6 +166,7 @@ class TemplateDescription(BaseModel):
 
 __all__ = [
     "NOME_MAX_LENGTH",
+    "TemplateTipo",
     "TemplateCreate",
     "TemplateDescription",
     "TemplateListQuery",

@@ -8,7 +8,11 @@ from sqlalchemy.orm import Session
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.documents import service as documents_service_module
-from pigrocrm.core.documents.schemas import DocumentCreate, DocumentFromTemplate
+from pigrocrm.core.documents.schemas import (
+    DocumentCreate,
+    DocumentFromTemplate,
+    DocumentListQuery,
+)
 from pigrocrm.core.documents.service import OFFER_TRANSITIONS, DocumentService
 from pigrocrm.core.emitter.schemas import EmitterProfileUpsert
 from pigrocrm.core.emitter.service import EmitterProfileService
@@ -297,3 +301,22 @@ def test_oggi_defaults_to_italys_own_day_not_the_processs(
     # `escape_markdown` backslash-escapes every ASCII punctuation character, so the ISO
     # date never reaches the compiled markdown literally -- only in its escaped form.
     assert escape_markdown(OGGI_IN_ITALIA.isoformat()) in stored.sorgente_markdown
+
+
+def test_a_sollecito_template_cannot_become_a_document(db_session: Session, setup: tuple) -> None:
+    """`TemplateTipo` and `DocumentTipo` used to be one Literal, so copying
+    `template.tipo` onto `Document.tipo` could not go wrong. Slice 5 widened the
+    template side with `email` and `sollecito`; `DocumentRead.tipo` is a plain `str`,
+    so without an explicit check the copy succeeds and a "sollecito" document appears
+    in the customer's document list, with a body that is an email."""
+    service, customer, _ = setup
+    sollecito = TemplateService(db_session).create(
+        TemplateCreate(nome="Sollecito", tipo="sollecito", corpo_markdown="Gentile cliente,"),
+        ADMIN,
+    )
+    with pytest.raises(ValidationFailed) as excinfo:
+        service.create_from_template(_payload(customer, sollecito), ADMIN)
+    assert excinfo.value.details["field"] == "template_id"
+    assert "sollecito" in excinfo.value.details["reason"]
+    # Nothing was left behind by the refusal.
+    assert service.list(DocumentListQuery(customer_id=customer.id), ADMIN).items == []

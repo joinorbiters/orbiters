@@ -1,9 +1,10 @@
 import pytest
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.emitter.repository import EmitterProfileRepository
-from pigrocrm.core.emitter.schemas import EmitterProfileUpsert
+from pigrocrm.core.emitter.schemas import FIRMA_EMAIL_MAX_LENGTH, EmitterProfileUpsert
 from pigrocrm.core.emitter.service import EmitterProfileService
 from pigrocrm.core.errors import Conflict, NotFound, PermissionDenied, ValidationFailed
 
@@ -104,3 +105,33 @@ def test_upsert_converts_a_true_insert_race_into_a_clean_conflict(
     monkeypatch.undo()
     profile = EmitterProfileService(db_session).get(ADMIN)
     assert profile.ragione_sociale == "Humancraft di Ivan Sala"
+
+
+def test_firma_email_holds_a_text_block_and_firma_key_still_holds_an_image(
+    db_session: Session,
+) -> None:
+    """Spec 10: the shipped `firma_key` is the storage key of a signature *image*, and
+    an email does not attach one -- it wants a text block. The two coexist; neither is
+    overloaded."""
+    read = EmitterProfileService(db_session).upsert(
+        _upsert(firma_key="firme/rossi.png", firma_email="Mario Rossi\nConsulente"), ADMIN
+    )
+    assert read.firma_email == "Mario Rossi\nConsulente"
+    assert read.firma_key == "firme/rossi.png"
+
+
+def test_firma_email_reaches_a_template_scope_under_emittente(db_session: Session) -> None:
+    """`as_template_values` derives from `EmitterProfileRead`, so a column added to the
+    model but forgotten on the read schema would be silently absent from every rendered
+    document and every rendered email instead of failing anywhere."""
+    service = EmitterProfileService(db_session)
+    service.upsert(_upsert(firma_email="Mario Rossi\nConsulente"), ADMIN)
+    scope = service.as_template_values(ADMIN)
+    assert scope["emittente"]["firma_email"] == "Mario Rossi\nConsulente"
+
+
+def test_firma_email_is_bounded_and_rejects_a_nul_byte() -> None:
+    with pytest.raises(PydanticValidationError):
+        _upsert(firma_email="a" * (FIRMA_EMAIL_MAX_LENGTH + 1))
+    with pytest.raises(PydanticValidationError):
+        _upsert(firma_email="Mario\x00Rossi")

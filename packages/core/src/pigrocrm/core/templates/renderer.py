@@ -222,11 +222,24 @@ def render_template(
     source: str,
     values: dict[str, Any],
     declared: tuple[DeclaredVariable, ...] = (),
+    *,
+    context: RenderContext | None = None,
 ) -> str:
     """Compile `source` with `values`. Raises `ValidationFailed` naming the template
     line for anything the template needs that `values` does not actually supply --
     a required declared variable, an unresolved `{{path}}`, an `#each` pointed at
     something that is not a list -- rather than rendering a PDF with a hole in it.
+
+    `context` overrides the escaping context the *parser* derived for every
+    placeholder, and exists for one reason: not every template compiles to Markdown
+    any more. Slice 5's reminder body is a `text/plain` MIME part read by a person,
+    where the segment-derived "markdown" context's backslashes are not protection but
+    damage -- see `escaping.escape_plain`. It is a whole-document decision (which
+    language is this output written in?), never a per-placeholder one (where inside
+    that language does this value land?), which is why it belongs to the caller here
+    and the per-node context still belongs to the parser: `_render_variable` is still
+    forbidden to re-derive or second-guess a node's own context, and with `context`
+    left `None` -- every existing caller -- nothing about this module changes.
     """
     nodes = parse_template(source)
     _check_declared(nodes, declared, values)
@@ -260,11 +273,16 @@ def render_template(
     optional_defaults: dict[str, Any] = {v.nome: None for v in declared if not v.obbligatoria}
     scopes: list[dict[str, Any]] = [{**optional_defaults, **values}]
     out: list[str] = []
-    _render_nodes(nodes, scopes, out)
+    _render_nodes(nodes, scopes, out, context)
     return "".join(out)
 
 
-def _render_nodes(nodes: tuple[Node, ...], scopes: list[dict[str, Any]], out: list[str]) -> None:
+def _render_nodes(
+    nodes: tuple[Node, ...],
+    scopes: list[dict[str, Any]],
+    out: list[str],
+    override: RenderContext | None,
+) -> None:
     for node in nodes:
         match node:
             case TextNode(text=text):
@@ -273,7 +291,7 @@ def _render_nodes(nodes: tuple[Node, ...], scopes: list[dict[str, Any]], out: li
                 # `// pigrocrm:line=` marker wherever one applies (see parser.py).
                 out.append(text)
             case VariableNode(path=path, context=context, line=line):
-                out.append(_render_variable(path, context, line, scopes))
+                out.append(_render_variable(path, override or context, line, scopes))
             case IfNode(path=path, then=then, otherwise=otherwise):
                 found, value = _resolve(path, scopes)
                 # Plain Python truthiness, not `_is_blank`: `False` and `0` must
@@ -282,9 +300,9 @@ def _render_nodes(nodes: tuple[Node, ...], scopes: list[dict[str, Any]], out: li
                 # `_is_blank`'s own docstring. A missing path (`found` is `False`)
                 # also takes the else branch, never an error: a conditional's whole
                 # job is to ask whether something is there.
-                _render_nodes(then if found and value else otherwise, scopes, out)
+                _render_nodes(then if found and value else otherwise, scopes, out, override)
             case EachNode(path=path, line=line, body=body):
-                _render_each(path, line, body, scopes, out)
+                _render_each(path, line, body, scopes, out, override)
             case _:
                 # Fix round 2: a future fifth `Node` variant silently rendering as
                 # nothing here is the same class of failure as any of the errors
@@ -352,6 +370,7 @@ def _render_each(
     body: tuple[Node, ...],
     scopes: list[dict[str, Any]],
     out: list[str],
+    override: RenderContext | None,
 ) -> None:
     found, value = _resolve(path, scopes)
     if not found or value is None:
@@ -383,6 +402,6 @@ def _render_each(
             frame.update(item)
         scopes.append(frame)
         try:
-            _render_nodes(body, scopes, out)
+            _render_nodes(body, scopes, out, override)
         finally:
             scopes.pop()
