@@ -180,7 +180,7 @@ def test_env_prefers_an_explicit_config_url_over_settings(monkeypatch: pytest.Mo
     finally:
         get_settings.cache_clear()
 
-    assert revision == "0018"
+    assert revision == "0019"
 
 
 def test_env_falls_back_to_settings_when_config_has_no_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -202,4 +202,4 @@ def test_env_falls_back_to_settings_when_config_has_no_url(monkeypatch: pytest.M
         finally:
             get_settings.cache_clear()
 
-    assert revision == "0018"
+    assert revision == "0019"

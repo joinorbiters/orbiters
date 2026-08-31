@@ -111,7 +111,7 @@ def test_render_nodes_fails_loudly_on_a_node_type_it_does_not_recognise() -> Non
         pass
 
     with pytest.raises(AssertionError):
-        renderer_module._render_nodes((_NotARealNode(),), [{}], [])  # type: ignore[arg-type]
+        renderer_module._render_nodes((_NotARealNode(),), [{}], [], None)  # type: ignore[arg-type]
 
 
 def test_typst_injection_is_literal_text_in_the_markdown_context() -> None:
