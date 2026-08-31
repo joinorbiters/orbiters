@@ -149,6 +149,15 @@ def message_get_url(message_id: str) -> str:
     return f"{GMAIL_API_ROOT}/messages/{_checked_id(message_id)}?format=full"
 
 
+# The one endpoint in this slice that is not built from a caller's input: there is
+# nothing to interpolate into it. It lives here all the same, because
+# `test_gmail_query.py` walks the AST of every source file and fails on a Gmail host in
+# any string literal outside this module -- and that guard is worth more than the
+# convenience of writing the constant next to the code that posts to it. Assembled from
+# `GMAIL_API_ROOT` so the host is stated exactly once.
+GMAIL_SEND_URL = f"{GMAIL_API_ROOT}/messages/send"
+
+
 def rfc822msgid_query(message_id_header: str) -> str:
     """Finds one exact message by the `Message-ID` we generated ourselves. This is the
     one query in the slice that is not built from the address roster, and it is allowed

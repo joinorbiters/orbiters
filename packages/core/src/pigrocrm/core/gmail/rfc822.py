@@ -30,6 +30,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from email.message import EmailMessage
 from email.policy import SMTP
+from email.utils import formataddr
 
 from pigrocrm.core.db import uuid7
 from pigrocrm.core.errors import ValidationFailed
@@ -134,7 +135,15 @@ def build_rfc822(
     # `EmailMessage` applies RFC 2047 encoded-words to a header containing non-ASCII by
     # itself, which is the other half of what the previous system got wrong -- its subjects were raw
     # UTF-8 in a header field.
-    message["From"] = f"{_header(from_name, 'from_name')} <{sender}>" if from_name else sender
+    # `formataddr` and not an f-string, and this is not cosmetic. The display name is
+    # `emitter_profile.ragione_sociale`, which is somebody's own business name: an
+    # unquoted `Bianchi, Rossi e Associati <io@example.it>` parses as **two** addresses
+    # -- a bare `Bianchi` and then the real one -- because the comma is the address-list
+    # separator. `formataddr` quotes the name when it has to, escapes an embedded quote,
+    # and encodes a non-ASCII one as an RFC 2047 word, which is the same three rules
+    # `_header` cannot express because they are about structure rather than about
+    # control characters. `_header` still runs first: it is what refuses the CRLF.
+    message["From"] = formataddr((_header(from_name, "from_name"), sender)) if from_name else sender
     message["To"] = ", ".join(recipients)
     if copies:
         message["Cc"] = ", ".join(copies)

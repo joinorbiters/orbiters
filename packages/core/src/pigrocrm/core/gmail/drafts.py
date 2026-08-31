@@ -37,6 +37,7 @@ from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 from pigrocrm.core.gmail.models import EmailDraft, GmailMessage
 from pigrocrm.core.gmail.rfc822 import new_message_id
 from pigrocrm.core.gmail.schemas import (
+    EDITABLE_SEND_STATES,
     EmailDraftCreate,
     EmailDraftListQuery,
     EmailDraftPage,
@@ -47,12 +48,12 @@ from pigrocrm.core.people.models import Person
 
 ENTITY = "email_draft"
 
-# The states in which the text is still the user's to change. `fallito` is here on
-# purpose and it is not an oversight: spec 6.3(a) says a refused send leaves «la bozza
-# intatta con l'errore accanto, il composer si riapre con il testo dentro», and a draft
-# frozen by its own failure would leave "write it again" as the only recovery -- exactly
-# the loss this table exists to prevent.
-_EDITABLE = frozenset({"bozza", "fallito"})
+# The states in which the text is still the user's to change, and -- the same set, and
+# for the same reason -- the states from which it can be sent. Defined once in
+# `schemas.py` rather than here, because `EmailSendService` and the claim statement of
+# `GmailRepository.claim_draft_for_send` need the identical answer: a second copy that
+# drifted would offer the composer a draft the send path refuses, or the reverse.
+_EDITABLE = EDITABLE_SEND_STATES
 _ALREADY_GONE = "questa email è già inviata o in invio: duplicala per modificarla"
 
 # Which table each `entity_type` names. Checked against the *right* table rather than

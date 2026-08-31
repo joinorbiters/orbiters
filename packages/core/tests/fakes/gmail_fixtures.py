@@ -9,6 +9,7 @@ real package and `fakes.gmail_fixtures` is unambiguous however the roots are com
 """
 
 import base64
+from datetime import timedelta
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -18,11 +19,14 @@ from pigrocrm.core.actor import Actor
 from pigrocrm.core.auth.models import User
 from pigrocrm.core.config import Settings
 from pigrocrm.core.gmail.crypto import seal
+from pigrocrm.core.gmail.drafts import EmailDraftService
 from pigrocrm.core.gmail.models import GoogleAccount
 from pigrocrm.core.gmail.schemas import REQUESTED_SCOPES
+from pigrocrm.core.gmail.send import EmailSendService
 from pigrocrm.core.gmail.sync import GmailSyncService
 from pigrocrm.core.gmail.tokens import GoogleTokenClient
 from pigrocrm.core.gmail.transport import GmailTransport
+from pigrocrm.core.storage.base import DocumentStorage
 
 TOKEN_KEY = b"k" * 32
 REFRESH_TOKEN = "1//0gFixtureRefreshToken"
@@ -98,4 +102,53 @@ def sync_service(
             client_secret=resolved.google_client_secret,
             transport=transport,
         ),
+    )
+
+
+class UnusedStorage:
+    """The document backend a send that attaches nothing must never reach.
+
+    Not a stand-in for storage: it is an assertion. `resolve_attachments` answers `()`
+    for an empty list without a query or a fetch, so a mail with no attachments has no
+    business touching the document store at all -- and a storage whose every method
+    raises is how that stays true rather than merely being true today. A test that does
+    attach something passes a real `LocalFileStorage(tmp_path)` instead.
+    """
+
+    def put(self, key: str, data: bytes, content_type: str) -> None:
+        raise AssertionError("the send path must never write to document storage")
+
+    def get(self, key: str) -> bytes:
+        raise AssertionError("a message with no attachments must not read document storage")
+
+    def delete(self, key: str) -> None:
+        raise AssertionError("the send path must never delete from document storage")
+
+    def signed_url(self, key: str, ttl: timedelta) -> str | None:
+        return None
+
+
+def draft_service(session: Session, *, settings: Settings | None = None) -> EmailDraftService:
+    return EmailDraftService(session, settings=settings or gmail_settings())
+
+
+def send_service(
+    session: Session,
+    fake: FakeGmail,
+    *,
+    settings: Settings | None = None,
+    storage: DocumentStorage | None = None,
+) -> EmailSendService:
+    resolved = settings or gmail_settings()
+    transport = GmailTransport(http=fake, sleep=lambda _: None)
+    return EmailSendService(
+        session,
+        settings=resolved,
+        transport=transport,
+        tokens=GoogleTokenClient(
+            client_id=resolved.google_client_id,
+            client_secret=resolved.google_client_secret,
+            transport=transport,
+        ),
+        storage=storage or UnusedStorage(),
     )
