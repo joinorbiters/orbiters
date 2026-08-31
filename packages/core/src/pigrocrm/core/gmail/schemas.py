@@ -68,6 +68,11 @@ class SyncReport(BaseModel):
     messages_skipped: int = 0
     links_created: int = 0
     states_pruned: int = 0
+    # How many sends of unknown outcome this cycle settled, in either direction. A
+    # number and not a list of drafts, for the same reason as everything else here: a
+    # draft id would be the first thing in this model that names somebody's unsent
+    # correspondence.
+    reconciled: int = 0
 
 
 class GmailMessageRead(BaseModel):

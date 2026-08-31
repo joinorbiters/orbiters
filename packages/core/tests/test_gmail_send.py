@@ -370,6 +370,32 @@ def test_a_definite_refusal_is_not_retried_over_the_network(db_session: Session)
     assert len([r for r in fake.requests if r.is_messages_send]) == 1
 
 
+def test_a_transient_failure_is_not_retried_either_because_a_send_is_not_idempotent(
+    db_session: Session,
+) -> None:
+    """The one place in this slice where the transport's retry-with-backoff would be a
+    defect rather than a kindness.
+
+    A 503 on a listing costs a second listing. A 503 on a *send* may be a message that
+    left and an answer that did not, and Gmail offers no idempotency key -- so the
+    transport's four attempts are up to four copies in a client's inbox. `deliver_on_
+    timeout` makes the fake behave the way that really goes wrong: every attempt that
+    reaches it delivers. Drop `retry=False` from the send call and this reports four.
+    """
+    account = connected_account(db_session)
+    draft = _draft(db_session, account)
+    db_session.commit()
+    fake = FakeGmail(timeout_on_send=True, deliver_on_timeout=True)
+
+    with pytest.raises(Conflict, match="da verificare"):
+        send_service(db_session, fake).send(draft.id, actor_for(account))
+    assert len([r for r in fake.requests if r.is_messages_send]) == 1
+    assert len(fake.messages) == 1, "a retried send is a second copy of somebody's email"
+    db_session.rollback()
+    row = db_session.get(EmailDraft, draft.id)
+    assert row is not None and row.send_state == "incerto"
+
+
 def test_a_failed_draft_can_be_retried(db_session: Session) -> None:
     """`fallito` is not terminal: nothing left, so trying again is correct. Only
     `inviato`, `in_invio` and `incerto` are refused."""

@@ -210,6 +210,19 @@ _CREDENZIALI: dict[Method, str] = {
         "Il divieto per costruzione sui nomi degli strumenti vive in "
         "`test_mcp_invoice_ban.py`, che possiede i divieti"
     ),
+    ("EmailSendService", "reconcile"): (
+        "stessa ragione di `sync`, in piccolo: va a chiedere a Gmail, sotto il consenso "
+        "OAuth della persona e a carico della sua quota, se un messaggio partito dalla "
+        "sua casella e' arrivato. E' la meta' di riparazione dell'invio -- il pulsante "
+        "«verifica» accanto a «esito da verificare» -- quindi appartiene a chi ha premuto "
+        "Invia. Se B2-10 decidesse altrimenti dovrebbe spiegare perche' un agente puo' "
+        "interrogare una casella che non puo' sincronizzare"
+    ),
+    ("EmailSendService", "reconcile_all"): (
+        "non e' un'operazione che qualcuno compie: la chiama `GmailSyncService._run_cycle` "
+        "all'inizio di ogni ciclo, sotto il consenso gia' verificato li'. Esporla "
+        "significherebbe offrire all'agente il ciclo di sync per un'altra porta"
+    ),
     ("PatService", "create"): "un agente non conia le proprie credenziali",
     ("PatService", "list"): "l'elenco dei token e' materiale di sicurezza",
     ("PatService", "revoke"): "revocare token e' amministrazione dell'account",
