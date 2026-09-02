@@ -59,6 +59,11 @@ class Document(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
             postgresql_ops={"titolo": "gin_trgm_ops"},
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        # Residuo R9. See `customers/models.py` for why each admitted sort key costs a
+        # `(column, id)` B-tree and why none of them is partial.
+        Index("ix_documents_created_at_id", "created_at", "id"),
+        Index("ix_documents_updated_at_id", "updated_at", "id"),
+        Index("ix_documents_titolo_id", "titolo", "id"),
     )
 
 

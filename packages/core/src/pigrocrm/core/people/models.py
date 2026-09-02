@@ -1,7 +1,7 @@
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import ForeignKey, Index, String, Text, text
+from sqlalchemy import ForeignKey, Index, String, Text, column, desc, nullslast, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -50,6 +50,26 @@ class Person(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
             postgresql_using="gin",
             postgresql_ops={"email": "gin_trgm_ops"},
             postgresql_where=text("deleted_at IS NULL"),
+        ),
+        # Residuo R9. See `customers/models.py` for why each admitted sort key costs a
+        # `(column, id)` B-tree and why none of them is partial.
+        Index("ix_people_created_at_id", "created_at", "id"),
+        Index("ix_people_updated_at_id", "updated_at", "id"),
+        Index("ix_people_cognome_id", "cognome", "id"),
+        # The second index the one nullable sort column in the whole whitelist costs.
+        # `order_by` declares NULLS LAST in *both* directions; a backward scan of the
+        # ascending index above yields NULLS FIRST, so it cannot serve `dir=desc` and
+        # Postgres falls back to sorting the table.
+        #
+        # `column("cognome")` rather than the mapped attribute because `id` comes from
+        # `PrimaryKeyMixin` and is not bound in this class body at all. Unlike
+        # `func.lower("nome")` -- which would bind a *constant* (see
+        # `templates/models.py`) -- `column()` is an explicit column reference, so the
+        # string is safe here.
+        Index(
+            "ix_people_cognome_desc_id",
+            nullslast(desc(column("cognome"))),
+            desc(column("id")),
         ),
     )
 

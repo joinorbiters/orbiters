@@ -59,6 +59,22 @@ class Customer(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
             postgresql_ops={"email": "gin_trgm_ops"},
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        # Residuo R9. One `(column, id)` B-tree per key admitted by `CUSTOMER_SORTS`:
+        # the ordering contract is `ORDER BY <col> <dir> NULLS LAST, id <dir>`, and the
+        # tie-break following the direction is what lets a single ascending index serve
+        # `desc` as a backward scan. None of these is nullable, so none costs a second
+        # index -- see `people/models.py` for the one that does.
+        #
+        # Not partial on `deleted_at IS NULL`, unlike the trigram indexes above: those
+        # serve a predicate that always carries that clause, while an ordering has to
+        # remain usable for any listing, including one that asks for the deleted rows.
+        #
+        # `ix_customers_ragione_sociale` (slice 1, single column) stays: it is still the
+        # cheaper index for an equality lookup, and dropping an index is a separate
+        # decision from adding one.
+        Index("ix_customers_created_at_id", "created_at", "id"),
+        Index("ix_customers_updated_at_id", "updated_at", "id"),
+        Index("ix_customers_ragione_sociale_id", "ragione_sociale", "id"),
     )
 
     ragione_sociale: Mapped[str] = mapped_column(String(255), nullable=False)
