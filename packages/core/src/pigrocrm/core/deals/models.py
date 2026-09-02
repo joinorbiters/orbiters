@@ -49,6 +49,11 @@ class Deal(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
             postgresql_ops={"nome": "gin_trgm_ops"},
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        # Residuo R9. See `customers/models.py` for why each admitted sort key costs a
+        # `(column, id)` B-tree and why none of them is partial.
+        Index("ix_deals_created_at_id", "created_at", "id"),
+        Index("ix_deals_updated_at_id", "updated_at", "id"),
+        Index("ix_deals_nome_id", "nome", "id"),
     )
 
     nome: Mapped[str] = mapped_column(String(255), nullable=False)

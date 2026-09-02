@@ -47,6 +47,26 @@ HAND_MAINTAINED_INDEXES = {
     "ix_people_email_trgm",
     "ix_deals_nome_trgm",
     "ix_documents_titolo_trgm",
+    # Slice 6, migration 0022. Residuo R9's other half: one `(column, id)` B-tree per
+    # admitted sort key, plus the one descending index the single nullable sort column
+    # costs. The twelve ascending ones are ordinary composite indexes that autogenerate
+    # handles correctly -- they are listed anyway, because a composite index dropped in
+    # silence is the same sequential scan as a GIN index dropped in silence, and the
+    # thirteenth is an expression index over `DESC NULLS LAST` that autogenerate cannot
+    # compare at all.
+    "ix_customers_created_at_id",
+    "ix_customers_updated_at_id",
+    "ix_customers_ragione_sociale_id",
+    "ix_people_created_at_id",
+    "ix_people_updated_at_id",
+    "ix_people_cognome_id",
+    "ix_people_cognome_desc_id",
+    "ix_deals_created_at_id",
+    "ix_deals_updated_at_id",
+    "ix_deals_nome_id",
+    "ix_documents_created_at_id",
+    "ix_documents_updated_at_id",
+    "ix_documents_titolo_id",
 }
 
 TRGM_INDEX_NAMES = frozenset(n for n in HAND_MAINTAINED_INDEXES if n.endswith("_trgm"))
@@ -199,6 +219,63 @@ def test_every_trigram_index_is_a_partial_gin_index_over_gin_trgm_ops() -> None:
         )
 
 
+# (index name, the exact `USING btree (...)` body Postgres must report). Residuo R9's
+# ordering contract is `ORDER BY <col> <dir> NULLS LAST, id <dir>`, and an index only
+# serves it when both members are present in that order -- a single-column index on
+# `created_at` leaves the `id` tie-break to an in-memory sort, which is the cost the
+# thirteen exist to avoid. Pinned as text because the *order* of the members and the
+# `DESC NULLS LAST` qualifier are observable nowhere else.
+SORT_INDEX_BODIES: dict[str, str] = {
+    "ix_customers_created_at_id": "(created_at, id)",
+    "ix_customers_updated_at_id": "(updated_at, id)",
+    "ix_customers_ragione_sociale_id": "(ragione_sociale, id)",
+    "ix_people_created_at_id": "(created_at, id)",
+    "ix_people_updated_at_id": "(updated_at, id)",
+    "ix_people_cognome_id": "(cognome, id)",
+    "ix_people_cognome_desc_id": "(cognome DESC NULLS LAST, id DESC)",
+    "ix_deals_created_at_id": "(created_at, id)",
+    "ix_deals_updated_at_id": "(updated_at, id)",
+    "ix_deals_nome_id": "(nome, id)",
+    "ix_documents_created_at_id": "(created_at, id)",
+    "ix_documents_updated_at_id": "(updated_at, id)",
+    "ix_documents_titolo_id": "(titolo, id)",
+}
+
+
+def test_every_sort_index_is_a_btree_over_the_column_and_the_identifier() -> None:
+    """Residuo R9's other half, asserted on the definition text rather than on the name.
+
+    `compare_metadata` does not compare index expressions at all, so the one index that
+    matters most here is exactly the one a schema diff would let through:
+    `ix_people_cognome_desc_id`. Without it a descending scan of `people.cognome` reads
+    the ascending index backwards, which yields NULLS FIRST -- not the order
+    `db/sort.py::order_by` declares -- and Postgres sorts the whole table in memory
+    instead.
+    """
+    with PostgresContainer("postgres:17-alpine", driver="psycopg") as container:
+        url = container.get_connection_url()
+        upgrade(_alembic_config(url), "head")
+
+        engine: Engine = create_engine(url)
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text("SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public'")
+            ).all()
+        engine.dispose()
+
+    indexes = {row.indexname: row.indexdef for row in rows}
+    # Twelve ascending, plus the one the single nullable sort column costs.
+    assert len(SORT_INDEX_BODIES) == 13
+    for name, body in SORT_INDEX_BODIES.items():
+        definition = indexes[name]
+        assert f"USING btree {body}" in definition, definition
+        # None of the thirteen is partial, unlike the trigram indexes above: ordering has
+        # to reach every row the filters admit, and a `WHERE deleted_at IS NULL` predicate
+        # here would make the index unusable for any future listing that asks for the
+        # deleted ones.
+        assert " WHERE " not in definition, definition
+
+
 def _applied_revision(url: str) -> str:
     engine: Engine = create_engine(url)
     try:
@@ -230,7 +307,7 @@ def test_env_prefers_an_explicit_config_url_over_settings(monkeypatch: pytest.Mo
     finally:
         get_settings.cache_clear()
 
-    assert revision == "0021"
+    assert revision == "0022"
 
 
 def test_env_falls_back_to_settings_when_config_has_no_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -252,4 +329,4 @@ def test_env_falls_back_to_settings_when_config_has_no_url(monkeypatch: pytest.M
         finally:
             get_settings.cache_clear()
 
-    assert revision == "0021"
+    assert revision == "0022"
