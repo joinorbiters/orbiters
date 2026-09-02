@@ -1,0 +1,119 @@
+import { useState } from 'react'
+import { DataTable } from '@/components/DataTable'
+import { QueryErrorBanner } from '@/components/QueryErrorBanner'
+import { EmailComposer } from '@/features/gmail/EmailComposer'
+import { sollecitiColumns } from './columns'
+import { useCandidates, useCreateReminder } from './queries'
+
+/**
+ * The solleciti list, where the work is the list and not the button.
+ *
+ * the previous system chose what to chase with `emailSentCount > 0` -- "is this the second email" --
+ * with no due date, no interval and no ceiling anywhere. Everything that makes this list
+ * legitimate lives on the server: the due date is what makes a reminder legitimate at
+ * all, the interval is what makes it bearable, and the ceiling of three is what stops a
+ * disputed invoice becoming an automated persecution. This screen renders that answer
+ * and does not recompute any part of it.
+ *
+ * **Preparing is not sending.** «Prepara sollecito» writes the reminder row and its
+ * draft and sends nothing (spec 8.3); the composer then opens on that draft so the
+ * person reads the letter that will go out in their name before it goes. The send is the
+ * same single path every other email uses.
+ *
+ * **There is no bulk action, and that is a decision rather than a missing feature**
+ * (spec 7.2). A reminder is a commercial act: it goes to a paying client, in the owner's
+ * name, over a debt they may already dispute. What would have to exist for this to be
+ * safe to automate -- a per-customer opt-in, a log of runs that sent nothing, an instant
+ * kill switch -- does not exist, so this slice asks a person every time. No «invia
+ * tutti», and no row checkboxes to build one out of.
+ */
+export function SollecitiPage() {
+  const candidates = useCandidates()
+  const createReminder = useCreateReminder()
+  // Which draft the composer is open on, and which customer it belongs to. Kept together
+  // because they are one fact: the reminder that was just prepared. Reading the customer
+  // back out of the row list at render time would break the moment the invalidation
+  // below removes that row -- which it does, immediately, and by design.
+  const [reviewing, setReviewing] = useState<{ draftId: string; customerId: string } | null>(null)
+  const [pendingId, setPendingId] = useState<string | null>(null)
+
+  // The failure branch first, always. On an error `isPending` is false while `data` is
+  // still undefined, so a single `isPending || !data` guard answers a failed read with a
+  // spinner that never resolves -- and an empty table and a request that never arrived
+  // are two different claims about somebody's unpaid invoices.
+  if (candidates.isError) return <QueryErrorBanner error={candidates.error} />
+  if (candidates.isPending || !candidates.data)
+    return <p className="text-muted-foreground">Caricamento…</p>
+
+  const rows = candidates.data.items
+
+  if (reviewing !== null) {
+    return (
+      <section className="space-y-4">
+        <header>
+          <h1 className="text-xl font-medium">Sollecito da rivedere</h1>
+          <p className="text-sm text-muted-foreground">
+            Il sollecito è stato preparato e <strong>non è stato inviato</strong>. Leggilo,
+            correggilo se serve, e premi Invia quando è come lo vuoi tu.
+          </p>
+        </header>
+        <EmailComposer
+          entityType="customer"
+          entityId={reviewing.customerId}
+          draftId={reviewing.draftId}
+          onClose={() => setReviewing(null)}
+        />
+      </section>
+    )
+  }
+
+  return (
+    <section className="space-y-4">
+      <header>
+        <h1 className="text-xl font-medium">Solleciti</h1>
+        <p className="text-sm text-muted-foreground">
+          Fatture scadute da più di una settimana, non ancora saldate, senza un sollecito
+          recente e sotto il tetto dei tre. Preparare il sollecito non lo invia: la bozza si
+          apre per la revisione.
+        </p>
+      </header>
+
+      {/* The mutation's own error, never copied into component state: a refused
+          preparation followed by a successful one must not print success under a banner
+          still claiming the opposite. */}
+      {createReminder.isError && <QueryErrorBanner error={createReminder.error} />}
+
+      {rows.length === 0 ? (
+        <p className="text-muted-foreground">
+          Nessuna fattura da sollecitare. È la lista che costa fatica a costruire, non il
+          pulsante da premere.
+        </p>
+      ) : (
+        <DataTable
+          columns={sollecitiColumns((invoiceId) => {
+            const candidate = rows.find((row) => row.invoice_id === invoiceId)
+            if (candidate === undefined) return
+            setPendingId(invoiceId)
+            createReminder.mutate(invoiceId, {
+              onSuccess: (reminder) => {
+                setPendingId(null)
+                // `email_draft_id` is nullable on the schema and never null in practice
+                // for a reminder this endpoint just created -- but a composer opened on
+                // `''` would ask the API for a draft that cannot exist, so the absence is
+                // handled by not opening rather than by trusting the shape.
+                if (reminder.email_draft_id !== null) {
+                  setReviewing({
+                    draftId: reminder.email_draft_id,
+                    customerId: candidate.customer_id,
+                  })
+                }
+              },
+              onError: () => setPendingId(null),
+            })
+          }, pendingId)}
+          data={rows}
+        />
+      )}
+    </section>
+  )
+}

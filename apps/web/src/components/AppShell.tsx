@@ -6,6 +6,7 @@ import {
   KeyRound,
   LayoutDashboard,
   LogOut,
+  MailWarning,
   PanelLeftIcon,
   Receipt,
   Settings,
@@ -32,6 +33,12 @@ const NAV = [
   // invoice is later built from, so the sidebar reads in the order the work happens.
   { to: '/app/ore', label: 'Ore', icon: Clock },
   { to: '/app/fatture', label: 'Fatture', icon: Receipt },
+  // Right after Fatture, because a sollecito is what an unpaid one becomes: the list is
+  // built by crossing the register against what has been collected, so it reads in the
+  // order the money is supposed to move. Not admin-gated -- `SollecitiService.candidates`
+  // is a plain read of your own books, and the write behind «Prepara sollecito» is gated
+  // at the service, where the refusal belongs.
+  { to: '/app/solleciti', label: 'Solleciti', icon: MailWarning },
   // After Fatture, because every figure it reports is derived from what comes before it
   // in this list. Not admin-gated: margins and estimate-versus-actual carry no role check
   // at the service layer, and only the fiscal tab inside does -- gating the whole entry
