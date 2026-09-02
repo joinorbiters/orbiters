@@ -2,6 +2,7 @@ import base64
 import binascii
 from functools import lru_cache
 from typing import Literal
+from zoneinfo import available_timezones
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -35,6 +36,22 @@ class Settings(BaseSettings):
     # Set PIGROCRM_COOKIE_SECURE=false for that one case. Anyone tempted to flip this
     # in production because "it's just a flag" should re-read this paragraph first.
     cookie_secure: bool = True
+
+    # The emitter's timezone, and the only one. Every `Date` column in the product is a
+    # calendar day in *this* zone: `invoices.data_emissione` (slice 3 §6.2),
+    # `costs.data` and `time_entries.data` (slice 4), `deals.chiuso_il` and
+    # `documents.stato_dal` (slice 6 §4.1). Deriving any of them from
+    # `datetime.now(UTC).date()` moves everything after 23:00 CET by a day and everything
+    # on 31 December by a year -- the exact defect slice 3 §6.2 names. Single-tenant, so
+    # one zone: a per-user zone would mean the same invoice falling in two fiscal years
+    # depending on who looked at it.
+    #
+    # It is a setting rather than a constant because `db/clock.py` is now the *only*
+    # clock -- `clock.oggi_in_italia()` delegates to it -- so changing this changes the
+    # fiscal calendar too, deliberately and in one place. An operator who moves it off
+    # Europe/Rome is telling the product where the invoices are issued from, which is
+    # the only reading under which one clock and one answer stay true.
+    timezone: str = "Europe/Rome"
 
     # Storage. `local` by default: no external dependency is what makes the product
     # genuinely self-hostable (spec 5). Switching to `gdrive` moves *new* bytes only
@@ -119,6 +136,20 @@ class Settings(BaseSettings):
                 f"jwt_secret must be at least {MIN_JWT_SECRET_LENGTH} characters long "
                 "(a short HS256 key is weaker than the algorithm itself, RFC 7518 "
                 "Section 3.2)"
+            )
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def _timezone_must_be_a_real_zone(cls, value: str) -> str:
+        # Checked against the tz database at construction, not at first use: a typo in
+        # PIGROCRM_TIMEZONE must fail at start-up rather than shift every date in the
+        # product by an hour for the life of the deployment. `ZoneInfo` itself would
+        # raise on first use instead -- deep inside a repository, on whichever request
+        # happened to need a date first.
+        if value not in available_timezones():
+            raise ValueError(
+                f"timezone {value!r} is not in the IANA tz database (examples: Europe/Rome, UTC)"
             )
         return value
 
