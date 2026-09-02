@@ -9,6 +9,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -48,6 +49,16 @@ class Document(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
             name="ck_documents_customer_xor_deal",
         ),
         Index("ix_documents_custom_fields", "custom_fields", postgresql_using="gin"),
+        # The global search matches a document by its title -- see
+        # `Customer.__table_args__` for why the index is partial on `deleted_at IS NULL`
+        # with no `lower()` in the expression.
+        Index(
+            "ix_documents_titolo_trgm",
+            "titolo",
+            postgresql_using="gin",
+            postgresql_ops={"titolo": "gin_trgm_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
     )
 
 

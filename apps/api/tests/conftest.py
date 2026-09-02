@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine
+from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 from testcontainers.community.postgres import PostgresContainer
 
@@ -30,6 +30,12 @@ def api_engine() -> Iterator[Engine]:
         settings = Settings(database_url=container.get_connection_url(), jwt_secret=TEST_JWT_SECRET)
         get_settings.cache_clear()
         engine = create_engine_from_settings(settings)
+        # Before `create_all`, and the order is load-bearing: four models declare GIN
+        # indexes with `gin_trgm_ops`, and `create_all` fails outright with
+        # `operator class "gin_trgm_ops" does not exist` without the extension.
+        # Mirrors packages/core/tests/conftest.py, which explains it at length.
+        with engine.begin() as connection:
+            connection.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         import pigrocrm.core.models_registry  # noqa: F401
 
         Base.metadata.create_all(engine)

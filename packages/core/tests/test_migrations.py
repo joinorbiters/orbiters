@@ -14,12 +14,12 @@ from pigrocrm.core.db import Base
 
 CORE_ROOT = Path(__file__).resolve().parents[1]
 
-# Autogenerate is known to silently omit exactly these two shapes: a unique index over a
-# SQL expression rather than a bare column (`uq_users_email_lower`), and a plain unique
-# index on a nullable column (`uq_pipeline_stage_code`). The three GIN indexes are the
-# other shape it handles poorly -- losing any of them turns a JSONB containment filter
-# into a sequential scan. Named explicitly here so a regression fails with the missing
-# index's name instead of a generic metadata diff.
+# Autogenerate is known to silently omit exactly these shapes: a unique index over a SQL
+# expression rather than a bare column (`uq_users_email_lower`), a plain unique index on a
+# nullable column (`uq_pipeline_stage_code`), a GIN index -- losing one of those turns a
+# JSONB containment filter into a sequential scan -- and, from slice 6, a *partial* GIN
+# index over an operator class (`*_trgm`). Named explicitly here so a regression fails
+# with the missing index's name instead of a generic metadata diff.
 HAND_MAINTAINED_INDEXES = {
     "uq_users_email_lower",
     "uq_pipeline_stage_code",
@@ -35,7 +35,21 @@ HAND_MAINTAINED_INDEXES = {
     "ix_costs_custom_fields",
     # Same shape as `uq_users_email_lower`: a functional unique index over lower(nome).
     "uq_cost_categories_nome",
+    # Slice 6, migration 0021. A *partial* GIN index over an operator class is a fourth
+    # shape autogenerate handles poorly, and nine trigram indexes omitted in silence are
+    # nine sequential scans that come back a month later.
+    "ix_customers_ragione_sociale_trgm",
+    "ix_customers_partita_iva_trgm",
+    "ix_customers_codice_fiscale_trgm",
+    "ix_customers_email_trgm",
+    "ix_people_nome_trgm",
+    "ix_people_cognome_trgm",
+    "ix_people_email_trgm",
+    "ix_deals_nome_trgm",
+    "ix_documents_titolo_trgm",
 }
+
+TRGM_INDEX_NAMES = frozenset(n for n in HAND_MAINTAINED_INDEXES if n.endswith("_trgm"))
 
 
 def _alembic_config(url: str) -> Config:
@@ -151,6 +165,40 @@ def test_hand_maintained_indexes_survive_the_migration() -> None:
     )
 
 
+def test_every_trigram_index_is_a_partial_gin_index_over_gin_trgm_ops() -> None:
+    """A trigram index created without `gin_trgm_ops` is an ordinary GIN index that
+    cannot serve `ILIKE '%x%'` at all, and one created without the `WHERE` clause is
+    bigger than it needs to be and leaves residuo R7 open for that table. Both mistakes
+    produce a green `compare_metadata`, so they are asserted on the definition text.
+    """
+    with PostgresContainer("postgres:17-alpine", driver="psycopg") as container:
+        url = container.get_connection_url()
+        upgrade(_alembic_config(url), "head")
+
+        engine: Engine = create_engine(url)
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text("SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public'")
+            ).all()
+        engine.dispose()
+
+    indexes = {row.indexname: row.indexdef for row in rows}
+    # Nine, and the count is asserted: a set comprehension that silently matched nothing
+    # would make every assertion below vacuous.
+    assert len(TRGM_INDEX_NAMES) == 9
+    for name in sorted(TRGM_INDEX_NAMES):
+        definition = indexes[name]
+        assert "USING gin" in definition, f"{name} is not a GIN index: {definition}"
+        assert "gin_trgm_ops" in definition, f"{name} lacks gin_trgm_ops: {definition}"
+        assert "WHERE (deleted_at IS NULL)" in definition, (
+            f"{name} is not partial on deleted_at IS NULL: {definition}"
+        )
+        assert "lower(" not in definition, (
+            f"{name} wraps the column in lower(), which stops ILIKE on the raw column "
+            f"from using it (spec §8.2): {definition}"
+        )
+
+
 def _applied_revision(url: str) -> str:
     engine: Engine = create_engine(url)
     try:
@@ -182,7 +230,7 @@ def test_env_prefers_an_explicit_config_url_over_settings(monkeypatch: pytest.Mo
     finally:
         get_settings.cache_clear()
 
-    assert revision == "0020"
+    assert revision == "0021"
 
 
 def test_env_falls_back_to_settings_when_config_has_no_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -204,4 +252,4 @@ def test_env_falls_back_to_settings_when_config_has_no_url(monkeypatch: pytest.M
         finally:
             get_settings.cache_clear()
 
-    assert revision == "0020"
+    assert revision == "0021"

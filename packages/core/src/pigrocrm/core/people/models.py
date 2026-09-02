@@ -1,7 +1,7 @@
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import ForeignKey, Index, String, Text
+from sqlalchemy import ForeignKey, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -25,7 +25,33 @@ class Person(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     """
 
     __tablename__ = "people"
-    __table_args__ = (Index("ix_people_custom_fields", "custom_fields", postgresql_using="gin"),)
+    __table_args__ = (
+        Index("ix_people_custom_fields", "custom_fields", postgresql_using="gin"),
+        # One trigram index per column `PersonRepository.list` ORs together -- see
+        # `Customer.__table_args__` for why all three are needed and why the index is
+        # partial on `deleted_at IS NULL` with no `lower()` in the expression.
+        Index(
+            "ix_people_nome_trgm",
+            "nome",
+            postgresql_using="gin",
+            postgresql_ops={"nome": "gin_trgm_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "ix_people_cognome_trgm",
+            "cognome",
+            postgresql_using="gin",
+            postgresql_ops={"cognome": "gin_trgm_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "ix_people_email_trgm",
+            "email",
+            postgresql_using="gin",
+            postgresql_ops={"email": "gin_trgm_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
 
     # Nullable FK: see the class docstring above.
     customer_id: Mapped[UUID | None] = mapped_column(

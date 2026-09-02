@@ -2,7 +2,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from sqlalchemy import Engine
+from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 from testcontainers.community.postgres import PostgresContainer
 
@@ -19,6 +19,12 @@ ADMIN = Actor(id=None, type="mcp", role="admin")
 def mcp_engine() -> Iterator[Engine]:
     with PostgresContainer("postgres:17-alpine", driver="psycopg") as container:
         engine = create_engine_from_settings(Settings(database_url=container.get_connection_url()))
+        # Before `create_all`, and the order is load-bearing: four models declare GIN
+        # indexes with `gin_trgm_ops`, and `create_all` fails outright with
+        # `operator class "gin_trgm_ops" does not exist` without the extension.
+        # Mirrors packages/core/tests/conftest.py, which explains it at length.
+        with engine.begin() as connection:
+            connection.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         import pigrocrm.core.models_registry  # noqa: F401
 
         Base.metadata.create_all(engine)
