@@ -9,6 +9,7 @@ from pigrocrm.core.search.schemas import (
     SearchQuery,
     SearchResults,
 )
+from pigrocrm.core.search.service import SearchService
 
 __all__ = [
     "COUNT_CEILING",
@@ -20,4 +21,5 @@ __all__ = [
     "SearchHit",
     "SearchQuery",
     "SearchResults",
+    "SearchService",
 ]

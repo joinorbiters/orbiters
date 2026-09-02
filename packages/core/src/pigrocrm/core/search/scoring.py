@@ -18,6 +18,23 @@ expression comes back as a `Decimal` at the declared scale. (`sqlalchemy.cast` a
 `func.cast` compile identically here -- SQLAlchemy special-cases the name -- so the
 spelling is a matter of reading, not of behaviour; verified, not assumed.)
 
+**The substring arm is `word_similarity(termine, campo)`, not `similarity(campo, termine)`,
+and that is the one place this module departs from §8.5 as written.** The ladder's third
+rung is about a term occurring *inside* a field, and `similarity()` does not measure that:
+it compares whole strings, so it penalises a field for the text it carries besides the
+match. Measured on real Postgres, `similarity('01234567890', '34567')` is 0.2000, which
+puts §8.5's own third rung at 0.1200 -- below the 0.20 floor task A8 applies. The plan
+promises that exact search in three places (§17, the `search_everything` MCP docstring,
+and the "un frammento di partita IVA trova il cliente" end-to-end test), so §8.5's formula,
+the floor and the product promise cannot all three be satisfied by `similarity()`.
+`word_similarity()` is pg_trgm's own answer to "how well does this term match some extent
+of this string": it scores the same pair 0.5000, every literal containment measured on
+this corpus lands between 0.5 and 1.0, and every non-containment measured lands at exactly
+0. The rest of §8.5 is untouched -- same 0.60 factor, same ceiling below the 0.80 prefix
+rung, same weights, same floor -- and the ladder still orders a prefix above a mid-word
+match, because the prefix arm is reached first. The same GIN trigram indexes serve both
+functions, so task A2's nine indexes are unaffected.
+
 **The prefix arm builds a LIKE pattern, so it escapes.** Without `escape_like`, a term
 ending in `_` prefix-matches any character in that position, and the score for
 `Rossi_Ingegneria` and `RossiXIngegneria` would be identical. The substring filter has
@@ -109,9 +126,14 @@ def field_score(field: ScoredField, term: str) -> ColumnElement[Decimal]:
                 func.lower(column).like(_like_prefix(term), escape="\\"),
                 literal(SCORE_PREFIX, type_=_NUMERIC),
             ),
+            # `word_similarity(term, column)`, in that argument order: the first
+            # argument is the needle whose trigrams are matched against an extent of
+            # the second. Reversed, it would answer a different question -- how well
+            # the whole column matches part of the term -- and score a long field
+            # against a short term at nearly zero.
             else_=func.round(
                 literal(SCORE_SUBSTRING_FACTOR, type_=_NUMERIC)
-                * cast(func.similarity(column, term), _NUMERIC),
+                * cast(func.word_similarity(term, column), _NUMERIC),
                 SCORE_SCALE,
             ),
         )
