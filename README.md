@@ -48,6 +48,13 @@ quest'ordine.
   che ogni server di destinazione abbia già una regola sudoers passwordless preconfigurata per
   esattamente questi comandi — una premessa non verificabile da qui, ed equivalente al requisito
   di sopra sotto un altro nome.
+- **`pg_trgm`.** Le migrazioni eseguono `CREATE EXTENSION IF NOT EXISTS pg_trgm`
+  all'avvio dell'API. Sull'immagine `postgres:17-alpine` del compose l'utente
+  `pigrocrm` è superuser e funziona senza intervento. Su un PostgreSQL gestito serve
+  che il fornitore abbia `pg_trgm` in allowlist e che l'utente possa creare estensioni:
+  senza, **il deploy fallisce all'avvio** — che è il comportamento voluto, perché
+  l'alternativa è un'applicazione che parte e scansiona sequenzialmente in silenzio.
+  Sintomo esatto nei log: `permission denied to create extension "pg_trgm"`.
 
 ### 1. `.env`
 

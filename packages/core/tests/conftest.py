@@ -25,10 +25,20 @@ from pigrocrm.core.timetracking.models import CostCategory, TimeEntry
 
 @pytest.fixture(scope="session")
 def db_engine() -> Iterator[Engine]:
-    """Real PostgreSQL. JSONB and GIN do not exist in SQLite, so there is no shortcut."""
+    """Real PostgreSQL. JSONB, GIN and pg_trgm do not exist in SQLite, so there is no
+    shortcut.
+
+    `CREATE EXTENSION` runs **before** `create_all`, and that order is load-bearing: from
+    slice 6 on, four models declare GIN indexes with `gin_trgm_ops`, and `create_all`
+    fails outright with `operator class "gin_trgm_ops" does not exist` if the extension
+    is not there yet. Migration 0021 creates the extension too -- this is the same
+    statement for the path that bypasses the migrations.
+    """
     with PostgresContainer("postgres:17-alpine", driver="psycopg") as container:
         settings = Settings(database_url=container.get_connection_url())
         engine = create_engine_from_settings(settings)
+        with engine.begin() as connection:
+            connection.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         import pigrocrm.core.models_registry  # noqa: F401  (imports every model)
 
         Base.metadata.create_all(engine)

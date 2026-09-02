@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Date, ForeignKey, Index, Integer, Numeric, String, Text
+from sqlalchemy import Date, ForeignKey, Index, Integer, Numeric, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -37,7 +37,19 @@ class Deal(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     """
 
     __tablename__ = "deals"
-    __table_args__ = (Index("ix_deals_custom_fields", "custom_fields", postgresql_using="gin"),)
+    __table_args__ = (
+        Index("ix_deals_custom_fields", "custom_fields", postgresql_using="gin"),
+        # `DealRepository.list` searches `nome` and nothing else -- see
+        # `Customer.__table_args__` for why the index is partial on `deleted_at IS NULL`
+        # with no `lower()` in the expression.
+        Index(
+            "ix_deals_nome_trgm",
+            "nome",
+            postgresql_using="gin",
+            postgresql_ops={"nome": "gin_trgm_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
 
     nome: Mapped[str] = mapped_column(String(255), nullable=False)
     # Required: see the class docstring above.

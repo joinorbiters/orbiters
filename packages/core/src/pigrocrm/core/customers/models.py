@@ -1,6 +1,6 @@
 from typing import Any
 
-from sqlalchemy import Index, String, Text
+from sqlalchemy import Index, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -21,6 +21,44 @@ class Customer(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     __table_args__ = (
         Index("ix_customers_custom_fields", "custom_fields", postgresql_using="gin"),
         Index("ix_customers_ragione_sociale", "ragione_sociale"),
+        # Trigram indexes, one per column `CustomerRepository.list` ORs together. All
+        # four are needed, not just the name: a four-way OR is planned as a BitmapOr
+        # over four bitmap index scans, and a single unindexed branch collapses the
+        # whole thing back into one sequential scan.
+        #
+        # Partial on `deleted_at IS NULL` because that is the condition every search
+        # carries (spec §8.3): the index is smaller and residuo R7 closes for this
+        # table. No `lower()` in the expression -- `similarity()` normalises to lower
+        # case internally, and wrapping the column would make ILIKE on the raw column
+        # unable to use the index (spec §8.2).
+        Index(
+            "ix_customers_ragione_sociale_trgm",
+            "ragione_sociale",
+            postgresql_using="gin",
+            postgresql_ops={"ragione_sociale": "gin_trgm_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "ix_customers_partita_iva_trgm",
+            "partita_iva",
+            postgresql_using="gin",
+            postgresql_ops={"partita_iva": "gin_trgm_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "ix_customers_codice_fiscale_trgm",
+            "codice_fiscale",
+            postgresql_using="gin",
+            postgresql_ops={"codice_fiscale": "gin_trgm_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "ix_customers_email_trgm",
+            "email",
+            postgresql_using="gin",
+            postgresql_ops={"email": "gin_trgm_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
     )
 
     ragione_sociale: Mapped[str] = mapped_column(String(255), nullable=False)
