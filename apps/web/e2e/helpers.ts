@@ -220,3 +220,37 @@ export async function seedDealWithRate(
 
   return { dealId: deal.id, customerId: customer.id }
 }
+
+/**
+ * Seeds `count` customers through the real API, in parallel batches.
+ *
+ * Through the API and not through the UI: 500 rows via forms would take minutes and
+ * would be testing the form, not the palette. Through `page.request` and a relative URL,
+ * exactly like `seedDealWithRate` above -- that context shares the browser's cookie jar,
+ * so the session `loginAsAdmin` established travels with it, and the Vite dev proxy
+ * forwards `/api` the same way it forwards the app's own requests.
+ *
+ * The prefix has to be distinctive per caller. `playwright.config.ts` runs `workers: 1`
+ * against one shared database that is never truncated mid-run, so these rows outlive the
+ * spec that made them; a generic term would make an assertion pass or fail depending on
+ * which spec ran first.
+ */
+export async function seedCustomers(page: Page, prefix: string, count: number): Promise<void> {
+  const BATCH = 25
+  for (let start = 0; start < count; start += BATCH) {
+    const size = Math.min(BATCH, count - start)
+    const responses = await Promise.all(
+      Array.from({ length: size }, (_, offset) =>
+        page.request.post('/api/customers', {
+          data: { ragione_sociale: `${prefix} ${String(start + offset).padStart(4, '0')} Srl` },
+        }),
+      ),
+    )
+    // Checked, never fired and forgotten: a fixture that silently seeded 40 rows instead
+    // of 500 would make the truncation assertion pass for the wrong reason, or fail for
+    // a reason that has nothing to do with the palette.
+    for (const response of responses) {
+      expect(response.status(), await response.text()).toBe(201)
+    }
+  }
+}
