@@ -34,6 +34,12 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["packages/core/tests", "apps/api/tests", "apps/mcp/tests"]
 asyncio_mode = "auto"
+# Nothing skips on this marker by default. It exists so a developer can say
+# `-m "not slow"` while iterating, and so CI's own `uv run pytest -q` still runs it: a
+# plan assertion that CI skips is a plan assertion that does not exist.
+markers = [
+  "slow: builds the 50 000-row inflated corpus; minutes, not seconds",
+]
 
 [tool.mypy]
 python_version = "3.13"
