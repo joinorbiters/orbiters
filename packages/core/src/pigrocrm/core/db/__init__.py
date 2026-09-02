@@ -5,7 +5,7 @@ from pigrocrm.core.db.base import (
     TimestampMixin,
     uuid7,
 )
-from pigrocrm.core.db.clock import month_bounds, today_local
+from pigrocrm.core.db.clock import month_bounds, today_local, window_from
 from pigrocrm.core.db.search import escape_like
 from pigrocrm.core.db.session import create_engine_from_settings, session_factory
 from pigrocrm.core.db.sort import (
@@ -40,4 +40,5 @@ __all__ = [
     "session_factory",
     "today_local",
     "uuid7",
+    "window_from",
 ]

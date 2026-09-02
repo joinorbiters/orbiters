@@ -26,7 +26,7 @@ is a bug that surfaces on 31 December.
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from pigrocrm.core.config import Settings, get_settings
@@ -74,4 +74,21 @@ def month_bounds(anno: int, mese: int) -> tuple[date, date]:
     return date(anno, mese, 1), date(anno, mese, last)
 
 
-__all__ = ["month_bounds", "today_local"]
+def window_from(start: date, days: int) -> tuple[date, date]:
+    """`(start, start + days)`, both inclusive.
+
+    Here and not in `core/dashboard/` because that package is forbidden from containing any
+    arithmetic at all -- no `*`, `/` or `-` BinOp, and no `Decimal` import outside
+    `schemas.py` -- so that it provably cannot invent a figure (spec §3, and
+    `packages/core/tests/test_dashboard_no_arithmetic.py`). A date offset is harmless in
+    itself; the rule has no exceptions precisely so that nobody has to judge which
+    arithmetic is harmless.
+
+    Inclusive at both ends, like `month_bounds` above and for the same reason: every period
+    filter in slices 4 and 6 is `BETWEEN da AND a` over a `Date` column, and two conventions
+    in one product is how a day gets counted twice.
+    """
+    return start, start + timedelta(days=days)
+
+
+__all__ = ["month_bounds", "today_local", "window_from"]

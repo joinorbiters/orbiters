@@ -16,6 +16,14 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from pigrocrm.core.db import month_bounds, today_local, window_from
+from pigrocrm.core.errors import ValidationFailed
+
+# Ten years and a bit -- the span of the §16 reference corpus. A ceiling exists because
+# §7.3 requires the predicate to always carry a bounded period: without one,
+# `da=0001-01-01` is a full table scan requested from a query string.
+MAX_PERIOD_DAYS = 3660
+
 
 class Periodo(BaseModel):
     """Normalised and echoed back, always. A screenshot of a dashboard with no explicit
@@ -23,6 +31,61 @@ class Periodo(BaseModel):
 
     da: date
     a: date
+
+
+class PeriodoQuery(BaseModel):
+    """The period, or nothing at all.
+
+    Both bounds or neither. Supplying one and letting the service guess the other would
+    silently answer a different question from the one asked, and the reader would have no
+    way to see it -- the response echoes the period back for exactly this reason.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    da: date | None = None
+    a: date | None = None
+
+    def resolve(self) -> Periodo:
+        """The normalised period, or a named `ValidationFailed`.
+
+        The `field` of every error here is the bound the caller must change, because
+        `fieldErrorFrom` in the web client and an MCP agent both read it.
+        """
+        if (self.da is None) != (self.a is None):
+            raise ValidationFailed(
+                "periodo",
+                "da" if self.da is None else "a",
+                "il periodo richiede entrambe le date, o nessuna",
+                expected="da e a insieme, oppure nessuna delle due",
+            )
+        if self.da is None or self.a is None:
+            today = today_local()
+            first, last = month_bounds(today.year, today.month)
+            return Periodo(da=first, a=last)
+        if self.da > self.a:
+            raise ValidationFailed(
+                "periodo",
+                "da",
+                "la data iniziale è successiva a quella finale",
+                expected=f"da <= {self.a.isoformat()}",
+            )
+        # The ceiling is expressed as "the last day still admitted" rather than as
+        # `(self.a - self.da).days`, for two reasons that happen to agree: a `-` anywhere
+        # under `core/dashboard/` is forbidden without exception (§3, and
+        # `test_dashboard_no_arithmetic.py`, whose BinOp exemption list is empty and
+        # includes this file), and `window_from` is the same inclusive convention every
+        # other period in slices 4 and 6 uses. A period of exactly MAX_PERIOD_DAYS days'
+        # difference is admitted; the next day is not.
+        _, ultimo_ammesso = window_from(self.da, MAX_PERIOD_DAYS)
+        if self.a > ultimo_ammesso:
+            raise ValidationFailed(
+                "periodo",
+                "a",
+                "periodo troppo lungo",
+                expected=f"al massimo {MAX_PERIOD_DAYS} giorni",
+            )
+        return Periodo(da=self.da, a=self.a)
 
 
 class PipelineStageSummary(BaseModel):

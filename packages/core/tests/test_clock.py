@@ -143,6 +143,20 @@ def test_month_bounds_applies_the_full_gregorian_leap_rule() -> None:
     assert month_bounds(2100, 2)[1] == date(2100, 2, 28)
 
 
+def test_window_from_is_inclusive_at_both_ends() -> None:
+    """The date arithmetic `core/dashboard/` is forbidden to contain (slice 6 §3) lives
+    here instead. Inclusive at both ends, like `month_bounds`: every period filter in
+    slices 4 and 6 is `BETWEEN da AND a`, and a second convention is how a day gets counted
+    twice."""
+    from pigrocrm.core.db import window_from
+
+    assert window_from(date(2026, 1, 31), 30) == (date(2026, 1, 31), date(2026, 3, 2))
+    # Across a month boundary and a leap day, because "plus thirty days" is not "next
+    # month" and the two differ by up to three days.
+    assert window_from(date(2024, 2, 1), 30) == (date(2024, 2, 1), date(2024, 3, 2))
+    assert window_from(date(2026, 5, 4), 0) == (date(2026, 5, 4), date(2026, 5, 4))
+
+
 @pytest.mark.parametrize("mese", [0, 13, -1])
 def test_month_bounds_refuses_a_month_outside_one_to_twelve(mese: int) -> None:
     from pigrocrm.core.errors import ValidationFailed
