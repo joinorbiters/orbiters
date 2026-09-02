@@ -4971,6 +4971,9 @@ export interface operations {
                 custom?: string[] | null;
                 limit?: number;
                 cursor?: string | null;
+                /** @description created_at | updated_at | ragione_sociale */
+                sort?: string | null;
+                dir?: "asc" | "desc";
             };
             header?: never;
             path?: never;
@@ -5815,6 +5818,9 @@ export interface operations {
                 custom?: string[] | null;
                 limit?: number;
                 cursor?: string | null;
+                /** @description created_at | updated_at | cognome */
+                sort?: string | null;
+                dir?: "asc" | "desc";
             };
             header?: never;
             path?: never;
@@ -6660,6 +6666,9 @@ export interface operations {
                 custom?: string[] | null;
                 limit?: number;
                 cursor?: string | null;
+                /** @description created_at | updated_at | nome */
+                sort?: string | null;
+                dir?: "asc" | "desc";
             };
             header?: never;
             path?: never;
@@ -10875,8 +10884,12 @@ export interface operations {
                 deal_id?: string | null;
                 tipo?: ("offerta" | "contratto" | "verbale" | "documento" | "fattura" | "fattura_xml" | "proforma" | "rapporto_ore") | null;
                 stato?: ("bozza" | "inviata" | "accettata" | "rifiutata") | null;
+                search?: string | null;
                 limit?: number;
                 cursor?: string | null;
+                /** @description created_at | updated_at | titolo */
+                sort?: string | null;
+                dir?: "asc" | "desc";
             };
             header?: never;
             path?: never;

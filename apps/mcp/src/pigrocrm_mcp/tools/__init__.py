@@ -8,6 +8,7 @@ from pydantic import WithJsonSchema
 from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.analytics.schemas import BudgetQuery, PeriodPnlQuery
 from pigrocrm.core.customers.schemas import CustomerListQuery, CustomerUpdate
+from pigrocrm.core.db import SortDirection
 from pigrocrm.core.deals.schemas import DealListQuery, DealUpdate
 from pigrocrm.core.documents.schemas import DocumentListQuery
 from pigrocrm.core.fields.schemas import EntityType
@@ -224,12 +225,20 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
         custom: dict[str, Any] | None = None,
         limit: BoundedLimit = 50,
         cursor: str | None = None,
+        sort: str | None = None,
+        # `str` and not `Literal["asc", "desc"]`, following this file's own
+        # runtime-permissive/schema-strict convention: an out-of-range value then
+        # raises `pydantic.ValidationError` inside `_guard`, which renders it as a
+        # domain error the agent can read, instead of failing in the SDK's pre-call
+        # `validate_arguments` where the message is not ours.
+        dir: str = "asc",
     ) -> dict[str, Any]:
         """Cerca clienti per ragione sociale, P.IVA, codice fiscale o email.
         `custom` filtra sui campi personalizzati per uguaglianza esatta (es.
         {"settore": "IT"}); chiama `describe_schema` per conoscere le chiavi
-        disponibili. Per leggere la pagina successiva passa `next_cursor` come
-        `cursor` nella chiamata seguente.
+        disponibili. `sort` accetta `created_at`, `updated_at` o `ragione_sociale`,
+        `dir` accetta `asc` o `desc`. Per leggere la pagina successiva passa
+        `next_cursor` come `cursor` nella chiamata seguente, senza interpretarlo.
         """
         return customers.search(
             context,
@@ -249,6 +258,8 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
                 # agent sees moves. `list_invoices` and the time-tracking tools keep
                 # their `UUID(cursor)`: those pages still key on the id alone.
                 cursor=cursor,
+                sort=sort,
+                dir=cast(SortDirection, dir),
             ),
         )
 
@@ -320,12 +331,16 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
         custom: dict[str, Any] | None = None,
         limit: BoundedLimit = 50,
         cursor: str | None = None,
+        sort: str | None = None,
+        # `str`, not a Literal -- see `search_customers`.
+        dir: str = "asc",
     ) -> dict[str, Any]:
         """Cerca persone per nome, cognome o email, opzionalmente entro un cliente.
         `custom` filtra sui campi personalizzati per uguaglianza esatta; chiama
-        `describe_schema` per conoscere le chiavi disponibili. Per leggere la
-        pagina successiva passa `next_cursor` come `cursor` nella chiamata
-        seguente.
+        `describe_schema` per conoscere le chiavi disponibili. `sort` accetta
+        `created_at`, `updated_at` o `cognome`, `dir` accetta `asc` o `desc`. Per
+        leggere la pagina successiva passa `next_cursor` come `cursor` nella chiamata
+        seguente, senza interpretarlo.
         """
         return people.search(
             context,
@@ -339,6 +354,8 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
                 limit=cast(int, limit),
                 # An opaque string since slice 6 -- see `search_customers`.
                 cursor=cursor,
+                sort=sort,
+                dir=cast(SortDirection, dir),
             ),
         )
 
@@ -409,11 +426,15 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
         custom: dict[str, Any] | None = None,
         limit: BoundedLimit = 50,
         cursor: str | None = None,
+        sort: str | None = None,
+        # `str`, not a Literal -- see `search_customers`.
+        dir: str = "asc",
     ) -> dict[str, Any]:
         """Cerca deal per nome, cliente o stato di pipeline. `custom` filtra sui
         campi personalizzati per uguaglianza esatta; chiama `describe_schema` per
-        conoscere le chiavi disponibili. Per leggere la pagina successiva passa
-        `next_cursor` come `cursor` nella chiamata seguente.
+        conoscere le chiavi disponibili. `sort` accetta `created_at`, `updated_at` o
+        `nome`, `dir` accetta `asc` o `desc`. Per leggere la pagina successiva passa
+        `next_cursor` come `cursor` nella chiamata seguente, senza interpretarlo.
         """
         return deals.search(
             context,
@@ -428,6 +449,8 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
                 limit=cast(int, limit),
                 # An opaque string since slice 6 -- see `search_customers`.
                 cursor=cursor,
+                sort=sort,
+                dir=cast(SortDirection, dir),
             ),
         )
 
@@ -490,12 +513,18 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
         deal_id: str | None = None,
         tipo: str | None = None,
         stato: str | None = None,
+        search: str | None = None,
         limit: BoundedLimit = 50,
         cursor: str | None = None,
+        sort: str | None = None,
+        # `str`, not a Literal -- see `search_customers`.
+        dir: str = "asc",
     ) -> dict[str, Any]:
-        """Elenca i documenti di un cliente o di un deal. Passa `next_cursor` come
-        `cursor` per la pagina successiva. Per scaricare i byte usa l'API REST:
-        MCP restituisce identificativi, non file."""
+        """Elenca i documenti di un cliente o di un deal. `search` filtra per titolo.
+        `sort` accetta `created_at`, `updated_at` o `titolo`, `dir` accetta `asc` o
+        `desc`. Passa `next_cursor` come `cursor` per la pagina successiva, senza
+        interpretarlo. Per scaricare i byte usa l'API REST: MCP restituisce
+        identificativi, non file."""
         return documents.search(
             context,
             DocumentListQuery(
@@ -503,9 +532,12 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
                 deal_id=UUID(deal_id) if deal_id else None,
                 tipo=tipo,  # type: ignore[arg-type]
                 stato=stato,  # type: ignore[arg-type]
+                search=search,
                 limit=cast(int, limit),
                 # An opaque string since slice 6 -- see `search_customers`.
                 cursor=cursor,
+                sort=sort,
+                dir=cast(SortDirection, dir),
             ),
         )
 

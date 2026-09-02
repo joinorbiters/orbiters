@@ -13,7 +13,7 @@ from pigrocrm.core.customers.schemas import (
     CustomerUpdate,
 )
 from pigrocrm.core.customers.service import CustomerService
-from pigrocrm.core.db import CURSOR_MAX_LENGTH
+from pigrocrm.core.db import CURSOR_MAX_LENGTH, SortDirection
 from pigrocrm.core.validation import SafeStr
 from pigrocrm_api.deps import ActorDep, SessionDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
@@ -50,6 +50,16 @@ def list_customers(
     # on the schema, so an oversized value is refused by FastAPI before the decoder
     # sees it.
     cursor: Annotated[str | None, Query(max_length=CURSOR_MAX_LENGTH)] = None,
+    # A plain string, not a `Literal` of the three keys: the whitelist lives in
+    # `CUSTOMER_SORTS` and answers with this project's own `ValidationFailed`, whose
+    # `field` key both the web client's `fieldErrorFrom` and an MCP agent read. A
+    # `Literal` here would answer with FastAPI's `HTTPValidationError` shape instead,
+    # which neither of them parses -- so the admissible values go in the description,
+    # where they reach the OpenAPI document and the generated client's JSDoc.
+    sort: Annotated[
+        SafeStr | None, Query(description="created_at | updated_at | ragione_sociale")
+    ] = None,
+    dir: Annotated[SortDirection, Query()] = "asc",
 ) -> CustomerPage:
     query = CustomerListQuery(
         search=search,
@@ -57,6 +67,8 @@ def list_customers(
         custom=parse_custom_filter(custom),
         limit=limit,
         cursor=cursor,
+        sort=sort,
+        dir=dir,
     )
     return CustomerService(session).list(query, actor)
 
