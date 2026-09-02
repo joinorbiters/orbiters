@@ -68,6 +68,7 @@ from pigrocrm.core.storage.base import DocumentStorage
 
 ENTITY = "email_draft"
 _SEND_ACTION = "inviare un'email"
+_RECONCILE_ACTION = "verificare l'esito di un'email"
 _WHAT_SEND = "invio del messaggio"
 _WHAT_VERIFY = "verifica dell'invio"
 
@@ -277,6 +278,14 @@ class EmailSendService:
         failure at second zero would turn a slow index into a resend, which is the
         outcome this whole design exists to prevent.
         """
+        # Role-gated like the send it repairs, and for two reasons rather than one: this
+        # method writes `send_state` (`inviato` or `fallito`, both terminal) and it spends
+        # the owner's Gmail quota under the owner's OAuth grant. A read-only actor may
+        # look at an `incerto` draft; resolving it is the other half of having pressed
+        # Invia. `reconcile_all` reaches here from `GmailSyncService._run_cycle`, whose
+        # own `sync` already requires write, so the cycle is unaffected.
+        actor.require_write(_RECONCILE_ACTION)
+
         draft = self.session.get(EmailDraft, draft_id)
         if draft is None:
             raise NotFound(ENTITY, draft_id)

@@ -200,23 +200,25 @@ _CREDENZIALI: dict[Method, str] = {
         "non un'operazione che l'agente compie al posto suo"
     ),
     ("EmailSendService", "send"): (
-        "**l'invio non sara' mai un tool**, e questa e' l'unica riga di 5B-2 che non "
-        "aspetta B2-10: e' la decisione permanente gia' registrata piu' sotto, ora che "
-        "il metodo dietro esiste. Un'email che parte dall'indirizzo del titolare parla "
-        "in suo nome a un cliente, non si richiama, e il destinatario e' una persona "
-        "esterna al CRM: stessa famiglia di `GmailOAuthService.disconnect`, con in piu' "
-        "che un agente che tenesse la *lettura* della posta e l'*invio* sullo stesso "
-        "canale avrebbe la sorgente di injection e il canale di esfiltrazione insieme. "
-        "Il divieto per costruzione sui nomi degli strumenti vive in "
-        "`test_mcp_invoice_ban.py`, che possiede i divieti"
+        "**l'invio non sara' mai un tool**, ed e' la decisione permanente di questa "
+        "fetta: B2-10 l'ha confermata invece di riaprirla. Un'email che parte "
+        "dall'indirizzo del titolare parla in suo nome a un cliente, non si richiama, e "
+        "il destinatario e' una persona esterna al CRM: stessa famiglia di "
+        "`GmailOAuthService.disconnect`, con in piu' che un agente che tenesse la "
+        "*lettura* della posta e l'*invio* sullo stesso canale avrebbe la sorgente di "
+        "injection e il canale di esfiltrazione insieme. Il divieto per costruzione sui "
+        "nomi degli strumenti vive in `test_mcp_invoice_ban.py`, che possiede i divieti"
     ),
     ("EmailSendService", "reconcile"): (
-        "stessa ragione di `sync`, in piccolo: va a chiedere a Gmail, sotto il consenso "
-        "OAuth della persona e a carico della sua quota, se un messaggio partito dalla "
-        "sua casella e' arrivato. E' la meta' di riparazione dell'invio -- il pulsante "
-        "«verifica» accanto a «esito da verificare» -- quindi appartiene a chi ha premuto "
-        "Invia. Se B2-10 decidesse altrimenti dovrebbe spiegare perche' un agente puo' "
-        "interrogare una casella che non puo' sincronizzare"
+        "stessa ragione di `sync`, in piccolo, e B2-10 ha deciso di non esporla: va a "
+        "chiedere a Gmail, sotto il consenso OAuth della persona e a carico della sua "
+        "quota, se un messaggio partito dalla sua casella e' arrivato -- e poi *scrive* "
+        "`send_state` su un valore terminale. E' la meta' di riparazione dell'invio -- "
+        "il pulsante «verifica» accanto a «esito da verificare» -- quindi appartiene a "
+        "chi ha premuto Invia. La domanda che l'esclusione doveva reggere era: perche' "
+        "un agente potrebbe interrogare una casella che non puo' sincronizzare? Non "
+        "puo': e' la stessa quota e lo stesso consenso, e in piu' qui l'esito di quella "
+        "interrogazione decide se una bozza risulta partita o no"
     ),
     ("EmailSendService", "reconcile_all"): (
         "non e' un'operazione che qualcuno compie: la chiama `GmailSyncService._run_cycle` "
@@ -279,15 +281,17 @@ _BYTE: dict[Method, str] = {
 #    future slice could expose any of them -- which is exactly why they are not in the
 #    ban list and why each has to say so out loud.
 #
-#    Five entries left this block, and they are the reason it must stay small.
+#    Seven entries have left this block, and they are the reason it must stay small.
 #    `PeriodLockService.list_locks`, `TemplateService.preview`,
 #    `DocumentService.regenerate`, `soft_delete` and `restore` were all recorded here as
 #    "non ha ancora un tool" / "e' una decisione della persona" -- and each turned out to
 #    be a plain read, or a reversible audited write whose inverse this surface already
-#    exposes for customers, deals, people, costs and time entries. A reason that only
-#    says "nobody wrote the tool" is a placeholder wearing the clothes of a decision;
-#    this category is for the ones that survive being asked why, and the only way to keep
-#    that true is to delete the ones that do not the moment the tool is written.
+#    exposes for customers, deals, people, costs and time entries. `EmailDraftService.
+#    create` and `SollecitiService.candidates` left the same way at B2-10, as
+#    `draft_email` and `list_payment_reminder_candidates`. A reason that only says
+#    "nobody wrote the tool" is a placeholder wearing the clothes of a decision; this
+#    category is for the ones that survive being asked why, and the only way to keep that
+#    true is to delete the ones that do not the moment the tool is written.
 _COPERTE_O_UMANE: dict[Method, str] = {
     ("DocumentService", "create"): "create_document_from_template e' l'unica creazione "
     "che non richieda di caricare byte",
@@ -302,39 +306,49 @@ _COPERTE_O_UMANE: dict[Method, str] = {
     ("InvoiceService", "confirm_proforma"): "e' la conferma umana che precede "
     "l'emissione: l'agente prepara, la persona conferma",
     ("TemplateService", "get"): "describe_template espone gia' il template",
-    # Le cinque righe qui sotto sono di 5B-2 e hanno una scadenza dichiarata: **B2-10 e'
-    # il task che decide la superficie MCP di questa fetta**, come B1-14 ha deciso quella
-    # di 5B-1. Fino a li' la ragione non e' "nessuno ha scritto il tool" -- che questo
-    # blocco vieta esplicitamente -- ma questa: **l'invio non sara' mai un tool** (la
-    # riga permanente e' su `EmailSendService.send`, in `_CREDENZIALI`), quindi un
-    # `create_email_draft` offrirebbe a un agente di scrivere un messaggio che nessuno
-    # strumento potra' mai spedire: meta' operazione, e l'altra meta' non e' rinviata,
-    # e' esclusa. Se quella meta' bozza valga comunque la superficie lo decide B2-10.
-    ("EmailDraftService", "create"): "il composer e' della persona finche' B2-10 non "
-    "decide la superficie di 5B-2: un agente scriverebbe una bozza che nessun tool "
-    "puo' inviare, perche' l'invio non sara' mai esposto",
-    ("EmailDraftService", "update"): "riscrivere il testo che partira' a nome del "
-    "titolare e' la stessa decisione di `create`, e la prende B2-10",
-    ("EmailDraftService", "get"): "leggere una bozza non ancora inviata non serve a "
-    "nessun tool esistente: `list_gmail_messages` espone la corrispondenza gia' "
-    "archiviata, che e' l'unica di cui un agente abbia bisogno per lavorare",
+    # Le cinque righe qui sotto sono cio' che resta di 5B-2 dopo che **B2-10 ha deciso
+    # la superficie MCP di questa fetta**, come B1-14 aveva deciso quella di 5B-1.
+    # `EmailDraftService.create` e `SollecitiService.candidates` erano qui e non ci sono
+    # piu': sono `draft_email` e `list_payment_reminder_candidates`. La riga di
+    # separazione non e' lettura contro scrittura, ed e' bene dirla per intero perche' e'
+    # l'unica cosa che tiene insieme le esclusioni rimaste:
+    #
+    #   * si espone la *preparazione* di un testo neutro che qualcuno ha chiesto. La
+    #     bozza e' inerte -- nessuno strumento di questa superficie puo' spedirla -- e la
+    #     meta' mancante e' una persona che la legge prima che parta. Che sia meta'
+    #     operazione e' il progetto: la revisione e' cio' che rende accettabile l'invio, e
+    #     una bozza e' l'artefatto che la rende economica;
+    #   * non si espone niente che *tocchi una bozza che l'agente non ha scritto*, e
+    #     niente che scriva una richiesta di denaro a nome del titolare.
+    ("EmailDraftService", "update"): "riscrivere una bozza che l'agente non ha scritto "
+    "romperebbe l'unica garanzia su cui poggia `draft_email`: che il testo che parte sia "
+    "il testo che una persona ha letto. Un agente che potesse riscrivere una bozza gia' "
+    "rivista, fra la revisione e Invia, renderebbe la revisione una formalita' -- e la "
+    "revisione e' tutta la sicurezza di questa meta' della superficie. Non e' cautela: e' "
+    "che `draft_email` restituisce gia' cio' che ha scritto, quindi l'unica capacita' che "
+    "`update` aggiungerebbe e' proprio quella che va negata",
+    ("EmailDraftService", "get"): "leggere una bozza che l'agente non ha scritto e' "
+    "leggere corrispondenza privata non ancora partita. `draft_email` restituisce id, "
+    "oggetto e stato di cio' che ha appena preparato, quindi non c'e' niente che un "
+    "agente debba rileggere per lavorare; `list_gmail_messages` espone la corrispondenza "
+    "gia' archiviata, che e' l'altra meta' di cui ha bisogno",
     ("EmailDraftService", "delete"): "cancellare il testo non spedito di qualcuno e' "
-    "una decisione della persona, e non ha inverso: la riga sparisce davvero",
-    ("EmailDraftService", "list"): "elenca bozze non inviate, cioe' corrispondenza "
-    "privata che non e' ancora partita: se servira' a un agente lo dira' B2-10",
-    ("SollecitiService", "candidates"): "e' una lettura pura -- nessuna chiamata a "
-    "Google, nessuna quota, nessun invio -- e per questo l'unica di 5B-2 che potrebbe "
-    "davvero diventare un tool: e' *la* parte laboriosa, incrociare scadenze e "
-    "pagamenti, ed e' esattamente cio' che un agente farebbe bene. Non e' esposta qui "
-    "solo perche' la superficie MCP di questa fetta la decide B2-10, che possiede la "
-    'scelta; la ragione non e\' "nessuno ha scritto il tool" ma "la decisione ha un '
-    'proprietario e una scadenza"',
-    ("SollecitiService", "create_reminder"): "prepara una bozza che nessuno strumento "
-    "potra' mai spedire, perche' **l'invio non sara' mai un tool** (la riga permanente "
-    "e' su `EmailSendService.send`, in `_CREDENZIALI`): stessa meta'-operazione di "
-    "`EmailDraftService.create`, e la decide lo stesso task, B2-10. In piu' il testo che "
-    "preparerebbe non e' una bozza qualunque -- e' una richiesta di pagamento a nome del "
-    "titolare, con il suo IBAN dentro",
+    "una decisione della persona, e non ha inverso: la riga sparisce davvero. E' l'unica "
+    "operazione di questa fetta che distrugge qualcosa senza lasciare traccia da cui "
+    "tornare indietro",
+    ("EmailDraftService", "list"): "e' l'indice della corrispondenza privata non ancora "
+    "partita di tutti -- inclusi i solleciti, che hanno l'IBAN del titolare dentro. Un "
+    "agente non ne ha bisogno per preparare una bozza, che e' l'unica scrittura che gli "
+    "e' concessa qui",
+    ("SollecitiService", "create_reminder"): "**preparare un sollecito non e' preparare "
+    "un'email**, ed e' qui che passa la riga fra questa esclusione e `draft_email`. Il "
+    "testo non e' neutro: e' una richiesta di denaro a nome del titolare, con il suo IBAN "
+    "dentro. E prepararlo *consuma* una delle tre posizioni che il registro concede per "
+    "fattura (spec 7.3): un agente che preparasse solleciti spenderebbe il tetto che "
+    "impedisce a una fattura contestata di diventare una persecuzione automatica, senza "
+    "che nessuno abbia deciso di sollecitare quella fattura. Elencare cosa si potrebbe "
+    "sollecitare non e' una decisione, e infatti `list_payment_reminder_candidates` "
+    "esiste; prepararlo lo e'",
 }
 
 

@@ -38,8 +38,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.activities.models import Activity
+from pigrocrm.core.actor import Actor
 from pigrocrm.core.customers.models import Customer
-from pigrocrm.core.errors import Conflict, NotFound
+from pigrocrm.core.errors import Conflict, NotFound, PermissionDenied
 from pigrocrm.core.gmail.models import EmailDraft, GmailMessage, GoogleAccount
 from pigrocrm.core.gmail.schemas import SCOPE_SEND, EmailDraftCreate, EmailDraftRead
 from pigrocrm.core.people.models import Person
@@ -316,6 +317,35 @@ def test_reconciling_a_draft_that_was_never_sent_does_nothing(db_session: Sessio
 
     assert read.send_state == "bozza"
     assert fake.requests == []
+
+
+def test_a_readonly_actor_cannot_resolve_an_uncertain_outcome(db_session: Session) -> None:
+    """«verifica» is the repair half of having pressed Invia, so it is gated like the
+    send it repairs. Two reasons, and either alone would be enough: it writes
+    `send_state` to a terminal value (`inviato` or `fallito`), and it spends the owner's
+    Gmail quota under the owner's OAuth grant.
+
+    Refused *before* any request goes out, which is the part worth asserting: a gate
+    that fired after the lookup would still have spent the quota it exists to protect.
+    """
+    account = connected_account(db_session)
+    draft = _draft(db_session, account)
+    row = db_session.get(EmailDraft, draft.id)
+    assert row is not None
+    # Straight onto the row: `EmailDraftCreate` refuses `send_state` by design -- it is a
+    # fact about what happened, never an input -- and the only writer is the send path.
+    row.send_state = "incerto"
+    db_session.commit()
+    fake = FakeGmail()
+
+    with pytest.raises(PermissionDenied):
+        send_service(db_session, fake).reconcile(
+            draft.id, Actor(id=account.user_id, type="user", role="readonly")
+        )
+
+    assert fake.requests == []
+    db_session.refresh(row)
+    assert row.send_state == "incerto"
 
 
 def test_reconciling_a_draft_that_does_not_exist_is_a_not_found(db_session: Session) -> None:

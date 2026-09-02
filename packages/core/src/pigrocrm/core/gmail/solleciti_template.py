@@ -53,8 +53,9 @@ IBAN: {{iban}}
 
 Qualora avesse già provveduto al pagamento, La preghiamo di ignorare questo messaggio.
 
-In allegato trova copia di cortesia della fattura. L'originale è stato trasmesso \
-digitalmente tramite il Sistema di Interscambio (SdI) secondo le modalità previste.
+{{#if allegato}}In allegato trova copia di cortesia della fattura. {{/if}}L'originale è \
+stato trasmesso digitalmente tramite il Sistema di Interscambio (SdI) secondo le \
+modalità previste.
 
 Restiamo a disposizione per qualsiasi chiarimento e cogliamo l'occasione per porgere \
 cordiali saluti.
@@ -89,6 +90,20 @@ SOLLECITO_DECLARED_VARIABLES: tuple[DeclaredVariable, ...] = (
     DeclaredVariable(
         nome="terzo", etichetta="Terzo sollecito", tipo="checkbox", obbligatoria=False
     ),
+    # Derived from whether there is actually a document to attach, never typed by a
+    # human -- the same shape as the three level flags, and declared optional for the
+    # same reason. It exists because `GmailRepository.invoice_pdf_version_ids` may
+    # legitimately answer `[]` (a proforma converted before the PDF existed, a document
+    # since removed), and a letter to a paying client that says «in allegato trova copia
+    # di cortesia della fattura» with nothing attached is worse than one that says
+    # nothing: it invites them to look for a file that is not there and then to distrust
+    # the figure next to it.
+    DeclaredVariable(
+        nome="allegato",
+        etichetta="Copia della fattura allegata",
+        tipo="checkbox",
+        obbligatoria=False,
+    ),
     # Optional: an emitter profile saved before this column existed has no signature
     # block, and a reminder with no free-text signature is still a correct reminder --
     # `emittente.ragione_sociale` is always there under it.
@@ -122,11 +137,11 @@ def level_flags(livello: int) -> dict[str, bool]:
     }
 
 
-def render_sollecito_body(values: dict[str, Any], *, livello: int) -> str:
+def render_sollecito_body(values: dict[str, Any], *, livello: int, con_allegato: bool) -> str:
     """The reminder body, as the plain text a mail client will show.
 
-    The only supported way to render `SOLLECITO_TEMPLATE_SOURCE`. Two things it makes
-    unforgettable, both of which are wrong-in-the-client's-inbox rather than
+    The only supported way to render `SOLLECITO_TEMPLATE_SOURCE`. Three things it makes
+    unforgettable, all of which are wrong-in-the-client's-inbox rather than
     wrong-in-a-test if a caller open-codes `render_template` instead:
 
     * the "plain" context. The default "markdown" one escapes the full ASCII
@@ -134,10 +149,16 @@ def render_sollecito_body(values: dict[str, Any], *, livello: int) -> str:
     * the level flags. `values` carries the invoice's own frozen figures; the tone of
       the sequence is derived here from `livello`, so no caller can send a third
       reminder wearing the wording of a first.
+    * the attachment sentence. `con_allegato` is a **required** keyword and has no
+      default on purpose: the honest default would be `False`, which silently drops a
+      sentence a caller meant to keep, and the convenient default would be `True`, which
+      is precisely the defect -- a body promising a courtesy copy of the invoice while
+      `attachment_version_ids` is empty. A caller that has to say which one it is cannot
+      get it wrong by forgetting.
     """
     return render_template(
         SOLLECITO_TEMPLATE_SOURCE,
-        {**values, **level_flags(livello)},
+        {**values, **level_flags(livello), "allegato": con_allegato},
         SOLLECITO_DECLARED_VARIABLES,
         context="plain",
     )
