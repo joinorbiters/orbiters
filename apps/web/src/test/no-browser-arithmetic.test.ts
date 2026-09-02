@@ -22,6 +22,13 @@
  * module". Every dashboard module lives under `features/dashboard/`; `routes/app/index.tsx`
  * is the page that composes them, and Task B14 rewrites it.
  *
+ * What this bans is the *coercion* of an API value into a JS number, not arithmetic as
+ * such. `features/dashboard/Freshness.tsx` subtracts two instants and divides by 60 000 to
+ * say how old the figures are, and `CommercialTab.tsx` divides one server-sent integer by
+ * another to scale a bar: neither invents a figure, and neither could be written without
+ * an operator. What no dashboard module may do is turn `"1234.56"` into `1234.56`, because
+ * the number that comes back out is not the number that went in.
+ *
  * The TypeScript compiler API is used rather than a regex: `Number(` inside a string
  * literal or a comment is not a call, and a regex cannot tell the difference.
  */

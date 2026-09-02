@@ -72,4 +72,11 @@ export const queryKeys = {
   // rendering of "rossi": TanStack Query discards the stale entry rather than the
   // component having to compare what came back with what was typed.
   search: (term: string) => ['search', term] as const,
+  // The period is part of the key, so switching period is a different cache entry rather
+  // than a refetch that briefly shows March's numbers under April's heading. Every
+  // dashboard key starts with the literal 'dashboard' so a mutation that cannot know which
+  // period is on screen can invalidate all of them by prefix.
+  dashboard: (kind: 'commerciale' | 'economica' | 'operativa', params: Record<string, string>) =>
+    ['dashboard', kind, params] as const,
+  automations: () => ['automations'] as const,
 }
