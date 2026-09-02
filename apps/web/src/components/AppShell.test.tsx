@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { AppShell } from './AppShell'
 
@@ -16,6 +16,9 @@ vi.mock('@/lib/auth', () => ({
 describe('AppShell', () => {
   it('shows the main navigation in Italian', () => {
     render(<AppShell><div /></AppShell>)
+    // Scoped to the sidebar: since the header landed, the breadcrumb renders the current
+    // section's label too, so an unscoped getByText('Clienti') now matches twice.
+    const sidebar = within(screen.getByRole('navigation', { name: 'Navigazione principale' }))
     for (const label of [
       'Dashboard',
       'Clienti',
@@ -25,8 +28,14 @@ describe('AppShell', () => {
       'Analisi',
       'Token',
     ]) {
-      expect(screen.getByText(label)).toBeInTheDocument()
+      expect(sidebar.getByText(label)).toBeInTheDocument()
     }
+  })
+
+  it('renders the header with the search control', () => {
+    render(<AppShell><div /></AppShell>)
+    expect(screen.getByRole('banner')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /cerca/i })).toBeInTheDocument()
   })
 
   it('shows Impostazioni to an admin', () => {
