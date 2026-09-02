@@ -85,6 +85,27 @@
   --input: #d8e2df;
   --ring: var(--color-watermelon);
 
+  /* Five chart hues, every one derived from the five existing tints -- no sixth colour
+     enters the product. #ffffff is the one literal permitted inside a color-mix(): it is
+     the neutral being mixed toward, not a tint. Enforced by styles/tokens.test.ts.
+
+     Declared here and not in @theme: a @theme entry holding a color-mix() of a var()
+     cannot be resolved into Tailwind utilities at build time, which is the whole point of
+     @theme's literal hexes. These are read only as var(--chart-n) in inline styles, so
+     they belong beside --primary and --ring, which are already var() indirections.
+
+     One set for both modes, deliberately: they encode nothing. In every shape in
+     features/dashboard/charts.tsx the bar sits in its own labelled row and the table
+     beside it is the accessible rendering, so the hue is decoration and a second set of
+     five for dark mode would be five more values to keep honest for no information
+     gained. tokens.test.ts records what that costs in contrast, and what would have to
+     change first if a shape ever made colour the only thing telling two series apart. */
+  --chart-1: color-mix(in oklab, var(--color-watermelon) 78%, #ffffff);
+  --chart-2: color-mix(in oklab, var(--color-prussian-blue) 72%, #ffffff);
+  --chart-3: color-mix(in oklab, var(--color-royal-gold) 82%, var(--color-charcoal-blue));
+  --chart-4: color-mix(in oklab, var(--color-charcoal-blue) 84%, #ffffff);
+  --chart-5: color-mix(in oklab, var(--color-watermelon) 40%, var(--color-prussian-blue));
+
   /* The sidebar primitive (added per the component list) reads these directly;
      they are not separate colours, only the app palette re-pointed at its slots. */
   --sidebar: var(--card);

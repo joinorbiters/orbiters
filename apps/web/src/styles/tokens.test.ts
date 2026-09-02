@@ -36,6 +36,92 @@ function tokenHex(name: string): string {
   return hex
 }
 
+/* --- Oklab, so the chart tokens can be *computed* rather than recorded by hand ---
+   The five --chart-* tokens are `color-mix(in oklab, ...)` expressions, and a test that
+   only carried their expected sRGB values as a comment ("recompute these in a browser if
+   the expression changes") is a pair that drifts the first time nobody does. Everything
+   below is the CSS Color 4 definition of that mix, verified against Chromium's own
+   `getComputedStyle` output for all five expressions -- it agrees to the byte. */
+
+const srgbToLinear = (c: number): number =>
+  c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
+const linearToSrgb = (c: number): number =>
+  c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055
+
+type Triple = [number, number, number]
+
+function hexToLinear(hex: string): Triple {
+  return hexToRgb(hex).map((c) => srgbToLinear(c / 255)) as Triple
+}
+
+function linearToOklab([r, g, b]: Triple): Triple {
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b)
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b)
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b)
+  return [
+    0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s,
+    1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s,
+    0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s,
+  ]
+}
+
+function oklabToLinear([lightness, a, b]: Triple): Triple {
+  const l = (lightness + 0.3963377774 * a + 0.2158037573 * b) ** 3
+  const m = (lightness - 0.1055613458 * a - 0.0638541728 * b) ** 3
+  const s = (lightness - 0.0894841775 * a - 1.291485548 * b) ** 3
+  return [
+    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
+  ]
+}
+
+function linearToHex(linear: Triple): string {
+  return `#${linear
+    .map((c) => Math.round(Math.min(1, Math.max(0, linearToSrgb(c))) * 255).toString(16).padStart(2, '0'))
+    .join('')}`
+}
+
+function oklabOf(hex: string): Triple {
+  return linearToOklab(hexToLinear(hex))
+}
+
+/** Euclidean distance in Oklab x100 — the same units the dataviz palette gates use. */
+function deltaE(hexA: string, hexB: string): number {
+  const a = oklabOf(hexA)
+  const b = oklabOf(hexB)
+  return Math.hypot(...a.map((v, i) => (v - b[i]!) * 100))
+}
+
+/** A colour as it may appear inside a `color-mix()`: a tint reference or a literal. */
+function resolveMixOperand(text: string): string {
+  const reference = text.match(/^var\(--color-([a-z-]+)\)$/)
+  if (reference) return tokenHex(reference[1]!)
+  if (/^#[0-9a-fA-F]{6}$/.test(text)) return text
+  throw new Error(`unresolvable colour operand in tokens.css: ${text}`)
+}
+
+const OPERAND = String.raw`(?:var\(--color-[a-z-]+\)|#[0-9a-fA-F]{6})`
+
+/**
+ * Evaluates `color-mix(in oklab, <a> <p>%, <b>)` exactly as a browser does, so the
+ * recorded sRGB value of every chart token is derived from the declaration in
+ * `tokens.css` instead of asserted against a number somebody typed.
+ */
+function evaluateChartToken(token: string): string {
+  const declaration = css.match(new RegExp(`${token}:\\s*([^;]+);`))
+  if (!declaration) throw new Error(`${token} not found in tokens.css`)
+  const mix = declaration[1]!
+    .trim()
+    .match(new RegExp(String.raw`^color-mix\(in oklab,\s*(${OPERAND})\s+(\d{1,3})%,\s*(${OPERAND})\s*\)$`))
+  if (!mix) throw new Error(`${token} is not a two-operand oklab color-mix: ${declaration[1]}`)
+  const first = oklabOf(resolveMixOperand(mix[1]!))
+  const second = oklabOf(resolveMixOperand(mix[3]!))
+  const weight = parseInt(mix[2]!, 10) / 100
+  const mixed = first.map((v, i) => v * weight + second[i]! * (1 - weight)) as Triple
+  return linearToHex(oklabToLinear(mixed))
+}
+
 describe('design tokens', () => {
   it.each([
     ['watermelon', '#ed254e'],
@@ -74,5 +160,129 @@ describe('design tokens', () => {
     expect(css).not.toMatch(/Reenie/i)
     const families = [...css.matchAll(/@font-face\s*\{[^}]*font-family:\s*'([^']+)'/g)].map((m) => m[1])
     expect(families).toEqual(['Outfit'])
+  })
+
+  const CHART_TOKENS = ['--chart-1', '--chart-2', '--chart-3', '--chart-4', '--chart-5']
+
+  it('declares five chart tokens', () => {
+    for (const token of CHART_TOKENS) {
+      expect(css).toContain(`${token}:`)
+    }
+  })
+
+  it('builds every chart token out of existing tints, with no raw hex but white', () => {
+    // The mechanical half of "tokens.css stays the single source of colour" (slice 5 §9.3's
+    // rule, extended here). `#ffffff` is the one literal permitted: it is the neutral being
+    // mixed toward, not a sixth tint.
+    for (const token of CHART_TOKENS) {
+      const declaration = css.match(new RegExp(`${token}:\\s*([^;]+);`))
+      expect(declaration).not.toBeNull()
+      const value = declaration![1]!
+      expect(value).toContain('color-mix(')
+      expect(value).toContain('var(--color-')
+      const hexes = value.match(/#[0-9a-fA-F]{3,8}/g) ?? []
+      expect(hexes.every((hex) => hex.toLowerCase() === '#ffffff')).toBe(true)
+    }
+  })
+
+  it('declares the chart tokens outside every @theme block', () => {
+    // A @theme entry holding a color-mix() of a var() cannot be resolved into Tailwind
+    // utilities at build time, which is what @theme's literal hexes are for. The chart
+    // tokens are read as var(--chart-n) in inline styles only.
+    // Both @theme blocks are checked, not only the first: `@theme inline` further down
+    // registers the semantic slots, and a chart token misfiled there would be just as
+    // unresolvable while a first-block-only check waved it through.
+    const blocks = [...css.matchAll(/@theme[^{]*\{([^}]*)\}/g)].map((match) => match[1]!)
+    expect(blocks.length).toBeGreaterThanOrEqual(2)
+    for (const block of blocks) {
+      for (const token of CHART_TOKENS) {
+        expect(block).not.toContain(token)
+      }
+    }
+  })
+
+  /**
+   * The sRGB each chart token resolves to. Not typed in from a browser and trusted: the
+   * test beside this derives the same five values from the declarations in `tokens.css`,
+   * so an edit to an expression fails here instead of quietly invalidating every contrast
+   * assertion below it. Verified once against Chromium's own `getComputedStyle`.
+   */
+  const CHART_HEX: Record<string, string> = {
+    '--chart-1': '#f86774',
+    '--chart-2': '#3f526a',
+    '--chart-3': '#d6c265',
+    '--chart-4': '#616c79',
+    '--chart-5': '#5f2e44',
+  }
+
+  it('resolves each chart token to the sRGB value the contrast checks below assume', () => {
+    for (const [token, hex] of Object.entries(CHART_HEX)) {
+      expect(evaluateChartToken(token), token).toBe(hex)
+    }
+  })
+
+  it('keeps every chart colour visible on both app backgrounds, and a proper mark on one', () => {
+    // Read this with the WARN it records. 3:1 -- WCAG's threshold for a graphical object,
+    // not for body text -- is what a chart mark carrying meaning must clear, and these five
+    // do not clear it on both surfaces: --chart-1 measures 2.86:1 on the light background,
+    // --chart-3 1.75:1, --chart-2 2.20:1 on the dark one and --chart-5 1.64:1. That is a
+    // consequence of the expressions, which are fixed by the plan's token table, and of
+    // there being one set of five for both modes.
+    //
+    // It is legal here, and only here, because **colour encodes nothing in these shapes**:
+    // every bar sits in its own row with its label and its value as text, and every chart
+    // renders an equivalent table that is the accessible rendering (§13). The mark is
+    // decoration on top, `aria-hidden`, and a reader who cannot separate two hues has lost
+    // no information. Introduce a shape where colour is the only thing telling two series
+    // apart -- a legend-keyed multi-series line, a stacked bar without direct labels -- and
+    // this test is no longer the right gate: raise it to 3:1 on both surfaces and re-step
+    // the tokens, rather than relaxing the shape.
+    //
+    // What is still asserted, because it must hold for decoration too: each colour is a
+    // real mark against at least one surface, and never sinks into either one.
+    const light = tokenHex('mint-cream')
+    const dark = tokenHex('prussian-blue')
+    for (const [token, hex] of Object.entries(CHART_HEX)) {
+      const onLight = contrastRatio(hex, light)
+      const onDark = contrastRatio(hex, dark)
+      expect(Math.max(onLight, onDark), `${token} on its better surface`).toBeGreaterThanOrEqual(3)
+      // 1.5:1 is the floor below which a fill stops reading as a shape at all. The measured
+      // worst is --chart-5 on the dark background at 1.64:1; this is the ratchet that keeps
+      // a future edit from spending that headroom.
+      expect(Math.min(onLight, onDark), `${token} on its worse surface`).toBeGreaterThanOrEqual(1.5)
+    }
+  })
+
+  it('keeps the five chart colours distinguishable from each other', () => {
+    // Five bars a reader cannot tell apart is one bar drawn five times.
+    const computed = CHART_TOKENS.map((token) => CHART_HEX[token]!)
+    for (let i = 0; i < computed.length; i += 1) {
+      for (let j = i + 1; j < computed.length; j += 1) {
+        expect(contrastRatio(computed[i]!, computed[j]!)).toBeGreaterThanOrEqual(1.2)
+      }
+    }
+  })
+
+  it('separates every pair of chart colours by perceptual distance, not only by lightness', () => {
+    // A contrast ratio is a lightness comparison: it scores two colours of the same
+    // luminance and different hue as identical, so the check above passes palettes that
+    // collapse. Oklab ΔE is the measure that does not.
+    //
+    // ΔE ≥ 8 is the categorical target when colour carries identity; ≥ 15 is the
+    // normal-vision floor for that case. This palette's worst pair is --chart-2 against
+    // --chart-4 (#3f526a / #616c79) at ΔE 9.6 -- two slates one derivation apart, both
+    // unavoidable given a brand of two saturated hues and two near-neutral blues. It is
+    // below that floor and stays there for the same reason the contrast WARN above stands:
+    // identity is carried by the row label and the table, never by the hue.
+    // 9 is the ratchet under the measured worst pair.
+    const computed = CHART_TOKENS.map((token) => CHART_HEX[token]!)
+    for (let i = 0; i < computed.length; i += 1) {
+      for (let j = i + 1; j < computed.length; j += 1) {
+        expect(
+          deltaE(computed[i]!, computed[j]!),
+          `${CHART_TOKENS[i]} vs ${CHART_TOKENS[j]}`,
+        ).toBeGreaterThanOrEqual(9)
+      }
+    }
   })
 })
