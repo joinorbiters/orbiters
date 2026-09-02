@@ -15,6 +15,7 @@ from pigrocrm.core.fields.schemas import EntityType
 from pigrocrm.core.invoices.schemas import InvoiceListQuery
 from pigrocrm.core.people.schemas import PersonListQuery, PersonUpdate
 from pigrocrm.core.pipeline.service import PipelineService
+from pigrocrm.core.search.schemas import PER_CLASS_LIMIT, SearchQuery
 from pigrocrm.core.timetracking.schemas import (
     ANNO_MAX,
     ANNO_MIN,
@@ -25,6 +26,7 @@ from pigrocrm.core.timetracking.schemas import (
 )
 from pigrocrm_mcp.context import McpContext
 from pigrocrm_mcp.tools import customers, deals, documents, invoices, people, timetracking
+from pigrocrm_mcp.tools import search as search_tools
 
 # `changes` stays a plain `dict[str, Any]` at runtime -- deliberately, not an
 # oversight. Typing it directly as `CustomerUpdate` (etc.) would make the MCP SDK
@@ -84,6 +86,15 @@ IsoDateStr = Annotated[
 BoundedLimit = Annotated[
     int | str,
     WithJsonSchema({"type": "integer", "minimum": 1, "maximum": 200, "default": 50}),
+]
+# The palette's own per-class limit, and deliberately not `BoundedLimit`: that alias
+# advertises 1..200 with a default of 50, which are the paged entity lists' bounds and not
+# these. An agent told it may ask for two hundred results per class would be told something
+# `SearchQuery.limite` (1..20, default 5) then refuses. The runtime type stays `int | str`
+# for exactly the reason `BoundedLimit`'s own comment gives above.
+SearchLimite = Annotated[
+    int | str,
+    WithJsonSchema({"type": "integer", "minimum": 1, "maximum": 20, "default": PER_CLASS_LIMIT}),
 ]
 OptionalProbabilita = Annotated[
     int | str | None,
@@ -493,6 +504,26 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
             entity_type, UUID(entity_id), limit=cast(int, limit)
         )
         return {"entries": [entry.model_dump(mode="json") for entry in entries]}
+
+    @mcp.tool()
+    @guard
+    def search_everything(termine: str, limite: SearchLimite = PER_CLASS_LIMIT) -> dict[str, Any]:
+        """Cerca in tutto il CRM — clienti, persone, deal e documenti — con una sola
+        chiamata: ragione sociale, P.IVA, codice fiscale, email, nome e cognome, nome del
+        deal, titolo del documento. Accetta anche un frammento in mezzo a una parola (per
+        esempio «34567» trova la P.IVA 01234567890). Servono almeno 3 caratteri.
+        Restituisce fino a `limite` risultati per classe di entità più il conteggio reale
+        di quella classe: se `totale_e_un_minimo` è true il conteggio è un minimo e i
+        risultati completi stanno sull'elenco della singola entità.
+        """
+        # `termine` is a bare `str` with no `Annotated` bound, following this file's own
+        # runtime-permissive / schema-only-strict convention: the length check happens
+        # inside `SearchQuery`, inside the guarded call, so a two-character term produces a
+        # domain error the agent can act on instead of an SDK rejection whose wording is
+        # not ours.
+        return search_tools.search_everything(
+            context, SearchQuery(termine=termine, limite=cast(int, limite))
+        )
 
     # ---- documents ---------------------------------------------------------
     # The download of bytes never goes through MCP (spec 7): a tool returning a

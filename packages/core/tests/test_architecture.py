@@ -22,6 +22,8 @@ away in prose.
 """
 
 import ast
+import importlib
+import inspect
 import re
 import sys
 import tomllib
@@ -172,3 +174,124 @@ def test_guard_known_limitation_cannot_catch_dynamic_import_via_variable(
         encoding="utf-8",
     )
     assert _offenders_in(tmp_path) == []
+
+
+# --- slice 6's MCP ban, made mechanical --------------------------------------------
+#
+# Spec §11.1: for every public method of `DashboardService`, `SearchService` and
+# `AutomationConfigService` either an MCP tool calls it, or it appears in a declared
+# exclusion list -- and for these three services the list must be **exactly**
+# `update_automation_config`. Adding a tool for it breaks the build; removing it from the
+# list without adding a tool breaks it too.
+#
+# Two of the three services do not exist until sub-plan 6B. The list is asserted as a
+# constant regardless -- it is the *declaration* the spec fixes -- while the coverage half
+# inspects only the classes actually importable. Task B15 adds `DashboardService` and
+# `AutomationConfigService` to `_audited_services_slice6()` and changes not one character
+# of the list.
+#
+# Slice 4's own `MCP_EXCLUDED`/`_audited_services()` are not in this file yet: that clause
+# belongs to task 4A-13, which is not merged. The four shared helpers below are the ones
+# slice 4's plan specifies, verbatim, so that task will find them present and add only its
+# own list and tests. Neither ordering duplicates a helper.
+#
+# This is deliberately *not* a second copy of `apps/mcp/tests/test_mcp_surface_coverage.py`,
+# which resolves each call's receiver through an AST walk and is strictly stronger. That
+# file answers "is every service method reachable"; this one answers the narrower question
+# §11.1 asks by name, in the place slice 4 put it -- so a reader looking for the ban finds
+# it where the spec says it lives, and so task B15 has the interface its brief names. Where
+# the two ever disagree, the AST walk is right and this clause is the one to fix.
+
+MCP_TOOLS_DIR = CORE_ROOT.parents[1] / "apps" / "mcp" / "src" / "pigrocrm_mcp"
+
+MCP_EXCLUDED_SLICE6: tuple[str, ...] = ("update_automation_config",)
+
+
+def _audited_services_slice6() -> list[type]:
+    """`SearchService` and -- from sub-plan 6B -- `DashboardService` and
+    `AutomationConfigService`, exactly the three classes §11.1 names. Resolved by import
+    rather than by hard-coded objects, so this file does not fail to collect before 6B
+    exists."""
+    found: list[type] = []
+    for module_path, class_name in (
+        ("pigrocrm.core.search.service", "SearchService"),
+        ("pigrocrm.core.dashboard.service", "DashboardService"),
+        ("pigrocrm.core.automations.config_service", "AutomationConfigService"),
+    ):
+        try:
+            module = importlib.import_module(module_path)
+        except ModuleNotFoundError:
+            continue
+        found.append(getattr(module, class_name))
+    return found
+
+
+def _public_methods(cls: type) -> set[str]:
+    return {
+        name
+        for name, member in inspect.getmembers(cls, predicate=inspect.isfunction)
+        if not name.startswith("_") and member.__qualname__.startswith(cls.__name__ + ".")
+    }
+
+
+def _tool_source() -> str:
+    return "\n".join(
+        path.read_text(encoding="utf-8") for path in (MCP_TOOLS_DIR / "tools").rglob("*.py")
+    )
+
+
+def test_the_slice6_exclusion_list_is_exactly_one_name() -> None:
+    assert MCP_EXCLUDED_SLICE6 == ("update_automation_config",)
+
+
+def test_no_mcp_tool_reaches_update_automation_config() -> None:
+    """Matched on the call site, not on the tool's own name: a tool called `tidy_settings`
+    that happened to call `.update_automation_config(` is exactly how this ban would
+    otherwise be lost.
+
+    The ban is imposed by not registering a tool rather than by an authorisation check,
+    because residuo R10 leaves a PAT inheriting its owner's full role -- an admin token
+    would pass any check we wrote.
+    """
+    offenders = [name for name in MCP_EXCLUDED_SLICE6 if f".{name}(" in _tool_source()]
+    assert not offenders, f"these methods must not be reachable from any MCP tool: {offenders}"
+
+
+def test_the_ban_would_catch_the_call_it_bans() -> None:
+    """Until sub-plan 6B writes `AutomationConfigService`, the test above passes because the
+    method does not exist -- which is indistinguishable from passing because the ban works.
+
+    So the matcher is run once against a source that *does* contain the call. A ban whose
+    instrument has never been seen to fire is a ban nobody has tested.
+    """
+    sneaky = "def tidy_settings():\n    return service.update_automation_config(data, actor)\n"
+    offenders = [name for name in MCP_EXCLUDED_SLICE6 if f".{name}(" in sneaky]
+    assert offenders == ["update_automation_config"]
+
+
+def test_every_other_public_method_of_a_slice6_service_has_a_tool() -> None:
+    source = _tool_source()
+    audited = _audited_services_slice6()
+    assert audited, "expected at least SearchService to be importable"
+    missing: list[str] = []
+    for cls in audited:
+        for name in sorted(_public_methods(cls)):
+            if name in MCP_EXCLUDED_SLICE6:
+                continue
+            if f".{name}(" not in source:
+                missing.append(f"{cls.__name__}.{name}")
+    assert not missing, (
+        "every public method of an audited slice-6 service must either be reachable from "
+        f"an MCP tool or be the one declared exclusion: {missing}"
+    )
+
+
+def test_the_slice6_audit_actually_inspects_something() -> None:
+    """The coverage test above is green over an empty method set, and an empty method set is
+    what a mistyped module path produces: `importlib` raises `ModuleNotFoundError`, the loop
+    skips it, and nothing says so. `SearchService.search_everything` is named here because
+    it is the one method of the three services that exists today."""
+    methods = {
+        (cls.__name__, name) for cls in _audited_services_slice6() for name in _public_methods(cls)
+    }
+    assert ("SearchService", "search_everything") in methods, methods

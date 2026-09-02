@@ -756,6 +756,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search */
+        get: operations["search_api_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/documents": {
         parameters: {
             query?: never;
@@ -3972,6 +3989,48 @@ export interface components {
         RecalculateResponse: {
             /** Voci Aggiornate */
             voci_aggiornate: number;
+        };
+        /** SearchGroup */
+        SearchGroup: {
+            /**
+             * Entity
+             * @enum {string}
+             */
+            entity: "customer" | "person" | "deal" | "document" | "invoice";
+            /** Hits */
+            hits: components["schemas"]["SearchHit"][];
+            /** Totale */
+            totale: number;
+            /** Totale E Un Minimo */
+            totale_e_un_minimo: boolean;
+        };
+        /** SearchHit */
+        SearchHit: {
+            /**
+             * Entity
+             * @enum {string}
+             */
+            entity: "customer" | "person" | "deal" | "document" | "invoice";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Etichetta */
+            etichetta: string;
+            /** Sottotitolo */
+            sottotitolo: string | null;
+            /** Punteggio */
+            punteggio: string;
+            /** Campo */
+            campo: string;
+        };
+        /** SearchResults */
+        SearchResults: {
+            /** Termine */
+            termine: string;
+            /** Gruppi */
+            gruppi: components["schemas"]["SearchGroup"][];
         };
         /** SollecitiPage */
         SollecitiPage: {
@@ -10776,6 +10835,126 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EntitySchema"];
+                };
+            };
+            /** @description Permesso negato: l'actor non ha il ruolo richiesto. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La risorsa richiesta non esiste o è stata rimossa. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La richiesta è in conflitto con lo stato attuale della risorsa. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Una regola di dominio non è stata rispettata (application/problem+json), oppure il corpo, i parametri o il path della richiesta non hanno la forma attesa e non hanno mai raggiunto l'endpoint (application/json). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_api_search_get: {
+        parameters: {
+            query: {
+                q: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchResults"];
                 };
             };
             /** @description Permesso negato: l'actor non ha il ruolo richiesto. */
