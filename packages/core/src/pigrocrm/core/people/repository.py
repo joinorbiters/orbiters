@@ -3,9 +3,9 @@ from uuid import UUID
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from pigrocrm.core.db import escape_like
+from pigrocrm.core.db import decode_cursor, escape_like, keyset_predicate, order_by
 from pigrocrm.core.people.models import Person
-from pigrocrm.core.people.schemas import PersonListQuery
+from pigrocrm.core.people.schemas import PERSON_SORTS, PersonListQuery
 
 
 class PersonRepository:
@@ -49,8 +49,19 @@ class PersonRepository:
         if query.custom:
             # JSONB containment, served by the GIN index.
             stmt = stmt.where(Person.custom_fields.contains(query.custom))
-        if query.cursor:
-            stmt = stmt.where(Person.id > query.cursor)
 
-        # Keyset pagination on a UUIDv7 id: ordered by creation, stable under inserts.
-        return list(self.session.execute(stmt.order_by(Person.id).limit(query.limit + 1)).scalars())
+        # Residuo R9 -- see `CustomerRepository.list` for the reasoning. `cognome` is
+        # the one nullable column in any of the four whitelists, so this is the `list`
+        # where `keyset_predicate`'s `OR col IS NULL` arm actually fires: without it a
+        # scan ordered by `cognome` stops at the last surname and never returns the
+        # people who have none.
+        spec = PERSON_SORTS.resolve(query.sort)
+        if query.cursor:
+            value, row_id = decode_cursor(spec, query.cursor)
+            stmt = stmt.where(keyset_predicate(spec, query.dir, value, row_id))
+
+        return list(
+            self.session.execute(
+                stmt.order_by(*order_by(spec, query.dir)).limit(query.limit + 1)
+            ).scalars()
+        )

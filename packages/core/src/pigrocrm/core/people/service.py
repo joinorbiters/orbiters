@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.customers.repository import CustomerRepository
+from pigrocrm.core.db import encode_cursor
 from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 from pigrocrm.core.fields.schemas import EntityType
 from pigrocrm.core.fields.service import FieldDefinitionService
@@ -15,6 +16,7 @@ from pigrocrm.core.fields.validator import validate_custom_fields
 from pigrocrm.core.people.models import Person
 from pigrocrm.core.people.repository import PersonRepository
 from pigrocrm.core.people.schemas import (
+    PERSON_SORTS,
     PersonCreate,
     PersonListQuery,
     PersonPage,
@@ -251,7 +253,17 @@ class PersonService:
         rows = self.repo.list(query)
         has_more = len(rows) > query.limit
         items = rows[: query.limit]
+        # See `CustomerService.list` for why the cursor carries the sort value as well
+        # as the id. Here the value can legitimately be `None` -- `cognome` is
+        # nullable -- which is the whole reason the cursor is opaque rather than a
+        # query parameter a client could compose.
+        spec = PERSON_SORTS.resolve(query.sort)
+        next_cursor = (
+            encode_cursor(spec, getattr(items[-1], spec.key), items[-1].id)
+            if has_more and items
+            else None
+        )
         return PersonPage(
             items=[PersonRead.model_validate(p) for p in items],
-            next_cursor=items[-1].id if has_more and items else None,
+            next_cursor=next_cursor,
         )

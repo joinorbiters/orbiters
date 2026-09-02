@@ -241,7 +241,14 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
                 # documented on BoundedLimit above; the *ListQuery schema this
                 # feeds is what actually enforces (and coerces) "must be an int".
                 limit=cast(int, limit),
-                cursor=UUID(cursor) if cursor else None,
+                # Since slice 6 the cursor is an opaque string, not a UUID: it encodes
+                # `(sort value, id)`. Passing it through unparsed is the whole
+                # contract -- `UUID(cursor)` here would raise a bare `ValueError` on
+                # every `next_cursor` this tool itself just handed the agent. The
+                # tool's own signature and JSON Schema are unchanged, so nothing an
+                # agent sees moves. `list_invoices` and the time-tracking tools keep
+                # their `UUID(cursor)`: those pages still key on the id alone.
+                cursor=cursor,
             ),
         )
 
@@ -330,7 +337,8 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
                 # documented on BoundedLimit above; the *ListQuery schema this
                 # feeds is what actually enforces (and coerces) "must be an int".
                 limit=cast(int, limit),
-                cursor=UUID(cursor) if cursor else None,
+                # An opaque string since slice 6 -- see `search_customers`.
+                cursor=cursor,
             ),
         )
 
@@ -418,7 +426,8 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
                 # documented on BoundedLimit above; the *ListQuery schema this
                 # feeds is what actually enforces (and coerces) "must be an int".
                 limit=cast(int, limit),
-                cursor=UUID(cursor) if cursor else None,
+                # An opaque string since slice 6 -- see `search_customers`.
+                cursor=cursor,
             ),
         )
 
@@ -495,7 +504,8 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
                 tipo=tipo,  # type: ignore[arg-type]
                 stato=stato,  # type: ignore[arg-type]
                 limit=cast(int, limit),
-                cursor=UUID(cursor) if cursor else None,
+                # An opaque string since slice 6 -- see `search_customers`.
+                cursor=cursor,
             ),
         )
 

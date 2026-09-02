@@ -3,9 +3,9 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from pigrocrm.core.db import escape_like
+from pigrocrm.core.db import decode_cursor, escape_like, keyset_predicate, order_by
 from pigrocrm.core.deals.models import Deal
-from pigrocrm.core.deals.schemas import DealListQuery
+from pigrocrm.core.deals.schemas import DEAL_SORTS, DealListQuery
 
 
 class DealRepository:
@@ -46,8 +46,15 @@ class DealRepository:
         if query.custom:
             # JSONB containment, served by the GIN index.
             stmt = stmt.where(Deal.custom_fields.contains(query.custom))
-        if query.cursor:
-            stmt = stmt.where(Deal.id > query.cursor)
 
-        # Keyset pagination on a UUIDv7 id: ordered by creation, stable under inserts.
-        return list(self.session.execute(stmt.order_by(Deal.id).limit(query.limit + 1)).scalars())
+        # Residuo R9 -- see `CustomerRepository.list` for the reasoning.
+        spec = DEAL_SORTS.resolve(query.sort)
+        if query.cursor:
+            value, row_id = decode_cursor(spec, query.cursor)
+            stmt = stmt.where(keyset_predicate(spec, query.dir, value, row_id))
+
+        return list(
+            self.session.execute(
+                stmt.order_by(*order_by(spec, query.dir)).limit(query.limit + 1)
+            ).scalars()
+        )

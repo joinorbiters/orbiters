@@ -10,12 +10,14 @@ from pigrocrm.core.actor import Actor
 from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.customers.repository import CustomerRepository
 from pigrocrm.core.customers.schemas import (
+    CUSTOMER_SORTS,
     CustomerCreate,
     CustomerListQuery,
     CustomerPage,
     CustomerRead,
     CustomerUpdate,
 )
+from pigrocrm.core.db import encode_cursor
 from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 from pigrocrm.core.fields.schemas import EntityType
 from pigrocrm.core.fields.service import FieldDefinitionService
@@ -230,7 +232,18 @@ class CustomerService:
         rows = self.repo.list(query)
         has_more = len(rows) > query.limit
         items = rows[: query.limit]
+        # The cursor encodes `(sort value, id)` of the last returned row, not the bare
+        # id: a scan ordered by a non-unique column cannot resume from an id alone.
+        # `getattr(…, spec.key)` is safe precisely because `spec` came out of the
+        # whitelist -- the key is one of three literals declared in this package, never
+        # a caller-supplied string.
+        spec = CUSTOMER_SORTS.resolve(query.sort)
+        next_cursor = (
+            encode_cursor(spec, getattr(items[-1], spec.key), items[-1].id)
+            if has_more and items
+            else None
+        )
         return CustomerPage(
             items=[CustomerRead.model_validate(c) for c in items],
-            next_cursor=items[-1].id if has_more and items else None,
+            next_cursor=next_cursor,
         )

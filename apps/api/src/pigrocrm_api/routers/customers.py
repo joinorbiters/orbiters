@@ -13,6 +13,7 @@ from pigrocrm.core.customers.schemas import (
     CustomerUpdate,
 )
 from pigrocrm.core.customers.service import CustomerService
+from pigrocrm.core.db import CURSOR_MAX_LENGTH
 from pigrocrm.core.validation import SafeStr
 from pigrocrm_api.deps import ActorDep, SessionDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
@@ -43,7 +44,12 @@ def list_customers(
     stato: Annotated[SafeStr | None, Query()] = None,
     custom: Annotated[list[SafeStr] | None, Query(description=CUSTOM_QUERY_DESCRIPTION)] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
-    cursor: Annotated[UUID | None, Query()] = None,
+    # `str`, not `UUID`, since slice 6: the cursor encodes `(sort value, id)` so that a
+    # scan ordered by a non-unique or nullable column can resume. Opaque by design --
+    # clients echo `next_cursor` back and never parse it. `max_length` here as well as
+    # on the schema, so an oversized value is refused by FastAPI before the decoder
+    # sees it.
+    cursor: Annotated[str | None, Query(max_length=CURSOR_MAX_LENGTH)] = None,
 ) -> CustomerPage:
     query = CustomerListQuery(
         search=search,

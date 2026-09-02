@@ -27,7 +27,10 @@ def search(context: McpContext, query: DealListQuery) -> dict[str, Any]:
     page = DealService(context.session).list(query, context.actor)
     return {
         "items": [item.model_dump(mode="json") for item in page.items],
-        "next_cursor": str(page.next_cursor) if page.next_cursor else None,
+        # Already a string since slice 6 (an opaque `(sort value, id)` cursor), so no
+        # `str()`: keeping one here would suggest the value is still a UUID being
+        # rendered, which is exactly the assumption this change removes.
+        "next_cursor": page.next_cursor,
     }
 
 

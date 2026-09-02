@@ -3,8 +3,9 @@ from uuid import UUID
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.db import decode_cursor, escape_like, keyset_predicate, order_by
 from pigrocrm.core.documents.models import Document, DocumentVersion
-from pigrocrm.core.documents.schemas import DocumentListQuery
+from pigrocrm.core.documents.schemas import DOCUMENT_SORTS, DocumentListQuery
 
 
 class DocumentRepository:
@@ -60,9 +61,28 @@ class DocumentRepository:
             stmt = stmt.where(Document.tipo == query.tipo)
         if query.stato:
             stmt = stmt.where(Document.stato == query.stato)
+        if query.search:
+            # New in slice 6. One column, so no `or_`: spec §8.1 searches `titolo` and
+            # nothing else on this table -- a document's body lives in storage, not in
+            # a column, and its Markdown source is explicitly out of scope.
+            #
+            # `escape_like` neutralises "%"/"_"/"\" in the *user's* term before it is
+            # wrapped in the "%...%" this method builds; `escape="\\"` states which
+            # character it used rather than relying on ILIKE's default. Task A2
+            # measured that the ESCAPE clause costs `ix_documents_titolo_trgm` nothing
+            # -- the planner folds it into the same constant pattern -- so it stays
+            # here exactly as in the other three repositories.
+            like = f"%{escape_like(query.search.lower())}%"
+            stmt = stmt.where(Document.titolo.ilike(like, escape="\\"))
+
+        # Residuo R9 -- see `CustomerRepository.list` for the reasoning.
+        spec = DOCUMENT_SORTS.resolve(query.sort)
         if query.cursor:
-            stmt = stmt.where(Document.id > query.cursor)
-        # Keyset pagination on a UUIDv7 id: ordered by creation, stable under inserts.
+            value, row_id = decode_cursor(spec, query.cursor)
+            stmt = stmt.where(keyset_predicate(spec, query.dir, value, row_id))
+
         return list(
-            self.session.execute(stmt.order_by(Document.id).limit(query.limit + 1)).scalars()
+            self.session.execute(
+                stmt.order_by(*order_by(spec, query.dir)).limit(query.limit + 1)
+            ).scalars()
         )
