@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -67,6 +68,13 @@ HAND_MAINTAINED_INDEXES = {
     "ix_documents_created_at_id",
     "ix_documents_updated_at_id",
     "ix_documents_titolo_id",
+    # Slice 6, migration 0023. The two period-filter columns of §4.1. Both are ordinary
+    # single-column B-trees that autogenerate handles correctly; they are listed here for
+    # the same reason the twelve ascending sort indexes are, which is that an index
+    # dropped in silence is a sequential scan on every dashboard load, and this file is
+    # where a missing index is supposed to fail by name.
+    "ix_deals_chiuso_il",
+    "ix_documents_stato_dal",
 }
 
 TRGM_INDEX_NAMES = frozenset(n for n in HAND_MAINTAINED_INDEXES if n.endswith("_trgm"))
@@ -307,7 +315,7 @@ def test_env_prefers_an_explicit_config_url_over_settings(monkeypatch: pytest.Mo
     finally:
         get_settings.cache_clear()
 
-    assert revision == "0022"
+    assert revision == "0023"
 
 
 def test_env_falls_back_to_settings_when_config_has_no_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -329,4 +337,143 @@ def test_env_falls_back_to_settings_when_config_has_no_url(monkeypatch: pytest.M
         finally:
             get_settings.cache_clear()
 
-    assert revision == "0022"
+    assert revision == "0023"
+
+
+def test_stato_dal_is_backfilled_from_the_timeline_and_chiuso_il_is_not() -> None:
+    """The asymmetry of spec §4.1, asserted rather than described.
+
+    A migration that quietly backfilled `chiuso_il` from the stage-change payload would
+    pass every other test in this file and would silently attribute deals to months
+    derived from a renamable string. Asserted on the migration's source text because the
+    absence of a statement is observable nowhere else: a schema comparison sees identical
+    columns whether they were filled or left null.
+    """
+    source = (CORE_ROOT / "migrations" / "versions" / "0023_automations_and_dates.py").read_text(
+        encoding="utf-8"
+    )
+    assert "UPDATE documents" in source
+    assert "state_changed" in source
+    assert "UPDATE deals" not in source, (
+        "deals.chiuso_il must not be backfilled: move_stage records stage *names*, which "
+        "are renamable (residuo R15). See spec §4.1."
+    )
+    assert "stage_changed" not in source
+
+
+def test_the_backfill_reaches_only_offers_and_reads_the_emitters_day() -> None:
+    """Two clauses that a passing schema comparison cannot see either.
+
+    `d.stato IS NOT NULL` is what keeps the backfill to offers: `documents.stato` is NULL
+    on every non-offer document, and stamping a `stato_dal` on a row with no state would
+    make "this offer has been sitting for N days" answer for a contract.
+
+    `AT TIME ZONE 'Europe/Rome'` is the same rule as `db/clock.py`, applied to history: a
+    state set at 00:30 CET on 1 January was set on 1 January, and a bare `::date` on a
+    `timestamptz` would record it as the previous year.
+    """
+    source = (CORE_ROOT / "migrations" / "versions" / "0023_automations_and_dates.py").read_text(
+        encoding="utf-8"
+    )
+    assert "d.stato IS NOT NULL" in source
+    assert "AT TIME ZONE" in source
+    assert 'Europe/Rome"' in source or "Europe/Rome'" in source
+
+
+def test_the_backfill_actually_fills_the_right_day_on_the_right_rows() -> None:
+    """The backfill run against real rows, not read as text.
+
+    Every other assertion about migration 0023 is a substring check, and a substring check
+    cannot tell a correct `DISTINCT ON` from one that picks the *first* state change, nor
+    a `AT TIME ZONE` that is applied from one that is written and ignored. This runs the
+    revision over rows planted at 0022 and reads back what it wrote.
+
+    The newest state change is at 22:30 UTC on 30 June, which is 00:30 on 1 July in Rome
+    (CEST, +02:00). Four distinct defects each change the answer:
+
+      * taking the oldest state change instead of the newest -> 10 March;
+      * dropping the `kind` filter -> 1 August, the day of the unrelated activity;
+      * projecting through UTC instead of the emitter's zone -> 30 June;
+      * dropping `d.stato IS NOT NULL` -> the contract gets a `stato_dal` too.
+    """
+    with PostgresContainer("postgres:17-alpine", driver="psycopg") as container:
+        url = container.get_connection_url()
+        config = _alembic_config(url)
+        upgrade(config, "0022")
+
+        engine: Engine = create_engine(url)
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO customers (id, ragione_sociale, nazione, custom_fields,
+                                           created_at, updated_at)
+                    VALUES ('00000000-0000-7000-8000-0000000000c1', 'Cliente Storico', 'IT',
+                            '{}'::jsonb, now(), now());
+
+                    INSERT INTO pipeline_stages (id, nome, posizione, probabilita_default,
+                                                 tipo, created_at, updated_at)
+                    VALUES ('00000000-0000-7000-8000-0000000000e1', 'Vinto', 0, 100, 'won',
+                            now(), now());
+
+                    INSERT INTO deals (id, nome, customer_id, pipeline_stage_id, probabilita,
+                                       custom_fields, created_at, updated_at)
+                    VALUES ('00000000-0000-7000-8000-0000000000d0', 'Affare chiuso',
+                            '00000000-0000-7000-8000-0000000000c1',
+                            '00000000-0000-7000-8000-0000000000e1', 100, '{}'::jsonb,
+                            now(), now());
+
+                    INSERT INTO documents (id, customer_id, tipo, titolo, stato,
+                                           versione_corrente, custom_fields,
+                                           created_at, updated_at)
+                    VALUES ('00000000-0000-7000-8000-0000000000a1',
+                            '00000000-0000-7000-8000-0000000000c1', 'offerta', 'Offerta',
+                            'inviata', 0, '{}'::jsonb, now(), now()),
+                           ('00000000-0000-7000-8000-0000000000a2',
+                            '00000000-0000-7000-8000-0000000000c1', 'verbale', 'Verbale',
+                            NULL, 0, '{}'::jsonb, now(), now());
+
+                    INSERT INTO activities (id, entity_type, entity_id, kind, actor_type,
+                                            payload, occurred_at)
+                    VALUES ('00000000-0000-7000-8000-0000000000b1', 'document',
+                            '00000000-0000-7000-8000-0000000000a1', 'state_changed', 'system',
+                            '{"da": "bozza", "a": "inviata"}'::jsonb,
+                            '2026-03-10T09:00:00+00:00'),
+                           ('00000000-0000-7000-8000-0000000000b2', 'document',
+                            '00000000-0000-7000-8000-0000000000a1', 'state_changed', 'system',
+                            '{"da": "inviata", "a": "accettata"}'::jsonb,
+                            '2026-06-30T22:30:00+00:00'),
+                           ('00000000-0000-7000-8000-0000000000b3', 'document',
+                            '00000000-0000-7000-8000-0000000000a1', 'version_added', 'system',
+                            '{}'::jsonb, '2026-08-01T12:00:00+00:00'),
+                           ('00000000-0000-7000-8000-0000000000b4', 'document',
+                            '00000000-0000-7000-8000-0000000000a2', 'state_changed', 'system',
+                            '{"da": "bozza", "a": "inviata"}'::jsonb,
+                            '2026-05-05T12:00:00+00:00'),
+                           ('00000000-0000-7000-8000-0000000000b5', 'deal',
+                            '00000000-0000-7000-8000-0000000000d0', 'stage_changed', 'system',
+                            '{"from": "Offerta", "to": "Vinto"}'::jsonb,
+                            '2026-04-04T12:00:00+00:00');
+                    """
+                )
+            )
+        engine.dispose()
+
+        upgrade(config, "0023")
+
+        engine = create_engine(url)
+        with engine.connect() as connection:
+            offerta, verbale = (
+                connection.execute(text("SELECT stato_dal FROM documents ORDER BY id"))
+                .scalars()
+                .all()
+            )
+            chiuso_il = connection.execute(text("SELECT chiuso_il FROM deals")).scalar_one()
+        engine.dispose()
+
+    assert offerta == date(2026, 7, 1), offerta
+    assert verbale is None, "a document with no stato must not acquire a stato_dal"
+    assert chiuso_il is None, (
+        "deals.chiuso_il must stay null: a closure deduced from a renamable stage name is "
+        "a conversion rate that is plausible and wrong (spec §4.1)"
+    )

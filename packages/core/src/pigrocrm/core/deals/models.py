@@ -54,6 +54,11 @@ class Deal(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
         Index("ix_deals_created_at_id", "created_at", "id"),
         Index("ix_deals_updated_at_id", "updated_at", "id"),
         Index("ix_deals_nome_id", "nome", "id"),
+        # Slice 6 §4.1. Every period figure on the commercial dashboard filters on this
+        # column, and `deals` grows without bound. Declared here and not only in the
+        # migration: `Base.metadata.create_all` builds the test schema, so an index
+        # declared only in a migration is one no test ever sees.
+        Index("ix_deals_chiuso_il", "chiuso_il"),
     )
 
     nome: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -85,3 +90,14 @@ class Deal(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     # §5.1; no report ever reads it, because the resolved value is copied onto the row.
     tariffa_oraria: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), default=None)
     custom_fields: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    # `Date`, not `timestamptz`, against slice 1 §5's general convention and for slice 3
+    # §6.2's precise reason: a date that decides which period a figure falls in is not an
+    # instant. Written by `DealService.move_stage` when the destination stage has
+    # `tipo != 'open'`, and cleared when the deal returns to an open stage.
+    #
+    # Deliberately NOT backfilled (spec §4.1): `move_stage` records the stage *names* in
+    # its activity payload, and a name is renamable (residuo R15), so deducing a
+    # historical closure date from the timeline would mean matching a mutable string. The
+    # period dashboards exclude `chiuso_il IS NULL` and say how many rows they excluded,
+    # rather than counting them as zero or attributing them to the wrong month.
+    chiuso_il: Mapped[date | None] = mapped_column(Date, default=None)

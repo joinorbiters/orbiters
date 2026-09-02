@@ -1,8 +1,10 @@
+from datetime import date
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
     CheckConstraint,
+    Date,
     ForeignKey,
     Index,
     Integer,
@@ -41,6 +43,15 @@ class Document(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     titolo: Mapped[str] = mapped_column(String(200), nullable=False)
     stato: Mapped[str | None] = mapped_column(String(20), default=None)
     versione_corrente: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # The day the current `stato` was set. Written by `DocumentService.set_offer_state`,
+    # the only writer of `documents.stato`. `Date` for the same reason as
+    # `deals.chiuso_il`. Backfilled in migration 0023 -- unlike `chiuso_il` -- because the
+    # offer timeline's payload is `{"da": "inviata", "a": "accettata"}`, literals of
+    # `OfferState` rather than user-editable text.
+    #
+    # `NULL` on an offer that has never left `bozza`, because a draft has no state change
+    # to date and "ferma da N giorni" is not a question anyone asks about a draft.
+    stato_dal: Mapped[date | None] = mapped_column(Date, default=None)
     custom_fields: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
 
     __table_args__ = (
@@ -64,6 +75,9 @@ class Document(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
         Index("ix_documents_created_at_id", "created_at", "id"),
         Index("ix_documents_updated_at_id", "updated_at", "id"),
         Index("ix_documents_titolo_id", "titolo", "id"),
+        # Slice 6 §4.1. See `Deal.__table_args__` for why the index is declared on the
+        # model rather than only in the migration.
+        Index("ix_documents_stato_dal", "stato_dal"),
     )
 
 

@@ -134,6 +134,9 @@ class DealRead(BaseModel):
     # Bare `Decimal | None`, no bound: a Read schema validates values the database
     # produced, so a bound here would reject a row the column legitimately holds.
     tariffa_oraria: Decimal | None
+    # Derived, never supplied: on no Create or Update schema, because a caller who could
+    # set it could claim a closure that never happened, straight into the conversion rate.
+    chiuso_il: date | None
     custom_fields: dict[str, Any]
     created_at: datetime
     updated_at: datetime

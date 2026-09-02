@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 from uuid import UUID
 
@@ -86,6 +86,9 @@ class DocumentRead(BaseModel):
     tipo: str
     titolo: str
     stato: str | None
+    # Derived, never supplied: on no Create or Update schema, because a caller who could
+    # set it could claim an offer has been waiting since January.
+    stato_dal: date | None
     versione_corrente: int
     custom_fields: dict[str, Any]
     created_at: datetime
