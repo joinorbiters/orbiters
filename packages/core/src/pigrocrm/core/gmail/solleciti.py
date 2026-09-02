@@ -247,6 +247,13 @@ class SollecitiService:
         # no IBAN is a reminder nobody can act on, and discovering that after the row
         # exists would burn a position in the sequence.
         emittente = self._emitter_scope(actor)
+        # Resolved before the body is rendered, because the body's own wording depends on
+        # it: `invoice_pdf_version_ids` legitimately answers `[]` for an invoice whose PDF
+        # was never rendered or has since been removed, and a reminder that promises «in
+        # allegato trova copia di cortesia della fattura» with nothing attached asks a
+        # paying client to look for a file that does not exist. One read, two uses -- a
+        # second call here is how the sentence and the attachment list drift apart.
+        allegati = self.repo.invoice_pdf_version_ids(invoice_id)
         body = render_sollecito_body(
             {
                 **emittente,
@@ -263,6 +270,7 @@ class SollecitiService:
                 "firma_email": emittente["emittente"].get("firma_email") or "",
             },
             livello=livello,
+            con_allegato=bool(allegati),
         )
 
         reminder = PaymentReminder(invoice_id=invoice_id, sequence=sequence)
@@ -294,7 +302,7 @@ class SollecitiService:
                 body_markdown=body,
                 # The invoice's own PDF, through slice 2's document layer -- never an
                 # arbitrary upload (spec 6.4).
-                attachment_version_ids=self.repo.invoice_pdf_version_ids(invoice_id),
+                attachment_version_ids=allegati,
                 # Threads the reminder onto the original covering email, so the recipient
                 # sees the invoice above it.
                 in_reply_to_message_id=self._thread_of(invoice, actor),

@@ -92,7 +92,7 @@ _MESSAGES_PATH = "/messages"
 _ACCOUNT_PATH = "/account"
 
 
-def _tokens(settings: Settings) -> GoogleTokenClient:
+def token_client(settings: Settings) -> GoogleTokenClient:
     client = _token_clients.get(settings.google_client_id)
     if client is None:
         with _token_clients_lock:
@@ -108,12 +108,12 @@ def _tokens(settings: Settings) -> GoogleTokenClient:
 
 
 def _oauth(session: Session, settings: Settings) -> GmailOAuthService:
-    return GmailOAuthService(session, settings=settings, tokens=_tokens(settings))
+    return GmailOAuthService(session, settings=settings, tokens=token_client(settings))
 
 
 def _sync(session: Session, settings: Settings) -> GmailSyncService:
     return GmailSyncService(
-        session, settings=settings, transport=GmailTransport(), tokens=_tokens(settings)
+        session, settings=settings, transport=GmailTransport(), tokens=token_client(settings)
     )
 
 

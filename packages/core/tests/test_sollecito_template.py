@@ -39,7 +39,7 @@ VALUES = {
 def test_the_carried_copy_keeps_the previous system_running_order() -> None:
     """Portato: this text went to real clients for years, and its order is the useful
     part -- invoice number, date, due date, amount, IBAN."""
-    rendered = render_sollecito_body(VALUES, livello=1)
+    rendered = render_sollecito_body(VALUES, livello=1, con_allegato=True)
     assert "Gentile Acme S.r.l." in rendered
     for line in [
         "Fattura: 2026/14",
@@ -55,12 +55,49 @@ def test_the_carried_copy_keeps_the previous system_running_order() -> None:
 
 
 def test_the_courtesy_clauses_that_earned_their_place_are_still_there() -> None:
-    rendered = render_sollecito_body(VALUES, livello=1)
+    rendered = render_sollecito_body(VALUES, livello=1, con_allegato=True)
     assert (
         "Qualora avesse già provveduto al pagamento, La preghiamo di ignorare questo messaggio."
         in rendered
     )
     assert "Sistema di Interscambio (SdI)" in rendered
+
+
+def test_a_body_with_nothing_attached_does_not_promise_a_courtesy_copy() -> None:
+    """The one imperfection B2-9 left behind, closed.
+
+    `GmailRepository.invoice_pdf_version_ids` legitimately answers `[]` -- a proforma
+    converted before the PDF existed, an invoice whose document was removed -- and the
+    reminder still has to go out, because a missing file is not a reason to stop chasing
+    a real debt. What must not go out is the sentence: a letter to a paying client
+    saying «in allegato trova copia di cortesia della fattura» with nothing attached
+    sends them looking for a file that is not there, and a client who cannot find the
+    attachment has a reason to distrust the figure printed next to it.
+
+    The SdI sentence stays either way: the original *was* transmitted electronically,
+    which is true whether or not this email carries a courtesy copy.
+    """
+    rendered = render_sollecito_body(VALUES, livello=1, con_allegato=False)
+
+    assert "In allegato" not in rendered
+    assert "copia di cortesia" not in rendered
+    assert "Sistema di Interscambio (SdI)" in rendered
+    # And the rest of the letter is untouched: the figures a reminder exists to state.
+    assert "IBAN: IT60X0542811101000000123456" in rendered
+    assert "Importo: 1.200,00 €" in rendered
+
+
+def test_dropping_the_promise_leaves_no_double_space_or_orphan_line() -> None:
+    """The failure mode of a conditional spliced mid-paragraph. The clause carries its
+    own trailing space *inside* the `{{#if}}`, so removing it must leave the paragraph
+    beginning at «L'originale» and not at a space -- which is the kind of thing only the
+    recipient ever sees."""
+    without = render_sollecito_body(VALUES, livello=1, con_allegato=False)
+
+    assert "L'originale è stato trasmesso" in without
+    assert "  " not in without
+    paragraphs = [block for block in without.split("\n\n") if block.strip()]
+    assert any(block.startswith("L'originale") for block in paragraphs), paragraphs
 
 
 def test_no_freelancers_name_appears_in_the_source() -> None:
@@ -71,7 +108,7 @@ def test_no_freelancers_name_appears_in_the_source() -> None:
 
 
 def test_the_signature_comes_from_the_emitter_profile() -> None:
-    rendered = render_sollecito_body(VALUES, livello=1)
+    rendered = render_sollecito_body(VALUES, livello=1, con_allegato=True)
     assert "Mario Rossi" in rendered
     assert "Studio Rossi" in rendered
     # The phone and the website are read from emitter_profile rather than retyped into
@@ -85,7 +122,7 @@ def test_a_signature_keeps_its_own_line_breaks() -> None:
     and typst escapers both collapse every line terminator to a space, because a value
     landing in a table cell must not manufacture a row; a plain-text body has no such
     unit to protect, and collapsing here would run the whole signature together."""
-    rendered = render_sollecito_body(VALUES, livello=1)
+    rendered = render_sollecito_body(VALUES, livello=1, con_allegato=True)
     assert "Mario Rossi\nConsulente" in rendered
 
 
@@ -95,6 +132,7 @@ def test_an_emitter_without_a_phone_or_a_site_leaves_no_empty_label() -> None:
     rendered = render_sollecito_body(
         {**VALUES, "emittente": {"ragione_sociale": "Studio Rossi"}, "firma_email": None},
         livello=1,
+        con_allegato=True,
     )
     assert "tel." not in rendered
     assert "Studio Rossi" in rendered
@@ -103,8 +141,8 @@ def test_an_emitter_without_a_phone_or_a_site_leaves_no_empty_label() -> None:
 def test_the_reminder_level_is_a_variable_and_not_three_templates() -> None:
     """Spec 7.3: the tone of the sequence is a template variable. Three templates that
     resemble each other diverge -- the same decision slice 2 made about the offer."""
-    first = render_sollecito_body(VALUES, livello=1)
-    third = render_sollecito_body(VALUES, livello=3)
+    first = render_sollecito_body(VALUES, livello=1, con_allegato=True)
+    third = render_sollecito_body(VALUES, livello=3, con_allegato=True)
     assert first != third
     assert "sollecito" in first.lower()
     # By the third, the tone is firmer and says so, without inventing a legal threat.
@@ -124,13 +162,17 @@ def test_a_level_beyond_the_third_reuses_the_third_wording() -> None:
     """`max_reminders` defaults to 3; inventing a fourth register would be inventing a
     legal threat this project has no standing to make."""
     assert level_flags(4) == level_flags(3)
-    assert render_sollecito_body(VALUES, livello=4) == render_sollecito_body(VALUES, livello=3)
+    assert render_sollecito_body(VALUES, livello=4, con_allegato=True) == render_sollecito_body(
+        VALUES, livello=3, con_allegato=True
+    )
 
 
 def test_a_missing_required_variable_names_the_template_line() -> None:
     with pytest.raises(ValidationFailed) as excinfo:
         render_sollecito_body(
-            {key: value for key, value in VALUES.items() if key != "iban"}, livello=1
+            {key: value for key, value in VALUES.items() if key != "iban"},
+            livello=1,
+            con_allegato=True,
         )
     assert excinfo.value.details["field"] == "iban"
     assert "riga " in excinfo.value.details["reason"]
@@ -143,7 +185,7 @@ def test_the_body_is_rendered_plain_and_not_markdown_escaped() -> None:
     Asserting that the default really does mangle it is what keeps this from being a
     comment somebody deletes.
     """
-    plain = render_sollecito_body(VALUES, livello=1)
+    plain = render_sollecito_body(VALUES, livello=1, con_allegato=True)
     as_markdown = render_template(
         SOLLECITO_TEMPLATE_SOURCE, {**VALUES, **level_flags(1)}, SOLLECITO_DECLARED_VARIABLES
     )

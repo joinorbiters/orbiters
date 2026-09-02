@@ -38,6 +38,7 @@ from pigrocrm.core.auth.models import User
 from pigrocrm.core.clock import oggi_in_italia
 from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.db import session_factory
+from pigrocrm.core.documents.models import Document, DocumentVersion
 from pigrocrm.core.emitter.models import EmitterProfile
 from pigrocrm.core.errors import Conflict, NotFound, PermissionDenied
 from pigrocrm.core.fiscal.models import FiscalProfile
@@ -89,7 +90,94 @@ def _ready(session: Session, *, giorni: int = 30) -> Invoice:
     return unpaid_invoice(session, due=_days_ago(giorni), totale=Decimal("1220.00"))
 
 
+def _with_pdf(session: Session, invoice: Invoice) -> UUID:
+    """Give an invoice the rendered PDF slice 3 would have stored, and return the id of
+    its current version -- the one `invoice_pdf_version_ids` is supposed to find.
+
+    Built as rows rather than through `InvoiceService.issue`: nothing here cares about
+    the register or the Typst renderer, only about whether a document exists for the
+    reminder to attach.
+    """
+    document = Document(
+        customer_id=invoice.customer_id,
+        tipo="fattura",
+        titolo=f"Fattura {_numero(invoice)}",
+        versione_corrente=1,
+    )
+    session.add(document)
+    session.flush()
+    version = DocumentVersion(
+        document_id=document.id,
+        numero=1,
+        storage_key=f"invoices/{invoice.id}.pdf",
+        content_type="application/pdf",
+        dimensione=1024,
+        hash_sha256="0" * 64,
+    )
+    session.add(version)
+    session.flush()
+    invoice.pdf_document_id = document.id
+    session.flush()
+    return version.id
+
+
 # --- the claim ------------------------------------------------------------------------
+
+
+def test_a_reminder_with_nothing_to_attach_does_not_promise_an_attachment(
+    db_session: Session,
+) -> None:
+    """The residual B2-9 left open, closed at the only place it can be closed.
+
+    `GmailRepository.invoice_pdf_version_ids` answers `[]` for an invoice whose PDF was
+    never rendered or has since been removed -- and the reminder still goes out, because
+    a missing file is not a reason to stop chasing a real debt. What must not go out is
+    the promise: «in allegato trova copia di cortesia della fattura» with an empty
+    `attachment_version_ids` sends a paying client looking for a file that is not there.
+
+    The two halves are asserted together on purpose. Testing the body alone would pass
+    with an attachment list that had quietly changed; testing the list alone would pass
+    with a body that still promised. What has to hold is that they agree.
+    """
+    account = connected_account(db_session)
+    invoice = _ready(db_session)
+    db_session.commit()
+
+    read = _service(db_session).create_reminder(invoice.id, actor_for(account))
+    db_session.commit()
+
+    draft = db_session.get(EmailDraft, read.email_draft_id)
+    assert draft is not None
+    assert draft.attachment_version_ids == []
+    assert "In allegato" not in draft.body_markdown
+    assert "copia di cortesia" not in draft.body_markdown
+    # The invoice's own figures are still there: this drops one sentence, not the letter.
+    assert "1.220,00 €" in draft.body_markdown
+    assert IBAN in draft.body_markdown
+
+
+def test_a_reminder_that_does_attach_the_invoice_still_says_so(db_session: Session) -> None:
+    """The other half of the same rule, and the reason it is not simply "never promise":
+    when the courtesy copy *is* attached, the recipient has to be told it is there --
+    otherwise a client who never opens attachments reads a demand for money with no
+    document behind it.
+
+    The attached version is the invoice's own current one, through slice 2's document
+    layer (spec 6.4), never an upload -- so the id asserted here is the one
+    `invoice_pdf_version_ids` resolved, not one this test invented.
+    """
+    account = connected_account(db_session)
+    invoice = _ready(db_session)
+    version_id = _with_pdf(db_session, invoice)
+    db_session.commit()
+
+    read = _service(db_session).create_reminder(invoice.id, actor_for(account))
+    db_session.commit()
+
+    draft = db_session.get(EmailDraft, read.email_draft_id)
+    assert draft is not None
+    assert draft.attachment_version_ids == [str(version_id)]
+    assert "In allegato trova copia di cortesia della fattura." in draft.body_markdown
 
 
 def test_creating_a_reminder_creates_a_draft_and_sends_nothing(

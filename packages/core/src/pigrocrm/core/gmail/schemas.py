@@ -313,6 +313,22 @@ class SollecitiPage(BaseModel):
     total: int
 
 
+class PaymentReminderCreate(BaseModel):
+    """The whole of the request: which invoice to chase.
+
+    One field, and no room for a second. Everything the letter says -- the number, the
+    two dates, the frozen `totale`, the IBAN, the tone of the sequence -- is derived from
+    the register by `SollecitiService.create_reminder`, and a field here that let a caller
+    override any of them would be a demand for payment naming a figure the client's own
+    copy of the invoice does not carry. `extra="forbid"` is what makes that a refusal
+    rather than a silently ignored key.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    invoice_id: UUID
+
+
 class PaymentReminderRead(BaseModel):
     """A reminder row, as the API and the composer see it.
 

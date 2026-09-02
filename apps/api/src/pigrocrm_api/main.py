@@ -13,11 +13,13 @@ from pigrocrm_api.routers import (
     customers,
     deals,
     documents,
+    email_drafts,
     emitter,
     fields,
     fiscal_profile,
     gmail,
     invoices,
+    payment_reminders,
     people,
     period_locks,
     pipeline,
@@ -72,6 +74,8 @@ def create_app() -> FastAPI:
         period_locks,
         analytics,
         gmail,
+        email_drafts,
+        payment_reminders,
     ):
         app.include_router(module.router)
 
