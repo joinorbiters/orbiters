@@ -37,3 +37,16 @@ if (typeof window.IntersectionObserver !== 'function') {
     disconnect() {}
   } as unknown as typeof IntersectionObserver
 }
+
+// The same jsdom gap, one API over: no ResizeObserver at all. `cmdk` (the command
+// palette) constructs one unconditionally in an effect, so without this every test that
+// mounts the palette dies with an uncaught `ReferenceError` instead of a failed
+// assertion. Global and permanent, like the two stubs above: any future component that
+// measures itself hits the identical gap.
+if (typeof window.ResizeObserver !== 'function') {
+  window.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver
+}

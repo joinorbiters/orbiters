@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { AppHeader } from '@/components/AppHeader'
+import { CommandPalette } from '@/features/search/CommandPalette'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
@@ -55,6 +56,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   // Local, unpersisted UI state -- collapsing to an icon rail is a per-visit
   // convenience, not a setting worth a round trip or a storage key.
   const [collapsed, setCollapsed] = useState(false)
+  // The palette is mounted here, once, rather than inside the header: it owns the
+  // Cmd/Ctrl+K listener, so it has to be alive even while the header's button has
+  // never been clicked.
+  const [searchOpen, setSearchOpen] = useState(false)
 
   const initials = (user?.nome ?? '?')
     .split(' ')
@@ -152,12 +157,11 @@ export function AppShell({ children }: { children: ReactNode }) {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* The palette lands in Task A13, which gives this callback the open state of a
-            real `CommandPalette`. Deliberately not a `useState` yet: a flag nobody reads
-            is dead state, and `noUnusedLocals` says so. */}
-        <AppHeader onOpenSearch={() => {}} />
+        <AppHeader onOpenSearch={() => setSearchOpen(true)} />
         <main className="flex-1 overflow-auto">{children}</main>
       </div>
+
+      <CommandPalette open={searchOpen} onOpenChange={setSearchOpen} />
     </div>
   )
 }
