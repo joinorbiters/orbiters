@@ -5,11 +5,13 @@ from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import delete, select, text, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.db import escape_like
+from pigrocrm.core.documents.models import Document, DocumentVersion
 from pigrocrm.core.emitter.models import EmitterProfile
 from pigrocrm.core.gmail.models import (
     EmailDraft,
@@ -18,9 +20,11 @@ from pigrocrm.core.gmail.models import (
     GmailMessageLink,
     GoogleAccount,
     GoogleOAuthState,
+    PaymentReminder,
 )
 from pigrocrm.core.gmail.roster import EntityRef
 from pigrocrm.core.gmail.schemas import EDITABLE_SEND_STATES
+from pigrocrm.core.invoices.models import Invoice
 
 # An arbitrary but stable first key for `pg_try_advisory_lock(int, int)`, so this
 # project's locks cannot collide with another application sharing the database. The
@@ -530,6 +534,95 @@ class GmailRepository:
             .all()
             if claimed is not None
         }
+
+    # --- payment reminders -------------------------------------------------------------
+
+    def reminder_rows(self, invoice_id: UUID) -> tuple[int, int, datetime | None]:
+        """`(rows, sent, last_activity)` for one invoice's reminders.
+
+        Three numbers in one round trip, because `create_reminder` needs all three and
+        each answers a different question: how many positions in the sequence are taken
+        (the ceiling), how many letters a client actually received (the wording), and when
+        the last reminder was sent *or merely prepared* (the interval). Collapsing any two
+        of them either offers a fourth reminder the constraint refuses, or opens a second
+        letter with «nonostante il precedente sollecito» about one nobody received.
+        """
+        row = self.session.execute(
+            select(
+                func.count(),
+                func.count(PaymentReminder.sent_at),
+                func.max(func.coalesce(PaymentReminder.sent_at, PaymentReminder.created_at)),
+            ).where(PaymentReminder.invoice_id == invoice_id)
+        ).one()
+        return int(row[0]), int(row[1]), row[2]
+
+    def reminder_for_draft(self, draft_id: UUID) -> PaymentReminder | None:
+        """The reminder a draft carries, if it carries one.
+
+        Keyed on the draft and never on "the newest reminder for this invoice": the send
+        path calls this for *every* message it sends, and an ordinary email to a client
+        who also happens to owe money must leave `payment_reminders` untouched.
+        """
+        return self.session.execute(
+            select(PaymentReminder).where(PaymentReminder.email_draft_id == draft_id)
+        ).scalar_one_or_none()
+
+    def invoice_pdf_version_ids(self, invoice_id: UUID) -> list[UUID]:
+        """The current version of the invoice's own PDF, or an empty list.
+
+        Spec 6.4: attachments come from `document_versions` and never from an upload, so
+        the courtesy copy the reminder promises is the same artefact slice 3 rendered and
+        stored -- not a fresh render, which could differ from what the client already has.
+
+        Empty is a supported answer. A proforma converted before the PDF existed, or an
+        invoice whose document was removed, still deserves a reminder; the body says «in
+        allegato trova copia di cortesia», which is the one imperfection here, and it is
+        smaller than refusing to chase a real debt over a missing file.
+        """
+        document_id = self.session.execute(
+            select(Invoice.pdf_document_id).where(Invoice.id == invoice_id)
+        ).scalar_one_or_none()
+        if document_id is None:
+            return []
+        version_id = self.session.execute(
+            select(DocumentVersion.id)
+            .join(Document, Document.id == DocumentVersion.document_id)
+            .where(
+                DocumentVersion.document_id == document_id,
+                # The *current* version, by the document's own pointer rather than by
+                # `max(numero)`: those two disagree the moment a version is added and the
+                # pointer is not moved, and the document layer owns that decision.
+                DocumentVersion.numero == Document.versione_corrente,
+                Document.deleted_at.is_(None),
+            )
+        ).scalar_one_or_none()
+        return [version_id] if version_id is not None else []
+
+    def last_outbound_about(self, account_id: UUID, numero: str) -> UUID | None:
+        """The newest message this mailbox sent whose subject names this invoice.
+
+        What threads a reminder onto the invoice's own covering email, so the recipient
+        can see the document above it (spec 6.2 rule 2). Without it the reminder arrives
+        detached and the first thing they do is ask for the invoice again.
+
+        `escape_like` on the number, because `_` and `%` in a `LIKE` pattern are wildcards
+        and an invoice number is data: `2026/1` must not match `2026/14`. It cannot,
+        because the escaped needle is matched literally -- the number is bracketed by the
+        subject's own text on both sides only when it really appears.
+        """
+        if not numero:
+            return None
+        like = f"%{escape_like(numero)}%"
+        return self.session.execute(
+            select(GmailMessage.id)
+            .where(
+                GmailMessage.google_account_id == account_id,
+                GmailMessage.direction == "outbound",
+                GmailMessage.subject.like(like, escape="\\"),
+            )
+            .order_by(GmailMessage.internal_date.desc())
+            .limit(1)
+        ).scalar_one_or_none()
 
     def emitter_profile(self) -> EmitterProfile | None:
         """The single issuer row, or `None` on an installation that has not filled it in.
