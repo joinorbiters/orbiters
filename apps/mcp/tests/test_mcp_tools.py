@@ -1,5 +1,6 @@
 import json
 from typing import Any
+from uuid import UUID, uuid4
 
 import pytest
 from mcp import Client
@@ -313,6 +314,105 @@ async def test_search_customers_with_a_malformed_cursor_produces_guidance_not_a_
     assert "cursor" in message.lower()
     assert "cursore non valido" in message.lower()
     assert "riprova" in message.lower()
+
+
+async def test_search_customers_accepts_sort_and_dir(server) -> None:
+    """The tool's JSON Schema gained two parameters, and the SDK silently drops an
+    argument a signature does not declare -- which is exactly how `cursor` shipped
+    broken once already (see the cursor test above). Asserting the *order* rather than
+    the status is what makes this fail in that case: a dropped `sort` returns 200 with
+    the rows in creation order.
+
+    Scoped by a per-run token rather than asserting on the whole table: at least one
+    test in this suite commits a customer outside the rolled-back transaction, so a bare
+    `search_customers` here sees rows it did not create. That made this test pass alone
+    and fail in the suite, which is the worst of both.
+    """
+    token = f"zz{uuid4().hex[:8]}"
+    async with Client(server) as client:
+        for nome in ("Gamma", "Alfa", "Beta"):
+            await client.call_tool("create_customer", {"ragione_sociale": f"{token} {nome}"})
+
+        ascending = _payload(
+            await client.call_tool(
+                "search_customers",
+                {"search": token, "sort": "ragione_sociale", "dir": "asc", "limit": 10},
+            )
+        )
+        descending = _payload(
+            await client.call_tool(
+                "search_customers",
+                {"search": token, "sort": "ragione_sociale", "dir": "desc", "limit": 10},
+            )
+        )
+
+    assert [c["ragione_sociale"] for c in ascending["items"]] == [
+        f"{token} Alfa",
+        f"{token} Beta",
+        f"{token} Gamma",
+    ]
+    assert [c["ragione_sociale"] for c in descending["items"]] == [
+        f"{token} Gamma",
+        f"{token} Beta",
+        f"{token} Alfa",
+    ]
+
+
+async def test_search_customers_with_an_unknown_sort_key_produces_guidance(server) -> None:
+    """`sort` is a plain `str` at the tool boundary on purpose: the whitelist answers
+    with this project's own `ValidationFailed`, which `_guard` renders as readable
+    guidance naming the field and listing the admissible keys. A `Literal` here would
+    have been rejected by the SDK ahead of the guard, in raw English pydantic text."""
+    async with Client(server) as client:
+        result = await client.call_tool("search_customers", {"sort": "note"})
+
+    assert result.is_error
+    message = result.content[0].text
+    assert "errors.pydantic.dev" not in message
+    assert "ragione_sociale" in message
+
+
+async def test_search_customers_with_an_unknown_direction_produces_guidance(server) -> None:
+    """`dir` is `str` at the boundary and cast at the call, so an out-of-range value is
+    rejected by `CustomerListQuery`'s own `SortDirection` *inside* the guard."""
+    async with Client(server) as client:
+        result = await client.call_tool("search_customers", {"dir": "sideways"})
+
+    assert result.is_error
+    message = result.content[0].text
+    assert "errors.pydantic.dev" not in message
+    assert "dir" in message.lower()
+
+
+async def test_list_documents_accepts_a_search_term(
+    server, mcp_session: Session, seeded_customer_id: str
+) -> None:
+    """Seeded through the session rather than a tool: MCP deliberately exposes no
+    `create_document` (a document is created from a template, or over REST with real
+    bytes), so there is no tool call that would put rows here.
+
+    The search term carries a per-run token for the same reason
+    `test_search_customers_accepts_sort_and_dir` does: this suite's schema is shared and
+    not every row in it belongs to the running test."""
+    from pigrocrm.core.documents.models import Document
+
+    token = f"zz{uuid4().hex[:8]}"
+    for titolo in (f"Offerta {token}", f"Verbale {token}"):
+        mcp_session.add(
+            Document(
+                customer_id=UUID(seeded_customer_id),
+                tipo="documento",
+                titolo=titolo,
+                versione_corrente=1,
+                custom_fields={},
+            )
+        )
+    mcp_session.commit()
+
+    async with Client(server) as client:
+        found = _payload(await client.call_tool("list_documents", {"search": f"offerta {token}"}))
+
+    assert [d["titolo"] for d in found["items"]] == [f"Offerta {token}"]
 
 
 async def test_archive_customer_is_reversible_and_blocks_on_active_deals(

@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from pigrocrm.core.activities.schemas import ActivityRead
 from pigrocrm.core.activities.service import ActivityService
-from pigrocrm.core.db import CURSOR_MAX_LENGTH
+from pigrocrm.core.db import CURSOR_MAX_LENGTH, SortDirection
 from pigrocrm.core.documents.schemas import (
     DocumentCreate,
     DocumentFromTemplate,
@@ -21,6 +21,7 @@ from pigrocrm.core.documents.schemas import (
     OfferState,
 )
 from pigrocrm.core.documents.service import DocumentService
+from pigrocrm.core.validation import SafeStr
 from pigrocrm_api.deps import ActorDep, SessionDep, SettingsDep, StorageDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
 
@@ -65,18 +66,30 @@ def list_documents(
     deal_id: Annotated[UUID | None, Query()] = None,
     tipo: Annotated[DocumentTipo | None, Query()] = None,
     stato: Annotated[OfferState | None, Query()] = None,
+    # New in slice 6 (spec §8.1). `SafeStr` for the same reason the other three lists
+    # carry it on `search`: this is an ordinary query parameter, so the guard has to
+    # sit on the parameter itself for FastAPI's own validation to answer 422 before
+    # `DocumentListQuery` is hand-built below.
+    search: Annotated[SafeStr | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     # `str`, not `UUID`, since slice 6 -- see the identical comment on list_customers
     # (routers/customers.py).
     cursor: Annotated[str | None, Query(max_length=CURSOR_MAX_LENGTH)] = None,
+    # A plain string and not a `Literal` -- see the reasoning on list_customers
+    # (routers/customers.py).
+    sort: Annotated[SafeStr | None, Query(description="created_at | updated_at | titolo")] = None,
+    dir: Annotated[SortDirection, Query()] = "asc",
 ) -> DocumentPage:
     query = DocumentListQuery(
         customer_id=customer_id,
         deal_id=deal_id,
         tipo=tipo,
         stato=stato,
+        search=search,
         limit=limit,
         cursor=cursor,
+        sort=sort,
+        dir=dir,
     )
     return DocumentService(session, storage, settings).list(query, actor)
 
