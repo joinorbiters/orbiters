@@ -23,19 +23,34 @@ there.
 """
 
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+from typing import Any
+from uuid import UUID
 
 from sqlalchemy import Select, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.clock import oggi_in_italia
 from pigrocrm.core.config import Settings
 from pigrocrm.core.customers.models import Customer
-from pigrocrm.core.gmail.models import GoogleAccount, PaymentReminder
+from pigrocrm.core.emitter.service import EmitterProfileService
+from pigrocrm.core.errors import Conflict, NotFound
+from pigrocrm.core.fiscal.repository import FiscalProfileRepository
+from pigrocrm.core.gmail.drafts import EmailDraftService
+from pigrocrm.core.gmail.models import EmailDraft, GoogleAccount, PaymentReminder
 from pigrocrm.core.gmail.repository import GmailRepository
-from pigrocrm.core.gmail.schemas import SollecitoCandidate
+from pigrocrm.core.gmail.schemas import (
+    EmailDraftCreate,
+    PaymentReminderRead,
+    SollecitoCandidate,
+)
+from pigrocrm.core.gmail.solleciti_template import render_sollecito_body
 from pigrocrm.core.invoices.models import Invoice
 from pigrocrm.core.invoices.naming import numero_completo
+from pigrocrm.core.money import round_money
 from pigrocrm.core.people.models import Person
 
 # What `_query` yields per row: the invoice, its customer, how many reminder rows exist,
@@ -56,6 +71,40 @@ INCASSATO = "incassato"
 CHASEABLE_TIPO = "fattura"
 CHASEABLE_STATO = "emessa"
 
+ENTITY = "payment_reminder"
+INVOICE_ENTITY = "invoice"
+_PREPARE_ACTION = "preparare un sollecito"
+
+
+def _data_italiana(value: date | None) -> str:
+    """`31/07/2026`. The way the recipient of this letter reads a date.
+
+    Not `invoices.totals`' formatters and not `.isoformat()`: those two are the *fiscal*
+    representations, one for FPR12's schema and one for the PDF, and neither is what an
+    Italian client expects in the body of an email. `%d/%m/%Y` matches the sentence
+    `gmail/account.py` already shows people about their consent expiry.
+    """
+    return value.strftime("%d/%m/%Y") if value is not None else ""
+
+
+def _euro(value: Decimal) -> str:
+    """`1.220,00 €`. Italian grouping and decimal separators, both.
+
+    Deliberately **not** `invoices.totals.format_amount_2`, which is FPR12's
+    `Amount2DecimalType` -- `1220.00`, a schema format for a machine at the Agenzia delle
+    Entrate. Printing that in a demand for payment shows an Italian reader a number
+    written the wrong way round.
+
+    `round_money` is `money.py`'s, so the one place rounding happens stays the one place:
+    the column is already `Numeric(12, 2)`, so this quantizes nothing in practice, and it
+    is here so that a future caller handing this a wider `Decimal` cannot invent a third
+    rounding rule.
+    """
+    quantized = round_money(value)
+    # `f"{...:,.2f}"` gives `1,220.00`; the swap turns it into Italian in one pass, with
+    # the placeholder step so the two separators cannot overwrite each other.
+    return f"{quantized:,.2f}".replace(",", "\x00").replace(".", ",").replace("\x00", ".") + " €"
+
 
 class SollecitiService:
     """Payment reminders: the list, and the preparation of one.
@@ -70,6 +119,7 @@ class SollecitiService:
         self.session = session
         self.settings = settings
         self.repo = GmailRepository(session)
+        self.activities = ActivityService(session)
 
     def candidates(self, actor: Actor) -> list[SollecitoCandidate]:
         """Every invoice that may legitimately be chased, worst first.
@@ -141,7 +191,286 @@ class SollecitiService:
         )
         return candidates
 
+    # ---- preparing one ---------------------------------------------------------------
+
+    def create_reminder(self, invoice_id: UUID, actor: Actor) -> PaymentReminderRead:
+        """Creates the `payment_reminders` row **and** its draft. Sends nothing.
+
+        Spec 8.3 is explicit that this endpoint does not send: the draft goes out through
+        `/api/email-drafts/{id}/send` like any other email. That is what lets spec 7.3
+        rely on 6.1's idempotence instead of reimplementing it -- **one send path in the
+        whole slice** -- and it is why `sent_at` is filled by
+        `EmailSendService._record_sent` rather than here. A reminder service with a send
+        of its own would be the second path, and the second path is where the double send
+        comes back.
+
+        **The order of the two writes is deliberate.** The reminder row is reserved first,
+        inside a SAVEPOINT, and the draft is written only once the position is ours.
+        `EmailDraftService.create` commits -- durability is its whole point -- so writing
+        the draft first would leave the loser of a race with a committed draft nobody
+        asked for and a `Conflict` in its hand. This way a refused reminder leaves nothing
+        behind at all.
+
+        The refusals here are the same three conditions `candidates()` applies, and that
+        is not duplication for its own sake: this endpoint is reachable by invoice id
+        without going through the list, so a create that skipped them would disagree with
+        the list about the same invoice -- which is the shape of every "il CRM crede una
+        cosa diversa da quella che è successa" defect this slice exists to remove.
+        """
+        actor.require_write(_PREPARE_ACTION)
+
+        invoice = self.session.get(Invoice, invoice_id)
+        if invoice is None or invoice.deleted_at is not None:
+            raise NotFound(INVOICE_ENTITY, invoice_id)
+        self._require_chaseable(invoice)
+
+        customer = self.session.get(Customer, invoice.customer_id)
+        if customer is None or customer.deleted_at is not None:
+            raise NotFound("customer", invoice.customer_id)
+        recipients = self._recipients(customer)
+        if not recipients:
+            raise Conflict(
+                ENTITY,
+                f"{customer.ragione_sociale} non ha un indirizzo email a cui scrivere",
+                customer_id=str(customer.id),
+            )
+
+        righe, inviati, ultima_attivita = self.repo.reminder_rows(invoice_id)
+        self._require_room(invoice_id, righe, ultima_attivita)
+        # `livello` is what the *client* has already received, so an unsent draft cannot
+        # make the next letter open with «nonostante il precedente sollecito»; `sequence`
+        # is the position in the register, which an unsent draft does occupy.
+        livello = inviati + 1
+        sequence = self._next_sequence(invoice_id)
+
+        # Everything the body needs, resolved before anything is written: a reminder with
+        # no IBAN is a reminder nobody can act on, and discovering that after the row
+        # exists would burn a position in the sequence.
+        emittente = self._emitter_scope(actor)
+        body = render_sollecito_body(
+            {
+                **emittente,
+                "cliente": customer.ragione_sociale,
+                "numero_fattura": self._numero(invoice),
+                "data_fattura": _data_italiana(invoice.data_emissione),
+                "scadenza": _data_italiana(invoice.data_scadenza),
+                "importo": _euro(invoice.totale),
+                "iban": self._iban(),
+                # The free-text block. Read from the same scope rather than from a second
+                # query, and offered at the top level too because the template puts it
+                # above the company line -- one source, two names, no second copy to
+                # diverge.
+                "firma_email": emittente["emittente"].get("firma_email") or "",
+            },
+            livello=livello,
+        )
+
+        reminder = PaymentReminder(invoice_id=invoice_id, sequence=sequence)
+        try:
+            # A SAVEPOINT and not a bare flush, so the expected refusal costs exactly the
+            # failed statement. `Session.rollback()` here would discard whatever the
+            # caller had already done in this transaction -- and on this path the caller
+            # is a REST handler whose session may carry more than this one row.
+            with self.session.begin_nested():
+                self.session.add(reminder)
+                self.session.flush()
+        except IntegrityError as clash:
+            # `uq_payment_reminders_invoice_sequence` is the first of the three layers of
+            # spec 7.3, and the database is what guarantees it: two concurrent callers
+            # both pass the count above, and only the constraint stops the second.
+            raise Conflict(
+                ENTITY,
+                f"un sollecito numero {sequence} per questa fattura esiste già",
+                invoice_id=str(invoice_id),
+                sequence=sequence,
+            ) from clash
+
+        draft = EmailDraftService(self.session, settings=self.settings).create(
+            EmailDraftCreate(
+                entity_type="customer",
+                entity_id=customer.id,
+                to_addresses=recipients,
+                subject=f"Sollecito pagamento – {self._numero(invoice)}",
+                body_markdown=body,
+                # The invoice's own PDF, through slice 2's document layer -- never an
+                # arbitrary upload (spec 6.4).
+                attachment_version_ids=self.repo.invoice_pdf_version_ids(invoice_id),
+                # Threads the reminder onto the original covering email, so the recipient
+                # sees the invoice above it.
+                in_reply_to_message_id=self._thread_of(invoice, actor),
+            ),
+            actor,
+        )
+
+        # Both directions of the link. The reminder needs the draft so the caller can send
+        # it through the one send path; the draft needs the reminder so `_record_sent` can
+        # stamp `sent_at` without scanning for "the newest reminder of this invoice",
+        # which would let an unrelated email mark a reminder as sent.
+        reminder.email_draft_id = draft.id
+        row = self.session.get(EmailDraft, draft.id)
+        if row is not None:
+            row.payment_reminder_id = reminder.id
+
+        # Last before the commit, per `ActivityService.record`. The payload names the
+        # invoice and the position, never the recipient and never the body.
+        self.activities.record(
+            "customer",
+            customer.id,
+            "gmail.sollecito_preparato",
+            actor,
+            {
+                "invoice_id": str(invoice_id),
+                "numero": self._numero(invoice),
+                "sequence": sequence,
+                "livello": livello,
+                "email_draft_id": str(draft.id),
+                # Deliberately not "inviato": this records that a reminder was *prepared*.
+                # The send has its own entry, written by the send path.
+                "inviato": False,
+            },
+        )
+        self.session.commit()
+        return PaymentReminderRead.model_validate(reminder)
+
     # ---- internals ------------------------------------------------------------------
+
+    def _require_chaseable(self, invoice: Invoice) -> None:
+        """The same conditions the list applies, in the language of a refusal.
+
+        Each names what is wrong rather than answering "not a candidate", because the
+        person pressing this button is looking at one invoice and needs to know which of
+        five different facts about it is in the way.
+        """
+        if invoice.tipo != CHASEABLE_TIPO or invoice.stato == "bozza":
+            raise Conflict(ENTITY, "si può sollecitare solo una fattura già emessa")
+        if invoice.stato == "annullata":
+            raise Conflict(ENTITY, "questa fattura è stata annullata: non si può sollecitare")
+        if invoice.stato != CHASEABLE_STATO:
+            raise Conflict(ENTITY, "si può sollecitare solo una fattura già emessa")
+        if invoice.stato_pagamento == INCASSATO:
+            raise Conflict(ENTITY, "questa fattura risulta già incassata")
+        if invoice.data_scadenza is None:
+            raise Conflict(
+                ENTITY,
+                "questa fattura non ha una data di scadenza: senza una scadenza "
+                "concordata non c'è nulla da sollecitare",
+            )
+
+    def _require_room(self, invoice_id: UUID, righe: int, ultima_attivita: datetime | None) -> None:
+        """The ceiling and the interval, in that order.
+
+        The ceiling first because it is the permanent answer: an invoice at the maximum
+        will never accept another reminder, and telling the person to wait fourteen days
+        for something that will still be refused is worse than telling them the truth.
+        """
+        if righe >= self.settings.solleciti_max_reminders:
+            raise Conflict(
+                ENTITY,
+                "questa fattura ha già il numero massimo di solleciti "
+                f"({self.settings.solleciti_max_reminders})",
+                invoice_id=str(invoice_id),
+                solleciti=righe,
+            )
+        giorni = self.settings.solleciti_min_interval_days
+        if ultima_attivita is not None and datetime.now(UTC) - ultima_attivita < timedelta(
+            days=giorni
+        ):
+            raise Conflict(
+                ENTITY,
+                f"un sollecito per questa fattura è già stato preparato negli ultimi "
+                f"{giorni} giorni",
+                invoice_id=str(invoice_id),
+            )
+
+    def _next_sequence(self, invoice_id: UUID) -> int:
+        """The next free position in this invoice's reminder sequence.
+
+        `max + 1` and not `count + 1`: a reminder deleted from the middle would otherwise
+        hand the next caller a number that is already taken, and the constraint would
+        refuse a request that is perfectly legitimate.
+
+        This is a *read*, and the constraint is what actually arbitrates -- see
+        `create_reminder`. Named rather than inlined so the concurrency test has a seam to
+        put both threads on the same answer.
+        """
+        highest = self.session.execute(
+            select(func.max(PaymentReminder.sequence)).where(
+                PaymentReminder.invoice_id == invoice_id
+            )
+        ).scalar_one()
+        return int(highest or 0) + 1
+
+    @staticmethod
+    def _numero(invoice: Invoice) -> str:
+        """`{anno}/{numero}` -- the number printed on the document the client is holding.
+
+        Through `invoices.naming`, never rebuilt here: the previous system recovered the fiscal
+        progressive from a display title with a regex, which made the number on a legal
+        document a derivative of a caption someone could rename.
+        """
+        if invoice.anno is None or invoice.numero is None:  # pragma: no cover - `emessa`
+            raise Conflict(ENTITY, "si può sollecitare solo una fattura già emessa")
+        return numero_completo(invoice.anno, invoice.numero)
+
+    def _emitter_scope(self, actor: Actor) -> dict[str, Any]:
+        """`{"emittente": {...}}`, the same scope every other template in this project
+        renders against.
+
+        Through `EmitterProfileService.as_template_values` rather than by reading three
+        columns here: slice 2 built that method for exactly this, and a second assembly of
+        the issuer's identity is how the phone number in a letter starts disagreeing with
+        the one on the invoice.
+
+        A missing profile becomes a `Conflict` and not the underlying `NotFound`: an
+        installation that has not filled the issuer in cannot sign a letter in anybody's
+        name, and «compila il profilo» is an instruction while «emitter_profile singleton
+        non trovato» is a puzzle.
+        """
+        try:
+            return EmitterProfileService(self.session).as_template_values(actor)
+        except NotFound as missing:
+            raise Conflict(
+                ENTITY,
+                "manca il profilo dell'emittente: compilalo prima di sollecitare",
+            ) from missing
+
+    def _iban(self) -> str:
+        """Where the client is being asked to pay, from `fiscal_profile.iban`.
+
+        Never a literal and never a placeholder: the previous system's `normalizeIban(iban) ||
+        'IBAN_PAGAMENTO'` shipped the placeholder to the client whenever the value was
+        missing, so the letter told somebody to transfer money to a string. Refusing is
+        worse for the sender and far better for the recipient.
+
+        `fiscal_profile` and not `emitter_profile`, because that is where slice 3 put it:
+        `emitter_profile` holds the issuer's identity, `fiscal_profile` the numbers and
+        codes, and the invoice's own XML already reads the IBAN from there.
+        """
+        profile = FiscalProfileRepository(self.session).get()
+        iban = (profile.iban or "").strip() if profile is not None else ""
+        if not iban:
+            raise Conflict(
+                ENTITY,
+                "manca l'IBAN: compilalo nel profilo fiscale prima di sollecitare",
+            )
+        return iban
+
+    def _recipients(self, customer: Customer) -> list[str]:
+        """The customer's own address if it has one; otherwise every live person on it.
+
+        An invoice reminder goes to whoever pays, and on a small company that is often a
+        named person rather than a generic mailbox.
+        """
+        if customer.email:
+            return [customer.email.strip().lower()]
+        return self._addresses_of(customer)
+
+    def _thread_of(self, invoice: Invoice, actor: Actor) -> UUID | None:
+        """The covering email this invoice already went out on, if there is one."""
+        account = self._mailbox_of(actor)
+        if account is None:
+            return None
+        return self.repo.last_outbound_about(account.id, self._numero(invoice))
 
     def _query(self, grace_cutoff: date) -> Select[CandidateRow]:
         """The invoice/customer/reminder join, with conditions 1 and 2 in the `WHERE`.

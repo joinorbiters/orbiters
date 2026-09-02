@@ -329,6 +329,12 @@ _COPERTE_O_UMANE: dict[Method, str] = {
     "solo perche' la superficie MCP di questa fetta la decide B2-10, che possiede la "
     'scelta; la ragione non e\' "nessuno ha scritto il tool" ma "la decisione ha un '
     'proprietario e una scadenza"',
+    ("SollecitiService", "create_reminder"): "prepara una bozza che nessuno strumento "
+    "potra' mai spedire, perche' **l'invio non sara' mai un tool** (la riga permanente "
+    "e' su `EmailSendService.send`, in `_CREDENZIALI`): stessa meta'-operazione di "
+    "`EmailDraftService.create`, e la decide lo stesso task, B2-10. In piu' il testo che "
+    "preparerebbe non e' una bozza qualunque -- e' una richiesta di pagamento a nome del "
+    "titolare, con il suo IBAN dentro",
 }
 
 

@@ -554,6 +554,16 @@ class EmailSendService:
         for ref in self._refs_for(row):
             self.repo.add_link(message.id, ref)
 
+        # If this draft was a payment reminder, this is the moment it stops being merely
+        # *prepared*. In the same transaction as the draft's own outcome, because the two
+        # facts are one event: a `sent_at` that could survive a rolled-back send would let
+        # the ceiling and the interval count a letter nobody received, and a send recorded
+        # without it would let them offer a second one an hour later. Looked up by the
+        # draft, so an ordinary email to a client who happens to owe money stamps nothing.
+        reminder = self.repo.reminder_for_draft(draft_id)
+        if reminder is not None:
+            reminder.sent_at = datetime.now(UTC)
+
         # Last before the commit, as `ActivityService.record` requires: nothing that
         # commits on its own behalf may run after it.
         self.activities.record(
