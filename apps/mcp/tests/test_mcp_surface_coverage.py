@@ -245,6 +245,19 @@ _CREDENZIALI: dict[Method, str] = {
 #    the configuration is. Exposing them would also mean an agent could rewrite the field
 #    definitions its own `describe_schema` output is derived from.
 _CONFIGURAZIONE: dict[Method, str] = {
+    ("AutomationConfigService", "update_automation_config"): (
+        "decide che cosa il CRM fa **da solo** ai dati futuri, senza nessuno nel mezzo: "
+        "e' la stessa famiglia di `PipelineService.update`, un grado piu' seria. Un agente "
+        "che potesse spegnere A1 e poi spostare un deal non lascerebbe traccia della "
+        "differenza fra «l'automazione non e' scattata» e «l'ho disattivata io». "
+        "L'esclusione non e' cautela di questo file: e' l'unico nome di "
+        "`MCP_EXCLUDED_SLICE6` (packages/core/tests/test_architecture.py), che la spec "
+        "§11.1 fissa a esattamente uno, e la lettura corrispondente -- "
+        "`describe_automations` -- ha un tool, quindi all'agente resta visibile tutto "
+        "quello che il sistema fa per conto suo. Il divieto e' strutturale e non un "
+        "controllo di permesso perche' residuo R10 lascia un PAT con il ruolo pieno del "
+        "proprietario: il token di un admin passerebbe qualunque check"
+    ),
     ("CostCategoryService", "seed_defaults"): "installa le categorie iniziali",
     ("EmitterProfileService", "upsert"): "identita' fiscale dell'emittente",
     ("FieldDefinitionService", "create"): "definisce lo schema, non lo popola",
