@@ -7,6 +7,7 @@ from pigrocrm.core.activities.models import Activity  # noqa: F401
 from pigrocrm.core.auth.models import User  # noqa: F401
 from pigrocrm.core.auth.pat_models import PersonalAccessToken  # noqa: F401
 from pigrocrm.core.auth.refresh_models import RefreshToken  # noqa: F401
+from pigrocrm.core.automations.models import AutomationConfig  # noqa: F401
 from pigrocrm.core.customers.models import Customer  # noqa: F401
 from pigrocrm.core.deals.models import Deal  # noqa: F401
 from pigrocrm.core.documents.models import Document, DocumentVersion  # noqa: F401

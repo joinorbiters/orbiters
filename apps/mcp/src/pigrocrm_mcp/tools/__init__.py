@@ -25,6 +25,7 @@ from pigrocrm.core.timetracking.schemas import (
     TimeEntryUpdate,
 )
 from pigrocrm_mcp.context import McpContext
+from pigrocrm_mcp.tools import automations as automation_tools
 from pigrocrm_mcp.tools import customers, deals, documents, invoices, people, timetracking
 from pigrocrm_mcp.tools import search as search_tools
 
@@ -524,6 +525,29 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
         return search_tools.search_everything(
             context, SearchQuery(termine=termine, limite=cast(int, limite))
         )
+
+    # ---- automations -------------------------------------------------------
+    # One tool, and its counterpart is deliberately absent: `update_automation_config`
+    # changes what the system will do to *future* data with nobody in the loop, and
+    # `MCP_EXCLUDED_SLICE6` in `packages/core/tests/test_architecture.py` declares it as
+    # the slice's one exclusion. Registered here, in `tools/automations.py`, rather than
+    # alongside the dashboard: the two answer different questions and share no service.
+    #
+    # Registered by Task B3 rather than by Task B12, which owns 6B's surface: the moment
+    # `AutomationConfigService` exists, both coverage tests demand that each of its public
+    # methods be a tool or a named exclusion, and deferring one to a later task is exactly
+    # the placeholder Task A11 cleared out of the taxonomy. Task B12 must not register a
+    # second `describe_automations`.
+
+    @mcp.tool()
+    @guard
+    def describe_automations() -> dict[str, Any]:
+        """Che cosa fa il CRM da solo: le regole di automazione, se sono attive, e le
+        ultime esecuzioni con il loro esito (compresi i casi in cui una regola ha deciso
+        di non agire, con il motivo). Leggila prima di concludere che un deal è stato
+        spostato a mano. La configurazione si cambia solo dall'interfaccia web.
+        """
+        return automation_tools.describe_automations(context)
 
     # ---- documents ---------------------------------------------------------
     # The download of bytes never goes through MCP (spec 7): a tool returning a

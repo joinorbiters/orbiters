@@ -9,9 +9,8 @@ Numbered 0023 and not 0008: the brief for this task says 0008/0007, but the head
 occupied number is a branch, not a migration.
 
 Three objects in one revision because they are meaningless apart: the automation cannot
-run without its config row and cannot record a closure without the column. The
-`automation_config` section is written by Task B3; this file applies cleanly with or
-without it.
+run without its config row and cannot record a closure without the column. The two columns
+are Task B2's and `automation_config` is Task B3's, in this one file.
 
 **The backfill is asymmetric, and the asymmetry is the whole argument of spec §4.1.**
 
@@ -78,10 +77,50 @@ def upgrade() -> None:
 
     # `deals.chiuso_il` is deliberately NOT backfilled. See the module docstring.
 
-    # -- automation_config: written by Task B3, in this same revision. --
+    # -- automation_config (Task B3), in this same revision. --
+    op.create_table(
+        "automation_config",
+        sa.Column(
+            "a1_offerta_accettata_vince_deal",
+            sa.Boolean(),
+            server_default=sa.text("true"),
+            nullable=False,
+        ),
+        sa.Column(
+            "a2_offerta_inviata_avanza_deal",
+            sa.Boolean(),
+            server_default=sa.text("true"),
+            nullable=False,
+        ),
+        sa.Column("id", sa.Uuid(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    # The single row, seeded here so a migrated installation has it before the first
+    # request. `AutomationConfigRepository.get_or_create` covers the other path -- a
+    # database built by `Base.metadata.create_all`, which is how the test suite builds
+    # one. Both paths must work: slice 3 lost a sequence to exactly this gap.
+    #
+    # `gen_random_uuid()` rather than a UUIDv7: it is one row, its id is never sorted on,
+    # and `gen_random_uuid()` is built into PostgreSQL 13 and later, so no extension is
+    # needed. The two booleans are left to their server defaults, which is the reason
+    # the model declares `server_default` as well as a Python `default`.
+    op.execute(sa.text("INSERT INTO automation_config (id) VALUES (gen_random_uuid())"))
 
 
 def downgrade() -> None:
+    op.drop_table("automation_config")
     op.drop_index("ix_documents_stato_dal", table_name="documents")
     op.drop_column("documents", "stato_dal")
     op.drop_index("ix_deals_chiuso_il", table_name="deals")

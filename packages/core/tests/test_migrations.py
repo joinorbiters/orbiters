@@ -128,6 +128,7 @@ def test_every_table_the_slice_needs_exists() -> None:
         "gmail_message_links",
         "email_drafts",
         "payment_reminders",
+        "automation_config",
     }
     assert expected <= set(Base.metadata.tables)
 
@@ -477,3 +478,37 @@ def test_the_backfill_actually_fills_the_right_day_on_the_right_rows() -> None:
         "deals.chiuso_il must stay null: a closure deduced from a renamable stage name is "
         "a conversion rate that is plausible and wrong (spec §4.1)"
     )
+
+
+def test_the_migration_seeds_exactly_one_automation_config_row() -> None:
+    """Two paths build this schema and both must produce one row.
+
+    `Base.metadata.create_all` (the test suite) leaves the table empty and
+    `AutomationConfigRepository.get_or_create` fills it on first read; a migrated
+    installation gets the row from `0023` before the first request. A migration that
+    created the table and forgot the `INSERT` would still pass every schema comparison in
+    this file -- slice 3 lost `proforma_riferimento_seq` to exactly that gap -- and the
+    first `GET` would then be the request that writes.
+
+    Asserted as a count, not as "at least one": a second seeded row would make
+    `get_or_create`'s `LIMIT 1` return whichever the planner preferred, so an operator's
+    change to the configuration could stop taking effect between one request and the next.
+    """
+    with PostgresContainer("postgres:17-alpine", driver="psycopg") as container:
+        url = container.get_connection_url()
+        upgrade(_alembic_config(url), "head")
+
+        engine: Engine = create_engine(url)
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    "SELECT a1_offerta_accettata_vince_deal, a2_offerta_inviata_avanza_deal "
+                    "FROM automation_config"
+                )
+            ).all()
+        engine.dispose()
+
+    assert len(rows) == 1, rows
+    # Both defaults are `true`, and they arrive from the *server* default: the migration's
+    # INSERT names only `id`. An automation nobody switched on is one nobody knows exists.
+    assert rows[0] == (True, True)

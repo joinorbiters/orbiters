@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from uuid import UUID
 
 from sqlalchemy import select
@@ -23,3 +24,31 @@ class ActivityRepository:
             .limit(limit)
         )
         return list(self.session.execute(stmt).scalars())
+
+    def by_kind(self, kinds: Sequence[str], limit: int = 20) -> list[Activity]:
+        """Activities of the given kinds, newest first, across every entity.
+
+        Spec §9.5 and §11.1: the automation run log is a read of `activities` by `kind`,
+        not a new table (§9.4). A dedicated execution log would be a table whose only
+        function is answering a question `activities` answers better -- the same reasoning
+        that made slice 3 refuse to historicise `fiscal_profile`.
+
+        An empty `kinds` returns nothing. `IN ()` is not portable and a carelessly written
+        empty filter matches everything, which here would dump the whole timeline into a
+        settings page.
+
+        The `id` tie-break mirrors `timeline` above: `occurred_at` has microsecond
+        resolution and two automations firing inside one trigger's transaction can share
+        it, at which point an unordered tie is a list that changes order between two reads
+        of the same rows.
+        """
+        if not kinds:
+            return []
+        return list(
+            self.session.execute(
+                select(Activity)
+                .where(Activity.kind.in_(list(kinds)))
+                .order_by(Activity.occurred_at.desc(), Activity.id.desc())
+                .limit(limit)
+            ).scalars()
+        )
