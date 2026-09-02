@@ -9,11 +9,12 @@ Without this test the convention is a comment. `set_stage_in_transaction` skips
 reads like a helper -- would be an authorisation bypass with no error anywhere. The check
 is on the *call site*, in the AST, across `packages/core`, `apps/api` and `apps/mcp`.
 
-Three guards on the guard, because a scan that silently stops finding call sites passes
+Four guards on the guard, because a scan that silently stops finding call sites passes
 forever and is worse than no scan at all: one asserts the searched roots exist and hold
 real modules, one asserts a `*_in_transaction` method is actually defined somewhere (a
-guard over an empty set proves nothing), and one feeds the walk an obviously offending
-file and requires it to be seen.
+guard over an empty set proves nothing), one asserts the single legitimate call site is
+still there, and one feeds the walk an obviously offending file and requires it to be
+seen.
 """
 
 import ast
@@ -100,3 +101,17 @@ def test_the_guard_catches_a_call_from_outside(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert _calls_with_suffix(offending), "the AST walk failed to see an obvious call"
+
+
+def test_the_runner_is_where_the_call_actually_is() -> None:
+    """Positive control: the allowed directory really does contain the call, so the test
+    above is not passing merely because nothing calls it anywhere.
+
+    Split from `test_at_least_one_such_method_exists_so_the_guard_is_not_vacuous` because
+    the two failures mean different things: that one says the *definition* vanished, this
+    one says the only legitimate *call site* did -- at which point the exclusion is
+    guarding an empty set and would keep passing while the convention had quietly died.
+    """
+    runner = SEARCHED_ROOTS[0] / "automations" / "runner.py"
+    assert runner.exists(), "core/automations/runner.py is missing (Task B5)"
+    assert _calls_with_suffix(runner), "the runner does not call set_stage_in_transaction"

@@ -1,5 +1,6 @@
 from pigrocrm.core.automations.config_service import AutomationConfigService
 from pigrocrm.core.automations.models import AutomationConfig
+from pigrocrm.core.automations.runner import AutomationOutcome, AutomationRunner
 from pigrocrm.core.automations.schemas import (
     AUTOMATION_KINDS,
     KIND_CONFIG_CHANGED,
@@ -23,9 +24,11 @@ __all__ = [
     "AutomationConfigRead",
     "AutomationConfigService",
     "AutomationConfigUpdate",
+    "AutomationOutcome",
     "AutomationRule",
     "AutomationRuleDescription",
     "AutomationRun",
+    "AutomationRunner",
     "AutomationSkipReason",
     "AutomationsDescription",
 ]
