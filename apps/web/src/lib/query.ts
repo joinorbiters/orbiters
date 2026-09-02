@@ -68,4 +68,8 @@ export const queryKeys = {
   periodPnl: (params?: unknown) => ['period-pnl', params ?? {}] as const,
   budget: (params?: unknown) => ['budget', params ?? {}] as const,
   fiscalEstimate: (anno: number) => ['fiscal-estimate', anno] as const,
+  // The term is part of the key so an in-flight response for "ross" cannot overwrite the
+  // rendering of "rossi": TanStack Query discards the stale entry rather than the
+  // component having to compare what came back with what was typed.
+  search: (term: string) => ['search', term] as const,
 }

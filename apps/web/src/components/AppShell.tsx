@@ -14,6 +14,7 @@ import {
   Users,
 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
+import { AppHeader } from '@/components/AppHeader'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
@@ -94,7 +95,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           </Button>
         </div>
 
-        <nav className="flex-1 space-y-1 px-3">
+        {/* Labelled because the header's breadcrumb is a second <nav> landmark on the
+            same page, and two unlabelled ones are indistinguishable to a screen reader
+            (and to `getByRole('navigation')`). */}
+        <nav aria-label="Navigazione principale" className="flex-1 space-y-1 px-3">
           {NAV.map(({ to, label, icon: Icon }) => (
             <Link
               key={to}
@@ -147,7 +151,13 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      <main className="flex-1 overflow-auto">{children}</main>
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* The palette lands in Task A13, which gives this callback the open state of a
+            real `CommandPalette`. Deliberately not a `useState` yet: a flag nobody reads
+            is dead state, and `noUnusedLocals` says so. */}
+        <AppHeader onOpenSearch={() => {}} />
+        <main className="flex-1 overflow-auto">{children}</main>
+      </div>
     </div>
   )
 }
