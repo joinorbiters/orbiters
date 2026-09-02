@@ -9,7 +9,7 @@ from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.auth.repository import UserRepository
 from pigrocrm.core.customers.repository import CustomerRepository
-from pigrocrm.core.db import encode_cursor
+from pigrocrm.core.db import encode_cursor, today_local
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.deals.repository import DealRepository
 from pigrocrm.core.deals.schemas import (
@@ -77,6 +77,33 @@ def _settle_probability(stage: PipelineStageRead, probabilita: int | None) -> in
     if stage.tipo == "lost":
         return 0
     return probabilita if probabilita is not None else stage.probabilita_default
+
+
+def _settle_closure_date(
+    deal: Deal, previous: PipelineStageRead, target: PipelineStageRead
+) -> None:
+    """The single authority on `deals.chiuso_il`, at module level for the same reason
+    `_settle_probability` is: `AutomationRunner` reaches it through
+    `set_stage_in_transaction` (slice 6 §9.3), and an invariant reachable through two
+    paths must live in one function or it holds on one of them.
+
+    `today_local()` and never `date.today()`: at 00:30 on 1 April in Rome it is still
+    31 March in UTC, and a deal won just after midnight would land in the previous
+    month's conversion rate.
+
+    The three cases are deliberately asymmetric. `target.tipo` is tested first, so a
+    reopening clears the stamp whatever the deal came from; `previous.tipo` then decides
+    whether entering a terminal stage is a closure at all.
+    """
+    if target.tipo == "open":
+        # Reopened. A reopened deal is not a deal closed in March, and leaving the stamp
+        # would put it in the conversion rate and in the open pipeline at once.
+        deal.chiuso_il = None
+        return
+    if previous.tipo != "open":
+        # won -> lost or lost -> won: a correction, not a closure.
+        return
+    deal.chiuso_il = today_local()
 
 
 class DealService:
@@ -228,7 +255,14 @@ class DealService:
         docstring for why it is not also a plain field on `update`. `_settle_probability`
         -- also used by `create` and `update` -- is what actually keeps "won at 60%"
         unreachable through *any* of the three; this method no longer settles the
-        probability by itself."""
+        probability by itself.
+
+        Since slice 6 it also maintains `chiuso_il`, and the three cases are not
+        symmetric: entering a terminal stage from an open one stamps today, returning to
+        an open stage clears it, and moving between two terminal stages leaves it alone --
+        that is a correction of *which* outcome, not a new closure, and restamping would
+        move the deal into the month somebody fixed the mistake in.
+        """
         actor.require_write("move_deal")
         deal = self.repo.get(deal_id)
         if deal is None:
@@ -239,6 +273,7 @@ class DealService:
 
         deal.pipeline_stage_id = target.id
         deal.probabilita = _settle_probability(target, deal.probabilita)
+        _settle_closure_date(deal, previous, target)
 
         self.activities.record(
             ENTITY, deal.id, "stage_changed", actor, {"from": previous.nome, "to": target.nome}

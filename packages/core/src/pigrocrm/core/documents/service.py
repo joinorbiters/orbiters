@@ -14,7 +14,7 @@ from pigrocrm.core.clock import oggi_in_italia
 from pigrocrm.core.config import Settings, get_settings
 from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.customers.schemas import CustomerRead
-from pigrocrm.core.db import encode_cursor
+from pigrocrm.core.db import encode_cursor, today_local
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.documents.models import Document, DocumentVersion
 from pigrocrm.core.documents.repository import DocumentRepository
@@ -594,6 +594,12 @@ class DocumentService:
                 transizioni_ammesse=sorted(allowed),
             )
         previous, document.stato = document.stato, stato
+        # The day this state began. Task B5 inserts the automation runner between this
+        # line and `activities.record` below -- the order in §9.3 is not cosmetic.
+        # `today_local()` and never `date.today()`: see `db/clock.py`. An offer whose
+        # state was set at 00:30 CET on 1 January would otherwise be reported as having
+        # been in that state since the previous year.
+        document.stato_dal = today_local()
         self.activities.record(
             ENTITY, document.id, "state_changed", actor, {"da": previous, "a": stato}
         )
