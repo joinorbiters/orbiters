@@ -281,6 +281,42 @@ class DealService:
         self.session.commit()
         return DealRead.model_validate(deal)
 
+    def set_stage_in_transaction(self, deal: Deal, stage: PipelineStageRead) -> None:
+        """Move a deal to a stage, and nothing else. Slice 6 §9.3's convention.
+
+        Mutates. Does **not** record an activity, does **not** commit, and does **not**
+        check authorisation. Callable only from `core/automations/`, and
+        `packages/core/tests/test_in_transaction_callers.py` enforces that on the AST of
+        every call site in the repository.
+
+        Why it exists at all: `AutomationRunner` runs inside its trigger's transaction
+        (`DocumentService.set_offer_state`), and `move_stage` commits and records. Calling
+        `move_stage` from the runner would commit the offer's state change before the
+        trigger had finished -- destroying the atomicity that is the whole answer to "what
+        happens if an automation fails halfway" -- and would write a second timeline entry
+        for a single movement.
+
+        Why it does not authorise: the trigger already did (`set_offer_state` calls
+        `actor.require_write`), so a `readonly` actor never reaches the runner. Adding a
+        check here would be harmless; *elevating* here would turn accepting an offer into a
+        way to write to a deal the actor could not otherwise touch. It takes no `actor`
+        parameter at all, so there is nothing to elevate with.
+
+        `_settle_probability` and `_settle_closure_date` are reused rather than
+        reimplemented, and that is the only reason both are module-level functions: "won at
+        60%" and "closed in the wrong month" must stay unreachable through this path too,
+        and an invariant reachable through two paths has to live in one place.
+
+        The previous stage is read **before** the assignment, and the order is
+        load-bearing: `_settle_closure_date` decides on `previous.tipo`, so looking it up
+        afterwards would hand it the target as the previous stage and every move would take
+        the "correction between two terminal stages" branch, which stamps nothing at all.
+        """
+        previous = self.pipeline.get(deal.pipeline_stage_id)
+        deal.pipeline_stage_id = stage.id
+        deal.probabilita = _settle_probability(stage, deal.probabilita)
+        _settle_closure_date(deal, previous, stage)
+
     def get(self, deal_id: UUID, actor: Actor) -> DealRead:
         deal = self.repo.get(deal_id)
         if deal is None:

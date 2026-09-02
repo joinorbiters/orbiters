@@ -106,6 +106,19 @@ _VIETATE: dict[Method, str] = {
 _INTERNE: dict[Method, str] = {
     ("ActivityService", "record"): "scrive la timeline per conto di un altro servizio",
     ("CostCategoryService", "require_active"): "validazione interna di CostService",
+    ("DealService", "set_stage_in_transaction"): (
+        "e' la meta' di sola mutazione di `move_stage`, introdotta dalla convenzione "
+        "`*_in_transaction` della fetta 6 (§9.3): muta, non registra, non committa e non "
+        "controlla l'autorizzazione, perche' gira dentro la transazione del *trigger* che "
+        "l'autorizzazione l'ha gia' fatta. Non prende `actor` -- la firma meccanica di "
+        "\"non e' un'operazione che qualcuno compie\" -- e non avrebbe niente da "
+        "controllare se lo prendesse. L'unico chiamante e' `core/automations/runner.py`, e "
+        "`packages/core/tests/test_in_transaction_callers.py` lo impone sull'AST di ogni "
+        "sito di chiamata dei tre pacchetti: un tool che la esponesse sarebbe esattamente "
+        "il bypass di autorizzazione che quella guardia esiste per impedire. Lo spostamento "
+        "di stage resta raggiungibile dall'agente sotto il suo nome vero, `move_deal`, "
+        "che autorizza, registra e committa"
+    ),
     ("DocumentService", "storage_key_for"): "costruisce una chiave di storage",
     ("EmitterProfileService", "as_template_values"): "alimenta il renderer dei template",
     ("FieldDefinitionService", "specs_for"): "alimenta la validazione dei campi custom",
