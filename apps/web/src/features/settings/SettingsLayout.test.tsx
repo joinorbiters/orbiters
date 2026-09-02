@@ -51,6 +51,21 @@ describe('SettingsLayout (the /app/impostazioni route guard)', () => {
     )
   })
 
+  /**
+   * Same reason as the tabs above: `AutomationsPanel` is the only surface where the two
+   * automation rules can be switched at all, and `AutomationConfigService` gates its write
+   * on `require_admin`, so this list is the only door it has. A panel with its own passing
+   * tests and no way in is not shipped.
+   */
+  it('offers the automations settings tab to an admin', () => {
+    mockAuth.isAdmin = true
+    render(<SettingsLayout />)
+    expect(screen.getByRole('tab', { name: 'Automazioni' })).toHaveAttribute(
+      'href',
+      '/app/impostazioni/automazioni',
+    )
+  })
+
   it('no longer offers a Token tab here — it moved to its own, non-admin-gated route', () => {
     mockAuth.isAdmin = true
     render(<SettingsLayout />)

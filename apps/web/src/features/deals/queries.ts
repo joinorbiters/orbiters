@@ -230,6 +230,10 @@ export function useMoveDeal() {
       // the pipeline, so it is the natural point to also refresh what the
       // pipeline itself looks like.
       void queryClient.invalidateQueries({ queryKey: queryKeys.stages })
+      // A move changes which stage a deal is in, which is the whole of the commercial
+      // dashboard's pipeline snapshot, and it may change the closures too. By the
+      // ['dashboard'] prefix: this mutation cannot know which period is on screen.
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] })
     },
   })
 }

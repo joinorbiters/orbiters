@@ -1,5 +1,6 @@
 import { Link, Outlet, useRouterState } from '@tanstack/react-router'
 import { ShieldAlert } from 'lucide-react'
+import { defaultDashboardSearch } from '@/features/dashboard/search'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useIsAdmin } from '@/lib/auth'
@@ -15,6 +16,7 @@ const TABS = [
   { value: 'tariffe', label: 'Tariffe' },
   { value: 'periodi', label: 'Periodi' },
   { value: 'gmail', label: 'Gmail' },
+  { value: 'automazioni', label: 'Automazioni' },
 ] as const
 
 /**
@@ -65,7 +67,15 @@ export function SettingsLayout() {
             stato della pipeline o un nuovo utente, chiedi a un amministratore del tuo account.
           </p>
           <Button asChild variant="outline" className="mt-2">
-            <Link to="/app">Torna alla dashboard</Link>
+            {/* Since slice 6 `/app/` declares `validateSearch`, so its search params are
+                part of its type and a `<Link to="/app">` without them does not compile.
+                This link has no period of its own in mind, which is exactly what
+                `defaultDashboardSearch()` answers -- and sending the resolved month rather
+                than an empty object means the address bar is true from the first paint,
+                which is the whole reason §4 put the period in the URL. */}
+            <Link to="/app" search={defaultDashboardSearch()}>
+              Torna alla dashboard
+            </Link>
           </Button>
         </div>
       </div>

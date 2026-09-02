@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useState, type FormEvent } from 'react'
 import { toast } from 'sonner'
+import { defaultDashboardSearch } from '@/features/dashboard/search'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -37,7 +38,12 @@ function LoginPage() {
    * form is not a page a live session has any use for.
    */
   useEffect(() => {
-    if (user) void navigate({ to: '/app' })
+    // `/app/` declares `validateSearch` since slice 6, so its search params are part of
+    // its type and this redirect has to name them. A fresh login has no period in mind,
+    // which is what `defaultDashboardSearch()` answers -- and landing with the month
+    // already in the URL means the first thing the user could screenshot or paste to a
+    // colleague already says which period it is about (§4).
+    if (user) void navigate({ to: '/app', search: defaultDashboardSearch() })
   }, [user, navigate])
 
   async function onSubmit(event: FormEvent) {

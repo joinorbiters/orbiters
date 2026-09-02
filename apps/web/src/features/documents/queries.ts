@@ -183,6 +183,11 @@ export function useSetOfferState(documentId: string) {
       void queryClient.invalidateQueries({ queryKey: queryKeys.document(documentId) })
       void queryClient.invalidateQueries({ queryKey: queryKeys.documents() })
       void queryClient.invalidateQueries({ queryKey: queryKeys.timeline('document', documentId) })
+      // Accepting an offer may move a deal (automation A1), which changes the pipeline, the
+      // closures and the "offerta accettata, deal non vinto" signal. By the ['dashboard']
+      // prefix rather than an exact key: this mutation cannot know which period the user is
+      // looking at, and the prefix covers every cached period and every tab.
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] })
     },
   })
 }
