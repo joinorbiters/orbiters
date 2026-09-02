@@ -47,6 +47,37 @@ def get_session() -> Iterator[Session]:
 
 
 SessionDep = Annotated[Session, Depends(get_session)]
+
+
+def get_snapshot_session() -> Iterator[Session]:
+    """A second session per request, untouched by anything else in the request.
+
+    Only the dashboards use it, and they need it. A dashboard is one transaction in
+    `REPEATABLE READ` so that every figure on the page was true at one instant (spec
+    §7.1), Postgres refuses to change the isolation level once a transaction has begun,
+    and `DashboardService._open_snapshot` raises rather than silently degrading to
+    `READ COMMITTED` -- where a card and its own drill-through can disagree and nothing
+    about re-reading the code would say so.
+
+    `get_actor` resolves the cookie by reading `users` **on `SessionDep`**, and that read
+    autobegins a transaction. So a dashboard route taking `SessionDep` would raise on
+    every single request: not a race, not a load-dependent bug, every request. Two
+    sessions is the fix, and it is the same one the MCP adapter has used since Task 4A-1 --
+    `__main__.py` resolves the PAT in its own short-lived session so the tool's session is
+    untouched when the tool body runs.
+
+    A distinct callable, therefore a distinct key in FastAPI's per-request dependency
+    cache: a route asking for both gets two sessions, deliberately. The cost is one extra
+    pooled connection for the life of the request, paid only by the routes that ask.
+    """
+    session = _get_session_factory()()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+SnapshotSessionDep = Annotated[Session, Depends(get_snapshot_session)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 

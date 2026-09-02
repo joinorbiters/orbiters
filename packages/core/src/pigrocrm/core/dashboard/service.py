@@ -60,8 +60,11 @@ class DashboardService:
         """Begin the one read-only `REPEATABLE READ` transaction, and return its instant.
 
         Must be the first thing that touches the session: Postgres refuses to change the
-        isolation level once a transaction has begun. In the API that is automatic --
-        `SessionDep` yields a fresh session per request.
+        isolation level once a transaction has begun. That is not automatic in either
+        adapter, and both pay for it explicitly: the API's dashboard routes take
+        `SnapshotSessionDep`, a *second* session per request, because `ActorDep` resolves
+        the cookie by reading `users` on the ordinary one; the MCP server resolves its PAT
+        in a short-lived session of its own before any tool body runs.
 
         It raises rather than continuing when it cannot. Silent degradation here produces a
         total that was true at no single instant, and nothing about re-reading this file
@@ -82,7 +85,8 @@ class DashboardService:
             raise RuntimeError(
                 "a dashboard needs a session with no transaction in progress so it can "
                 f"run in {SNAPSHOT_ISOLATION}; this session already had one. Pass a fresh "
-                "session (the API's SessionDep yields one per request)."
+                "session (the API's SnapshotSessionDep, not SessionDep, which the actor "
+                "lookup has already read on)."
             )
         self.session.connection(execution_options={"isolation_level": SNAPSHOT_ISOLATION})
         # Annotated rather than returned directly: `scalar_one()` is typed `Any`, and an

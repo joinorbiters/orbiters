@@ -8,9 +8,11 @@ from pigrocrm_api.errors import domain_error_handler, ensure_validation_error_sc
 from pigrocrm_api.routers import (
     analytics,
     auth,
+    automations,
     cost_categories,
     costs,
     customers,
+    dashboard,
     deals,
     documents,
     email_drafts,
@@ -78,6 +80,11 @@ def create_app() -> FastAPI:
         gmail,
         email_drafts,
         payment_reminders,
+        # Slice 6. The tuple is grouped by slice rather than sorted -- the import list
+        # above is what stays alphabetical -- so a reader can see which surface each
+        # release added.
+        dashboard,
+        automations,
     ):
         app.include_router(module.router)
 
