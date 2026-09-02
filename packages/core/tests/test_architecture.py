@@ -295,3 +295,13 @@ def test_the_slice6_audit_actually_inspects_something() -> None:
         (cls.__name__, name) for cls in _audited_services_slice6() for name in _public_methods(cls)
     }
     assert ("SearchService", "search_everything") in methods, methods
+
+
+def test_the_in_transaction_convention_has_its_own_guard() -> None:
+    """Slice 6 §9.3's rule is enforced in `test_in_transaction_callers.py`, which walks
+    the AST of every call site in three packages. Named here because this file is where
+    somebody looks for the project's architectural rules, and a rule enforced in a file
+    nobody opens is a rule that gets deleted in a refactor."""
+    guard = CORE_ROOT / "tests" / "test_in_transaction_callers.py"
+    assert guard.exists(), "the *_in_transaction caller guard is missing"
+    assert "core/automations/" in guard.read_text(encoding="utf-8")
