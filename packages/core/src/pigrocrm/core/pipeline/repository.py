@@ -18,6 +18,27 @@ class PipelineRepository:
         stmt = select(PipelineStage).where(PipelineStage.code == code)
         return self.session.execute(stmt).scalar_one_or_none()
 
+    def get_by_tipo(self, tipo: str) -> list[PipelineStage]:
+        """Every stage of a kind, ordered by `posizione`.
+
+        Returns a **list** and not an `Optional`, deliberately: residuo **R14** records
+        that nothing forbids two `tipo='won'` stages, and "there are two" is an answer the
+        automation runner has to be able to see so it can decline instead of picking one.
+        An `Optional` signature would force this method to choose, which is exactly the
+        decision it must not make.
+
+        Defined above `list` because its return annotation is a bare `list[...]`: after
+        `def list` rebinds that name in the class namespace, evaluating this annotation
+        would resolve `list` to the method and raise `TypeError` at import time on 3.13.
+        """
+        return list(
+            self.session.execute(
+                select(PipelineStage)
+                .where(PipelineStage.tipo == tipo)
+                .order_by(PipelineStage.posizione, PipelineStage.id)
+            ).scalars()
+        )
+
     def list(self) -> list[PipelineStage]:
         stmt = select(PipelineStage).order_by(PipelineStage.posizione, PipelineStage.nome)
         return list(self.session.execute(stmt).scalars())
