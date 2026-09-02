@@ -352,6 +352,33 @@ _COPERTE_O_UMANE: dict[Method, str] = {
 }
 
 
+# 7. La sola esclusione dichiaratamente provvisoria di questo file, e l'unica riga che
+#    nomina il task che deve cancellarla. Sta in un blocco a se' perche' non e' una
+#    decisione sulla superficie: e' l'ammissione che la decisione non e' ancora stata
+#    presa, e una riga cosi' non deve poter passare inosservata dentro un elenco di
+#    scelte definitive.
+#
+#    La ragione per cui non la prende A8 e' di sostanza, non di ordine dei task. La
+#    fetta 6 aggiunge tre superfici agentiche insieme -- la ricerca globale, le
+#    dashboard e la configurazione delle automazioni -- e A11 le decide in un colpo
+#    solo, perche' e' li' che si vede se `search_everything` debba essere un tool o
+#    cinque, se abbia senso restituire `punteggio` a un agente che non lo puo' usare per
+#    ordinare niente, e se il conteggio troncato vada detto a un agente nello stesso
+#    modo in cui lo si dice a una persona. Fissarla qui vorrebbe dire decidere la forma
+#    di un adattatore dal centro del dominio, prima che le altre due superfici esistano.
+#
+#    **A11 deve rimuovere questa riga**, non aggiornarla: il suo brief vuole che le
+#    esclusioni della fetta 6 siano esattamente `update_automation_config`, e questa
+#    voce e' l'unica cosa che glielo impedirebbe.
+_IN_ATTESA_DI_DECISIONE: dict[Method, str] = {
+    ("SearchService", "search_everything"): "la superficie agentica della fetta 6 -- "
+    "ricerca, dashboard e automazioni -- e' decisa in blocco dal task A11, che espone "
+    "questo metodo come tool e cancella questa riga. Fino ad allora il metodo esiste "
+    "senza tool, ed e' l'unica esclusione di questo file che dichiari di essere "
+    "provvisoria",
+}
+
+
 ESCLUSIONI: dict[Method, str] = {
     **_VIETATE,
     **_INTERNE,
@@ -359,6 +386,7 @@ ESCLUSIONI: dict[Method, str] = {
     **_CONFIGURAZIONE,
     **_BYTE,
     **_COPERTE_O_UMANE,
+    **_IN_ATTESA_DI_DECISIONE,
 }
 
 

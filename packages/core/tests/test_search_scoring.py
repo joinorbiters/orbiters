@@ -266,9 +266,9 @@ def test_the_floor_admits_a_whole_word_match_and_excludes_pure_noise(
     A constant asserted equal to its own literal would pass against any number at all. So
     the floor is pinned by what it has to separate: a whole word found inside a company
     name must survive it, and a row that shares no trigram at all must not. Both figures
-    come from `similarity()` on real Postgres -- 0.2129 and 0.0000 as measured here -- so
-    if a pg_trgm upgrade moves them enough to cross the floor, this test says so instead
-    of the palette quietly losing results.
+    come from `word_similarity()` on real Postgres -- 0.6000 and 0.0000 as measured here
+    -- so if a pg_trgm upgrade moves them enough to cross the floor, this test says so
+    instead of the palette quietly losing results.
     """
     real_match = _add(db_session, "Grande Ingegneria Lombarda Srl")
     noise = _add(db_session, "Quadrifoglio Logistica Spa")
@@ -282,25 +282,29 @@ def test_the_floor_admits_a_whole_word_match_and_excludes_pure_noise(
     assert Decimal("0") < SCORE_FLOOR < SCORE_SUBSTRING_FACTOR
 
 
-def test_a_short_fragment_of_a_middle_word_scores_below_the_floor(
-    db_session: Session,
-) -> None:
-    """Recorded, not celebrated -- and it is the one interaction in this module a reader
-    should know about before task A8 applies the floor.
+def test_a_short_fragment_of_a_middle_word_survives_the_floor(db_session: Session) -> None:
+    """The measurement that chose `word_similarity()` over §8.5's literal
+    `similarity(campo, termine)`, kept as an executable record of the decision.
 
-    `similarity()` is symmetric in the *length* of both sides: a six-character fragment
-    against a thirty-character name shares few trigrams relative to their union, so
-    "Ingegn" inside "Grande Ingegneria Lombarda Srl" scores 0.1125 -- a legitimate match
-    by `matches_any`, ranked correctly below a prefix by the formula, and still under the
-    0.20 floor. A8 will therefore not show it. That is what the spec's two constants
-    produce together; this test exists so the consequence is a decision on the record
-    rather than something discovered from a bug report about a customer that "does not
-    come up".
+    `similarity()` compares whole strings, so it charges a field for the text it carries
+    besides the match: it scores this pair at 0.1875, putting §8.5's third rung at 0.1125
+    -- under the 0.20 floor -- and it scores the fragment the plan advertises by name,
+    "34567" inside the P.IVA 01234567890, at 0.2000 for a rung of 0.1200, also under the
+    floor. The plan promises that exact search in three places (§17, the
+    `search_everything` MCP docstring and an end-to-end test), so the formula as written,
+    the floor and the promise cannot all three hold. `word_similarity()` is the pg_trgm
+    function for a term matched against an *extent* of a string, and with it every literal
+    containment clears the floor while every non-containment still scores exactly zero.
+
+    If this ever goes red, the palette has silently stopped finding customers by a
+    fragment of their VAT number, which is 6A's stated reason to exist.
     """
-    row = _add(db_session, "Grande Ingegneria Lombarda Srl")
-    fragment = _score(db_session, row, "Ingegn")
+    long_name = _add(db_session, "Grande Ingegneria Lombarda Srl")
+    vat_like = _add(db_session, "01234567890")
 
-    assert Decimal("0") < fragment < SCORE_FLOOR
-    # The same fragment at the *start* of the name is well clear of the floor, which is
-    # the asymmetry §16 criterion 4 asks for in the first place.
-    assert _score(db_session, _add(db_session, "Ingegneria Rossi Srl"), "Ingegn") > SCORE_FLOOR
+    assert _score(db_session, long_name, "Ingegn") > SCORE_FLOOR
+    assert _score(db_session, vat_like, "34567") > SCORE_FLOOR
+
+    # Still below a prefix match on the same term, which is what §16 criterion 4 asks
+    # for: the ladder is unchanged, only the measure on its third rung.
+    assert _score(db_session, long_name, "Ingegn") < SCORE_PREFIX
