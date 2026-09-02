@@ -126,7 +126,7 @@ class GmailSyncService:
         # conversation, so the two agree instead of racing over the unique constraint.
         report.reconciled = reconcile_only(
             self.session, settings=self.settings, transport=self.transport, tokens=self.tokens
-        ).reconcile_all(actor)
+        ).reconcile_all(account.id, actor)
 
         # Two windows, not one. An address the roster gained since the last cycle has a
         # history behind it that no watermark has ever covered, so it is searched over

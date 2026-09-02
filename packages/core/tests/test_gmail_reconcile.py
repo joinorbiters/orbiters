@@ -567,3 +567,86 @@ def test_the_fallback_can_be_switched_off_and_the_exact_path_still_answers(
 
     service.reconcile(draft.id, actor_for(account))
     assert [r for r in fake.requests if "rfc822msgid" in (r.q or "")] == []
+
+
+# --- whose send is it, anyway ---------------------------------------------------------
+
+
+def test_one_users_sync_does_not_declare_another_users_delivered_mail_failed(
+    db_session: Session,
+) -> None:
+    """The defect B2-6 could mitigate and not remove, now closed by a column.
+
+    `reconcile_all` runs inside *each* user's sync cycle. Before
+    `email_drafts.google_account_id` existed it walked every unresolved draft in the
+    installation, so this cycle -- user A's -- would pick up user B's `incerto` send, look
+    for it in A's mailbox, find nothing there because it never was there, and past the
+    grace window write `fallito` on a message sitting in B's client's inbox.
+
+    That verdict is the worst thing this slice can produce: it is not merely wrong, it
+    reads as an instruction to send the message a second time. Delete the
+    `google_account_id` predicate in `uncertain_draft_ids` and this test reports
+    `fallito`.
+    """
+    mine = connected_account(db_session)
+    theirs = connected_account(db_session, email_address="altro@example.it")
+    draft = _draft(db_session, theirs)
+    db_session.commit()
+
+    # Their send: the answer never arrived, and the message really did leave.
+    with pytest.raises(Conflict):
+        send_service(db_session, _lost_answer(True)).send(draft.id, actor_for(theirs))
+    db_session.rollback()
+    _age(db_session, draft.id, minutes=16)
+
+    stored = db_session.get(EmailDraft, draft.id)
+    assert stored is not None
+    assert stored.send_state == "incerto"
+    assert stored.google_account_id == theirs.id, "the claim must record the sending mailbox"
+
+    # My cycle, with a mailbox that has never seen their message.
+    empty = FakeGmail()
+    resolved = send_service(db_session, empty).reconcile_all(mine.id, actor_for(mine))
+    db_session.commit()
+
+    assert resolved == 0
+    after = db_session.get(EmailDraft, draft.id)
+    assert after is not None
+    assert after.send_state == "incerto", "another mailbox's cycle rewrote this outcome"
+    # And it did not even ask: their draft is none of this cycle's business, so no
+    # lookup was spent on somebody else's correspondence.
+    assert [request for request in empty.requests if "rfc822msgid" in (request.q or "")] == []
+
+
+def test_verifying_someone_elses_send_by_hand_is_refused_rather_than_guessed(
+    db_session: Session,
+) -> None:
+    """The endpoint is reachable per draft, so the scoping cannot live only in the sweep.
+    Refused with a sentence about the mailbox -- never a subject, never a recipient."""
+    mine = connected_account(db_session)
+    theirs = connected_account(db_session, email_address="altro@example.it")
+    draft = _draft(db_session, theirs)
+    db_session.commit()
+    with pytest.raises(Conflict):
+        send_service(db_session, _lost_answer(True)).send(draft.id, actor_for(theirs))
+    db_session.rollback()
+    _age(db_session, draft.id, minutes=16)
+
+    with pytest.raises(Conflict, match="un'altra casella"):
+        send_service(db_session, FakeGmail()).reconcile(draft.id, actor_for(mine))
+
+    after = db_session.get(EmailDraft, draft.id)
+    assert after is not None
+    assert after.send_state == "incerto"
+
+
+def test_a_draft_that_never_left_carries_no_mailbox(db_session: Session) -> None:
+    """`google_account_id` is written by the claim and by nothing else. A draft somebody
+    is still writing has no mailbox involved yet, and recording one at creation would
+    claim an outcome that does not exist."""
+    account = connected_account(db_session)
+    draft = _draft(db_session, account)
+    db_session.commit()
+    row = db_session.get(EmailDraft, draft.id)
+    assert row is not None
+    assert row.google_account_id is None

@@ -69,6 +69,24 @@ class GmailRepository:
     def account(self, account_id: UUID) -> GoogleAccount | None:
         return self.session.get(GoogleAccount, account_id)
 
+    def any_account(self) -> GoogleAccount | None:
+        """One connected mailbox, whichever the installation has, or `None`.
+
+        For the reminder candidate list, which is a per-installation question rather than
+        a per-user one: the invoices are the issuer's, not any particular user's, and the
+        reply signal only needs *a* mailbox that has synchronised the correspondence. On
+        the ordinary single-user install this is that user's own account.
+
+        Ordered by `connected_at`, so it is deterministic on an install with more than
+        one -- an arbitrary row would make the reply signal appear and disappear between
+        two identical calls. `None` is a supported answer and not an error: an
+        installation that never connected Gmail still has invoices to chase, it simply
+        carries no reply signal.
+        """
+        return self.session.execute(
+            select(GoogleAccount).order_by(GoogleAccount.connected_at).limit(1)
+        ).scalar_one_or_none()
+
     def add_state(self, state: GoogleOAuthState) -> GoogleOAuthState:
         self.session.add(state)
         self.session.flush()
@@ -355,7 +373,7 @@ class GmailRepository:
 
     # --- the send claim ---------------------------------------------------------------
 
-    def claim_draft_for_send(self, draft_id: UUID, now: datetime) -> bool:
+    def claim_draft_for_send(self, draft_id: UUID, now: datetime, account_id: UUID) -> bool:
         """Moves a draft out of an editable state into `in_invio` in one statement, and
         answers whether *this* caller is the one that moved it.
 
@@ -372,6 +390,14 @@ class GmailRepository:
 
         `last_error` is cleared with the claim: an error sentence next to a send that is
         currently in flight describes a previous attempt and reads as one happening now.
+
+        `google_account_id` is written **here** and nowhere else, because the claim is the
+        first moment a mailbox is involved at all -- and every state whose outcome nobody
+        knows (`in_invio`, `incerto`) is reached through this statement, so writing it
+        with the claim is what makes "every reconcilable draft says whose it is" true by
+        construction rather than by remembering. Without it, one user's sync reconciles
+        another user's unresolved send against the wrong mailbox and can write `fallito`
+        on a delivered message.
 
         `synchronize_session=False` because the default would be actively wrong here.
         SQLAlchemy's `evaluate` strategy applies the `values()` to any object in this
@@ -391,7 +417,12 @@ class GmailRepository:
                 EmailDraft.id == draft_id,
                 EmailDraft.send_state.in_(sorted(EDITABLE_SEND_STATES)),
             )
-            .values(send_state="in_invio", send_attempted_at=now, last_error=None)
+            .values(
+                send_state="in_invio",
+                send_attempted_at=now,
+                last_error=None,
+                google_account_id=account_id,
+            )
             .returning(EmailDraft.id)
             .execution_options(synchronize_session=False)
         )
@@ -399,19 +430,37 @@ class GmailRepository:
 
     # --- resolving an unknown send outcome --------------------------------------------
 
-    def uncertain_draft_ids(self) -> list[UUID]:
-        """Every draft whose outcome nobody knows, oldest attempt first.
+    def uncertain_draft_ids(self, account_id: UUID) -> list[UUID]:
+        """Every draft **of this mailbox** whose outcome nobody knows, oldest attempt
+        first.
 
         `in_invio` is in here beside `incerto` and it is not an oversight: a process that
         died between the claim and the record leaves exactly that, and a draft left in it
         can be neither edited, nor sent, nor verified. `EmailSendService.reconcile` is
         what decides whether a given `in_invio` is still in flight or abandoned -- this
         query only says which rows are worth asking about.
+
+        Scoped to one account, and that scoping is the fix for a defect B2-6 could
+        mitigate and not remove. `reconcile_all` runs inside each user's own sync cycle,
+        so an unscoped list handed user A's cycle user B's unresolved send: A's mailbox
+        cannot contain it, the lookups all come back empty, and past the grace window the
+        reconciliation writes `fallito` on a message that is sitting in B's client's
+        inbox. Telling somebody their email failed when it was delivered is the one
+        outcome here that cannot be walked back, because the answer to it is to send it
+        again.
+
+        A draft with no account -- an install that had two mailboxes when 0020 ran, so the
+        backfill could not attribute it -- is deliberately in nobody's list. It keeps its
+        state, its text and its «controlla Posta inviata» sentence until a person asks
+        for it by hand, which is the safe direction of the two.
         """
         return list(
             self.session.execute(
                 select(EmailDraft.id)
-                .where(EmailDraft.send_state.in_(("incerto", "in_invio")))
+                .where(
+                    EmailDraft.send_state.in_(("incerto", "in_invio")),
+                    EmailDraft.google_account_id == account_id,
+                )
                 .order_by(EmailDraft.send_attempted_at)
             )
             .scalars()

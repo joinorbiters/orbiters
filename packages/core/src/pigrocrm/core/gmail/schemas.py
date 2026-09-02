@@ -1,4 +1,5 @@
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -233,6 +234,9 @@ class EmailDraftRead(BaseModel):
     id: UUID
     entity_type: str
     entity_id: UUID
+    # Which mailbox sent it, `None` until somebody presses Invia. An account id and
+    # nothing else: it names a row of this installation's own, not an address.
+    google_account_id: UUID | None
     to_addresses: list[str]
     cc_addresses: list[str]
     subject: str
@@ -261,3 +265,68 @@ class EmailDraftListQuery(BaseModel):
 class EmailDraftPage(BaseModel):
     items: list[EmailDraftRead]
     total: int
+
+
+class SollecitoCandidate(BaseModel):
+    """One invoice worth chasing, with everything the person needs to decide.
+
+    Read-only, so no `SafeStr` and no `max_length`: nothing here is ever an input. It is
+    what `SollecitiService.candidates` answers, and building this list -- crossing due
+    dates against payments against what has already been sent -- is the part of the job
+    that was actually laborious. Pressing a button never was.
+
+    `importo` is the invoice's own frozen `totale`, a `Decimal` at two places, never a
+    sum recomputed at reminder time: a demand for payment that names a figure the
+    client's copy of the invoice does not carry is a demand they are right to ignore.
+
+    `ultima_risposta_il` is the signal the previous system could not have had, and it is `None` on an
+    installation with no mailbox connected -- the honest degradation, not a claim that
+    nobody replied.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    invoice_id: UUID
+    # `{anno}/{numero}`, through `invoices.naming.numero_completo`. The register keeps
+    # two integers; this is the string printed on the document the client is holding.
+    numero: str
+    data_fattura: date
+    data_scadenza: date
+    giorni_di_ritardo: int
+    importo: Decimal = Field(max_digits=12, decimal_places=2)
+    cliente: str
+    customer_id: UUID
+    # How many reminders actually *left*, which is not how many rows exist: a reminder
+    # prepared and never sent occupies a position in the sequence without having been
+    # received by anybody.
+    solleciti_inviati: int
+    ultimo_sollecito_il: date | None
+    # The tone the next reminder would carry, derived from `solleciti_inviati` and not
+    # from the row count, so an unsent draft can never make the next letter open with
+    # «nonostante il precedente sollecito».
+    prossimo_livello: int
+    ultima_risposta_il: date | None
+
+
+class SollecitiPage(BaseModel):
+    items: list[SollecitoCandidate]
+    total: int
+
+
+class PaymentReminderRead(BaseModel):
+    """A reminder row, as the API and the composer see it.
+
+    `email_draft_id` is the whole point of returning this: the caller sends through
+    `/api/email-drafts/{id}/send` -- the one send path in the slice -- and nowhere else.
+    `sent_at` is `None` on everything this endpoint creates, because creating a reminder
+    sends nothing.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    invoice_id: UUID
+    sequence: int
+    sent_at: datetime | None
+    email_draft_id: UUID | None
+    created_at: datetime
