@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
+from pigrocrm.core.automations.runner import AutomationRunner
 from pigrocrm.core.clock import oggi_in_italia
 from pigrocrm.core.config import Settings, get_settings
 from pigrocrm.core.customers.models import Customer
@@ -594,12 +595,30 @@ class DocumentService:
                 transizioni_ammesse=sorted(allowed),
             )
         previous, document.stato = document.stato, stato
-        # The day this state began. Task B5 inserts the automation runner between this
-        # line and `activities.record` below -- the order in §9.3 is not cosmetic.
-        # `today_local()` and never `date.today()`: see `db/clock.py`. An offer whose
-        # state was set at 00:30 CET on 1 January would otherwise be reported as having
-        # been in that state since the previous year.
+        # The day this state began. `today_local()` and never `date.today()`: see
+        # `db/clock.py`. An offer whose state was set at 00:30 CET on 1 January would
+        # otherwise be reported as having been in that state since the previous year.
         document.stato_dal = today_local()
+
+        # Slice 6 §9.3. The order of these four steps is fixed and is not cosmetic:
+        #
+        #   1. the mutation above,
+        #   2. the runner -- which mutates the deal and records its own activity,
+        #   3. this document's own activity,
+        #   4. the commit.
+        #
+        # `ActivityService.record`'s docstring requires it to be the last thing that
+        # touches the session before the caller's commit, and forbids following it with a
+        # call into another service that commits on its own behalf. The runner sits before
+        # it and never commits, so both halves of that contract hold -- and the automation
+        # is atomic with its trigger: either the offer is accepted and the deal is moved,
+        # or neither is true. `test_automation_atomicity.py` proves both directions,
+        # including that a concurrent reader never sees one half without the other.
+        #
+        # Called explicitly, not through a hook: an implicit hook on a state change is a
+        # mechanism whose call sites cannot be found by reading the code.
+        AutomationRunner(self.session).on_offer_state_changed(document, previous, actor)
+
         self.activities.record(
             ENTITY, document.id, "state_changed", actor, {"da": previous, "a": stato}
         )
