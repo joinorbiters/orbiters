@@ -71,6 +71,10 @@ def list_documents(
     # sit on the parameter itself for FastAPI's own validation to answer 422 before
     # `DocumentListQuery` is hand-built below.
     search: Annotated[SafeStr | None, Query()] = None,
+    # The drill-through of the commercial dashboard's "offerta accettata, deal non vinto"
+    # card (§6.2). The card links here and nowhere else, and the rows returned are counted
+    # by the same predicate function the card's `COUNT` uses.
+    solo_deal_non_vinto: Annotated[bool, Query()] = False,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     # `str`, not `UUID`, since slice 6 -- see the identical comment on list_customers
     # (routers/customers.py).
@@ -86,6 +90,7 @@ def list_documents(
         tipo=tipo,
         stato=stato,
         search=search,
+        solo_deal_non_vinto=solo_deal_non_vinto,
         limit=limit,
         cursor=cursor,
         sort=sort,

@@ -14,6 +14,10 @@ const OFFER: Document = {
   tipo: 'offerta',
   titolo: 'Offerta 2026-01',
   stato: 'bozza',
+  // Slice 6 §4.1 added the day the current `stato` was set to `DocumentRead`. `null` on
+  // an offer still in `bozza`: a draft has no state change to date, and "ferma da N
+  // giorni" is not a question anyone asks about one.
+  stato_dal: null,
   versione_corrente: 1,
   custom_fields: {},
   created_at: '2026-08-10T09:00:00Z',

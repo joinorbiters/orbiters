@@ -2470,6 +2470,8 @@ export interface components {
             valore_preventivato: string | null;
             /** Tariffa Oraria */
             tariffa_oraria: string | null;
+            /** Chiuso Il */
+            chiuso_il: string | null;
             /** Custom Fields */
             custom_fields: {
                 [key: string]: unknown;
@@ -2629,6 +2631,8 @@ export interface components {
             titolo: string;
             /** Stato */
             stato: string | null;
+            /** Stato Dal */
+            stato_dal: string | null;
             /** Versione Corrente */
             versione_corrente: number;
             /** Custom Fields */
@@ -11064,6 +11068,7 @@ export interface operations {
                 tipo?: ("offerta" | "contratto" | "verbale" | "documento" | "fattura" | "fattura_xml" | "proforma" | "rapporto_ore") | null;
                 stato?: ("bozza" | "inviata" | "accettata" | "rifiutata") | null;
                 search?: string | null;
+                solo_deal_non_vinto?: boolean;
                 limit?: number;
                 cursor?: string | null;
                 /** @description created_at | updated_at | titolo */

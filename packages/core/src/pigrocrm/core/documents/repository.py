@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import ColumnElement, desc, func, select
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.dashboard.schemas import PendingOffer
@@ -15,6 +15,33 @@ from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.documents.models import Document, DocumentVersion
 from pigrocrm.core.documents.schemas import DOCUMENT_SORTS, DocumentListQuery
 from pigrocrm.core.pipeline.models import PipelineStage
+
+
+def _accepted_with_unwon_deal_predicate() -> tuple[ColumnElement[bool], ...]:
+    """§6.2's first signal, as one predicate used by both the count and the list.
+
+    Extracted rather than written twice because §7.2's guarantee -- "the card and its
+    drill-through are the same query, not two calculations" -- is only true if the
+    predicate is literally the same. Two hand-copied predicates agree until one is edited,
+    and then the dashboard and the list disagree about the same rows with nothing to say
+    which of them is right.
+
+    `PipelineStage.tipo != "won"` and not `== "open"`: an accepted offer on a *lost* deal
+    is the inconsistency too, and the two spellings differ only on that row.
+
+    Returned as a tuple of clauses so the caller can splat it into `where(...)` alongside
+    its own; the joins are the caller's, because a `COUNT` and a paginated `SELECT` build
+    them differently. Both callers use the same **inner** joins, which is what makes an
+    accepted offer filed against a customer rather than a deal absent from both sides with
+    no special case written anywhere.
+    """
+    return (
+        Document.deleted_at.is_(None),
+        Document.tipo == "offerta",
+        Document.stato == "accettata",
+        Deal.deleted_at.is_(None),
+        PipelineStage.tipo != "won",
+    )
 
 
 class DocumentRepository:
@@ -130,13 +157,7 @@ class DocumentRepository:
                 select(func.count(Document.id))
                 .join(Deal, Deal.id == Document.deal_id)
                 .join(PipelineStage, PipelineStage.id == Deal.pipeline_stage_id)
-                .where(
-                    Document.deleted_at.is_(None),
-                    Document.tipo == "offerta",
-                    Document.stato == "accettata",
-                    Deal.deleted_at.is_(None),
-                    PipelineStage.tipo != "won",
-                )
+                .where(*_accepted_with_unwon_deal_predicate())
             )
             or 0
         )
@@ -167,6 +188,20 @@ class DocumentRepository:
             # here exactly as in the other three repositories.
             like = f"%{escape_like(query.search.lower())}%"
             stmt = stmt.where(Document.titolo.ilike(like, escape="\\"))
+        if query.solo_deal_non_vinto:
+            # The drill-through of §6.2's signal card, sharing its predicate literally
+            # rather than restating it -- see `_accepted_with_unwon_deal_predicate`.
+            # An **additional** predicate on the statement built above, never a
+            # replacement for it: `tipo` and `stato` supplied alongside it still narrow
+            # the result, because a drill-through that silently dropped the caller's own
+            # filters would be answering a different question from the one asked.
+            # Inner joins, so an offer with no deal simply has no matching row -- no
+            # special case needed, and none written. Both are many-to-one, so no document
+            # is returned twice.
+            stmt = stmt.join(Deal, Deal.id == Document.deal_id).join(
+                PipelineStage, PipelineStage.id == Deal.pipeline_stage_id
+            )
+            stmt = stmt.where(*_accepted_with_unwon_deal_predicate())
 
         # Residuo R9 -- see `CustomerRepository.list` for the reasoning.
         spec = DOCUMENT_SORTS.resolve(query.sort)
