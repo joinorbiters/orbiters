@@ -156,7 +156,7 @@ class EmailSendService:
             raise Conflict(ENTITY, _already(draft.send_state), send_state=draft.send_state)
 
         # (2) Claim it, and commit the claim so a concurrent request can see it.
-        if not self.repo.claim_draft_for_send(draft_id, datetime.now(UTC)):
+        if not self.repo.claim_draft_for_send(draft_id, datetime.now(UTC), account.id):
             state = self._state_now(draft_id)
             raise Conflict(ENTITY, _already(state), send_state=state)
         self.session.commit()
@@ -308,6 +308,17 @@ class EmailSendService:
             scope=SCOPE_READONLY,
             feature="la verifica dell'invio",
         )
+        if draft.google_account_id is not None and draft.google_account_id != account.id:
+            # Somebody else's send. Refused rather than attempted, because attempting it
+            # is the defect: this mailbox cannot contain that message, every lookup below
+            # would come back empty, and past the grace window the code beneath would
+            # write `fallito` on an email already delivered from another mailbox. The
+            # sentence names the mailbox, not the correspondence.
+            raise Conflict(
+                ENTITY,
+                "questa email è partita da un'altra casella: solo chi l'ha inviata può "
+                "verificarne l'esito",
+            )
         found = self._find_sent(account, draft)
         if found is not None:
             gmail_id, thread_id = found
@@ -328,15 +339,20 @@ class EmailSendService:
         self.session.commit()
         return EmailDraftRead.model_validate(draft)
 
-    def reconcile_all(self, actor: Actor) -> int:
-        """Every draft whose outcome is unknown, and how many of them this run settled.
+    def reconcile_all(self, account_id: UUID, actor: Actor) -> int:
+        """Every draft **of this mailbox** whose outcome is unknown, and how many of them
+        this run settled.
 
         Runs at the start of each sync cycle, so an unresolved outcome does not wait for
         somebody to remember it -- a state that only resolves when a human presses a
         button is a state that stays wrong.
+
+        The `account_id` is the cycle's own, not the actor's, and passing it is what keeps
+        one user's cycle out of another user's unresolved sends: see
+        `GmailRepository.uncertain_draft_ids`.
         """
         resolved = 0
-        for draft_id in self.repo.uncertain_draft_ids():
+        for draft_id in self.repo.uncertain_draft_ids(account_id):
             before = self.session.get(EmailDraft, draft_id)
             state_before = before.send_state if before is not None else ""
             self.reconcile(draft_id, actor)

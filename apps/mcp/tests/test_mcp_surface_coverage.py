@@ -322,6 +322,13 @@ _COPERTE_O_UMANE: dict[Method, str] = {
     "una decisione della persona, e non ha inverso: la riga sparisce davvero",
     ("EmailDraftService", "list"): "elenca bozze non inviate, cioe' corrispondenza "
     "privata che non e' ancora partita: se servira' a un agente lo dira' B2-10",
+    ("SollecitiService", "candidates"): "e' una lettura pura -- nessuna chiamata a "
+    "Google, nessuna quota, nessun invio -- e per questo l'unica di 5B-2 che potrebbe "
+    "davvero diventare un tool: e' *la* parte laboriosa, incrociare scadenze e "
+    "pagamenti, ed e' esattamente cio' che un agente farebbe bene. Non e' esposta qui "
+    "solo perche' la superficie MCP di questa fetta la decide B2-10, che possiede la "
+    'scelta; la ragione non e\' "nessuno ha scritto il tool" ma "la decisione ha un '
+    'proprietario e una scadenza"',
 }
 
 

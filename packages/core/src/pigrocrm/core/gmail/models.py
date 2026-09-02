@@ -6,6 +6,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     LargeBinary,
     String,
     Text,
@@ -258,6 +259,26 @@ class EmailDraft(Base, PrimaryKeyMixin, TimestampMixin):
     # `entity_type` names, so a well-formed UUID is a `NotFound` and never an
     # `IntegrityError` from the driver.
     entity_id: Mapped[UUID] = mapped_column(nullable=False)
+    # **Which mailbox this draft was sent from.** Written by the send claim, not by
+    # `create`: until somebody presses Invia there is no mailbox involved, and the
+    # column's whole job is to say whose outcome an unresolved send is.
+    #
+    # It exists because of a defect B2-6 could mitigate and not remove. `reconcile_all`
+    # walks every draft in `incerto`/`in_invio`, and it runs inside each user's own sync
+    # cycle -- so on a multi-user install, user A's cycle would pick up user B's
+    # unresolved draft, look for it in *A's* mailbox, find nothing, and past the grace
+    # window write `fallito` on a message sitting in B's client's inbox. Telling somebody
+    # an email failed when it was delivered is the one outcome in this slice that cannot
+    # be walked back, because the reply to it is to send the message again.
+    #
+    # `SET NULL` and not `CASCADE`, like `in_reply_to_message_id` above and for the same
+    # reason: a draft is the user's own text, and disconnecting the mailbox it went out
+    # from is no reason to delete it. NULL therefore means "no mailbox is known for this
+    # one", which is also what an install that had two accounts when 0020 ran is left
+    # with -- and which the reconciliation reads as "not mine", never as "everyone's".
+    google_account_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("google_accounts.id", ondelete="SET NULL"), default=None
+    )
     to_addresses: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     cc_addresses: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     subject: Mapped[str] = mapped_column(String(998), nullable=False, default="")
@@ -283,7 +304,68 @@ class EmailDraft(Base, PrimaryKeyMixin, TimestampMixin):
     last_error: Mapped[str | None] = mapped_column(String(500), default=None)
     # The sent message, once Gmail has answered. Never before.
     sent_gmail_message_id: Mapped[str | None] = mapped_column(String(128), default=None)
-    # A plain nullable UUID with **no** foreign key, because `payment_reminders` does not
-    # exist until B2-8. That task adds the constraint in its own migration. Recorded here
-    # so the absence is a decision rather than an oversight.
-    payment_reminder_id: Mapped[UUID | None] = mapped_column(default=None)
+    # The reminder this draft carries, once there is one. The foreign key B2-3 recorded
+    # as deliberately absent -- `payment_reminders` did not exist yet -- is here now, and
+    # 0020 adds it to the table that 0018 created without it.
+    #
+    # `SET NULL`, so deleting a reminder row leaves the text somebody wrote; the reverse
+    # direction (`payment_reminders.email_draft_id`) is `SET NULL` too, for the same
+    # reason in the other order.
+    #
+    # `use_alter=True` because the two tables point at each other, and without it
+    # `Base.metadata.create_all` -- which is how the test schema is built -- cannot sort
+    # them and raises `CircularDependencyError` before a single test runs. With it the
+    # constraint is emitted as its own `ALTER TABLE` after both tables exist, which is
+    # exactly what 0020 does by hand.
+    payment_reminder_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "payment_reminders.id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_email_drafts_payment_reminder",
+        ),
+        default=None,
+    )
+
+
+class PaymentReminder(Base, PrimaryKeyMixin, TimestampMixin):
+    """One reminder for one invoice, at one position in the sequence.
+
+    The unique constraint on `(invoice_id, sequence)` is the first of the three layers of
+    spec 7.3, and it is the database that guarantees it rather than application code: two
+    concurrent creates both pass the count that precedes them, and only the constraint
+    stops the second -- which then becomes a `Conflict` instead of a second letter.
+
+    Acme had none of this. `wasSent = emailSentCount > 0` chose between a courtesy copy
+    and a reminder, and nothing anywhere checked a due date, an interval or a ceiling.
+    Pressing the button ten times sent ten emails -- and the choice was wrong even when it
+    worked: a courtesy copy resent because the first bounced became, on the second send, a
+    letter of demand.
+
+    **`sent_at` is filled by the send path and never here.** A row exists from the moment
+    the reminder is *prepared*, which is what `create_reminder` does; the draft then goes
+    out through the one send path in the slice, and `EmailSendService._record_sent` is
+    what stamps this column. The two are therefore not synonyms and the service reads
+    them differently: the ceiling counts rows (three prepared reminders occupy the three
+    positions the sequence has), while the escalation of the wording counts `sent_at`,
+    because «nonostante il precedente sollecito» about a letter still sitting in the
+    drafts folder is a sentence that describes something that never happened.
+
+    `email_draft_id` is `SET NULL` and not `CASCADE`: deleting the draft is allowed only
+    while it is still editable, and a reminder that lost its unsent text is still the
+    record that a reminder was prepared at that position.
+    """
+
+    __tablename__ = "payment_reminders"
+    __table_args__ = (
+        UniqueConstraint("invoice_id", "sequence", name="uq_payment_reminders_invoice_sequence"),
+    )
+
+    invoice_id: Mapped[UUID] = mapped_column(
+        ForeignKey("invoices.id", ondelete="CASCADE"), nullable=False
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    email_draft_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("email_drafts.id", ondelete="SET NULL"), default=None
+    )

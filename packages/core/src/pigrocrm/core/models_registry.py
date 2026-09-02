@@ -20,6 +20,7 @@ from pigrocrm.core.gmail.models import (  # noqa: F401
     GmailMessageLink,
     GoogleAccount,
     GoogleOAuthState,
+    PaymentReminder,
 )
 from pigrocrm.core.invoices.models import Invoice, InvoiceCounter, InvoiceLine  # noqa: F401
 from pigrocrm.core.people.models import Person  # noqa: F401

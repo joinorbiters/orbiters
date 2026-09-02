@@ -95,6 +95,22 @@ class Settings(BaseSettings):
     # being reported as `fallito` should try `false` first.
     gmail_reconcile_by_message_id: bool = True
 
+    # The three numbers that decide whether a reminder is legitimate, bearable and
+    # finite. Each carries `ge`/`le` because they are plain integers that reach no
+    # service-level range check: a `solleciti_grace_days` of `0` would chase the day
+    # after the due date while the transfer is still in flight, and a
+    # `solleciti_min_interval_days` of `0` would remove the layer that stops the double
+    # send hours apart. The upper bounds are not tidiness either -- an operator who typed
+    # a year into the grace period would silently switch the feature off, and one who
+    # typed 50 into the ceiling would have configured a persecution.
+    solleciti_grace_days: int = Field(default=7, ge=1, le=365)
+    solleciti_min_interval_days: int = Field(default=14, ge=1, le=365)
+    # 3 is also `MAX_SOLLECITO_LEVEL` in `gmail/solleciti_template.py`, which is where the
+    # wording stops escalating: above it a fourth register would have to be a legal
+    # threat, which is not a sentence this project has standing to put in a freelancer's
+    # name. The `le` therefore matches the template rather than being a round number.
+    solleciti_max_reminders: int = Field(default=3, ge=1, le=3)
+
     @field_validator("jwt_secret")
     @classmethod
     def _jwt_secret_must_be_long_enough(cls, value: str) -> str:

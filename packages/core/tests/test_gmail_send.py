@@ -531,9 +531,11 @@ def test_two_concurrent_sends_produce_one_email_one_row_and_one_conflict(
         both_ready = Barrier(2, timeout=30)
         original = GmailRepository.claim_draft_for_send
 
-        def claim_at_the_same_moment(self: GmailRepository, target: UUID, now: datetime) -> bool:
+        def claim_at_the_same_moment(
+            self: GmailRepository, target: UUID, now: datetime, mailbox: UUID
+        ) -> bool:
             both_ready.wait()
-            return original(self, target, now)
+            return original(self, target, now, mailbox)
 
         monkeypatch.setattr(GmailRepository, "claim_draft_for_send", claim_at_the_same_moment)
 
