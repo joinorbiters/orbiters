@@ -8,6 +8,7 @@ from pydantic import WithJsonSchema
 from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.analytics.schemas import BudgetQuery, PeriodPnlQuery
 from pigrocrm.core.customers.schemas import CustomerListQuery, CustomerUpdate
+from pigrocrm.core.dashboard.schemas import PeriodoQuery
 from pigrocrm.core.db import SortDirection
 from pigrocrm.core.deals.schemas import DealListQuery, DealUpdate
 from pigrocrm.core.documents.schemas import DocumentListQuery
@@ -27,6 +28,7 @@ from pigrocrm.core.timetracking.schemas import (
 from pigrocrm_mcp.context import McpContext
 from pigrocrm_mcp.tools import automations as automation_tools
 from pigrocrm_mcp.tools import customers, deals, documents, invoices, people, timetracking
+from pigrocrm_mcp.tools import dashboard as dashboard_tools
 from pigrocrm_mcp.tools import search as search_tools
 
 # `changes` stays a plain `dict[str, Any]` at runtime -- deliberately, not an
@@ -548,6 +550,39 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
         spostato a mano. La configurazione si cambia solo dall'interfaccia web.
         """
         return automation_tools.describe_automations(context)
+
+    # ---- dashboard ---------------------------------------------------------
+    # Registered by Task B8, which created `DashboardService`, and for the same reason
+    # Task B3 registered `describe_automations` above: the moment the service exists both
+    # coverage tests demand that each of its public methods be a tool or a named exclusion,
+    # and "a later task decides" is the placeholder Task A11 spent a whole task deleting.
+    # Task B12 owns the rest of 6B's surface -- the REST routers and this tool's own MCP
+    # test -- and must not register a second `get_commercial_dashboard`.
+    #
+    # No resource counterpart, deliberately (§11.1): a resource is addressed by a URI and a
+    # dashboard is a question with a period.
+
+    @mcp.tool()
+    @guard
+    def get_commercial_dashboard(da: IsoDateStr = None, a: IsoDateStr = None) -> dict[str, Any]:
+        """Il quadro commerciale in una sola chiamata: pipeline per stato, deal chiusi nel
+        periodo con il tasso di conversione, offerte inviate ancora in attesa con da quanti
+        giorni, chiusure previste nei 30 giorni successivi al periodo e le offerte accettate
+        il cui deal non risulta vinto. Ogni cifra è letta nello stesso istante, indicato da
+        `calcolato_alle`. `da` e `a` sono date `YYYY-MM-DD` e vanno insieme: senza, il
+        periodo è il mese corrente. `valore_ponderato` è una stima e non è fatturato.
+        """
+        # `IsoDateStr`, the alias this file already uses for a date parameter: the runtime
+        # type stays `str | None` so a malformed date is rejected inside `PeriodoQuery`,
+        # inside the guarded call, and the agent gets this project's own rendered guidance
+        # instead of an SDK rejection whose wording is not ours -- while `list_tools()`
+        # still advertises `format: date`. `model_validate` on a dict rather than
+        # `PeriodoQuery(da=da, a=a)`: the two do the same coercion, and the keyword form
+        # would be a type error to a reader (and to mypy) that says nothing true about the
+        # runtime.
+        return dashboard_tools.get_commercial_dashboard(
+            context, PeriodoQuery.model_validate({"da": da, "a": a})
+        )
 
     # ---- documents ---------------------------------------------------------
     # The download of bytes never goes through MCP (spec 7): a tool returning a
