@@ -297,6 +297,51 @@ def test_the_slice6_audit_actually_inspects_something() -> None:
     assert ("SearchService", "search_everything") in methods, methods
 
 
+def test_the_dashboard_arithmetic_ban_has_its_own_guard() -> None:
+    """Spec §3's two AST clauses live in `test_dashboard_no_arithmetic.py`. Named here
+    because this file is where somebody looks for the project's architectural rules, and a
+    rule enforced in a file nobody opens is a rule deleted in the next refactor.
+
+    The exemption list is asserted from here as well as from there, and deliberately so: the
+    file that holds a rule is the file a contributor edits when the rule is in their way, so
+    the assertion that keeps it empty is worth having somewhere they are not editing.
+    """
+    guard = CORE_ROOT / "tests" / "test_dashboard_no_arithmetic.py"
+    assert guard.exists(), "the dashboard arithmetic guard is missing"
+    source = guard.read_text(encoding="utf-8")
+    assert "BINOP_EXEMPT: frozenset[str] = frozenset()" in source, (
+        "the BinOp exemption list must stay empty (spec §3)"
+    )
+
+
+def test_the_calendar_day_ban_has_its_own_guard() -> None:
+    """The other rule this slice mechanised, and the one whose home moved.
+
+    Task B1's brief said the ban on `date.today()`/`datetime.now(...).date()` would be
+    enforced by "Task B9's AST test"; B9's brief turned out to be about the dashboard's
+    arithmetic instead, so B1 put the scan in `test_clock.py` -- over all three source
+    trees, with `db/clock.py` as its only exemption. It is named here so that the pointer
+    survives the briefs, and asserted to exist in exactly one place: two scans for one rule
+    is how the two come to disagree.
+    """
+    clock_guard = CORE_ROOT / "tests" / "test_clock.py"
+    assert clock_guard.exists()
+    assert "def test_no_module_in_src_reads_a_calendar_day_from_the_process_clock" in (
+        clock_guard.read_text(encoding="utf-8")
+    )
+    # The scanner's *definition*, not a mention of it: this test names it in its own
+    # assertion, and a file that points at a rule is not a second copy of the rule. The
+    # needle is assembled rather than written out for the same reason `tools/automations.py`
+    # cannot spell the call it bans -- a literal here would match this very line.
+    needle = "def " + "_is_process_clock_day"
+    others = [
+        path
+        for path in sorted((CORE_ROOT / "tests").glob("test_*.py"))
+        if path != clock_guard and needle in path.read_text(encoding="utf-8")
+    ]
+    assert not others, f"the calendar-day scan must live in test_clock.py alone: {others}"
+
+
 def test_the_in_transaction_convention_has_its_own_guard() -> None:
     """Slice 6 §9.3's rule is enforced in `test_in_transaction_callers.py`, which walks
     the AST of every call site in three packages. Named here because this file is where
