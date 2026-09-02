@@ -1,11 +1,16 @@
+from datetime import date
+from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import Numeric, and_, case, func, literal, select
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.dashboard.schemas import ClosedInPeriod, PipelineStageSummary
 from pigrocrm.core.db import decode_cursor, escape_like, keyset_predicate, order_by
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.deals.schemas import DEAL_SORTS, DealListQuery
+from pigrocrm.core.money import percentage_of, round_money
+from pigrocrm.core.pipeline.models import PipelineStage
 
 
 class DealRepository:
@@ -25,6 +30,164 @@ class DealRepository:
         self.session.flush()
         return deal
 
+    def pipeline_summary(self) -> list[PipelineStageSummary]:
+        """Open deals per stage: count, `Σ valore_previsto`, count without a value, and
+        the weighted estimate.
+
+        Lives in the repository rather than on `DealService` on purpose (spec §3): these
+        aggregates have no business rule beyond `deleted_at IS NULL`, and putting them on
+        the service would create **two paths an agent can reach the same number by** --
+        the deal domain tool and the dashboard tool -- which is exactly the duplication
+        this slice exists not to introduce.
+
+        `valore_ponderato` is the first of §3's two declared exceptions: a product of two
+        columns of `deals`, rounded per row and then summed, HALF_UP. Allowed because both
+        operands are columns of this one table and the result is not money received. It is
+        labelled *stima* in every rendering and never added to revenue.
+
+        A LEFT JOIN from `pipeline_stages`, so a stage with no deals comes back with
+        zeroes: a missing stage and an empty stage render identically in a bar chart and
+        the reader cannot tell which they are looking at.
+        """
+        rounded_weight = func.round(
+            func.cast(Deal.valore_previsto, Numeric(20, 6))
+            * func.cast(Deal.probabilita, Numeric(20, 6))
+            / literal(100),
+            2,
+        )
+        stmt = (
+            select(
+                PipelineStage.id,
+                PipelineStage.code,
+                PipelineStage.nome,
+                PipelineStage.posizione,
+                func.count(Deal.id).label("numero"),
+                func.coalesce(func.sum(Deal.valore_previsto), literal(0)).label("valore"),
+                # `Deal.id IS NOT NULL` is load-bearing and not defensive: under the outer
+                # join a stage with no deals still yields one row whose `deals` columns are
+                # all NULL, so a bare `valore_previsto IS NULL` would count that phantom
+                # row and report one value-less deal in a stage that has none.
+                func.count(
+                    case((and_(Deal.id.is_not(None), Deal.valore_previsto.is_(None)), 1))
+                ).label("senza"),
+                func.coalesce(func.sum(rounded_weight), literal(0)).label("ponderato"),
+            )
+            .select_from(PipelineStage)
+            .outerjoin(
+                Deal,
+                (Deal.pipeline_stage_id == PipelineStage.id) & Deal.deleted_at.is_(None),
+            )
+            .where(PipelineStage.tipo == "open")
+            .group_by(
+                PipelineStage.id,
+                PipelineStage.code,
+                PipelineStage.nome,
+                PipelineStage.posizione,
+            )
+            .order_by(PipelineStage.posizione, PipelineStage.id)
+        )
+        return [
+            PipelineStageSummary(
+                stage_id=str(row.id),
+                stage_code=row.code,
+                stage_nome=row.nome,
+                posizione=row.posizione,
+                numero=row.numero,
+                valore_totale=round_money(Decimal(row.valore)),
+                senza_valore=row.senza,
+                valore_ponderato=round_money(Decimal(row.ponderato)),
+            )
+            for row in self.session.execute(stmt).all()
+        ]
+
+    def closed_in_period(self, da: date, a: date) -> ClosedInPeriod:
+        """Deals won and lost in the period, by `chiuso_il`.
+
+        `chiuso_il` and not the timeline: `move_stage` records the stage *names*, which a
+        user may rename (residuo R15), so deducing a historical closure would mean matching
+        a mutable string. Rows with `chiuso_il IS NULL` are excluded here and counted by
+        `unattributable_closures` so the dashboard can declare them.
+
+        `tasso_conversione` is §3's second declared exception: a ratio of two counts of the
+        same rows. It goes through `money.percentage_of` rather than a local division for
+        the reason the spec gives -- it is the *same* rule as slice 4 §7.1's margin
+        percentage, `None` and never `0.00` on a zero denominator, so it is one rule with
+        one rounding mode and not two that agree today. A local `quantize` would silently
+        be HALF_EVEN, the context default this project never sets.
+        """
+        stmt = (
+            select(
+                PipelineStage.tipo,
+                func.count(Deal.id).label("numero"),
+                func.coalesce(func.sum(Deal.valore_previsto), literal(0)).label("valore"),
+            )
+            .join(PipelineStage, PipelineStage.id == Deal.pipeline_stage_id)
+            .where(
+                Deal.deleted_at.is_(None),
+                Deal.chiuso_il.is_not(None),
+                Deal.chiuso_il >= da,
+                Deal.chiuso_il <= a,
+                PipelineStage.tipo.in_(("won", "lost")),
+            )
+            .group_by(PipelineStage.tipo)
+        )
+        by_tipo = {row.tipo: row for row in self.session.execute(stmt).all()}
+        won = by_tipo.get("won")
+        lost = by_tipo.get("lost")
+        vinti = won.numero if won is not None else 0
+        persi = lost.numero if lost is not None else 0
+        return ClosedInPeriod(
+            vinti=vinti,
+            persi=persi,
+            valore_vinto=(round_money(Decimal(won.valore)) if won is not None else Decimal("0.00")),
+            tasso_conversione=percentage_of(Decimal(vinti), Decimal(vinti + persi)),
+        )
+
+    def expected_closures(self, da: date, a: date) -> int:
+        """Open deals whose `data_chiusura_prevista` falls in the window.
+
+        `tipo='open'` only: a deal already won with a future expected date is not an
+        expected closure, it is a stale field on a finished deal.
+        """
+        return (
+            self.session.scalar(
+                select(func.count(Deal.id))
+                .join(PipelineStage, PipelineStage.id == Deal.pipeline_stage_id)
+                .where(
+                    Deal.deleted_at.is_(None),
+                    PipelineStage.tipo == "open",
+                    Deal.data_chiusura_prevista.is_not(None),
+                    Deal.data_chiusura_prevista >= da,
+                    Deal.data_chiusura_prevista <= a,
+                )
+            )
+            or 0
+        )
+
+    def unattributable_closures(self) -> int:
+        """Deals in a terminal stage with no `chiuso_il`.
+
+        §4.1: `chiuso_il` is deliberately not backfilled, so every deal closed before
+        migration 0023 is unattributable to a period. This count is what lets the dashboard
+        say "N deal chiusi prima dell'introduzione di questa misura non sono attribuibili a
+        un periodo" instead of quietly reporting a conversion rate computed on a subset.
+        """
+        return (
+            self.session.scalar(
+                select(func.count(Deal.id))
+                .join(PipelineStage, PipelineStage.id == Deal.pipeline_stage_id)
+                .where(
+                    Deal.deleted_at.is_(None),
+                    Deal.chiuso_il.is_(None),
+                    PipelineStage.tipo.in_(("won", "lost")),
+                )
+            )
+            or 0
+        )
+
+    # `list` is defined LAST in this class on purpose: `def list(...)` rebinds `list` in
+    # the class namespace, and Python 3.13 evaluates annotations eagerly, so a later
+    # `-> list[...]` would raise `TypeError` at import time.
     def list(self, query: DealListQuery) -> list[Deal]:
         stmt = select(Deal).where(Deal.deleted_at.is_(None))
 

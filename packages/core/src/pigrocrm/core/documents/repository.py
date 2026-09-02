@@ -1,11 +1,20 @@
 from uuid import UUID
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
-from pigrocrm.core.db import decode_cursor, escape_like, keyset_predicate, order_by
+from pigrocrm.core.dashboard.schemas import PendingOffer
+from pigrocrm.core.db import (
+    decode_cursor,
+    escape_like,
+    keyset_predicate,
+    order_by,
+    today_local,
+)
+from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.documents.models import Document, DocumentVersion
 from pigrocrm.core.documents.schemas import DOCUMENT_SORTS, DocumentListQuery
+from pigrocrm.core.pipeline.models import PipelineStage
 
 
 class DocumentRepository:
@@ -51,6 +60,90 @@ class DocumentRepository:
         )
         return list(self.session.execute(stmt).scalars())
 
+    def pending_offers(self, limit: int = 20) -> list[PendingOffer]:
+        """Sent offers still awaiting an answer, oldest first, with their age in days.
+
+        The age is computed in Python from `today_local()` rather than in SQL from
+        `CURRENT_DATE`: `CURRENT_DATE` is the *server's* day, and every date in this
+        product is a day in the emitter's zone (`db/clock.py`). On a UTC database at 00:30
+        Rome time the two differ, and a dashboard showing "ferma da 0 giorni" for something
+        sent yesterday is worse than showing nothing.
+        """
+        today = today_local()
+        rows = self.session.execute(
+            select(Document)
+            .where(
+                Document.deleted_at.is_(None),
+                Document.tipo == "offerta",
+                Document.stato == "inviata",
+            )
+            # Nulls last: an offer with no known start date is not the oldest one, and a
+            # list meant to be worked from the top must not open with the least
+            # informative row. Postgres already defaults an ASC sort to NULLS LAST, so
+            # this is spelled out rather than relied upon -- the default flips with the
+            # direction (DESC defaults to NULLS FIRST), and an ordering that changes
+            # meaning when someone reverses it is an ordering nobody can reason about.
+            .order_by(Document.stato_dal.asc().nulls_last(), Document.id.asc())
+            .limit(limit)
+        ).scalars()
+        return [
+            PendingOffer(
+                document_id=str(row.id),
+                titolo=row.titolo,
+                deal_id=str(row.deal_id) if row.deal_id else None,
+                customer_id=str(row.customer_id) if row.customer_id else None,
+                stato_dal=row.stato_dal,
+                giorni=(today - row.stato_dal).days if row.stato_dal is not None else None,
+            )
+            for row in rows
+        ]
+
+    def count_pending_offers(self) -> int:
+        """The real total behind `pending_offers`'s truncated list, so a dashboard showing
+        twenty of ninety says ninety."""
+        return (
+            self.session.scalar(
+                select(func.count(Document.id)).where(
+                    Document.deleted_at.is_(None),
+                    Document.tipo == "offerta",
+                    Document.stato == "inviata",
+                )
+            )
+            or 0
+        )
+
+    def count_accepted_with_unwon_deal(self) -> int:
+        """§6.2's first signal: accepted offers whose deal is not in a `won` stage.
+
+        This is the case where automation A1 did **not** fire -- switched off, or declined
+        with a recorded reason -- so it is the automation's permanent cross-check: if the
+        automation goes quiet, this count speaks. It sits on the *commercial* dashboard
+        because it needs no invoices, which is what lets it ship in the same sub-plan as
+        the automation it verifies rather than one later (§17).
+
+        A `COUNT` across a join, which §3 permits explicitly: it looks at two tables and
+        produces no money figure. A `SUM` across one is how the same row gets counted
+        twice, and on a margin nobody notices.
+        """
+        return (
+            self.session.scalar(
+                select(func.count(Document.id))
+                .join(Deal, Deal.id == Document.deal_id)
+                .join(PipelineStage, PipelineStage.id == Deal.pipeline_stage_id)
+                .where(
+                    Document.deleted_at.is_(None),
+                    Document.tipo == "offerta",
+                    Document.stato == "accettata",
+                    Deal.deleted_at.is_(None),
+                    PipelineStage.tipo != "won",
+                )
+            )
+            or 0
+        )
+
+    # `list` is defined LAST in this class on purpose: `def list(...)` rebinds `list` in
+    # the class namespace, and Python 3.13 evaluates annotations eagerly, so a later
+    # `-> list[...]` would raise `TypeError` at import time.
     def list(self, query: DocumentListQuery) -> list[Document]:
         stmt = select(Document).where(Document.deleted_at.is_(None))
         if query.customer_id:
