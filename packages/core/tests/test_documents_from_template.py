@@ -256,6 +256,65 @@ def test_a_state_change_leaves_a_timeline_entry(setup: tuple, db_session: Sessio
     assert "state_changed" in kinds
 
 
+def test_accepting_an_offer_that_has_no_deal_records_no_automation(
+    setup: tuple, db_session: Session
+) -> None:
+    """The runner is called on **every** offer state change and decides for itself
+    (slice 6 §9.3). This offer belongs to a customer, so there is no deal to move and
+    nothing is recorded: a `non_eseguita` entry here would fill the automation log with
+    non-events, and the commercial dashboard's "offerta accettata, deal non vinto" signal
+    counts exactly those entries."""
+    from pigrocrm.core.activities.repository import ActivityRepository
+    from pigrocrm.core.automations.schemas import AUTOMATION_KINDS
+
+    service, customer, _ = setup
+    document = service.create(
+        DocumentCreate(customer_id=customer.id, tipo="offerta", titolo="O senza deal"), ADMIN
+    )
+    service.set_offer_state(document.id, "inviata", ADMIN)
+    service.set_offer_state(document.id, "accettata", ADMIN)
+
+    assert ActivityRepository(db_session).by_kind(list(AUTOMATION_KINDS), limit=10) == []
+
+
+def test_the_automations_entry_precedes_the_documents_own(
+    setup: tuple, db_session: Session, tmp_path: Path
+) -> None:
+    """Slice 6 §9.3 fixes the order inside the trigger, and it is not cosmetic:
+    `ActivityService.record` must be the last thing that touches the session before the
+    caller's commit, so the runner has to run *before* the document's own entry. Asserted
+    on the timeline rather than trusted to a comment -- `by_kind` returns newest first, so
+    the document's `state_changed` comes back ahead of the automation's entry.
+    """
+    from pigrocrm.core.activities.repository import ActivityRepository
+    from pigrocrm.core.automations.schemas import KIND_STAGE_MOVED
+    from pigrocrm.core.deals.models import Deal
+    from pigrocrm.core.pipeline.service import PipelineService
+
+    service, customer, _ = setup
+    PipelineService(db_session).seed_defaults(ADMIN)
+    stages = {s.code: s for s in PipelineService(db_session).list() if s.code is not None}
+    deal = Deal(
+        nome="Impianto",
+        customer_id=customer.id,
+        pipeline_stage_id=stages["lead"].id,
+        probabilita=10,
+        custom_fields={},
+    )
+    db_session.add(deal)
+    db_session.flush()
+
+    document = service.create(
+        DocumentCreate(deal_id=deal.id, tipo="offerta", titolo="O con deal"), ADMIN
+    )
+    service.set_offer_state(document.id, "inviata", ADMIN)
+    service.set_offer_state(document.id, "accettata", ADMIN)
+
+    assert deal.pipeline_stage_id == stages["vinto"].id
+    ordered = ActivityRepository(db_session).by_kind([KIND_STAGE_MOVED, "state_changed"], limit=10)
+    assert [entry.kind for entry in ordered][:2] == ["state_changed", KIND_STAGE_MOVED]
+
+
 def test_oggi_defaults_to_italys_own_day_not_the_processs(
     db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
