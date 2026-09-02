@@ -132,6 +132,11 @@ class DocumentListQuery(BaseModel):
     # the other three carry it -- a NUL byte in a query parameter raises a raw
     # `ValueError` out of psycopg, which nothing here handles.
     search: SafeStr | None = None
+    # The drill-through of the commercial dashboard's inconsistency signal (§6.2). A
+    # boolean and not a free-text filter: it selects one fixed predicate, and the card that
+    # links here counts rows with that same predicate function
+    # (`_accepted_with_unwon_deal_predicate`), so the two cannot drift apart.
+    solo_deal_non_vinto: bool = False
     # Bounded here, not only on a future router: an MCP tool could build this object
     # directly, with no router-level Query(...) bound sitting between it and this
     # schema.

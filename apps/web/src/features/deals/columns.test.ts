@@ -37,6 +37,10 @@ const BASE_DEAL: Deal = {
   // Slice 4A added the per-deal hourly rate to `DealRead`; a deal that has never had
   // one set reads `null` and falls back to the user's own default (§7.2).
   tariffa_oraria: null,
+  // Slice 6 §4.1 added the closing day to `DealRead`. `null` on an open deal, and
+  // deliberately not backfilled on deals closed before the column existed -- the
+  // commercial dashboard declares how many of those there are rather than guessing.
+  chiuso_il: null,
   custom_fields: {},
   created_at: '2026-08-06T00:00:00Z',
   updated_at: '2026-08-06T00:00:00Z',
