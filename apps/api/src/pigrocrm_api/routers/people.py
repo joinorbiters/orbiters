@@ -5,6 +5,7 @@ from fastapi import APIRouter, Query, status
 
 from pigrocrm.core.activities.schemas import ActivityRead
 from pigrocrm.core.activities.service import ActivityService
+from pigrocrm.core.db import CURSOR_MAX_LENGTH
 from pigrocrm.core.people.schemas import (
     PersonCreate,
     PersonListQuery,
@@ -38,7 +39,9 @@ def list_people(
     customer_id: Annotated[UUID | None, Query()] = None,
     custom: Annotated[list[SafeStr] | None, Query(description=CUSTOM_QUERY_DESCRIPTION)] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
-    cursor: Annotated[UUID | None, Query()] = None,
+    # `str`, not `UUID`, since slice 6 -- see the identical comment on list_customers
+    # (routers/customers.py).
+    cursor: Annotated[str | None, Query(max_length=CURSOR_MAX_LENGTH)] = None,
 ) -> PersonPage:
     query = PersonListQuery(
         search=search,

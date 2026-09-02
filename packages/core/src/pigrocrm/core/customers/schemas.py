@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.db import CURSOR_MAX_LENGTH, SortDirection, SortSpec, SortWhitelist
 from pigrocrm.core.validation import SafeStr
 
 # Mirror Customer's column widths (models.py). Without these, an over-length value
@@ -117,16 +119,50 @@ class CustomerRead(BaseModel):
     updated_at: datetime
 
 
+# Residuo R9. Three keys and no more: every admitted column costs a `(column, id)`
+# B-tree index (migration 0022), and a nullable one costs two. The list is short for
+# that reason, not out of caution. `created_at` is the default because it reproduces
+# today's behaviour exactly -- UUIDv7 order *is* creation order -- which is what keeps
+# this change contained to the type of `cursor`.
+CUSTOMER_SORTS = SortWhitelist(
+    specs=(
+        SortSpec(key="created_at", column=Customer.created_at, kind="datetime", nullable=False),
+        SortSpec(key="updated_at", column=Customer.updated_at, kind="datetime", nullable=False),
+        SortSpec(
+            key="ragione_sociale",
+            column=Customer.ragione_sociale,
+            kind="text",
+            nullable=False,
+        ),
+    ),
+    default_key="created_at",
+)
+
+
 class CustomerListQuery(BaseModel):
-    search: str | None = None
-    stato: str | None = None
+    # `SafeStr`, not a bare `str`, on every free-text parameter: these values reach
+    # psycopg as query parameters, and a NUL byte there raises a raw `ValueError` out
+    # of the driver rather than any exception this project handles.
+    search: SafeStr | None = None
+    stato: SafeStr | None = None
     custom: dict[str, Any] | None = None
     # Upper-bounded so a caller (an MCP agent especially) cannot request an
     # unbounded page; the router will impose the same ceiling at the HTTP layer.
     limit: int = Field(default=50, ge=1, le=200)
-    cursor: UUID | None = None
+    # `str`, not `UUID`, since slice 6: ordering by a non-unique column needs the pair
+    # `(sort value, id)`, and the pair is opaque so that a null is representable -- an
+    # empty string in a query parameter is indistinguishable from a null, and rows are
+    # lost on exactly that distinction. Clients echo `next_cursor` back verbatim and
+    # never parse it. See `db/sort.py`.
+    cursor: str | None = Field(default=None, max_length=CURSOR_MAX_LENGTH)
+    # Validated against CUSTOMER_SORTS by the repository, which raises a domain
+    # `ValidationFailed` naming `sort`. Not a `Literal` here on purpose: a Literal
+    # would answer with pydantic's own error shape, and both the web client's
+    # `fieldErrorFrom` and an MCP agent read this project's `field` key instead.
+    sort: SafeStr | None = None
+    dir: SortDirection = "asc"
 
 
 class CustomerPage(BaseModel):
     items: list[CustomerRead]
-    next_cursor: UUID | None
+    next_cursor: str | None

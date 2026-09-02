@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from pigrocrm.core.db import CURSOR_MAX_LENGTH, SortDirection, SortSpec, SortWhitelist
+from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.validation import SafeStr
 
 # Mirrors Deal's column width (models.py). Without this, an over-length value sails
@@ -137,17 +139,33 @@ class DealRead(BaseModel):
     updated_at: datetime
 
 
+# Residuo R9. Mirrors CUSTOMER_SORTS (customers/schemas.py) -- see there for why three
+# keys and why `created_at` is the default.
+DEAL_SORTS = SortWhitelist(
+    specs=(
+        SortSpec(key="created_at", column=Deal.created_at, kind="datetime", nullable=False),
+        SortSpec(key="updated_at", column=Deal.updated_at, kind="datetime", nullable=False),
+        SortSpec(key="nome", column=Deal.nome, kind="text", nullable=False),
+    ),
+    default_key="created_at",
+)
+
+
 class DealListQuery(BaseModel):
-    search: str | None = None
+    # See CustomerListQuery for why every free-text parameter here is `SafeStr` and why
+    # `cursor` is an opaque bounded string rather than a UUID.
+    search: SafeStr | None = None
     customer_id: UUID | None = None
     stage_id: UUID | None = None
     custom: dict[str, Any] | None = None
     # Upper-bounded so a caller (an MCP agent especially) cannot request an
     # unbounded page; matches CustomerListQuery.limit/PersonListQuery.limit exactly.
     limit: int = Field(default=50, ge=1, le=200)
-    cursor: UUID | None = None
+    cursor: str | None = Field(default=None, max_length=CURSOR_MAX_LENGTH)
+    sort: SafeStr | None = None
+    dir: SortDirection = "asc"
 
 
 class DealPage(BaseModel):
     items: list[DealRead]
-    next_cursor: UUID | None
+    next_cursor: str | None

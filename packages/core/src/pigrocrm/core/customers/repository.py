@@ -4,8 +4,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.customers.models import Customer
-from pigrocrm.core.customers.schemas import CustomerListQuery
-from pigrocrm.core.db import Base, escape_like
+from pigrocrm.core.customers.schemas import CUSTOMER_SORTS, CustomerListQuery
+from pigrocrm.core.db import Base, decode_cursor, escape_like, keyset_predicate, order_by
 
 
 class CustomerRepository:
@@ -50,12 +50,23 @@ class CustomerRepository:
         if query.custom:
             # JSONB containment, served by the GIN index.
             stmt = stmt.where(Customer.custom_fields.contains(query.custom))
-        if query.cursor:
-            stmt = stmt.where(Customer.id > query.cursor)
 
-        # Keyset pagination on a UUIDv7 id: ordered by creation, stable under inserts.
+        # Residuo R9: keyset pagination over a *whitelisted* column, ordered
+        # `col <dir> NULLS LAST, id <dir>`. Still keyset and not offset -- offset
+        # re-reads and skips rows under concurrent insertion, which is why slice 1
+        # chose keyset and does not stop being true because the sort column changed.
+        #
+        # `resolve` raises `ValidationFailed` on an unknown key, so a caller-supplied
+        # column name never reaches `ORDER BY` and never reaches `getattr` either.
+        spec = CUSTOMER_SORTS.resolve(query.sort)
+        if query.cursor:
+            value, row_id = decode_cursor(spec, query.cursor)
+            stmt = stmt.where(keyset_predicate(spec, query.dir, value, row_id))
+
         return list(
-            self.session.execute(stmt.order_by(Customer.id).limit(query.limit + 1)).scalars()
+            self.session.execute(
+                stmt.order_by(*order_by(spec, query.dir)).limit(query.limit + 1)
+            ).scalars()
         )
 
     def count_active_deals(self, customer_id: UUID) -> int:

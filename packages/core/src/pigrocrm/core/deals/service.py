@@ -9,9 +9,11 @@ from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.auth.repository import UserRepository
 from pigrocrm.core.customers.repository import CustomerRepository
+from pigrocrm.core.db import encode_cursor
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.deals.repository import DealRepository
 from pigrocrm.core.deals.schemas import (
+    DEAL_SORTS,
     DealCreate,
     DealListQuery,
     DealPage,
@@ -308,7 +310,15 @@ class DealService:
         rows = self.repo.list(query)
         has_more = len(rows) > query.limit
         items = rows[: query.limit]
+        # See `CustomerService.list` for why the cursor carries the sort value as well
+        # as the id.
+        spec = DEAL_SORTS.resolve(query.sort)
+        next_cursor = (
+            encode_cursor(spec, getattr(items[-1], spec.key), items[-1].id)
+            if has_more and items
+            else None
+        )
         return DealPage(
             items=[DealRead.model_validate(d) for d in items],
-            next_cursor=items[-1].id if has_more and items else None,
+            next_cursor=next_cursor,
         )

@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from pigrocrm.core.activities.schemas import ActivityRead
 from pigrocrm.core.activities.service import ActivityService
+from pigrocrm.core.db import CURSOR_MAX_LENGTH
 from pigrocrm.core.documents.schemas import (
     DocumentCreate,
     DocumentFromTemplate,
@@ -65,7 +66,9 @@ def list_documents(
     tipo: Annotated[DocumentTipo | None, Query()] = None,
     stato: Annotated[OfferState | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
-    cursor: Annotated[UUID | None, Query()] = None,
+    # `str`, not `UUID`, since slice 6 -- see the identical comment on list_customers
+    # (routers/customers.py).
+    cursor: Annotated[str | None, Query(max_length=CURSOR_MAX_LENGTH)] = None,
 ) -> DocumentPage:
     query = DocumentListQuery(
         customer_id=customer_id,

@@ -14,12 +14,14 @@ from pigrocrm.core.clock import oggi_in_italia
 from pigrocrm.core.config import Settings, get_settings
 from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.customers.schemas import CustomerRead
+from pigrocrm.core.db import encode_cursor
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.documents.models import Document, DocumentVersion
 from pigrocrm.core.documents.repository import DocumentRepository
 from pigrocrm.core.documents.schemas import (
     ALLOWED_CONTENT_TYPES,
     DIMENSIONE_MAX,
+    DOCUMENT_SORTS,
     DocumentCreate,
     DocumentFromTemplate,
     DocumentListQuery,
@@ -613,7 +615,15 @@ class DocumentService:
         rows = self.repo.list(query)
         has_more = len(rows) > query.limit
         items = rows[: query.limit]
+        # See `CustomerService.list` for why the cursor carries the sort value as well
+        # as the id.
+        spec = DOCUMENT_SORTS.resolve(query.sort)
+        next_cursor = (
+            encode_cursor(spec, getattr(items[-1], spec.key), items[-1].id)
+            if has_more and items
+            else None
+        )
         return DocumentPage(
             items=[DocumentRead.model_validate(d) for d in items],
-            next_cursor=items[-1].id if has_more and items else None,
+            next_cursor=next_cursor,
         )

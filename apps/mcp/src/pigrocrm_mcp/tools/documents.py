@@ -27,7 +27,10 @@ def search(context: McpContext, query: DocumentListQuery) -> dict[str, Any]:
     page = _documents(context).list(query, context.actor)
     return {
         "items": [item.model_dump(mode="json") for item in page.items],
-        "next_cursor": str(page.next_cursor) if page.next_cursor else None,
+        # Already a string since slice 6 (an opaque `(sort value, id)` cursor), so no
+        # `str()`: keeping one here would suggest the value is still a UUID being
+        # rendered, which is exactly the assumption this change removes.
+        "next_cursor": page.next_cursor,
     }
 
 
@@ -65,6 +68,8 @@ def list_templates(context: McpContext, include_archived: bool) -> dict[str, Any
             {"id": str(t.id), "nome": t.nome, "tipo": t.tipo, "attivo": t.attivo}
             for t in page.items
         ],
+        # `TemplatePage.next_cursor` is still a `UUID`: `templates` has no sort
+        # whitelist and still pages by id alone, unlike the four entities R9 covers.
         "next_cursor": str(page.next_cursor) if page.next_cursor else None,
     }
 

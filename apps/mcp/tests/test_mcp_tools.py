@@ -303,7 +303,16 @@ async def test_search_customers_with_a_malformed_cursor_produces_guidance_not_a_
     assert result.is_error
     message = result.content[0].text
     assert "errors.pydantic.dev" not in message
-    assert "cerca" in message.lower()
+    # Since slice 6 this is a *better* error than it used to be, and the assertion
+    # moved with it. `cursor` was a UUID, so a malformed one used to surface as the
+    # generic `_malformed_identifier_error` ("...usa lo strumento di ricerca...", which
+    # is where the old `"cerca"` assertion was matching, inside "ricerca"). It is now
+    # an opaque string decoded by `db/sort.py`, which raises a domain `ValidationFailed`
+    # naming `cursor` and saying what a valid one is -- so the assertion is on the
+    # field and on the guidance, not on a substring of an unrelated sentence.
+    assert "cursor" in message.lower()
+    assert "cursore non valido" in message.lower()
+    assert "riprova" in message.lower()
 
 
 async def test_archive_customer_is_reversible_and_blocks_on_active_deals(

@@ -16,6 +16,7 @@ from pigrocrm.core.analytics.schemas import (
     DealPnl,
 )
 from pigrocrm.core.analytics.service import AnalyticsService
+from pigrocrm.core.db import CURSOR_MAX_LENGTH
 from pigrocrm.core.deals.schemas import (
     DealCreate,
     DealListQuery,
@@ -75,7 +76,10 @@ def list_deals(
     stage_id: Annotated[UUID | None, Query()] = None,
     custom: Annotated[list[SafeStr] | None, Query(description=CUSTOM_QUERY_DESCRIPTION)] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
-    cursor: Annotated[UUID | None, Query()] = None,
+    # `str`, not `UUID`, since slice 6 -- see the identical comment on list_customers
+    # (routers/customers.py). The `cursor` on `list_deal_time_entries` further down
+    # stays a `UUID`: `time_entries` has no sort whitelist and still pages by id.
+    cursor: Annotated[str | None, Query(max_length=CURSOR_MAX_LENGTH)] = None,
 ) -> DealPage:
     query = DealListQuery(
         search=search,

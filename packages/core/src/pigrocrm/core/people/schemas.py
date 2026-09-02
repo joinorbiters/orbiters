@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from pigrocrm.core.db import CURSOR_MAX_LENGTH, SortDirection, SortSpec, SortWhitelist
+from pigrocrm.core.people.models import Person
 from pigrocrm.core.validation import SafeStr
 
 # Mirror Person's column widths (models.py). Without these, an over-length value
@@ -107,16 +109,35 @@ class PersonRead(BaseModel):
     updated_at: datetime
 
 
+# Residuo R9. Mirrors CUSTOMER_SORTS (customers/schemas.py) -- see there for why three
+# keys and why `created_at` is the default.
+PERSON_SORTS = SortWhitelist(
+    specs=(
+        SortSpec(key="created_at", column=Person.created_at, kind="datetime", nullable=False),
+        SortSpec(key="updated_at", column=Person.updated_at, kind="datetime", nullable=False),
+        # The one nullable sort column in the whole whitelist, and the reason `order_by`
+        # declares NULLS LAST explicitly in both directions and `people` carries a
+        # second, descending index (`ix_people_cognome_desc_id`).
+        SortSpec(key="cognome", column=Person.cognome, kind="text", nullable=True),
+    ),
+    default_key="created_at",
+)
+
+
 class PersonListQuery(BaseModel):
-    search: str | None = None
+    # See CustomerListQuery for why every free-text parameter here is `SafeStr` and why
+    # `cursor` is an opaque bounded string rather than a UUID.
+    search: SafeStr | None = None
     customer_id: UUID | None = None
     custom: dict[str, Any] | None = None
     # Upper-bounded so a caller (an MCP agent especially) cannot request an
     # unbounded page; matches CustomerListQuery.limit exactly.
     limit: int = Field(default=50, ge=1, le=200)
-    cursor: UUID | None = None
+    cursor: str | None = Field(default=None, max_length=CURSOR_MAX_LENGTH)
+    sort: SafeStr | None = None
+    dir: SortDirection = "asc"
 
 
 class PersonPage(BaseModel):
     items: list[PersonRead]
-    next_cursor: UUID | None
+    next_cursor: str | None

@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from pigrocrm.core.db import CURSOR_MAX_LENGTH, SortDirection, SortSpec, SortWhitelist
+from pigrocrm.core.documents.models import Document
 from pigrocrm.core.validation import SafeStr
 
 # `fattura` is the PDF of an issued invoice, `fattura_xml` its FatturaPA file, and
@@ -105,21 +107,40 @@ class DocumentVersionRead(BaseModel):
     created_at: datetime
 
 
+# Residuo R9. Mirrors CUSTOMER_SORTS (customers/schemas.py) -- see there for why three
+# keys and why `created_at` is the default.
+DOCUMENT_SORTS = SortWhitelist(
+    specs=(
+        SortSpec(key="created_at", column=Document.created_at, kind="datetime", nullable=False),
+        SortSpec(key="updated_at", column=Document.updated_at, kind="datetime", nullable=False),
+        SortSpec(key="titolo", column=Document.titolo, kind="text", nullable=False),
+    ),
+    default_key="created_at",
+)
+
+
 class DocumentListQuery(BaseModel):
     customer_id: UUID | None = None
     deal_id: UUID | None = None
     tipo: DocumentTipo | None = None
     stato: OfferState | None = None
+    # New in slice 6: spec §8.1 makes `titolo` searchable, and task A13's "vedi tutti"
+    # link for the Documento class lands on this filter. `SafeStr` for the same reason
+    # the other three carry it -- a NUL byte in a query parameter raises a raw
+    # `ValueError` out of psycopg, which nothing here handles.
+    search: SafeStr | None = None
     # Bounded here, not only on a future router: an MCP tool could build this object
     # directly, with no router-level Query(...) bound sitting between it and this
     # schema.
     limit: int = Field(default=50, ge=1, le=200)
-    cursor: UUID | None = None
+    cursor: str | None = Field(default=None, max_length=CURSOR_MAX_LENGTH)
+    sort: SafeStr | None = None
+    dir: SortDirection = "asc"
 
 
 class DocumentPage(BaseModel):
     items: list[DocumentRead]
-    next_cursor: UUID | None
+    next_cursor: str | None
 
 
 class DocumentFromTemplate(BaseModel):
