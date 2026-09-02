@@ -17,27 +17,34 @@ fiscal year.
 
 `congela` freezes that instant on both sides of the disagreement:
 
-  * `pigrocrm.core.clock`'s own `datetime` is frozen, so `oggi_in_italia()` answers
-    `OGGI_IN_ITALIA` (1 January 2026) -- the real function, real `ZoneInfo` conversion,
-    only the instant supplied.
+  * `pigrocrm.core.db.clock._now` is frozen, so `today_local()` -- and `oggi_in_italia()`,
+    which is now a thin alias over it (slice 6 Task B1) -- answers `OGGI_IN_ITALIA`
+    (1 January 2026): the real function, real `ZoneInfo` conversion, only the instant
+    supplied.
   * each production module named by the caller gets a `date` whose `today()` answers
     `OGGI_DEL_PROCESSO` (31 December 2025), which is what the standard library would
     genuinely return for that instant on a host running in UTC.
 
-Patching the module's `date` rather than the whole interpreter's is deliberate: it is
-the same `monkeypatch.setattr(module, "datetime", ...)` shape `test_auth_tokens` and
+The freeze point moved from `pigrocrm.core.clock`'s own `datetime` to `db.clock._now`
+when Task B1 made `db/clock.py` the product's single clock and `oggi_in_italia()` a
+delegation to it. There is exactly one place to freeze because there is exactly one
+place that reads the wall clock; a helper that had to patch two would be evidence the
+consolidation had not actually happened.
+
+Patching a module attribute rather than the whole interpreter is deliberate: it is the
+same `monkeypatch.setattr(module, "datetime", ...)` shape `test_auth_tokens` and
 `test_refresh_tokens` already use to freeze token issuance, it needs no `TZ`/`tzset`
-games that would leak into other tests through the C library, and it is patched with
-`raising=False` because a module that has been fixed correctly no longer imports `date`
-at all -- the absence of the name is not a reason for the test to error.
+games that would leak into other tests through the C library, and the per-module `date`
+is patched with `raising=False` because a module that has been fixed correctly no longer
+imports `date` at all -- the absence of the name is not a reason for the test to error.
 """
 
 from datetime import UTC, date, datetime
 
 import pytest
 
-from pigrocrm.core import clock
 from pigrocrm.core.clock import ITALY_TZ
+from pigrocrm.core.db import clock as db_clock
 
 # 00:30 on 1 January in Rome. In UTC this instant is still 23:30 on 31 December.
 ISTANTE = datetime(2026, 1, 1, 0, 30, tzinfo=ITALY_TZ)
@@ -46,17 +53,6 @@ OGGI_IN_ITALIA: date = ISTANTE.astimezone(ITALY_TZ).date()
 OGGI_DEL_PROCESSO: date = ISTANTE.astimezone(UTC).date()
 
 assert OGGI_IN_ITALIA != OGGI_DEL_PROCESSO, "the whole point is that these two differ"
-
-
-class _OrologioFermo(datetime):
-    """`datetime` with a fixed `now`, in whatever zone the caller asks for."""
-
-    @classmethod
-    def now(cls, tz: object = None) -> datetime:
-        if tz is None:
-            # A naive "now" on a host running in UTC, which is what the API image is.
-            return ISTANTE.astimezone(UTC).replace(tzinfo=None)
-        return ISTANTE.astimezone(tz)  # type: ignore[arg-type]
 
 
 class _DataDiSistema(date):
@@ -69,7 +65,7 @@ class _DataDiSistema(date):
 
 def congela(monkeypatch: pytest.MonkeyPatch, *moduli: object) -> None:
     """Freeze `ISTANTE`, and make `date.today()` inside `moduli` lie the way UTC does."""
-    monkeypatch.setattr(clock, "datetime", _OrologioFermo)
+    monkeypatch.setattr(db_clock, "_now", lambda: ISTANTE.astimezone(UTC))
     for modulo in moduli:
         monkeypatch.setattr(modulo, "date", _DataDiSistema, raising=False)
 
