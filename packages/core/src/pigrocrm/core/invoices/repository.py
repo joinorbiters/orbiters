@@ -1,12 +1,23 @@
 """Queries only. A repository never commits (project rule): every method reads or
-flushes, and the surrounding `InvoiceService` method is the one transaction."""
+flushes, and the surrounding `InvoiceService` method is the one transaction.
+
+From slice 6 this file also owns the invoice-side *aggregates* the dashboards read. They
+live here rather than on `InvoiceService` for the reason §3 rule 2 gives -- a single-table
+`COUNT` or `SUM` belongs to the repository of that table, even when the dashboard asking
+for it belongs to another slice -- and for a concrete second reason: slice 3 §11 fixes its
+MCP exclusion list at exactly four names, so a new public method on `InvoiceService` would
+force either a new tool or an edit to another slice's declared list.
+"""
 
 from datetime import date
+from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import ColumnElement, delete, distinct, func, select, text
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.db import today_local
+from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.invoices.models import (
     PROFORMA_SEQUENCE_NAME,
     Invoice,
@@ -14,6 +25,71 @@ from pigrocrm.core.invoices.models import (
     InvoiceLine,
 )
 from pigrocrm.core.invoices.schemas import InvoiceListQuery
+from pigrocrm.core.money import round_money
+from pigrocrm.core.pipeline.models import PipelineStage
+
+
+def _issued_filter() -> tuple[ColumnElement[bool], ...]:
+    """The one definition of "an invoice that exists as a fiscal document".
+
+    Identical to `AnalyticsRepository._revenue_filter` on purpose and not imported from it:
+    that function answers "which invoices are revenue" and this one answers "which invoices
+    are documents somebody owes on". They coincide today because both mean "a `fattura`
+    that was issued and not annulled", and the day they stop coinciding a shared alias
+    would silently pick a side -- the same reasoning `analytics/schemas.py` records for
+    `DealStato`.
+    """
+    return (
+        Invoice.deleted_at.is_(None),
+        Invoice.tipo == "fattura",
+        Invoice.stato == "emessa",
+    )
+
+
+def _receivable_filter() -> tuple[ColumnElement[bool], ...]:
+    """An issued invoice nobody has paid. The base of both "Da incassare" and "Scaduto",
+    which is what makes the second a subset of the first rather than a figure of its own
+    (§5.2)."""
+    return (*_issued_filter(), Invoice.stato_pagamento == "da_incassare")
+
+
+def _overdue_predicate() -> tuple[ColumnElement[bool], ...]:
+    """A receivable past its due date, strictly.
+
+    Due today is due today, so `<` and not `<=`. A null `data_scadenza` is never overdue,
+    which Postgres's three-valued logic gives for free -- the explicit `IS NOT NULL` is
+    there because relying on that silently is how the opposite gets implemented by
+    accident.
+
+    `today_local()` and not `CURRENT_DATE`: `CURRENT_DATE` is the *database server's* day,
+    and every date in this product is a day in the emitter's zone (`db/clock.py`). Read at
+    call time, never bound once at import, so a process that outlives midnight in Rome does
+    not keep answering yesterday.
+    """
+    return (
+        *_receivable_filter(),
+        Invoice.data_scadenza.is_not(None),
+        Invoice.data_scadenza < today_local(),
+    )
+
+
+def _invoiced_not_won_predicate() -> tuple[ColumnElement[bool], ...]:
+    """A deal with an issued invoice that is still sitting on an `open` stage (§6.2).
+
+    `tipo = 'open'`, not `tipo <> 'won'`. The drill-through is a list of deals to go and
+    win -- almost always the stage somebody forgot to move -- and an invoiced deal parked
+    on `perso` is a different problem with a different remedy, which this signal must not
+    silently absorb.
+
+    Written as a predicate rather than inlined because slice 6 §6.2's card and its
+    drill-through must be the *same* predicate: `DealRepository.list` filters on this same
+    tuple, so the count on the card and the length of the list behind it cannot drift.
+    """
+    return (
+        *_issued_filter(),
+        Deal.deleted_at.is_(None),
+        PipelineStage.tipo == "open",
+    )
 
 
 class InvoiceRepository:
@@ -125,6 +201,96 @@ class InvoiceRepository:
             .limit(1)
         )
         return self.session.execute(stmt).scalars().first()
+
+    # --- slice 6's dashboard aggregates ------------------------------------------
+
+    def sum_da_incassare(self) -> Decimal:
+        """`Σ totale` over issued, unpaid, non-deleted invoices.
+
+        **`totale`, not `imponibile`, and that is not an inconsistency with the revenue
+        figure.** Revenue is `Σ imponibile` (slice 4 §7.1, and this slice introduces no
+        third meaning); a receivable is what must arrive in the bank, which includes VAT --
+        money collected on the State's behalf. Under the forfettario regime the two
+        coincide and the difference is unobservable, which is exactly why it is written
+        down now: the same condition, and the same answer, as slice 4 §7.1.
+
+        This figure enters **no** margin and never shares a total row with revenue (§5.2).
+
+        `round_money` rather than a bare `Decimal(...)`: `coalesce(sum(...), 0)` returns the
+        *integer literal* on an empty register, and `Decimal("0")` reaches the wire as `"0"`
+        while every other money field reaches it as `"0.00"`.
+        """
+        total = self.session.execute(
+            select(func.coalesce(func.sum(Invoice.totale), 0)).where(*_receivable_filter())
+        ).scalar_one()
+        return round_money(Decimal(total))
+
+    def sum_scaduto(self) -> Decimal:
+        """The subset of `sum_da_incassare` past its due date.
+
+        A **subset**, and rendered as one -- indented beneath it, never as a second addable
+        line (§5.2). The predicate is literally `_receivable_filter()` plus two clauses, so
+        the containment is structural rather than a property somebody has to remember.
+        """
+        total = self.session.execute(
+            select(func.coalesce(func.sum(Invoice.totale), 0)).where(*_overdue_predicate())
+        ).scalar_one()
+        return round_money(Decimal(total))
+
+    def count_emesse_in_periodo(self, da: date, a: date) -> int:
+        """A `COUNT` on the same predicate the revenue figure uses, so the two cannot
+        describe different sets -- "6 fatture emesse" beside a revenue total that included
+        a seventh, or a proforma, is the shape of that defect.
+
+        Attributed to the period by `data_emissione`, its own date, exactly as revenue is
+        (slice 4 §7.4).
+        """
+        return int(
+            self.session.execute(
+                select(func.count(Invoice.id)).where(
+                    *_issued_filter(),
+                    Invoice.data_emissione.is_not(None),
+                    Invoice.data_emissione >= da,
+                    Invoice.data_emissione <= a,
+                )
+            ).scalar_one()
+        )
+
+    def count_deals_invoiced_not_won(self) -> int:
+        """§6.2's second signal: how many deals have an issued invoice and an open stage.
+
+        Counts **deals**, not invoices: the drill-through lists deals, so two invoices on
+        one open deal is one signal, not two. `distinct` is what makes that true.
+
+        A `COUNT` across a join, which §3 permits explicitly; a `SUM` across one it does
+        not, and this produces no money figure. The inner join on `deal_id` is also what
+        keeps the register's unlinked invoices out -- a left join added later would count
+        every one of them.
+        """
+        return int(
+            self.session.execute(
+                select(func.count(distinct(Deal.id)))
+                .select_from(Invoice)
+                .join(Deal, Deal.id == Invoice.deal_id)
+                .join(PipelineStage, PipelineStage.id == Deal.pipeline_stage_id)
+                .where(*_invoiced_not_won_predicate())
+            ).scalar_one()
+        )
+
+    def count_scadute_non_incassate(self) -> int:
+        """§6.2's fourth signal: the candidate list of slice 5 §7.1's payment reminders,
+        counted. The count **sends nothing** -- and saying so here is the point, because a
+        count next to a list of overdue customers is exactly the place someone later adds a
+        "send all" button.
+
+        The same `_overdue_predicate()` `sum_scaduto` uses, so the count and the sum can
+        never describe different rows.
+        """
+        return int(
+            self.session.execute(
+                select(func.count(Invoice.id)).where(*_overdue_predicate())
+            ).scalar_one()
+        )
 
     # `list` must stay the last method defined in this class -- an unconditional
     # project rule (`test_module_imports.py`). Defining a method named `list` rebinds
