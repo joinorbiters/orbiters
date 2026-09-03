@@ -388,3 +388,88 @@ def test_the_overdue_signal_and_the_overdue_sum_are_one_predicate(
     repo = InvoiceRepository(db_session)
     assert repo.count_scadute_non_incassate() == 2
     assert repo.sum_scaduto() == Decimal("1830.00")
+
+
+# -- one customer's receivables, the rows behind the figure -----------------------
+
+
+def test_unpaid_for_customer_returns_the_rows_da_incassare_sums(
+    db_session: Session, customer: Customer
+) -> None:
+    """The list and the total describe the same set, which is the whole reason this method
+    shares `_receivable_filter()` rather than restating it.
+
+    Asserted as an identity between the two -- the sum of the listed rows against the
+    aggregate -- and not against a literal, so a clause added to one side and not the other
+    fails here whichever side was edited.
+    """
+    _invoice(db_session, customer, totale="1220.00", data_scadenza=today_local())
+    _invoice(db_session, customer, totale="610.00", data_scadenza=None)
+    _invoice(db_session, customer, totale="100.00", stato_pagamento="incassato")
+    _invoice(db_session, customer, totale="100.00", stato="bozza")
+    _invoice(db_session, customer, totale="100.00", tipo="proforma", stato="bozza")
+
+    repo = InvoiceRepository(db_session)
+    rows = repo.unpaid_for_customer(customer.id, limit=50)
+    assert sum(row.totale for row in rows) == repo.sum_da_incassare()
+    assert len(rows) == 2
+
+
+def test_unpaid_for_customer_excludes_another_customers_invoice(db_session: Session) -> None:
+    """The one clause `sum_da_incassare` does not have. Without it the briefing for one
+    customer would open with somebody else's unpaid invoices."""
+    mine = Customer(ragione_sociale="Mio Cliente", nazione="IT", custom_fields={})
+    theirs = Customer(ragione_sociale="Altro Cliente", nazione="IT", custom_fields={})
+    db_session.add_all([mine, theirs])
+    db_session.flush()
+    _invoice(db_session, mine, totale="1220.00")
+    _invoice(db_session, theirs, totale="999.00")
+
+    rows = InvoiceRepository(db_session).unpaid_for_customer(mine.id, limit=50)
+    assert [row.totale for row in rows] == [Decimal("1220.00")]
+
+
+def test_unpaid_for_customer_excludes_a_soft_deleted_invoice(
+    db_session: Session, customer: Customer
+) -> None:
+    row = _invoice(db_session, customer, totale="1220.00")
+    row.deleted_at = datetime.now(UTC)
+    db_session.flush()
+    assert InvoiceRepository(db_session).unpaid_for_customer(customer.id, limit=50) == []
+
+
+def test_unpaid_for_customer_orders_by_deadline_with_the_undated_row_last(
+    db_session: Session, customer: Customer
+) -> None:
+    """Oldest deadline first, and the one with no deadline at the bottom.
+
+    Nulls last is spelled out in the query rather than inherited, because Postgres's own
+    default flips with the sort direction -- an ordering whose meaning changes when
+    somebody reverses it is an ordering nobody can reason about. The undated row is
+    inserted *first* so a query with no ordering at all, or one relying on insertion
+    order, fails here.
+    """
+    _invoice(db_session, customer, totale="100.00", data_scadenza=None)
+    _invoice(db_session, customer, totale="300.00", data_scadenza=today_local() + timedelta(days=9))
+    _invoice(db_session, customer, totale="200.00", data_scadenza=today_local() - timedelta(days=9))
+
+    rows = InvoiceRepository(db_session).unpaid_for_customer(customer.id, limit=50)
+    assert [row.totale for row in rows] == [
+        Decimal("200.00"),
+        Decimal("300.00"),
+        Decimal("100.00"),
+    ]
+
+
+def test_unpaid_for_customer_honours_its_limit(db_session: Session, customer: Customer) -> None:
+    """The limit is required and has no default: this list is rendered into an MCP prompt,
+    and its cost is paid in the model's context window on every render. A method that
+    defaulted it would be spending a budget nobody set."""
+    for day in range(5):
+        _invoice(
+            db_session,
+            customer,
+            totale="100.00",
+            data_scadenza=today_local() + timedelta(days=day),
+        )
+    assert len(InvoiceRepository(db_session).unpaid_for_customer(customer.id, limit=2)) == 2

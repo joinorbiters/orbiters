@@ -297,6 +297,34 @@ class InvoiceRepository:
             ).scalar_one()
         )
 
+    def unpaid_for_customer(self, customer_id: UUID, limit: int) -> list[Invoice]:
+        """One customer's issued, unpaid invoices, oldest deadline first.
+
+        The rows behind `sum_da_incassare` restricted to one customer, sharing
+        `_receivable_filter()` literally rather than restating it: the total on the economic
+        dashboard and the list in the `stato-cliente` briefing describe the same set, and a
+        briefing that listed a different set from the figure beside it is the divergence
+        §7.2 exists to make impossible.
+
+        Nulls last, for the reason `pending_offers` gives: an invoice with no deadline is
+        not the most urgent one, and a list meant to be read from the top must not open with
+        the least informative row. Spelled out rather than relied upon, because Postgres's
+        default flips with the sort direction.
+
+        `limit` is required and has no default. This list goes into an MCP prompt, whose
+        cost is paid in the model's context window on every render, so the caller has to
+        say how much of it that window is worth -- a default here is a budget nobody
+        decided.
+        """
+        return list(
+            self.session.execute(
+                select(Invoice)
+                .where(*_receivable_filter(), Invoice.customer_id == customer_id)
+                .order_by(Invoice.data_scadenza.asc().nulls_last(), Invoice.id.asc())
+                .limit(limit)
+            ).scalars()
+        )
+
     # `list` must stay the last method defined in this class -- an unconditional
     # project rule (`test_module_imports.py`). Defining a method named `list` rebinds
     # that name in the *class* namespace, so any later method whose own return
