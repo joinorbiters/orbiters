@@ -167,7 +167,11 @@ def test_pat_is_returned_once_and_stored_only_as_a_hash(db_session: Session) -> 
 def test_pat_resolves_to_an_actor_and_records_last_use(db_session: Session) -> None:
     user = _make_user(db_session, "pat2@test.it")
     actor = Actor(id=user.id, type="user", role="admin")
-    service = PatService(db_session)
+    # Settings declared, not inherited: this repository's own `.env` opens the switch, so
+    # a bare `PatService(db_session)` would answer `full_access=True` here and make the
+    # assertion below say the opposite of what it claims while still passing. The same
+    # trap the API and MCP fixtures were fixed for in 59f4842.
+    service = PatService(db_session, Settings(_env_file=None))  # type: ignore[call-arg]
     _, raw = service.create("Claude locale", actor)
 
     resolved = service.resolve(raw)

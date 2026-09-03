@@ -42,7 +42,7 @@ PARTITA_IVA_RE = re.compile(r"^\d{11}$")
 CODICE_SDI_LENGTH = 7
 
 
-def _check_fiscal(data: dict[str, Any]) -> None:
+def _check_fiscal(data: dict[str, Any], nazione: str) -> None:
     """Mutates `data` in place: an empty string is normalized to `None` for both
     fiscal fields before either is checked. Without this, `if piva`/`if sdi` below are
     falsy on "", so an empty string skipped the check entirely and was stored as "" --
@@ -57,7 +57,18 @@ def _check_fiscal(data: dict[str, Any]) -> None:
         data["codice_sdi"] = None
 
     piva = data.get("partita_iva")
-    if piva and not PARTITA_IVA_RE.fullmatch(piva):
+    # The eleven-digit rule is Italian, so it is applied to Italian customers and to
+    # nobody else. It used to apply to everyone, which made a foreign customer
+    # unrepresentable: a UK company's VAT number ("12345678901", nine digits, and GB VATs
+    # are not always numeric at all) was refused, so the only way to record it was the
+    # `codice_fiscale` field, which is not validated -- a workaround that stores the
+    # right value under the wrong name and then writes it into the wrong XML element.
+    #
+    # `nazione` is passed in rather than read from `data`, because on an update the
+    # caller may be patching the VAT number without mentioning the country: the check
+    # has to run against the country the row will actually have, not against the subset
+    # of fields this request happened to name.
+    if piva and nazione.upper() == "IT" and not PARTITA_IVA_RE.fullmatch(piva):
         raise ValidationFailed(
             ENTITY, "partita_iva", "deve essere di 11 cifre", expected="11 cifre numeriche"
         )
@@ -146,7 +157,7 @@ class CustomerService:
     def create(self, data: CustomerCreate, actor: Actor) -> CustomerRead:
         actor.require_write("create_customer")
         payload = data.model_dump()
-        _check_fiscal(payload)
+        _check_fiscal(payload, payload.get("nazione") or "IT")
         payload["custom_fields"] = self._validated_custom(payload.get("custom_fields") or {})
 
         customer = self.repo.add(Customer(**payload))
@@ -169,7 +180,8 @@ class CustomerService:
         # confused with the field itself being absent -- see `_update_custom_fields`.
         changes = supplied_changes(data, exclude={"custom_fields"})
         reject_cleared_columns(ENTITY, Customer, changes)
-        _check_fiscal(changes)
+        # The country after this patch, not merely the one it mentions.
+        _check_fiscal(changes, changes.get("nazione") or customer.nazione)
         if data.custom_fields is not None:
             changes["custom_fields"] = self._update_custom_fields(customer, data.custom_fields)
         for key, value in changes.items():

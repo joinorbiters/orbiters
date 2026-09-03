@@ -313,16 +313,28 @@ def test_a_missing_address_part_is_refused_by_name(
     assert caught.value.details["field"] == field
 
 
-def test_a_foreign_customer_is_refused_by_name(
+def test_a_foreign_customer_is_issued_rather_than_refused_by_name(
     service: InvoiceService, db_session: Session
 ) -> None:
-    """R12: `customers.partita_iva` accepts only 11 digits, so a foreign VAT number
-    cannot even be stored. The slice declares foreign customers out of scope and says
-    so, rather than issuing something the SdI will reject."""
-    customer_id = _customer(db_session, nazione="DE")
-    with pytest.raises(ValidationFailed) as caught:
-        service.issue(_draft(service, customer_id), InvoiceIssue(), ADMIN)
-    assert caught.value.details["field"] == "nazione"
+    """Residual R12, closed. This test used to assert the opposite and was right to:
+    `customers.partita_iva` accepted only eleven digits, so a foreign VAT could not even
+    be stored, and the slice declared foreign customers out of scope rather than issuing
+    a file the SdI would reject.
+
+    All four of those layers are gone -- the Italian shape rule now applies only to an
+    Italian customer, `check_party_exportable` no longer refuses on `nazione`, `Provincia`
+    is omitted where there is none, and `IdPaese` is read from the customer instead of
+    being hard-coded to `IT`. Inverted rather than deleted, so that the change of decision
+    is visible in the file that recorded the old one.
+
+    A German customer with no SDI code and no PEC: exactly the shape that was
+    unrepresentable, and exactly the shape a European client has.
+    """
+    customer_id = _customer(db_session, nazione="DE", codice_sdi=None, pec=None, provincia="")
+    issued = service.issue(_draft(service, customer_id), InvoiceIssue(), ADMIN)
+
+    assert issued.stato == "emessa"
+    assert issued.numero is not None, "una fattura estera consuma un numero come le altre"
 
 
 def test_issuing_requires_admin_not_merely_write(
