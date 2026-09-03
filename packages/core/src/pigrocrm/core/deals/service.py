@@ -325,11 +325,45 @@ class DealService:
 
     def soft_delete(self, deal_id: UUID, actor: Actor) -> None:
         """Sets deleted_at. No physical delete exists in this slice: a misread
-        instruction from an agent must be reversible."""
+        instruction from an agent must be reversible.
+
+        Refuses while the deal still carries live hours, exactly as
+        `CustomerService.soft_delete` refuses while a customer still has active deals. The
+        invariant is the same one level down -- **no live child hangs off an archived
+        parent** -- and it is what keeps slice 6 criterion 2 true for every figure computed
+        over `time_entries`.
+
+        Without it the operational dashboard contradicted itself: `unbilled_backlog` sums
+        `time_entries` and joins nothing, while `count_won_deals_to_invoice` joins `deals`
+        and filters `Deal.deleted_at IS NULL`, so archiving a deal with a billable unbilled
+        entry left valore_maturato standing against a signal card reading zero, with no row
+        anywhere to reconcile them.
+
+        Fixed here rather than in the aggregates on purpose. A `Deal` semi-join added to
+        `unbilled_backlog` would fix that one pair and break another -- `week_hours` and
+        `TimeEntryRepository.list` agree today precisely because neither joins `deals` --
+        and adding the join to the lists too would make an archived deal's hours
+        unlistable, which is not what a soft delete is for. One guard at the write makes
+        every read consistent without any of them changing.
+
+        `TimeEntryService.restore` carries the mirror of this check, for the reason
+        `DealService.restore` gives about its own: an invariant enforced on only one side
+        has a back door, and the back door here is archive-the-hours, archive-the-deal,
+        restore-the-hours.
+        """
         actor.require_write("delete_deal")
         deal = self.repo.get(deal_id)
         if deal is None:
             raise NotFound(ENTITY, deal_id)
+
+        ore_attive = self.repo.count_active_time_entries(deal_id)
+        if ore_attive:
+            raise Conflict(
+                ENTITY,
+                "il deal ha ore registrate: fatturale o archiviale prima",
+                ore_attive=ore_attive,
+            )
+
         deal.deleted_at = datetime.now(UTC)
         self.activities.record(ENTITY, deal.id, "deleted", actor)
         self.session.commit()
