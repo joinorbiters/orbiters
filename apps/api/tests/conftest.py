@@ -76,6 +76,18 @@ def client(api_session: Session, tmp_path: Path) -> Iterator[TestClient]:
     # git to notice. A fresh `tmp_path` per test keeps storage exactly as isolated as
     # the database already is (`api_session`'s own rolled-back transaction).
     app.dependency_overrides[get_storage] = lambda: LocalFileStorage(tmp_path)
+    # And the settings themselves, for the same class of reason one line up. The default
+    # `get_settings()` reads a `.env` from the working directory, so whether Gmail was
+    # configured -- and therefore whether `/api/gmail/*` answers `Conflict` or works --
+    # depended on the developer's own local instance rather than on anything the tests
+    # declare. The two specs that assert an *unconfigured* installation said as much in
+    # their docstrings and were falsified the day someone wrote a `.env`.
+    #
+    # `_env_file=None` is what `test_gmail_tools.py::gmail_settings` already does for the
+    # configured half; a spec that wants Gmail present overrides this dependency with its
+    # own `Settings`, which is the honest way round: an installation is declared, never
+    # inherited.
+    app.dependency_overrides[get_settings] = lambda: Settings(_env_file=None)  # type: ignore[call-arg]
     # The login/refresh cookies are `Secure` on purpose (production sits behind TLS
     # termination) and httpx's cookie jar honours that against the request's URL
     # scheme -- over the default "http://testserver" it would store the cookie but

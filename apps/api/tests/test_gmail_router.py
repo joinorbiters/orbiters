@@ -51,7 +51,7 @@ def _configured() -> Settings:
     authenticated request in this file answer 401 "Sessione scaduta" -- a failure that
     looks like a broken auth dependency and is nothing of the sort.
     """
-    return get_settings().model_copy(
+    return _base_settings().model_copy(
         update={
             "google_client_id": "cid.apps.googleusercontent.com",
             "google_client_secret": CLIENT_SECRET,
@@ -59,6 +59,21 @@ def _configured() -> Settings:
             "public_url": "https://crm.example.it",
         }
     )
+
+
+def _base_settings() -> Settings:
+    """The settings the `client` fixture already installed, not `get_settings()`.
+
+    The distinction is the one the docstring above turns on. `client` overrides
+    `get_settings` with `Settings(_env_file=None)`, so that whether Gmail is configured
+    is something these tests declare rather than something they inherit from whatever
+    `.env` the developer wrote for their own instance. Copying from `get_settings()`
+    here would reintroduce the ambient file through the back door -- and worse, its
+    `jwt_secret` would differ from the one the login cookie was signed with, so every
+    authenticated request in this file would answer 401 "Sessione scaduta": a failure
+    that looks like a broken auth dependency and is nothing of the sort.
+    """
+    return Settings(_env_file=None)  # type: ignore[call-arg]
 
 
 @pytest.fixture
