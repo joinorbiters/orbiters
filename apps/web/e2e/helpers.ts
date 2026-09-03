@@ -17,14 +17,22 @@ export async function login(page: Page, email: string, password: string): Promis
   await page.getByLabel('Email').fill(email)
   await page.getByLabel('Password').fill(password)
   await page.getByRole('button', { name: 'Accedi' }).click()
-  // `/\/app\/?$/`, not the `/\/app(\/|$)/` this was: that pattern is also satisfied by
+  // Not `/\/app(\/|$)/`, which this once was: that pattern is also satisfied by
   // **/app/login** itself, so it passed for a login that had visibly failed to go
   // anywhere. That is not hypothetical -- it is exactly what hid the post-login
   // redirect race `routes/app/login.tsx` now documents (a correct login landed back on
   // the login form; every spec whose next line is a `page.goto` recovered on the full
   // reload, so only `auth.spec.ts` ever noticed). An assertion that its own failure
   // mode satisfies is not an assertion.
-  await expect(page).toHaveURL(/\/app\/?$/)
+  //
+  // And not the `/\/app\/?$/` that replaced it either, which anchored on the end of the
+  // string and therefore stopped being true the moment `/app/` grew a `validateSearch`
+  // (slice 6: the dashboard's period is in the URL, §4). The landing URL is now
+  // `/app?tab=commerciale&da=…&a=…`, so an end-anchored pattern fails for every spec in
+  // this suite while the login it is checking has actually succeeded. `(\?|$)` is what
+  // admits the search string without re-admitting `/app/login`: after `/app` the next
+  // character has to be `?` or nothing, and in `/app/login` it is `l`.
+  await expect(page).toHaveURL(/\/app\/?(\?|$)/)
 }
 
 export async function loginAsAdmin(page: Page): Promise<void> {
@@ -253,4 +261,145 @@ export async function seedCustomers(page: Page, prefix: string, count: number): 
       expect(response.status(), await response.text()).toBe(201)
     }
   }
+}
+
+// -- The commercial cycle: an offer waiting, and an inconsistency to repair ---
+
+/** What `seedCycleFixture` leaves behind, all of it hanging off one deal. */
+export interface CycleFixture {
+  customerId: string
+  customerName: string
+  dealId: string
+  dealName: string
+  /** The offer still `inviata`. Accepting it in the UI is the human half of criterion 15. */
+  documentId: string
+  documentTitle: string
+  /** Already `accettata`, on the same still-open deal: the inconsistency the signal counts. */
+  staleDocumentId: string
+  partitaIva: string
+}
+
+/**
+ * One customer with a recognisable VAT number, one deal in an open stage, and **two**
+ * offers on that deal: one already `accettata` from a moment when automation A1 was
+ * switched off, and one still `inviata` for a human to accept with A1 back on.
+ *
+ * Two offers on one deal, rather than the brief's one offer on each of two deals, because
+ * the criterion asks to watch «offerta accettata, deal non vinto» go **down by one** when
+ * the human accepts — and one-offer-per-deal cannot produce that.
+ * `DocumentRepository.count_accepted_with_unwon_deal` counts *documents* whose deal is not
+ * `won`, so accepting an offer on a deal that A1 then wins is a +1 and a −1 in the same
+ * instant: the signal stays flat. Flat is a real and worthwhile assertion (it is what
+ * "the automation fired" looks like from the dashboard) but it is not the movement the
+ * criterion names. Put both offers on the *same* deal and the arithmetic becomes the real
+ * one: the stale offer is already counted, the human's acceptance moves the deal to
+ * `vinto`, and the stale offer stops counting. One down — because the deal was repaired,
+ * which is the only thing this signal ever asks anyone to do.
+ *
+ * Seeded through the API for the same reason `seedCustomers` is: driving the customer form,
+ * the deal form and the upload dropzone first would make a failure in any of them read as a
+ * failure of the cycle. Those flows are asserted, once, in `crm.spec.ts` and
+ * `documents.spec.ts`.
+ *
+ * Everything carries a per-run stamp. `playwright.config.ts` runs `workers: 1,
+ * fullyParallel: false` against one database that is never truncated between invocations,
+ * so a fixed name or a fixed P.IVA would make the second run of this spec match two rows
+ * and fail on the fixture rather than on the product.
+ */
+export async function seedCycleFixture(page: Page): Promise<CycleFixture> {
+  const stamp = Date.now()
+  // Eleven digits, the shape `_check_fiscal` requires; the last eleven of the millisecond
+  // clock, which is what makes it unique per run.
+  const partitaIva = String(stamp).slice(-11)
+  // A suffix with no digits in it, deliberately: the only place the fragment searched
+  // through the palette can be found is the P.IVA, a column the palette's row never shows.
+  const suffix = stamp.toString(36).replace(/[0-9]/g, 'x')
+  const customerName = `Ciclo Ingegneria ${suffix} Srl`
+  const dealName = `Ciclo rifacimento impianti ${suffix}`
+  const documentTitle = `Ciclo offerta impianti ${suffix}`
+
+  const customer = await page.request.post('/api/customers', {
+    data: { ragione_sociale: customerName, partita_iva: partitaIva },
+  })
+  expect(customer.status(), await customer.text()).toBe(201)
+  const customerId = ((await customer.json()) as { id: string }).id
+
+  // `/api/pipeline-stages`, not the brief's `/api/pipeline`: the shipped router is the
+  // authority, and `kanban.spec.ts` already reads the same path.
+  const stages = await page.request.get('/api/pipeline-stages')
+  expect(stages.status(), await stages.text()).toBe(200)
+  const openStage = ((await stages.json()) as { id: string; code: string | null }[]).find(
+    (stage) => stage.code === 'lead',
+  )
+  if (!openStage) throw new Error('lo stato «lead» non è fra gli stati seminati')
+
+  const deal = await page.request.post('/api/deals', {
+    data: {
+      nome: dealName,
+      customer_id: customerId,
+      pipeline_stage_id: openStage.id,
+      // A string, never a JSON number: `valore_previsto` is `Numeric(12,2)`, and a float
+      // round trip is exactly what the rest of this codebase refuses to do to money.
+      valore_previsto: '18000.00',
+      probabilita: 60,
+    },
+  })
+  expect(deal.status(), await deal.text()).toBe(201)
+  const dealId = ((await deal.json()) as { id: string }).id
+
+  const staleDocumentId = await seedOffer(page, dealId, `Ciclo offerta precedente ${suffix}`)
+  // Accepting this one with A1 on would fire the automation and win the deal, which is the
+  // opposite of what this row is for. Switch A1 off, accept, switch it back on: that leaves
+  // exactly the state the signal exists to detect — an accepted offer whose deal was never
+  // moved — and leaves the automation on for the half of the cycle a human drives.
+  await setAutomationA1(page, false)
+  await setOfferState(page, staleDocumentId, 'accettata')
+  await setAutomationA1(page, true)
+
+  const documentId = await seedOffer(page, dealId, documentTitle)
+
+  return {
+    customerId,
+    customerName,
+    dealId,
+    dealName,
+    documentId,
+    documentTitle,
+    staleDocumentId,
+    partitaIva,
+  }
+}
+
+/**
+ * An offer on `dealId`, created and moved to `inviata` — the one state `accettata` is
+ * reachable from, in the server's own state machine and in `OFFER_TRANSITIONS` which
+ * mirrors it.
+ */
+async function seedOffer(page: Page, dealId: string, titolo: string): Promise<string> {
+  const created = await page.request.post('/api/documents', {
+    data: { deal_id: dealId, tipo: 'offerta', titolo },
+  })
+  expect(created.status(), await created.text()).toBe(201)
+  const documentId = ((await created.json()) as { id: string }).id
+  await setOfferState(page, documentId, 'inviata')
+  return documentId
+}
+
+async function setOfferState(page: Page, documentId: string, stato: string): Promise<void> {
+  const response = await page.request.post(`/api/documents/${documentId}/stato`, {
+    data: { stato },
+  })
+  expect(response.status(), await response.text()).toBe(200)
+}
+
+async function setAutomationA1(page: Page, on: boolean): Promise<void> {
+  const response = await page.request.put('/api/automation-config', {
+    data: { a1_offerta_accettata_vince_deal: on },
+  })
+  expect(response.status(), await response.text()).toBe(200)
+  // Read back rather than trusted. Everything the fixture is for depends on which way this
+  // switch points, and a body the server quietly ignored would seed the opposite state and
+  // fail three screens later, somewhere that looks like the product's fault.
+  const config = (await response.json()) as { a1_offerta_accettata_vince_deal: boolean }
+  expect(config.a1_offerta_accettata_vince_deal).toBe(on)
 }
