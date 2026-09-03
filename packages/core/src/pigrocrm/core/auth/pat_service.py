@@ -165,6 +165,13 @@ class PatService:
         and stay silent. Without that guard, anyone holding the revoked value could grow
         the table one row per request.
 
+        The guard is a read-modify-write, so two attempts racing each other can both
+        pass it and produce two rows. That is deliberate, not overlooked: taking a row
+        lock on every rejected token to save one duplicate entry would put a write lock
+        in the path of a credential anyone can present. The property that matters is
+        bounded growth -- once either commit lands, every later attempt is silent -- and
+        a duplicated alarm is a harmless way to fail compared to a suppressed one.
+
         The actor is `system`: the platform observed this, and honestly does not know
         who presented the token -- claiming it was the owner would be a worse answer
         than `actor_id = NULL`. The commit is this method's own, because the caller
