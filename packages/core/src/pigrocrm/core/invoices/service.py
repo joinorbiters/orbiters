@@ -69,7 +69,14 @@ from pigrocrm.core.invoices.schemas import (
     PartySnapshot,
     PaymentState,
 )
-from pigrocrm.core.invoices.totals import ComputedLine, build_riepilogo, line_total, sum_totals
+from pigrocrm.core.invoices.totals import (
+    MONEY_MAX_EXCLUSIVE,
+    ComputedLine,
+    build_riepilogo,
+    line_total,
+    overflows_money_column,
+    sum_totals,
+)
 from pigrocrm.core.schemas import reject_cleared_columns, supplied_changes
 from pigrocrm.core.storage.base import DocumentStorage
 
@@ -139,6 +146,28 @@ class InvoiceService:
         computed: list[ComputedLine] = []
         for index, riga in enumerate(righe, start=1):
             aliquota, natura, riferimento = strategy.resolve_line_vat(riga.aliquota_iva, profile)
+            prezzo_totale = line_total(
+                quantita=riga.quantita,
+                prezzo_unitario=riga.prezzo_unitario,
+                sconto_percentuale=riga.sconto_percentuale,
+                sconto_importo=riga.sconto_importo,
+            )
+            # The factors mirror `Numeric(12, 6)` in the schema; their product goes to
+            # `invoice_lines.prezzo_totale`, which is `Numeric(12, 2)`, and no Pydantic
+            # bound on two factors can express a bound on their product. Refused here,
+            # before anything is flushed: Postgres answers an overflow with
+            # `NumericValueOutOfRange`, which SQLAlchemy raises as `DataError` and not
+            # `IntegrityError`, so no handler catches it -- an unhandled 500 with the
+            # caller's transaction already aborted. The line is named because an invoice
+            # may carry `MAX_LINES` of them.
+            if overflows_money_column(prezzo_totale):
+                raise ValidationFailed(
+                    ENTITY,
+                    "righe",
+                    f"l'importo della riga {index} non e' rappresentabile: quantita per "
+                    "prezzo unitario, al netto degli sconti, supera il massimo",
+                    expected=f"un importo con valore assoluto inferiore a {MONEY_MAX_EXCLUSIVE}",
+                )
             computed.append(
                 ComputedLine(
                     numero_linea=index,
@@ -148,12 +177,7 @@ class InvoiceService:
                     prezzo_unitario=riga.prezzo_unitario,
                     sconto_percentuale=riga.sconto_percentuale,
                     sconto_importo=riga.sconto_importo,
-                    prezzo_totale=line_total(
-                        quantita=riga.quantita,
-                        prezzo_unitario=riga.prezzo_unitario,
-                        sconto_percentuale=riga.sconto_percentuale,
-                        sconto_importo=riga.sconto_importo,
-                    ),
+                    prezzo_totale=prezzo_totale,
                     aliquota_iva=aliquota,
                     natura=natura,
                     riferimento_normativo=riferimento,
@@ -170,12 +194,33 @@ class InvoiceService:
         strategy = resolve_regime(profile.codice_regime)
         riepilogo = build_riepilogo(computed)
         imponibile, imposta, totale = sum_totals(riepilogo)
+        # The stamp duty is stored but does not enter the total: `DatiBollo` declares
+        # that the issuer settled it virtually (spec 7.2).
+        bollo = strategy.bollo(riepilogo, profile)
+
+        # Summation reaches the same overflow with no oversized line anywhere:
+        # `InvoiceCreate.righe` admits `MAX_LINES` of them, and two hundred lines of
+        # fifty million each are two hundred perfectly ordinary amounts whose sum is not.
+        # Checked before a single attribute is assigned, so a refused invoice leaves no
+        # unstorable value sitting on a mapped object for the next autoflush to find.
+        for field, value in (
+            ("imponibile", imponibile),
+            ("imposta", imposta),
+            ("totale", totale),
+            ("bollo", bollo),
+        ):
+            if overflows_money_column(value):
+                raise ValidationFailed(
+                    ENTITY,
+                    field,
+                    f"la somma delle righe non e' rappresentabile: {field} supera il massimo",
+                    expected=f"un importo con valore assoluto inferiore a {MONEY_MAX_EXCLUSIVE}",
+                )
+
         invoice.imponibile = imponibile
         invoice.imposta = imposta
         invoice.totale = totale
-        # The stamp duty is stored but does not enter the total: `DatiBollo` declares
-        # that the issuer settled it virtually (spec 7.2).
-        invoice.bollo = strategy.bollo(riepilogo, profile)
+        invoice.bollo = bollo
 
     def _persist_lines(self, invoice: Invoice, computed: Sequence[ComputedLine]) -> None:
         self.repo.clear_lines(invoice.id)
