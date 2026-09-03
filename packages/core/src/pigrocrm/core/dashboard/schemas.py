@@ -184,3 +184,40 @@ class EconomicDashboard(BaseModel):
     # A COUNT on the same predicate the revenue figure uses, so the two cannot describe
     # different sets.
     fatture_emesse: int
+
+
+class DayHours(BaseModel):
+    """One point of the week's series. Always present, even at `0.00`."""
+
+    giorno: date
+    ore: Decimal = Field(max_digits=8, decimal_places=2)
+
+
+class WeekHours(BaseModel):
+    """§6's first two rows, assembled whole by `TimeEntryRepository`.
+
+    `giorni` always holds one entry per day of the window, zeros included and in calendar
+    order: a series that silently omits its empty days is a chart that lies about its own
+    shape, and a week with three worked days would render as three consecutive bars.
+
+    `giorni_senza_ore` is a field and not something the client derives. Deriving it would
+    put a set difference in the browser -- business logic in the frontend, over a set the
+    browser would have to reconstruct from a range it was never told -- and the only
+    server-side alternative, `DashboardService`, may contain no arithmetic at all (§3).
+
+    `giorni_senza_ore` means "no entry was written for this day", not "these hours sum to
+    zero". The two readings coincide today because `ck_time_entries_ore_range` is
+    `ore > 0 AND ore <= 24`, so a day that has rows cannot total zero -- but they are not
+    the same statement, and the first is the one that survives the constraint being
+    loosened. Telling somebody who entered a day that they forgot it is the one way this
+    figure can be actively unhelpful.
+    """
+
+    da: date
+    a: date
+    giorni: list[DayHours]
+    # The real failure slice 4 §13 names when it refuses a stopwatch: "non ho mai inserito
+    # martedì". This is the figure that attacks it, and the `ore-da-registrare` prompt of
+    # §10 reads the same field.
+    giorni_senza_ore: list[date]
+    ore_totali: Decimal = Field(max_digits=10, decimal_places=2)

@@ -5,7 +5,7 @@ from pigrocrm.core.db.base import (
     TimestampMixin,
     uuid7,
 )
-from pigrocrm.core.db.clock import month_bounds, today_local, window_from
+from pigrocrm.core.db.clock import current_week, month_bounds, today_local, window_from
 from pigrocrm.core.db.search import escape_like
 from pigrocrm.core.db.session import create_engine_from_settings, session_factory
 from pigrocrm.core.db.sort import (
@@ -31,6 +31,7 @@ __all__ = [
     "SortWhitelist",
     "TimestampMixin",
     "create_engine_from_settings",
+    "current_week",
     "decode_cursor",
     "encode_cursor",
     "escape_like",

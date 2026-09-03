@@ -1,10 +1,13 @@
 import calendar
-from datetime import date
+from datetime import date, timedelta
+from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.dashboard.schemas import DayHours, WeekHours
+from pigrocrm.core.money import ZERO_HOURS, round_hours, sum_hours
 from pigrocrm.core.timetracking.models import Cost, TimeEntry
 from pigrocrm.core.timetracking.schemas import CostListQuery, TimeEntryListQuery
 
@@ -52,6 +55,68 @@ class TimeEntryRepository:
     def for_month(self, deal_id: UUID, anno: int, mese: int) -> list[TimeEntry]:
         da, a = month_bounds(anno, mese)
         return self.in_range(deal_id, da, a)
+
+    def week_hours(self, da: date, a: date) -> WeekHours:
+        """`SUM(ore) GROUP BY data` over the window, filled out to **every** day in it.
+
+        Assembled here rather than in the dashboard for two reasons that agree: it is a
+        single-table `SUM`, which §3 puts in this table's repository, and "the days with no
+        hours" is a set difference -- which `DashboardService` is forbidden from containing
+        (§3, and `test_dashboard_no_arithmetic.py`). Assembling it whole is also what keeps
+        the two lists from being able to disagree: they are built from the same window and
+        the same grouped result, in one place.
+
+        The fill is the point. A `GROUP BY` returns only the days that have rows, so a week
+        with three worked days comes back as three points and any chart drawn from it shows
+        three consecutive bars -- a shape the week never had. `giorni` therefore carries one
+        entry per day of the window, in calendar order, zeros included, and an empty week
+        is seven zeros rather than nothing at all.
+
+        A day *present* in the grouped result counts as **logged** whatever it sums to, so
+        membership of `giorni_senza_ore` is decided by the presence of a row and never by
+        the total being zero. Under `ck_time_entries_ore_range` (`ore > 0 AND ore <= 24`)
+        the two readings are today indistinguishable -- a day with rows cannot sum to zero,
+        and no test can separate them, which is why this is written down rather than
+        asserted. Presence is nonetheless the right one: it is the reading that says "nobody
+        wrote anything for this day", which is the question §6 asks, and it stays correct if
+        that constraint is ever loosened. `0` is a value, never a blank, is the same rule
+        the frontend's `isBlank` applies from the other side.
+
+        `sum_hours` and `round_hours` from `core/money.py` rather than a local `quantize`:
+        that module is the project's single authority on rounding, it rounds `ROUND_HALF_UP`
+        where `Decimal.quantize` would default to half-even, and a second copy here is how
+        two totals of the same hours begin to disagree.
+        """
+        rows = self.session.execute(
+            select(TimeEntry.data, func.sum(TimeEntry.ore))
+            .where(
+                TimeEntry.deleted_at.is_(None),
+                TimeEntry.data >= da,
+                TimeEntry.data <= a,
+            )
+            .group_by(TimeEntry.data)
+        ).all()
+        # `func.sum` over a group is never null -- a group exists because it has at least
+        # one row -- so there is no `coalesce` here. The `or ZERO_HOURS` that would look
+        # prudent would instead hide a column becoming nullable.
+        logged: dict[date, Decimal] = {row[0]: round_hours(Decimal(row[1])) for row in rows}
+
+        span = (a - da).days + 1
+        giorni_finestra = [da + timedelta(days=offset) for offset in range(span)]
+        giorni = [
+            DayHours(giorno=giorno, ore=logged.get(giorno, ZERO_HOURS))
+            for giorno in giorni_finestra
+        ]
+        return WeekHours(
+            da=da,
+            a=a,
+            giorni=giorni,
+            # Membership by presence in `logged`, not by `ore == 0`: the zero-hour day is
+            # exactly the case the two readings disagree on, and this is the one that is
+            # right.
+            giorni_senza_ore=[giorno for giorno in giorni_finestra if giorno not in logged],
+            ore_totali=sum_hours([row.ore for row in giorni]),
+        )
 
     # `list` stays the last method in this class -- the unconditional project rule.
     def list(self, query: TimeEntryListQuery) -> list[TimeEntry]:

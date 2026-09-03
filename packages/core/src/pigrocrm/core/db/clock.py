@@ -91,4 +91,30 @@ def window_from(start: date, days: int) -> tuple[date, date]:
     return start, start + timedelta(days=days)
 
 
-__all__ = ["month_bounds", "today_local", "window_from"]
+def current_week(settings: Settings | None = None) -> tuple[date, date]:
+    """Monday to Sunday, both inclusive, containing today in the emitter's zone.
+
+    Monday and not Sunday: an Italian working week starts on Monday, and "which days did I
+    not log" is a working-week question. Under a Sunday-first convention every Sunday would
+    open a new week, and the six days just worked would drop off the chart on the one day
+    somebody is most likely to be catching up on them.
+
+    `isoweekday()` returns 1 for Monday through 7 for Sunday, so the offset back to Monday
+    is `isoweekday() - 1` -- zero on a Monday, six on a Sunday. `weekday()` would do as
+    well and is off by one from the name of the standard; the ISO spelling is the one whose
+    numbering can be checked against a calendar without running it.
+
+    Arithmetic on `date` and not on `datetime`, deliberately: the week containing the
+    March DST transition is 167 hours long and still seven days, and any duration-based
+    derivation loses its last day once a year. It is also why this lives here rather than
+    in `core/dashboard/`, which may contain no arithmetic at all (spec §3).
+
+    Inclusive at both ends, like `month_bounds` and `window_from` above: every period
+    filter in slices 4 and 6 is `BETWEEN da AND a` over a `Date` column.
+    """
+    today = today_local(settings)
+    monday = today - timedelta(days=today.isoweekday() - 1)
+    return monday, monday + timedelta(days=6)
+
+
+__all__ = ["current_week", "month_bounds", "today_local", "window_from"]
