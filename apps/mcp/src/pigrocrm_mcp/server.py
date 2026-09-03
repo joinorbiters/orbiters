@@ -252,9 +252,18 @@ def build_server(
         """Scheda completa di un deal, incluso stato di pipeline e timeline."""
         return entities.render_deal(context, UUID(deal_id))
 
+    from pigrocrm_mcp.prompts import register_prompts
     from pigrocrm_mcp.tools import register_entity_tools
 
     register_entity_tools(mcp, context, _guard)
+    # §10's four prompts, guarded by the same closure the tools get. A prompt reads the
+    # database exactly as a tool does, so it inherits `_session_scope()` and the rollback
+    # with it -- there is no second session story for prompts, and there must not be: three
+    # of the four open a `REPEATABLE READ` snapshot through `DashboardService`, which is
+    # possible only on a session nothing has touched. `ScopedSessionProvider` gives them
+    # one; a caller wiring `lambda: shared_session` gets the service's loud `RuntimeError`
+    # rather than a briefing whose figures were true at no single instant.
+    register_prompts(mcp, context, _guard)
 
     if gmail_configured(resolved_settings):
         # Conditional, and this is the whole of "absent, not broken": not registered
