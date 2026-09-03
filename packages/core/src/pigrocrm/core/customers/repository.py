@@ -52,9 +52,10 @@ class CustomerRepository:
             stmt = stmt.where(Customer.custom_fields.contains(query.custom))
 
         # Residuo R9: keyset pagination over a *whitelisted* column, ordered
-        # `col <dir> NULLS LAST, id <dir>`. Still keyset and not offset -- offset
-        # re-reads and skips rows under concurrent insertion, which is why slice 1
-        # chose keyset and does not stop being true because the sort column changed.
+        # `col <dir>, id <dir>` (`NULLS LAST` only where the column admits a null, which
+        # none of these does). Still keyset and not offset -- offset re-reads and skips
+        # rows under concurrent insertion, which is why slice 1 chose keyset and does not
+        # stop being true because the sort column changed.
         #
         # `resolve` raises `ValidationFailed` on an unknown key, so a caller-supplied
         # column name never reaches `ORDER BY` and never reaches `getattr` either.

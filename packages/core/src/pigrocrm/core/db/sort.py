@@ -18,12 +18,30 @@ without interpreting it. The encoding also carries the sort key, so replaying a 
 against a different `sort` is refused rather than silently comparing a surname to a
 timestamp.
 
-**`NULLS LAST` in both directions, tie-break in the direction of travel.**
-`ORDER BY col <dir> NULLS LAST, id <dir>`. The tie-break following the direction is what
-lets one ascending `(col, id)` index serve `desc` as a backward scan; the exception is a
-nullable column, where a backward scan would put nulls first, so `people.cognome` carries
-a second index `(cognome DESC NULLS LAST, id DESC)`. This is why the whitelist is short:
-every admitted column costs an index, and a nullable one costs two.
+**`NULLS LAST` only where a null is possible, tie-break in the direction of travel.**
+`ORDER BY col <dir>, id <dir>`, with `NULLS LAST` spelled out on the one nullable column
+and on no other. The tie-break following the direction is what lets one ascending
+`(col, id)` index serve `desc` as a backward scan -- but only if nothing else in the
+ordering contradicts the index, and `NULLS LAST` on a `NOT NULL` column does exactly that.
+
+Postgres matches ordering pathkeys *including* nulls placement, and it does not consult
+`NOT NULL` to reconcile two spellings that can only describe the same rows. A backward scan
+of an ascending index yields `DESC NULLS FIRST`; asking for `DESC NULLS LAST` therefore
+matches no index at all, and the planner sequentially scans the table and sorts it --
+measured on `postgres:17-alpine` at 50 000 rows, with `ORDER BY ragione_sociale DESC, id
+DESC` over the same rows taking `Index Scan Backward using ix_customers_ragione_sociale_id`.
+On a column that cannot be null the two orderings are identical by construction, because
+there are no nulls to place; so `SortSpec.nullable` decides whether `nulls_last()` is
+emitted, and that is the only thing it decides.
+
+`people.cognome` is the one column where the null tail is real, so it keeps
+`DESC NULLS LAST` and pays for it with a second index `(cognome DESC NULLS LAST, id DESC)`.
+This is why the whitelist is short: every admitted column costs an index, and a nullable one
+costs two.
+
+`test_sort_plan.py` asserts all of this on the executed plan. It exists because
+`test_migrations.py` asserts the indexes are *created* and `test_sort_cursor.py` asserts the
+rows come back in the declared *order*, and an in-memory sort satisfies both.
 
 The whitelist is an exact string comparison and deliberately not a regular expression.
 `re.fullmatch` would be correct where `re.match(r"^...$")` is not -- Python's `$` matches
@@ -43,7 +61,7 @@ from datetime import datetime
 from typing import Any, Literal, cast
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, UnaryExpression, and_, or_
+from sqlalchemy import ColumnElement, UnaryExpression, and_, or_, tuple_
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 
 from pigrocrm.core.errors import ValidationFailed
@@ -205,13 +223,23 @@ def decode_cursor(spec: SortSpec, raw: str) -> tuple[object | None, UUID]:
 
 
 def order_by(spec: SortSpec, direction: SortDirection) -> tuple[UnaryExpression[Any], ...]:
-    """`col <dir> NULLS LAST, id <dir>`. Both clauses carry the same direction -- see the
-    module docstring for why that is what makes one index enough for a non-nullable
-    column."""
+    """`col <dir>, id <dir>`, with `NULLS LAST` only when the column admits a null.
+
+    Both clauses carry the same direction, which is what makes one ascending `(col, id)`
+    index enough to serve both directions of a non-nullable column. `nulls_last()` on such a
+    column would undo that: it is semantically a no-op -- there are no nulls to place -- but
+    the planner matches nulls placement as part of the ordering pathkey and will not use
+    `NOT NULL` to reconcile the two, so the whole ordering silently stops matching the index.
+    See the module docstring for the measurement.
+
+    A nullable column is the opposite case: there `NULLS LAST` is a real requirement in both
+    directions, and it is why `people.cognome` carries a descending index of its own.
+    """
     column, identity = spec.column, _identity(spec)
-    if direction == "asc":
-        return (column.asc().nulls_last(), identity.asc())
-    return (column.desc().nulls_last(), identity.desc())
+    ordered = column.asc() if direction == "asc" else column.desc()
+    if spec.nullable:
+        ordered = ordered.nulls_last()
+    return (ordered, identity.asc() if direction == "asc" else identity.desc())
 
 
 def keyset_predicate(
@@ -222,17 +250,38 @@ def keyset_predicate(
 ) -> ColumnElement[bool]:
     """Everything strictly after `(value, row_id)` in `order_by(spec, direction)`.
 
+    **A row-value comparison where the column cannot be null.** `(col, id) > (v, rid)` is
+    the same set of rows as `col > v OR (col = v AND id > rid)`, and the two are not the
+    same query: the disjunction is not an indexable condition, so Postgres applies it as a
+    `Filter` over a scan that starts at the beginning of the index, and page *N* reads and
+    discards the `(N-1) x limit` entries of the pages before it -- the asymptotic cost of
+    the `OFFSET` pagination this module exists to avoid. The row-value form becomes a single
+    `Index Cond` and the scan starts where the previous page stopped.
+
+    **The nullable column keeps the disjunction, and must.** A row comparison with a NULL
+    member evaluates to NULL, so `(cognome, id) > (v, rid)` is never true for a person
+    without a surname and the entire null tail vanishes from a scan that ordered it last.
     The `column.is_(None)` arm is the one that gets forgotten: without it, paging from a
     non-null value stops at the last non-null row and the null tail is never returned at
     all -- rows silently missing from a complete scan, which is precisely the failure
     keyset pagination was chosen to avoid. It is correct in *both* directions because
-    `order_by` puts nulls last in both: the null tail always comes after every value.
+    `order_by` puts nulls last in both for a nullable column: the null tail always comes
+    after every value.
     """
     column, identity = spec.column, _identity(spec)
     if value is None:
-        # Already inside the null tail, which is ordered by `id` alone.
+        # Already inside the null tail, which is ordered by `id` alone. Reachable on a
+        # non-nullable column only through a forged cursor, where it correctly matches
+        # nothing rather than raising.
         after_id = identity > row_id if direction == "asc" else identity < row_id
         return and_(column.is_(None), after_id)
+
+    if not spec.nullable:
+        # The right-hand side is a plain Python tuple, not a second `tuple_()`: SQLAlchemy's
+        # `Tuple` binds it through the types of the columns on the left, so the datetime keys
+        # arrive as `timestamptz` and `id` as `uuid` with no cast written here.
+        pair = tuple_(column, identity)
+        return pair > (value, row_id) if direction == "asc" else pair < (value, row_id)
 
     strictly_after = column > value if direction == "asc" else column < value
     same_value_after_id = and_(

@@ -57,9 +57,11 @@ class Person(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
         Index("ix_people_updated_at_id", "updated_at", "id"),
         Index("ix_people_cognome_id", "cognome", "id"),
         # The second index the one nullable sort column in the whole whitelist costs.
-        # `order_by` declares NULLS LAST in *both* directions; a backward scan of the
-        # ascending index above yields NULLS FIRST, so it cannot serve `dir=desc` and
-        # Postgres falls back to sorting the table.
+        # `order_by` declares NULLS LAST in *both* directions for a nullable column -- and
+        # only for a nullable one, because on a NOT NULL column that same spelling matches
+        # no index at all. A backward scan of the ascending index above yields NULLS FIRST,
+        # so it cannot serve `cognome` `dir=desc`, and without this index Postgres falls
+        # back to sorting the table.
         #
         # `column("cognome")` rather than the mapped attribute because `id` comes from
         # `PrimaryKeyMixin` and is not bound in this class body at all. Unlike

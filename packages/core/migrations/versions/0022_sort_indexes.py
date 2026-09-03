@@ -4,15 +4,25 @@ Revision ID: 0022
 Revises: 0021
 
 Residuo R9's other half. `db/sort.py` declares the ordering contract
-`ORDER BY <col> <dir> NULLS LAST, id <dir>`; without a matching index that is an
-in-memory sort of the whole table on every page of every ordered scan, and the ordering
-feature ends up slower than the absence of it.
+`ORDER BY <col> <dir>, id <dir>`, with `NULLS LAST` on the one nullable column and on no
+other; without a matching index that is an in-memory sort of the whole table on every page
+of every ordered scan, and the ordering feature ends up slower than the absence of it.
 
 Twelve ascending indexes, one per admitted (entity, column) pair, plus one descending
 index for the single nullable column in the whitelist. The tie-break carrying the same
 direction as the column is what lets one ascending `(col, id)` index serve `desc` as a
 backward scan -- but a backward scan yields `NULLS FIRST`, so `people.cognome` is the one
 column that costs two.
+
+**And that backward scan only happens if the ordering does not spell `NULLS LAST`.**
+Postgres matches ordering pathkeys including nulls placement and will not use a `NOT NULL`
+constraint to reconcile `DESC NULLS LAST` with what a backward scan of an ascending index
+produces. An earlier version of this note claimed the tie-break direction was sufficient on
+its own; it is not, and for as long as `order_by` emitted `NULLS LAST` unconditionally
+eleven of these twelve indexes were dead for `dir=desc` -- a sequential scan and a sort,
+with the index sitting there unused. `db/sort.py::order_by` now emits `NULLS LAST` only for
+a nullable column, and `tests/test_sort_plan.py` asserts the plan rather than the order, so
+the claim cannot go stale again without a failure.
 
 None of the thirteen is partial on `deleted_at IS NULL`, unlike the trigram indexes of
 0021. Those serve a predicate that always carries the clause; an ordering has to remain

@@ -115,9 +115,12 @@ PERSON_SORTS = SortWhitelist(
     specs=(
         SortSpec(key="created_at", column=Person.created_at, kind="datetime", nullable=False),
         SortSpec(key="updated_at", column=Person.updated_at, kind="datetime", nullable=False),
-        # The one nullable sort column in the whole whitelist, and the reason `order_by`
-        # declares NULLS LAST explicitly in both directions and `people` carries a
-        # second, descending index (`ix_people_cognome_desc_id`).
+        # The one nullable sort column in the whole whitelist, and the only spec for which
+        # `order_by` emits NULLS LAST at all -- on a NOT NULL column that spelling matches
+        # no index and costs a sequential scan. It is also why `people` carries a second,
+        # descending index (`ix_people_cognome_desc_id`), and why `keyset_predicate` keeps
+        # its `OR cognome IS NULL` disjunction here instead of the row-value seek the other
+        # eleven use.
         SortSpec(key="cognome", column=Person.cognome, kind="text", nullable=True),
     ),
     default_key="created_at",

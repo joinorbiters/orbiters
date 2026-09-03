@@ -60,10 +60,13 @@ class Customer(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
             postgresql_where=text("deleted_at IS NULL"),
         ),
         # Residuo R9. One `(column, id)` B-tree per key admitted by `CUSTOMER_SORTS`:
-        # the ordering contract is `ORDER BY <col> <dir> NULLS LAST, id <dir>`, and the
-        # tie-break following the direction is what lets a single ascending index serve
-        # `desc` as a backward scan. None of these is nullable, so none costs a second
-        # index -- see `people/models.py` for the one that does.
+        # the ordering contract is `ORDER BY <col> <dir>, id <dir>`, and the tie-break
+        # following the direction is what lets a single ascending index serve `desc` as a
+        # backward scan. None of these is nullable, so none costs a second index -- and,
+        # for the same reason, `order_by` must not spell `NULLS LAST` on any of them: that
+        # spelling matches no index here, which is what made `dir=desc` a sequential scan
+        # until `test_sort_plan.py` was written. See `people/models.py` for the one column
+        # that does carry a second index.
         #
         # Not partial on `deleted_at IS NULL`, unlike the trigram indexes above: those
         # serve a predicate that always carries that clause, while an ordering has to
