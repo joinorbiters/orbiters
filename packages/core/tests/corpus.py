@@ -1,7 +1,8 @@
 """The §16 reference corpus, and the inflated variant criterion 3 needs.
 
 Two scales, one generator. The reference scale is ten years of a five-person practice;
-the inflated one brings every searched table to 50 000 rows, because an assertion about
+the inflated one brings every searched table -- all five of them -- to 50 000 rows,
+because an assertion about
 a query plan means nothing on a table that fits in a handful of pages -- Postgres picks
 a sequential scan there because it *is* the cheapest plan, and a test asserting
 otherwise would go red without a defect.
@@ -25,6 +26,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
+from datetime import date
 from decimal import Decimal
 from uuid import UUID
 
@@ -35,6 +37,7 @@ from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.db.base import uuid7
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.documents.models import Document
+from pigrocrm.core.invoices.models import Invoice
 from pigrocrm.core.people.models import Person
 from pigrocrm.core.pipeline.models import PipelineStage
 
@@ -123,10 +126,22 @@ class CorpusScale:
     people: int
     deals: int
     documents: int
+    invoices: int
 
 
-REFERENCE = CorpusScale(customers=500, people=800, deals=2000, documents=1000)
-INFLATED = CorpusScale(customers=50_000, people=50_000, deals=50_000, documents=50_000)
+REFERENCE = CorpusScale(customers=500, people=800, deals=2000, documents=1000, invoices=5000)
+INFLATED = CorpusScale(
+    customers=50_000, people=50_000, deals=50_000, documents=50_000, invoices=50_000
+)
+
+# Ten years of a register, whatever the scale. `(anno, numero)` is unique
+# (`uq_invoices_anno_numero`), so the two cannot be derived from the same modulus: the
+# brief's `anno = 2017 + index % 10` with `numero = index % 500 + 1` produces exactly 500
+# distinct pairs for any scale -- 10 divides 500, so the year is a function of the number --
+# and every row past the five-hundredth violates the constraint. Dividing for the year and
+# taking the remainder for the number is what makes the pair unique by construction.
+_REGISTER_YEARS = 10
+_FIRST_REGISTER_YEAR = 2017
 
 
 @dataclass(frozen=True)
@@ -261,6 +276,47 @@ def build_corpus(session: Session, scale: CorpusScale, *, seed: int = 20260821) 
             }
         )
     session.execute(insert(Document), document_rows)
+
+    # Invoices, the fifth searched table (§8.1's fifth branch, Task C12). Every row is
+    # `fattura`/`emessa` and therefore numbered: the search branch's equality path only
+    # reaches numbered rows, and a corpus of drafts would leave it with nothing to find.
+    #
+    # The `CHECK` constraints on this table are unusually dense and each of these values is
+    # chosen against one of them: `anno` and `numero` are set together
+    # (`ck_invoices_anno_numero_together`), `numero` requires an issued `fattura`
+    # (`ck_invoices_numero_requires_issued_fattura`), `riferimento` is proforma-only, and
+    # `snapshot`/`annullata_il`/`data_incasso` are all left NULL because each pairs with
+    # another column this corpus does not set.
+    invoice_rows: list[dict[str, object]] = []
+    per_year = -(-scale.invoices // _REGISTER_YEARS) or 1
+    for index in range(scale.invoices):
+        anno = _FIRST_REGISTER_YEAR + index // per_year
+        invoice_rows.append(
+            {
+                "id": uuid7(),
+                "customer_id": customer_ids[index % len(customer_ids)],
+                # Every other invoice hangs off a deal. `deals.id` is a real FK, so the
+                # value has to come from `deal_ids` and not from a fresh UUID.
+                "deal_id": deal_ids[index % len(deal_ids)] if index % 2 == 0 else None,
+                "tipo": "fattura",
+                "stato": "emessa",
+                "stato_pagamento": "da_incassare" if index % 3 else "incassato",
+                "anno": anno,
+                "numero": index % per_year + 1,
+                "causale": f"{rng.choice(_DEAL_WORDS)} {rng.choice(_SECTORS)} {index}"[:200],
+                # `Decimal`, not a string: `Numeric(12, 2)`, and money is never a float
+                # anywhere in this codebase.
+                "imponibile": Decimal("1000.00"),
+                "imposta": Decimal("0.00"),
+                "bollo": Decimal("0.00"),
+                "totale": Decimal("1000.00"),
+                "data_emissione": date(anno, index % 12 + 1, 15),
+                "tipo_documento": "TD01",
+                "divisa": "EUR",
+                "custom_fields": {},
+            }
+        )
+    session.execute(insert(Invoice), invoice_rows)
 
     session.flush()
     return CorpusIds(

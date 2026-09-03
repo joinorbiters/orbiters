@@ -7,6 +7,7 @@ whether it was truncated, so "5 of 500" and "5 of 5" are different responses rat
 the same list of five.
 """
 
+import re
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
@@ -71,3 +72,75 @@ class SearchGroup(BaseModel):
 class SearchResults(BaseModel):
     termine: str
     gruppi: list[SearchGroup]
+
+
+# The three shapes people actually write a fiscal number in, and the order they are tried
+# in is load-bearing: `2026/7` matches `_YEAR_FIRST` before `_NUMBER_FIRST` could read the
+# `2026` as a number, and `7/2026` fails `_YEAR_FIRST` (whose first group needs four
+# digits) and then matches `_NUMBER_FIRST`. Swapping the two would read `2026/7` as
+# "invoice 2026 of year 7" and reject it on the year bound.
+#
+# `re.fullmatch` throughout, never `re.match` with `$`: `$` matches before a trailing
+# newline, so `"7\n"` would parse as invoice 7 through a `$` anchor while carrying a
+# character the user never typed. The term arrives from a query string, so that is not
+# hypothetical.
+_YEAR_FIRST = re.compile(r"(\d{4})[/\-](\d{1,6})")
+_NUMBER_FIRST = re.compile(r"(\d{1,6})[/\-](\d{4})")
+_BARE_NUMBER = re.compile(r"(\d{1,6})")
+
+# An invoice number is at least 1 (slice 3's counter starts there) and no installation
+# issues a million invoices in a year. The bound exists so that a long digit string -- a
+# VAT number, a fiscal code fragment, an IBAN tail -- is treated as free text rather than
+# as a number nobody has: without it, `01234567890` would be read as an invoice number and
+# the branch would answer "nothing" instead of trigramming the causale.
+_MIN_INVOICE_NUMBER = 1
+_MAX_INVOICE_NUMBER = 999_999
+# Wide enough to cover any register this product will meet and narrow enough that a
+# four-digit fragment of ordinary text -- a price, a postcode -- is not mistaken for a year.
+_MIN_YEAR = 2000
+_MAX_YEAR = 2999
+
+
+def _bounded(anno: int, numero: int) -> tuple[int, int] | None:
+    if _MIN_YEAR <= anno <= _MAX_YEAR and _MIN_INVOICE_NUMBER <= numero <= _MAX_INVOICE_NUMBER:
+        return anno, numero
+    return None
+
+
+def parse_fiscal_number(term: str) -> tuple[int | None, int] | None:
+    """`(anno, numero)` when the term has the shape of a fiscal number, else `None`.
+
+    `2026/7`, `7/2026` and `2026-7` are all how the same number gets written. A bare `007`
+    returns `(None, 7)` and matches invoice 7 in **every** year: guessing the current year
+    would hide last year's invoice 7 with nothing on screen to say so, which is a partial
+    result presented as a complete one.
+
+    When this returns a value the invoice branch matches by equality on `(anno, numero)` and
+    does **not** also trigram the `causale`. The two paths are exclusive because `123`
+    searched as a trigram means "every description containing 123", which is not an answer
+    to "show me invoice 123". The cost of that exclusivity, stated rather than hidden: a
+    causale containing a bare four-digit number is not reachable by typing that number
+    alone. It is reachable by typing any of the words around it, and the alternative --
+    running both paths -- makes every numeric search return the rows that merely mention the
+    number beside the one that *is* it.
+
+    A shape that looks like a number but falls outside the bounds is `None` and not an empty
+    result: `01234567890` is a VAT number, `1999/7` is more likely a date range than an
+    invoice, and both should reach the trigram path rather than answer "no such invoice".
+    """
+    candidate = term.strip()
+
+    match = _YEAR_FIRST.fullmatch(candidate)
+    if match:
+        return _bounded(int(match.group(1)), int(match.group(2)))
+
+    match = _NUMBER_FIRST.fullmatch(candidate)
+    if match:
+        return _bounded(int(match.group(2)), int(match.group(1)))
+
+    match = _BARE_NUMBER.fullmatch(candidate)
+    if match:
+        numero = int(match.group(1))
+        if _MIN_INVOICE_NUMBER <= numero <= _MAX_INVOICE_NUMBER:
+            return None, numero
+    return None

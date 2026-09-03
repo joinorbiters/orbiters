@@ -3,7 +3,8 @@
 A good time on a fast machine hides a sequential scan; a plan assertion does not. And a
 plan assertion on a small table is meaningless -- Postgres picks a sequential scan on a
 table of a few pages because it *is* the cheapest plan -- so this is the one test that pays
-for the inflated corpus: every searched table at 50 000 rows.
+for the inflated corpus: every searched table at 50 000 rows -- all five of them, since
+Task C12 added the invoice branch.
 
 Note the difference from spec §7.3, which forbids asserting on the plan for `deals`. That
 exemption is about the *dashboard* queries on the *reference* corpus, where `deals` holds
@@ -67,12 +68,14 @@ from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.db import session_factory
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.documents.models import Document
+from pigrocrm.core.invoices.models import Invoice
 from pigrocrm.core.people.models import Person
 from pigrocrm.core.pipeline.models import PipelineStage
 from pigrocrm.core.search.repository import (
     CUSTOMER_FIELDS,
     DEAL_FIELDS,
     DOCUMENT_FIELDS,
+    INVOICE_FIELDS,
     PERSON_FIELDS,
     SearchRepository,
 )
@@ -94,6 +97,13 @@ pytestmark = pytest.mark.slow
 # measured separately below rather than asserted against the budget.
 _TERM_SHORT = "345"
 _TERM_LONG = "Ingegneria 4"
+# The invoice branch cannot be probed with `_TERM_SHORT`, and the reason is the branch's
+# own design rather than an inconvenience: `parse_fiscal_number("345")` is `(None, 345)`,
+# so a purely numeric term takes the *equality* path and never touches the trigram index at
+# all. Asserting `Bitmap Index Scan on ix_invoices_causale_trgm` for `"345"` would be
+# asserting that the exclusivity of the two paths does not work. The equality path is
+# measured on its own below, against the index that actually serves it.
+_TERM_SHORT_CAUSALE = "Col"
 # 9 575 customers, 4 951 deals, 4 969 documents on this corpus: the generator draws company
 # names from ten sector words, so any fragment of one of them matches a tenth of everything.
 _TERM_UNSELECTIVE = "ing"
@@ -102,7 +112,7 @@ _TERM_UNSELECTIVE = "ing"
 # serialisation.
 _ENDPOINT_BUDGET_MS = 300
 
-_SEARCHED_TABLES = ("customers", "people", "deals", "documents")
+_SEARCHED_TABLES = ("customers", "people", "deals", "documents", "invoices")
 
 
 class _Branch:
@@ -118,11 +128,16 @@ class _Branch:
         model: Any,
         fields: Sequence[ScoredField],
         method: Callable[[SearchRepository], Callable[[str, int], Any]],
+        terms: tuple[str, str] = (_TERM_SHORT, _TERM_LONG),
     ) -> None:
         self.table = table
         self.model = model
         self.fields = fields
         self.method = method
+        # (three-character, twelve-character) -- §16 names both lengths. Per branch,
+        # because `invoices` reads a purely numeric term as a fiscal number and would
+        # never reach its trigram index for `_TERM_SHORT`.
+        self.terms = terms
 
     @property
     def index_names(self) -> tuple[str, ...]:
@@ -143,6 +158,13 @@ _BRANCHES = (
     _Branch("people", Person, PERSON_FIELDS, lambda repo: repo.people),
     _Branch("deals", Deal, DEAL_FIELDS, lambda repo: repo.deals),
     _Branch("documents", Document, DOCUMENT_FIELDS, lambda repo: repo.documents),
+    _Branch(
+        "invoices",
+        Invoice,
+        INVOICE_FIELDS,
+        lambda repo: repo.invoices,
+        terms=(_TERM_SHORT_CAUSALE, _TERM_LONG),
+    ),
 )
 
 
@@ -176,8 +198,11 @@ def inflated(db_engine: Engine) -> Iterator[Engine]:
         yield db_engine
     finally:
         with factory() as session:
-            # Children first: `people.customer_id` and `deals.customer_id` reference
-            # `customers`, `documents` references both, and `deals` references a stage.
+            # Children first: `invoices.customer_id`/`invoices.deal_id`,
+            # `people.customer_id` and `deals.customer_id` reference `customers`,
+            # `documents` references both, and `deals` references a stage. Invoices lead
+            # because they are the only table referencing `deals`.
+            session.execute(delete(Invoice))
             session.execute(delete(Document))
             session.execute(delete(Deal))
             session.execute(delete(Person))
@@ -286,11 +311,16 @@ def _assert_served_by_its_trigram_indexes(branch: _Branch, term: str, plans: lis
         )
 
 
-@pytest.mark.parametrize("term", [_TERM_SHORT, _TERM_LONG], ids=["3-char", "12-char"])
+@pytest.mark.parametrize("length", [0, 1], ids=["3-char", "12-char"])
 @pytest.mark.parametrize("branch", _BRANCHES, ids=[branch.table for branch in _BRANCHES])
 def test_no_branch_sequentially_scans_a_searched_table(
-    inflated_session: Session, branch: _Branch, term: str
+    inflated_session: Session, branch: _Branch, length: int
 ) -> None:
+    """Parametrised over the *position* in each branch's own pair rather than over two
+    module-level constants: §16 asks for a three-character term and a twelve-character one,
+    and `invoices` needs a non-numeric three-character term to reach its trigram index at
+    all. The ids still say `3-char` and `12-char`, because that is what is being varied."""
+    term = branch.terms[length]
     _assert_served_by_its_trigram_indexes(branch, term, _plans_of(inflated_session, branch, term))
 
 
@@ -309,6 +339,30 @@ def test_the_index_is_used_even_for_a_term_that_matches_a_fifth_of_the_corpus(
     _assert_served_by_its_trigram_indexes(
         branch, _TERM_UNSELECTIVE, _plans_of(inflated_session, branch, _TERM_UNSELECTIVE)
     )
+
+
+def test_the_fiscal_number_path_is_served_by_the_unique_index(
+    inflated_session: Session,
+) -> None:
+    """The invoice branch's *other* half, which no trigram index serves and none should.
+
+    `parse_fiscal_number` turns a numeric term into an equality on `(anno, numero)`, and
+    `uq_invoices_anno_numero` -- the partial unique index slice 3 §3 already creates for the
+    register's own integrity -- is what makes it a lookup instead of a scan of fifty
+    thousand rows. Asserted because "no new index is needed for the number half" is a claim
+    about the planner, and a claim about the planner that nobody measured is a guess.
+
+    `"345"` is the term: three characters, purely numeric, and therefore exactly the term
+    `test_no_branch_sequentially_scans_a_searched_table` cannot use for this branch.
+    """
+    branch = next(candidate for candidate in _BRANCHES if candidate.table == "invoices")
+    plans = _plans_of(inflated_session, branch, _TERM_SHORT)
+    joined = "\n\n".join(plans)
+    assert "Seq Scan on invoices" not in joined, joined
+    assert "uq_invoices_anno_numero" in joined, joined
+    # And the trigram index is *not* read: the two paths are exclusive, and a plan that
+    # touched both would mean the branch was doing the work this test says it skips.
+    assert "ix_invoices_causale_trgm" not in joined, joined
 
 
 def test_the_bounded_count_stops_at_the_ceiling(inflated_session: Session) -> None:

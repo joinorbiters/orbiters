@@ -26,7 +26,10 @@ from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.db.base import uuid7
 from pigrocrm.core.search.schemas import COUNT_CEILING
 
-_ENTITIES = ["customer", "person", "deal", "document"]
+# Five, and the order is fixed: a palette whose sections move between keystrokes
+# cannot be driven with the keyboard. `invoice` is last, added by Task C12 with the
+# branch that finally makes `SearchEntity`'s fifth member true.
+_ENTITIES = ["customer", "person", "deal", "document", "invoice"]
 
 
 def _search(client: TestClient, **params: Any) -> Any:

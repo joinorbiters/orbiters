@@ -1,18 +1,19 @@
 """The one public entry point of the global search.
 
-It is a fan-out and nothing else: term normalisation, four repository calls, and a fixed
+It is a fan-out and nothing else: term normalisation, five repository calls, and a fixed
 group order. There is deliberately no cross-entity ranking -- the palette shows five per
 class with each class's own count (§8.5), so a global order across classes would be a
 figure nobody looks at, computed on every keystroke.
 
-**No authorisation check.** Not an omission: search reads the same rows the four list
+**No authorisation check.** Not an omission: search reads the same rows the five list
 endpoints already return to every role, slice 4 §11 gives every read to every role, and
 spec §13 states that this slice adds no role and no authorisation rule. Adding a check
 here would put a security rule on a read-only surface, which is the place nobody looks for
 one. `actor` is still taken, because every service method in this project takes it and a
 signature that differs invites a call site that forgets it.
 
-**No transaction.** Four `SELECT`s with no isolation requirement between them: a search is
+**No transaction.** Five branches' worth of `SELECT`s with no isolation requirement
+between them: a search is
 not a reconciliation, and a hit that vanishes between the palette and the click lands on a
 404 the palette already handles. The dashboards are the surface that needs one instant
 (§7.1); this one does not, and pretending otherwise would put `REPEATABLE READ` on the
@@ -57,5 +58,10 @@ class SearchService:
                 self.repo.people(term, limit),
                 self.repo.deals(term, limit),
                 self.repo.documents(term, limit),
+                # Fifth and last. Added by Task C12, which is also what made `SearchEntity`
+                # true: it declared five entities from the start and four were searched, so
+                # an invoice number answered "nothing found" when it had never been looked
+                # for.
+                self.repo.invoices(term, limit),
             ],
         )

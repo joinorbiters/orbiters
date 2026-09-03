@@ -6,7 +6,7 @@ The dashboards are the surface that needs one instant (spec §7.1); a search doe
 putting `REPEATABLE READ` here would pay for a property nothing reads.
 
 No authorisation gate either, and that is a decision rather than an omission. Spec §13 adds
-no role and no rule in this slice, and search reads exactly the rows the four list endpoints
+no role and no rule in this slice, and search reads exactly the rows the five list endpoints
 already return to every role, `readonly` included. A check here would put a security rule on
 a read-only surface, which is the place nobody looks for one.
 """

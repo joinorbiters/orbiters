@@ -111,8 +111,10 @@ export function CommandPalette({
       // documents list route to filter.
       case 'document':
         return null
-      // 6C's Task C13 adds the invoice branch to the search itself, and no invoice group
-      // is returned until it does. `/app/fatture` has no term filter to honour either.
+      // The invoice branch exists since Task C12, so this group does get results -- a row
+      // opens the invoice. There is still no «vedi tutti» for it: `/app/fatture` has no
+      // term filter to honour, and a link that dropped the term would answer a different
+      // question from the one the palette was asked.
       case 'invoice':
         return null
     }

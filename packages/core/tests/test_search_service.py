@@ -13,6 +13,7 @@ come back in one fixed order.
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import get_args
 
 import pydantic
 import pytest
@@ -29,7 +30,13 @@ from pigrocrm.core.db.base import uuid7
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.documents.models import Document
 from pigrocrm.core.people.models import Person
-from pigrocrm.core.search.schemas import COUNT_CEILING, SearchGroup, SearchQuery, SearchResults
+from pigrocrm.core.search.schemas import (
+    COUNT_CEILING,
+    SearchEntity,
+    SearchGroup,
+    SearchQuery,
+    SearchResults,
+)
 from pigrocrm.core.search.scoring import SCORE_FLOOR
 from pigrocrm.core.search.service import SearchService
 
@@ -66,15 +73,24 @@ def test_an_exact_vat_number_ranks_the_customer_first(db_session: Session) -> No
 
 def test_every_group_is_present_even_when_empty(db_session: Session) -> None:
     """§8.6's states are per-palette, not per-group, so the response always carries all
-    four groups: a missing group and an empty group would render identically, and the
-    client would have to guess which it was."""
+    five groups: a missing group and an empty group would render identically, and the
+    client would have to guess which it was.
+
+    Five since Task C12. The fifth was the point: `SearchEntity` declared `invoice` from
+    the start and the fan-out never queried it, so an invoice number came back as
+    «Nessun risultato» -- an empty group and a group that was never asked, rendering the
+    same, which is exactly what this assertion exists to prevent."""
     results = SearchService(db_session).search_everything(SearchQuery(termine="zzzqqq"), READONLY)
     assert [group.entity for group in results.gruppi] == [
         "customer",
         "person",
         "deal",
         "document",
+        "invoice",
     ]
+    # Every member of `SearchEntity`, not a list that happens to be five long: a sixth
+    # entity declared and not searched would be the same defect again.
+    assert {group.entity for group in results.gruppi} == set(get_args(SearchEntity))
     assert all(group.totale == 0 and group.hits == [] for group in results.gruppi)
 
 

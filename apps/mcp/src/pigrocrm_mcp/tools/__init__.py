@@ -511,13 +511,16 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
     @mcp.tool()
     @guard
     def search_everything(termine: str, limite: SearchLimite = PER_CLASS_LIMIT) -> dict[str, Any]:
-        """Cerca in tutto il CRM — clienti, persone, deal e documenti — con una sola
-        chiamata: ragione sociale, P.IVA, codice fiscale, email, nome e cognome, nome del
-        deal, titolo del documento. Accetta anche un frammento in mezzo a una parola (per
-        esempio «34567» trova la P.IVA 01234567890). Servono almeno 3 caratteri.
-        Restituisce fino a `limite` risultati per classe di entità più il conteggio reale
-        di quella classe: se `totale_e_un_minimo` è true il conteggio è un minimo e i
-        risultati completi stanno sull'elenco della singola entità.
+        """Cerca in tutto il CRM — clienti, persone, deal, documenti e fatture — con una
+        sola chiamata: ragione sociale, P.IVA, codice fiscale, email, nome e cognome, nome
+        del deal, titolo del documento, causale della fattura. Accetta anche un frammento
+        in mezzo a una parola (per esempio «34567» trova la P.IVA 01234567890). Un numero
+        di fattura si cerca come «2026/7», «7/2026» o «007»: in quel caso trova la fattura
+        con quel numero e non le causali che lo contengono, e senza anno la trova in ogni
+        anno. Servono almeno 3 caratteri. Restituisce fino a `limite` risultati per classe
+        di entità più il conteggio reale di quella classe: se `totale_e_un_minimo` è true
+        il conteggio è un minimo e i risultati completi stanno sull'elenco della singola
+        entità.
         """
         # `termine` is a bare `str` with no `Annotated` bound, following this file's own
         # runtime-permissive / schema-only-strict convention: the length check happens

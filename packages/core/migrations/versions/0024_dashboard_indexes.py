@@ -14,9 +14,11 @@ that have already been filtered down to one entity. DESC on both members so the 
 is served by the index rather than by an in-memory sort -- the same shape, and the same
 reasoning, as 0022's `ix_people_cognome_desc_id`.
 
-The `invoices.causale` trigram index -- the tenth of spec §8.3 -- is added by the task that
-extends the palette to invoices (Task C12), in the marked place below. This file applies
-cleanly with or without it.
+The `invoices.causale` trigram index -- the tenth and last of spec §8.3 -- is here for the
+same reason: `SearchRepository.invoices` matches that column with `ILIKE '%…%'`, and
+without the index the fifth search branch reads the whole fiscal register on every
+keystroke. It was left to Task C12 rather than written with the other nine in 0021 because
+until that task there was no invoice branch to serve.
 
 Written as raw SQL rather than `op.create_index` for the reason 0022 records: a descending
 expression index has no `op.create_index` spelling. `CONCURRENTLY` is not used because
@@ -39,8 +41,16 @@ def upgrade() -> None:
     op.execute(
         "CREATE INDEX IF NOT EXISTS ix_activities_recent ON activities (occurred_at DESC, id DESC)"
     )
-    # -- ix_invoices_causale_trgm: written by Task C12, in this same revision. --
+    # The tenth trigram index of spec §8.3, and the last one: it is what lets the palette
+    # search `invoices.causale` with `ILIKE '%…%'` instead of sequentially scanning the
+    # fiscal register on every keystroke. Partial on `deleted_at IS NULL`, matching the
+    # other nine and the declaration in `invoices/models.py`.
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_invoices_causale_trgm ON invoices "
+        "USING gin (causale gin_trgm_ops) WHERE deleted_at IS NULL"
+    )
 
 
 def downgrade() -> None:
+    op.execute("DROP INDEX IF EXISTS ix_invoices_causale_trgm")
     op.execute("DROP INDEX IF EXISTS ix_activities_recent")

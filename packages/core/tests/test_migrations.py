@@ -81,6 +81,10 @@ HAND_MAINTAINED_INDEXES = {
     # global activity feed would go back to sorting the whole table on every dashboard
     # load. Its declared shape is asserted below, on `indexdef` text.
     "ix_activities_recent",
+    # Slice 6, migration 0024 as well: the tenth and last trigram index of §8.3, added
+    # with the fifth search branch. Same partial-GIN-over-an-operator-class shape as the
+    # nine of 0021, and picked up automatically by `TRGM_INDEX_NAMES` below.
+    "ix_invoices_causale_trgm",
 }
 
 TRGM_INDEX_NAMES = frozenset(n for n in HAND_MAINTAINED_INDEXES if n.endswith("_trgm"))
@@ -218,9 +222,10 @@ def test_every_trigram_index_is_a_partial_gin_index_over_gin_trgm_ops() -> None:
         engine.dispose()
 
     indexes = {row.indexname: row.indexdef for row in rows}
-    # Nine, and the count is asserted: a set comprehension that silently matched nothing
-    # would make every assertion below vacuous.
-    assert len(TRGM_INDEX_NAMES) == 9
+    # Ten -- nine from migration 0021 plus `invoices.causale` from 0024 -- and the count is
+    # asserted: a set comprehension that silently matched nothing would make every
+    # assertion below vacuous, and §8.3 names ten columns rather than "some".
+    assert len(TRGM_INDEX_NAMES) == 10
     for name in sorted(TRGM_INDEX_NAMES):
         definition = indexes[name]
         assert "USING gin" in definition, f"{name} is not a GIN index: {definition}"

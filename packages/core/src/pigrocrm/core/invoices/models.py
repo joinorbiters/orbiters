@@ -171,6 +171,24 @@ class Invoice(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
             postgresql_where=text("numero IS NOT NULL"),
         ),
         Index("ix_invoices_custom_fields", "custom_fields", postgresql_using="gin"),
+        # The tenth trigram index (spec 6 §8.3), and the one that lets the global palette
+        # look at invoices at all: `causale` is the only free-text column on this table and
+        # `SearchRepository.invoices` matches it with `ILIKE '%…%'`, which no B-tree can
+        # serve. Declared here and not only in migration 0024 because
+        # `Base.metadata.create_all` is what builds the test schema -- an index that exists
+        # only in a migration is invisible to every plan assertion in the suite.
+        #
+        # Partial on `deleted_at IS NULL` like the other nine: it is the condition every
+        # search carries, so the index is smaller and residuo R7 closes for this table too.
+        # The other half of the branch -- a fiscal number matched by equality -- needs no
+        # index of its own: `uq_invoices_anno_numero` above already serves it.
+        Index(
+            "ix_invoices_causale_trgm",
+            "causale",
+            postgresql_using="gin",
+            postgresql_ops={"causale": "gin_trgm_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
     )
 
 
