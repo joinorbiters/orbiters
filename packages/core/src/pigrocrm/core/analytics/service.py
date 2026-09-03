@@ -20,6 +20,7 @@ from pigrocrm.core.analytics.schemas import (
     PeriodPnl,
     PeriodPnlQuery,
     PnlTotals,
+    UnbilledBacklog,
 )
 from pigrocrm.core.config import get_settings
 from pigrocrm.core.deals.repository import DealRepository
@@ -209,6 +210,13 @@ class AnalyticsService:
         revenue = self.repo.revenue_in_range(query.da, query.a, query.customer_id)
         per_deal_costs, general = self.repo.costs_in_range(query.da, query.a, query.customer_id)
         labour = self.repo.labour_cost_in_range(query.da, query.a, query.customer_id)
+        # Slice 6 §5's three rows, from the same aggregate `unbilled_backlog` uses and
+        # merely bounded to the period: one definition of "ore fatturabili non fatturate",
+        # not one per screen. They are informative and enter no margin, which is why they
+        # sit outside both `PnlTotals` columns rather than inside either.
+        ore_arretrate, valore_arretrato, senza_tariffa, _ = self.repo.unbilled_backlog(
+            query.da, query.a, query.customer_id
+        )
 
         chiusi: list[tuple[Decimal, Decimal, Decimal]] = []
         in_corso: list[tuple[Decimal, Decimal, Decimal]] = []
@@ -244,10 +252,41 @@ class AnalyticsService:
             # Never apportioned onto any deal (§7.4), and absent entirely under a
             # customer filter, because a general expense belongs to no customer.
             spese_generali=general,
+            valore_maturato=valore_arretrato,
+            ore_fatturabili_non_fatturate=ore_arretrate,
+            ore_senza_tariffa=senza_tariffa,
             periodo_chiuso=periodo_chiuso,
             # Free: a COUNT over two columns that already exist, and the one thing a
             # reader most needs to know about an open period (§6.4).
             voci_scritte_in_ritardo=self.repo.late_entry_count(query.da, query.a),
+        )
+
+    def unbilled_backlog(self, actor: Actor) -> UnbilledBacklog:
+        """The arrears: billable hours not yet on the line of an issued invoice, with no
+        period.
+
+        `period_pnl` returns the same quantities *for a period*; this one has none, because
+        "how much do I have to invoice" is not a question about March (§6.3). It lives on
+        this service and not on a dashboard module because its euro value is
+        `Σ ROUND(ore × tariffa_applicata, 2)` -- a product of two columns, which §3 forbids
+        `core/dashboard/` from containing at all.
+
+        No authorisation check beyond what every other read on this service does: slice 4
+        §11 gives every analytics read to every role, and the one admin-only figure -- the
+        fiscal estimate -- is a different method entirely. `actor` is therefore accepted
+        and unused, which is the shape every read here has; a method that quietly dropped
+        the parameter would be the one that is hard to add a check to later.
+
+        It has an MCP tool (`get_unbilled_backlog`, §11.1), so slice 4 §11's exclusion list
+        does not grow. That is the right outcome: the backlog is the figure an agent can be
+        most useful about, and it is read-only.
+        """
+        ore, valore, senza_tariffa, voci = self.repo.unbilled_backlog()
+        return UnbilledBacklog(
+            ore_fatturabili_non_fatturate=ore,
+            valore_maturato=valore,
+            voci_senza_tariffa=senza_tariffa,
+            voci=voci,
         )
 
     def budget_vs_actual(self, query: BudgetQuery, actor: Actor) -> BudgetPage:

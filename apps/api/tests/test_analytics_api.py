@@ -265,6 +265,34 @@ def test_the_period_report_uses_the_spec_query_names(logged_in: TestClient) -> N
     assert logged_in.get("/api/analytics/pnl", params={"da": DA, "a": A}).status_code == 422
 
 
+def test_the_backlog_takes_no_period_and_serialises_its_decimals_as_strings(
+    logged_in: TestClient,
+) -> None:
+    """§6.3's endpoint. `from`/`to` are absent on purpose -- "quanto ho da fatturare" is
+    not a question about March -- so the route must answer with no query parameter at all,
+    which is exactly the shape the mandatory-period test below proves `/pnl` refuses."""
+    deal_id, user_id = _seed_deal_and_user(logged_in)
+    _log_hours(logged_in, deal_id, user_id, ore="4.00", tariffa="100.000000")
+
+    response = logged_in.get("/api/analytics/backlog")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body == {
+        "ore_fatturabili_non_fatturate": "4.00",
+        "valore_maturato": "400.00",
+        "voci_senza_tariffa": 0,
+        "voci": 1,
+    }
+
+
+def test_the_backlog_is_readable_by_a_readonly_actor(logged_in: TestClient) -> None:
+    """Every analytics read is; the one admin-only figure is the fiscal estimate."""
+    deal_id, user_id = _seed_deal_and_user(logged_in)
+    _log_hours(logged_in, deal_id, user_id)
+    readonly = _second_actor(logged_in, "readonly")
+    assert readonly.get("/api/analytics/backlog").status_code == 200
+
+
 def test_the_period_filter_is_mandatory(logged_in: TestClient) -> None:
     """Residual B3: paginated with a mandatory period filter from the first commit,
     because a margins view is by nature a list of deals and unbounded growth stops being
@@ -457,6 +485,7 @@ def test_the_openapi_document_describes_every_analytics_route(logged_in: TestCli
         "/api/deals/{deal_id}/time-entries/to-invoice-draft",
         "/api/analytics/pnl",
         "/api/analytics/budget",
+        "/api/analytics/backlog",
         "/api/analytics/fiscale",
     ):
         assert path in paths, path

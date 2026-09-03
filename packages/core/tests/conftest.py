@@ -132,6 +132,58 @@ def seeded_entry_id(db_session: Session, seeded_deal_id: UUID, seeded_user_id: U
 
 
 @pytest.fixture
+def time_entry_factory(
+    db_session: Session, seeded_deal_id: UUID, seeded_user_id: UUID
+) -> Callable[..., TimeEntry]:
+    """One `time_entries` row, with only the columns an unbilled-backlog figure reads.
+
+    Written directly rather than through `TimeEntryService.create`, which is the opposite
+    of the choice `budgeted_deal` makes and for two reasons that do not apply there. The
+    backlog has **no period**, so its tests need days years apart, and the service refuses
+    any day after today and any day inside a closed month -- neither of which is the thing
+    under test. And it needs `invoice_line_id` populated, which no create path sets: the
+    link is written by `bind_time_to_invoice` and by slice 3's line replacement.
+
+    `tariffa=None` also sets `tariffa_origine="assente"`, because a rate and its
+    provenance are one fact: a row claiming `manuale` with no rate is a state no write
+    path can produce, and a fixture that could produce it would let a test pass against
+    an implementation that reads the wrong column.
+
+    Returns the row so a caller can soft-delete it or re-point it at another invoice line
+    without a second way to build a `TimeEntry` drifting into being.
+    """
+
+    def _make(
+        *,
+        data: date,
+        ore: str = "8.00",
+        tariffa: str | None = "50.000000",
+        costo: str | None = None,
+        fatturabile: bool = True,
+        invoice_line_id: UUID | None = None,
+        deal_id: UUID | None = None,
+    ) -> TimeEntry:
+        entry = TimeEntry(
+            deal_id=seeded_deal_id if deal_id is None else deal_id,
+            user_id=seeded_user_id,
+            data=data,
+            ore=Decimal(ore),
+            descrizione="Lavorazione",
+            fatturabile=fatturabile,
+            tariffa_applicata=None if tariffa is None else Decimal(tariffa),
+            tariffa_origine="assente" if tariffa is None else "manuale",
+            costo_applicato=None if costo is None else Decimal(costo),
+            costo_origine="assente" if costo is None else "manuale",
+            invoice_line_id=invoice_line_id,
+        )
+        db_session.add(entry)
+        db_session.flush()
+        return entry
+
+    return _make
+
+
+@pytest.fixture
 def local_storage(tmp_path) -> LocalFileStorage:
     """A tmp-dir backend, never the default `./var/documents` root -- a test must not
     write real files into this repository's working tree."""

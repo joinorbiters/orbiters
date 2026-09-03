@@ -1105,6 +1105,19 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
 
     @mcp.tool()
     @guard
+    def get_unbilled_backlog() -> dict[str, Any]:
+        """Le ore fatturabili non ancora finite su una fattura emessa, in **totale** e
+        senza periodo: quante ore, il valore maturato corrispondente (somma di ore ×
+        tariffa, arrotondata per riga), e quante voci non hanno una tariffa. Le voci senza
+        tariffa sono contate nelle ore ma valgono zero nel valore maturato: tariffa assente
+        e tariffa zero sono cose diverse. Le ore già legate a una **bozza** di fattura
+        contano ancora: una bozza non è un ricavo. Il valore maturato **non è un ricavo** e
+        non entra in nessun margine: il ricavo è la fattura.
+        """
+        return timetracking.get_unbilled_backlog(context)
+
+    @mcp.tool()
+    @guard
     def get_budget_vs_actual(
         da: str,
         a: str,

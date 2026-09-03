@@ -18,6 +18,7 @@ from pigrocrm.core.analytics.schemas import (
     FiscalEstimate,
     PeriodPnl,
     PeriodPnlQuery,
+    UnbilledBacklog,
 )
 from pigrocrm.core.analytics.service import AnalyticsService
 from pigrocrm_api.deps import ActorDep, SessionDep
@@ -74,3 +75,14 @@ def fiscal_estimate(
     `if` is a router the MCP adapter cannot reuse, and this figure has no MCP tool at all
     (§11's exclusion list), so the check has to live where both adapters share it."""
     return AnalyticsService(session).get_fiscal_estimate(anno, actor)
+
+
+@router.get("/backlog", response_model=UnbilledBacklog)
+def backlog(session: SessionDep, actor: ActorDep) -> UnbilledBacklog:
+    """No period parameter, deliberately: see `AnalyticsService.unbilled_backlog`.
+
+    Placed beside the other analytics reads rather than under `/dashboard`, because the
+    figure belongs to `AnalyticsService` and §3 forbids a dashboard module from owning
+    one -- its euro value is a product of two columns.
+    """
+    return AnalyticsService(session).unbilled_backlog(actor)
