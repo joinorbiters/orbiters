@@ -78,6 +78,18 @@ def _all_entries(db_session: Session) -> list[Activity]:
     return list(db_session.execute(select(Activity)).scalars())
 
 
+def _entries_since(db_session: Session, seen: set[UUID]) -> list[Activity]:
+    """Only the entries this test wrote.
+
+    `_all_entries` reads the whole table, which is a fair question on a database only
+    this test has touched and a wrong one here: other suites commit rows that outlive
+    them -- pipeline stages and deals among them -- so a count over everything measures
+    the order the suite happened to run in. These two call sites take a baseline first
+    and assert on the delta, which is the same assertion about this test's own behaviour
+    and does not move when a neighbour leaves something behind."""
+    return [entry for entry in _all_entries(db_session) if entry.id not in seen]
+
+
 def _kinds(db_session: Session, entity_type: str, entity_id: UUID) -> list[str]:
     return [e.kind for e in _entries(db_session, entity_type, entity_id)]
 
@@ -358,16 +370,29 @@ def test_seeding_records_each_default_stage_as_seeded_and_says_nothing_on_a_rese
     """`seed_defaults` is idempotent and converges silently; the audit has to converge
     with it, or every restart would grow the timeline for free."""
     service = PipelineService(db_session)
+    # The codes this call will actually insert. Not `DEFAULT_STAGES` wholesale: other
+    # suites commit stages that outlive them, so a count against the full list measures
+    # the order the suite happened to run in rather than this method's behaviour. And
+    # not `seed_defaults`' own return value either -- it answers with `self.list()`,
+    # every stage there is, which on a reseed is six rows it did not create.
+    existing = {stage.code for stage in service.list() if stage.code is not None}
+    attesi = {code for code, *_ in DEFAULT_STAGES if code not in existing}
+
+    before = {entry.id for entry in _all_entries(db_session)}
     service.seed_defaults(SYSTEM)
 
-    seeded = [e for e in _all_entries(db_session) if e.entity_type == "pipeline_stage"]
-    assert len(seeded) == len(DEFAULT_STAGES)
+    seeded = [e for e in _entries_since(db_session, before) if e.entity_type == "pipeline_stage"]
+    assert {e.payload["code"] for e in seeded} == attesi
     assert all(e.kind == "created" and e.payload["seeded"] is True for e in seeded)
 
+    # The half that always bites, and the one the name is about. Whatever the database
+    # held a moment ago, it has converged now, so a second pass must insert nothing and
+    # therefore say nothing -- otherwise every restart grows the timeline for free.
+    after_first = {entry.id for entry in _all_entries(db_session)}
     service.seed_defaults(SYSTEM)
-
-    still = [e for e in _all_entries(db_session) if e.entity_type == "pipeline_stage"]
-    assert len(still) == len(DEFAULT_STAGES), "a second seed inserted nothing and must log nothing"
+    assert _entries_since(db_session, after_first) == [], (
+        "a second seed inserted nothing and must log nothing"
+    )
 
 
 def test_a_refused_stage_deletion_records_nothing(db_session: Session) -> None:
@@ -524,10 +549,11 @@ def test_a_revoked_token_still_being_presented_raises_the_alarm_exactly_once(
 def test_an_unknown_token_records_nothing_at_all(db_session: Session) -> None:
     """There is no account to hang it on, and writing one row per guess would turn the
     audit trail into an amplifier for whoever is doing the guessing."""
+    before = {entry.id for entry in _all_entries(db_session)}
     with pytest.raises(ValidationFailed):
         PatService(db_session).resolve("pgc_mai-emesso-da-nessuno")
 
-    assert _all_entries(db_session) == []
+    assert _entries_since(db_session, before) == []
 
 
 def test_a_token_is_not_issued_when_its_audit_entry_cannot_be(
