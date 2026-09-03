@@ -24,8 +24,26 @@ import ast
 from pathlib import Path
 
 import pytest
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.config import Settings
+from pigrocrm.core.storage import LocalFileStorage
+from pigrocrm_mcp.server import build_server
 
 TOOLS_DIR = Path(__file__).resolve().parents[1] / "src" / "pigrocrm_mcp" / "tools"
+
+# The one module the scans below skip, and the only one allowed to reach a forbidden
+# operation. Its whole existence is conditional: `server.py` imports and registers it only
+# when `Settings.mcp_full_access` is true, so on a default installation its calls are as
+# unreachable as if the file were not there. The scans therefore ask a narrower and truer
+# question than "does this call appear anywhere" -- they ask whether it appears anywhere
+# that runs unconditionally.
+#
+# `test_the_privileged_module_is_the_only_place_they_appear` closes the obvious hole in
+# that exemption: a second file quietly added to the skip list, or `privileged` imported
+# outside the guard, both fail there.
+PRIVILEGED = TOOLS_DIR / "privileged.py"
 
 # Sixteen operations: the five fiscal ones that turn a draft into a fiscal fact or
 # change what one says after the fact, and the eleven that are closer to configuration
@@ -167,6 +185,7 @@ def _modules(base: Path = TOOLS_DIR) -> list[ast.Module]:
     return [
         ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for path in sorted(base.rglob("*.py"))
+        if path != PRIVILEGED
     ]
 
 
@@ -209,7 +228,9 @@ def _tools_source(base: Path = TOOLS_DIR) -> str:
     itself; scanning the whole package is what makes that true regardless of which
     file the call physically sits in.
     """
-    return "\n".join(path.read_text(encoding="utf-8") for path in base.rglob("*.py"))
+    return "\n".join(
+        path.read_text(encoding="utf-8") for path in base.rglob("*.py") if path != PRIVILEGED
+    )
 
 
 def _receivers_of(method: str, base: Path = TOOLS_DIR) -> list[str | None]:
@@ -232,6 +253,8 @@ def _receivers_of(method: str, base: Path = TOOLS_DIR) -> list[str | None]:
     """
     receivers: list[str | None] = []
     for path in sorted(base.rglob("*.py")):
+        if path == PRIVILEGED:
+            continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
         factories: dict[str, str] = {}
@@ -428,4 +451,84 @@ def test_the_structural_ban_has_a_second_line_on_the_credential_itself() -> None
         "stessa chiamata via REST con lo stesso token.\n"
         f"solo in FORBIDDEN: {sorted(attesi - set(AGENT_FORBIDDEN_ACTIONS))}\n"
         f"solo in AGENT_FORBIDDEN_ACTIONS: {sorted(set(AGENT_FORBIDDEN_ACTIONS) - attesi)}"
+    )
+
+
+async def test_the_sixteen_are_registered_exactly_when_the_installation_opted_in(
+    mcp_session: Session, tmp_path: Path
+) -> None:
+    """Both halves of the switch, in one assertion, because them disagreeing is the
+    failure worth catching.
+
+    Everything above proves the tools are absent on a default installation -- the
+    guarantee for everyone who never touches the setting. This adds the other direction:
+    with `mcp_full_access` on, all sixteen are there.
+
+    A half-open switch is worse than either honest state. Sixteen registered tools that
+    all refuse wastes an agent's turns and reads as a broken product; sixteen open
+    capabilities with no tool to reach them is a setting that does nothing. Worst is
+    fifteen of sixteen: the operator believes the switch is on and the one refusal
+    arrives at the moment somebody is issuing an invoice.
+
+    This test asks the built server rather than reading the source, which is why it sits
+    apart from its neighbours: registration is conditional at *runtime*, on a value no
+    AST walk can see.
+
+    `Settings(_env_file=None, ...)` and never the ambient settings -- this repository's
+    own `.env` has the switch **on**, so a test that inherited it would assert the
+    opposite of what it claims and pass anyway.
+    """
+    attore = Actor(id=None, type="mcp", role="admin")
+
+    async def tool_names(full_access: bool) -> set[str]:
+        server = build_server(
+            lambda: mcp_session,
+            lambda: attore,
+            LocalFileStorage(str(tmp_path)),
+            Settings(_env_file=None, mcp_full_access=full_access),  # type: ignore[call-arg]
+        )
+        return {tool.name for tool in await server.list_tools()}
+
+    chiusa = await tool_names(False)
+    aperta = await tool_names(True)
+
+    assert not (chiusa & set(FORBIDDEN)), "un'installazione chiusa non registra nessuno dei sedici"
+    mancanti = set(FORBIDDEN) - aperta
+    assert not mancanti, f"interruttore aperto ma questi tool non esistono: {sorted(mancanti)}"
+    # And nothing else moved: opting in means sixteen more tools, not a different server.
+    assert aperta - chiusa == set(FORBIDDEN)
+
+
+def test_the_privileged_module_is_the_only_place_they_appear() -> None:
+    """Guards the exemption.
+
+    The three scans above skip `privileged.py`, which is sound only while that file is
+    genuinely the sole exemption and its calls are genuinely conditional. Both halves are
+    checked here: every forbidden service call that appears anywhere under `tools/` must
+    appear in that one file, and `server.py` must reach it only behind
+    `mcp_full_access`.
+
+    Without this, the exemption is a hole with a comment on it: a second file added to
+    the skip list, or `privileged` imported unconditionally, would leave every test above
+    green while the sixteen became reachable on an installation that never opted in.
+    """
+    unconditional = _tools_source()
+    privileged = PRIVILEGED.read_text(encoding="utf-8")
+
+    for method in FORBIDDEN_SERVICE_CALLS:
+        assert f".{method}(" not in unconditional, (
+            f"'.{method}(' compare in un modulo che viene registrato sempre"
+        )
+        assert f".{method}(" in privileged, (
+            f"'.{method}(' non compare in privileged.py: o il tool non esiste, o e' "
+            "altrove, e in entrambi i casi l'esenzione qui sopra sta coprendo la cosa "
+            "sbagliata"
+        )
+
+    server_source = (TOOLS_DIR.parent / "server.py").read_text(encoding="utf-8")
+    assert "mcp_full_access" in server_source
+    guardia = server_source.index("if resolved_settings.mcp_full_access:")
+    assert server_source.index("import privileged") > guardia, (
+        "privileged e' importato fuori dalla guardia: il modulo verrebbe registrato "
+        "sempre e l'esenzione delle scansioni diventerebbe un buco"
     )

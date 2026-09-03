@@ -48,6 +48,14 @@ from test_mcp_invoice_ban import FORBIDDEN_QUALIFIED_CALLS, FORBIDDEN_SERVICE_CA
 MCP_SRC = Path(__file__).resolve().parents[1] / "src" / "pigrocrm_mcp"
 TOOLS_DIR = MCP_SRC / "tools"
 RESOURCES_DIR = MCP_SRC / "resources"
+# Skipped by `_reachable`, so that "reachable" here means "reachable on a default
+# installation". `tools/privileged.py` is registered only when `mcp_full_access` is
+# on, so counting its calls would make the sixteen banned operations look reachable
+# everywhere -- including on the installations the exclusions below exist to describe.
+# `test_mcp_invoice_ban.py` owns the other half: that those calls appear in that one
+# file and nowhere unconditional, and that `server.py` reaches it only behind the
+# guard.
+PRIVILEGED = TOOLS_DIR / "privileged.py"
 CORE_DIR = Path(__file__).resolve().parents[3] / "packages" / "core" / "src" / "pigrocrm" / "core"
 
 Method = tuple[str, str]
@@ -452,6 +460,8 @@ def _reachable(known: set[str]) -> set[Method]:
     found: set[Method] = set()
     for base in (TOOLS_DIR, RESOURCES_DIR):
         for path in sorted(base.rglob("*.py")):
+            if path == PRIVILEGED:
+                continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
             factories: dict[str, str] = {}
