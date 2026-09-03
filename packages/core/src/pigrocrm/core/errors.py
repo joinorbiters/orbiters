@@ -62,6 +62,24 @@ class PermissionDenied(DomainError):
         )
 
 
+class AgentForbidden(DomainError):
+    """An operation no agent may perform, whatever role its owner has.
+
+    Deliberately not a `PermissionDenied`. That one answers "you are the wrong role,
+    ask somebody senior"; this one answers "no token of this kind may do this at all",
+    and telling an administrator to find a bigger administrator would be a lie they
+    would waste time on.
+    """
+
+    code = "agent_forbidden"
+
+    def __init__(self, action: str) -> None:
+        super().__init__(
+            f"{action} non è eseguibile da un agente: è un atto che richiede una persona",
+            action=action,
+        )
+
+
 class ImmutableField(DomainError):
     code = "immutable_field"
 

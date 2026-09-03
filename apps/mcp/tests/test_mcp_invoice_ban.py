@@ -393,3 +393,39 @@ def test_no_tool_reaches_a_forbidden_operation_on_the_service_that_owns_it(
         "come violazione, perche' un divieto che si arrende all'ambiguita' non e' un "
         "divieto."
     )
+
+
+def test_the_structural_ban_has_a_second_line_on_the_credential_itself() -> None:
+    """The tool being absent is not, on its own, the guarantee this file claims.
+
+    Everything above proves these operations are unreachable over *this transport*. A
+    personal access token is not confined to it: `PatService.resolve` answers with
+    `Actor(type="mcp", role=<the owner's role>)`, and `apps/api`'s `get_actor` accepts
+    the same `Bearer pgc_...` header on every REST route. Until `AGENT_FORBIDDEN_ACTIONS`
+    existed nothing in that package read `actor.type`, so a token handed to an agent on
+    the written promise that it "may prepare but may not emit" could issue an invoice
+    with one curl -- spending a register number and producing a FatturaPA.
+
+    So the two lists have to stay one list. This test is the seam: `FORBIDDEN` names the
+    tools that must not be registered, `AGENT_FORBIDDEN_ACTIONS` names the operations
+    that must refuse an agent whatever transport it arrives on, and a name added to one
+    and forgotten in the other is that gap coming back. The mapping is identity except
+    for one pair, where the tool's advertised name and the action string the service
+    passes to `require_admin` were chosen separately -- mapped here rather than renamed,
+    because the tool name is the agent-facing contract and the action string is the
+    audited one.
+    """
+    from pigrocrm.core.actor import AGENT_FORBIDDEN_ACTIONS
+
+    tool_name_to_action = {"mark_invoice_transmitted": "mark_transmitted_externally"}
+    attesi = {tool_name_to_action.get(name, name) for name in FORBIDDEN}
+
+    assert attesi == set(AGENT_FORBIDDEN_ACTIONS), (
+        "le due meta' del divieto sono divergenti: FORBIDDEN vieta il tool, "
+        "AGENT_FORBIDDEN_ACTIONS vieta l'operazione a qualunque credenziale di tipo "
+        "agente. Un nome aggiunto a una sola delle due lascia proprio il buco che la "
+        "seconda e' stata scritta per chiudere -- l'assenza del tool non impedisce la "
+        "stessa chiamata via REST con lo stesso token.\n"
+        f"solo in FORBIDDEN: {sorted(attesi - set(AGENT_FORBIDDEN_ACTIONS))}\n"
+        f"solo in AGENT_FORBIDDEN_ACTIONS: {sorted(set(AGENT_FORBIDDEN_ACTIONS) - attesi)}"
+    )

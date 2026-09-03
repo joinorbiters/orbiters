@@ -11,6 +11,9 @@ from pigrocrm.core.timetracking.locks import PeriodLockService
 from pigrocrm.core.timetracking.schemas import PeriodLockCreate
 
 ADMIN = Actor(id=None, type="mcp", role="admin")
+# The person's half. Setting up a fixture by taking a decision the product reserves to
+# a human needs a human actor, or the setup contradicts what the test then asserts.
+UMANO = Actor(id=None, type="user", role="admin")
 
 
 async def test_log_time_writes_and_is_attributable_to_the_agent(
@@ -78,10 +81,15 @@ async def test_list_period_locks_shows_the_months_log_time_will_refuse(
     the closed months one rejection at a time. Closing a period is still absent from the
     surface: seeing which months are closed is not deciding which ones are.
 
-    The close is performed here through the service, with an admin actor, exactly as
+    The close is performed here through the service with a **user** actor, exactly as
     `test_full_cycle.py` drives the human half of its own cycle -- the point is that the
-    agent can *read* a decision a person took, not that it could take it."""
-    PeriodLockService(mcp_session).close_period(PeriodLockCreate(anno=2026, mese=1), ADMIN)
+    agent can *read* a decision a person took, not that it could take it.
+
+    `UMANO` and not this file's `ADMIN`, which is `type="mcp"`: `close_period` is one of
+    the sixteen operations `AGENT_FORBIDDEN_ACTIONS` refuses to any agent credential
+    whatever its role, so an mcp actor here would be setting up the fixture by doing the
+    very thing the test says an agent cannot do. It passed until that ban existed."""
+    PeriodLockService(mcp_session).close_period(PeriodLockCreate(anno=2026, mese=1), UMANO)
 
     async with Client(server) as client:
         listed = (await client.call_tool("list_period_locks", {})).structured_content
