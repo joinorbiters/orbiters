@@ -16,6 +16,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from pigrocrm.core.analytics.schemas import PeriodPnl
 from pigrocrm.core.db import month_bounds, today_local, window_from
 from pigrocrm.core.errors import ValidationFailed
 
@@ -149,3 +150,37 @@ class CommercialDashboard(BaseModel):
     chiusure_non_attribuibili: int
     # §6.2's first signal, and the permanent cross-check on automation A1.
     offerte_accettate_deal_non_vinto: int
+
+
+class EconomicDashboard(BaseModel):
+    """§5. **No new aggregate exists on this page.** Every figure comes from
+    `AnalyticsService` or from `InvoiceRepository`.
+
+    `pnl` embeds the owning service's own model verbatim rather than flattening its fields
+    into this one: a flattened copy is a place for a field to be renamed, reordered or
+    quietly recombined, and embedding it makes criterion 1's reconciliation an identity
+    instead of a comparison.
+
+    `da_incassare` and `scaduto` are the one pair here that does **not** come from the
+    P&L, and they use `totale` rather than `imponibile` because they are a different
+    quantity: a receivable is what must arrive in the bank, VAT included -- money
+    collected on the State's behalf. Neither enters any margin, and neither shares a total
+    row with revenue (§5.2).
+
+    Deliberately absent (§5.3): any fiscal estimate field, any single deal's margin, and
+    any comparison with the same period last year. The fiscal estimate stays at
+    `/app/analisi/fiscale`, admin-only, and the dashboard shows a link and not a number --
+    a dashboard is the screen most likely to end up in a screenshot or a screen share.
+    """
+
+    periodo: Periodo
+    calcolato_alle: datetime
+    pnl: PeriodPnl
+    # No period: an invoice issued in February and still unpaid is still owed in March.
+    da_incassare: Decimal = Field(max_digits=12, decimal_places=2)
+    # A subset of `da_incassare`, rendered as one -- indented beneath it, never as a
+    # second addable line.
+    scaduto: Decimal = Field(max_digits=12, decimal_places=2)
+    # A COUNT on the same predicate the revenue figure uses, so the two cannot describe
+    # different sets.
+    fatture_emesse: int

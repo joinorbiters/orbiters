@@ -37,10 +37,17 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
-from pigrocrm.core.dashboard.schemas import CommercialDashboard, PeriodoQuery
+from pigrocrm.core.analytics.schemas import PeriodPnlQuery
+from pigrocrm.core.analytics.service import AnalyticsService
+from pigrocrm.core.dashboard.schemas import (
+    CommercialDashboard,
+    EconomicDashboard,
+    PeriodoQuery,
+)
 from pigrocrm.core.db import window_from
 from pigrocrm.core.deals.repository import DealRepository
 from pigrocrm.core.documents.repository import DocumentRepository
+from pigrocrm.core.invoices.repository import InvoiceRepository
 
 # The property §7.1 requires, named so the tests can assert on the same constant the code
 # uses rather than on a duplicated string literal.
@@ -55,6 +62,8 @@ class DashboardService:
         self.session = session
         self.deals = DealRepository(session)
         self.documents = DocumentRepository(session)
+        self.analytics = AnalyticsService(session)
+        self.invoices = InvoiceRepository(session)
 
     def _open_snapshot(self) -> datetime:
         """Begin the one read-only `REPEATABLE READ` transaction, and return its instant.
@@ -129,4 +138,43 @@ class DashboardService:
             chiusure_previste_30_giorni=self.deals.expected_closures(periodo.a, finestra_a),
             chiusure_non_attribuibili=self.deals.unattributable_closures(),
             offerte_accettate_deal_non_vinto=(self.documents.count_accepted_with_unwon_deal()),
+        )
+
+    def get_economic_dashboard(self, query: PeriodoQuery, actor: Actor) -> EconomicDashboard:
+        """§5. Composition only: not one figure on this page is computed here.
+
+        `period_pnl` is called with the same `actor` the caller supplied, so its own
+        authorisation applies unchanged -- this method adds none and removes none. Its
+        result is embedded verbatim rather than flattened, which is what makes criterion
+        1's reconciliation an identity instead of a comparison: there is no field here for
+        a P&L row to be renamed or recombined into on the way through.
+
+        The receivable figures come from `InvoiceRepository` rather than from
+        `InvoiceService`: §3 rule 2 puts a single-table `SUM` in that table's repository
+        even when the table belongs to another slice, and adding a public method to
+        `InvoiceService` would force either a new MCP tool or an edit to slice 3 §11's
+        four-name exclusion list.
+
+        `da_incassare` and `scaduto` take no period, and that asymmetry is deliberate
+        rather than an omission: revenue is attributed to a period by `data_emissione`,
+        while an invoice issued in February and still unpaid is money owed today whatever
+        window the reader is looking at. Passing `periodo` to either would turn the one
+        figure on this page that answers "what is outstanding" into a second, weaker
+        rendering of "what was invoiced".
+
+        The period is resolved **before** the snapshot is opened, as on the commercial
+        dashboard: a malformed period is the caller's mistake and should not cost a
+        transaction.
+        """
+        periodo = query.resolve()
+        calcolato_alle = self._open_snapshot()
+        return EconomicDashboard(
+            periodo=periodo,
+            calcolato_alle=calcolato_alle,
+            pnl=self.analytics.period_pnl(
+                PeriodPnlQuery(da=periodo.da, a=periodo.a, customer_id=None), actor
+            ),
+            da_incassare=self.invoices.sum_da_incassare(),
+            scaduto=self.invoices.sum_scaduto(),
+            fatture_emesse=self.invoices.count_emesse_in_periodo(periodo.da, periodo.a),
         )
