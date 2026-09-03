@@ -66,7 +66,23 @@ def server(mcp_session: Session, tmp_path: Path):
     # left-in-the-working-tree problem the API's `client` fixture was fixed for in
     # task 12. A fresh `tmp_path` per test keeps storage exactly as isolated as the
     # database already is (`mcp_session`'s own rolled-back transaction).
-    return build_server(lambda: mcp_session, lambda: ADMIN, LocalFileStorage(tmp_path))
+    #
+    # `settings` is passed explicitly, and that is the second isolation this fixture
+    # provides. `build_server`'s default is `get_settings()`, which reads a `.env` from
+    # the working directory -- so the whole Gmail surface appeared or disappeared
+    # depending on whether the developer happened to have configured Gmail for their own
+    # local instance. The tests that assert the surface is *absent* said so out loud
+    # ("this repository has no .env") and were falsified the day someone wrote one.
+    #
+    # `_env_file=None` is the same guard `test_gmail_tools.py::gmail_settings` already
+    # applies to the configured half; this is the unconfigured half it was missing.
+    # An installation is now something these tests declare, not something they inherit.
+    return build_server(
+        lambda: mcp_session,
+        lambda: ADMIN,
+        LocalFileStorage(tmp_path),
+        Settings(_env_file=None),  # type: ignore[call-arg]
+    )
 
 
 @pytest.fixture
