@@ -25,6 +25,10 @@ from pigrocrm.core.actor import AGENT_FORBIDDEN_ACTIONS, Actor
 from pigrocrm.core.errors import AgentForbidden, PermissionDenied
 
 AGENT_ADMIN = Actor(id=None, type="mcp", role="admin")
+# The same credential on an installation that has opted in. Same type, same role --
+# the only difference is what `Settings.mcp_full_access` said when `PatService.resolve`
+# built it, which is the whole design: the capability rides on the credential.
+AGENT_APERTO = Actor(id=None, type="mcp", role="admin", full_access=True)
 AGENT_READONLY = Actor(id=None, type="mcp", role="readonly")
 HUMAN_ADMIN = Actor(id=None, type="user", role="admin")
 SYSTEM = Actor.system()
@@ -86,3 +90,45 @@ def test_the_system_actor_is_not_an_agent() -> None:
     into the ban would make the installer unable to install."""
     SYSTEM.require_admin("issue_invoice")
     SYSTEM.require_write("export_invoice_xml")
+
+
+@pytest.mark.parametrize("action", sorted(AGENT_FORBIDDEN_ACTIONS))
+def test_an_opted_in_agent_is_refused_none_of_them(action: str) -> None:
+    """The other half of the switch, and the reason it is a switch rather than a wall.
+
+    This product is single-tenant and self-hosted, and the person running it may
+    reasonably want their own agent to do everything they can do. `mcp_full_access`
+    says so for one installation; the default stays closed so that nobody has to know
+    the setting exists in order to be safe.
+
+    Asserted per action rather than on a couple of samples, because a partial opt-in --
+    fifteen of sixteen opening -- would be the worst of both: the operator believes the
+    switch is on and one operation still refuses, in a product where the refusal arrives
+    at the moment somebody is trying to issue an invoice.
+    """
+    AGENT_APERTO.require_admin(action)
+    AGENT_APERTO.require_write(action)
+
+
+def test_opting_in_does_not_hand_out_a_role() -> None:
+    """`full_access` answers "which operations", never "which role". A `readonly`
+    credential on an opted-in installation still cannot write, and the refusal is the
+    ordinary `PermissionDenied` -- because at that point the question really is about the
+    role, and answering "ask somebody senior" is now the correct advice."""
+    readonly_aperto = Actor(id=None, type="mcp", role="readonly", full_access=True)
+
+    with pytest.raises(PermissionDenied):
+        readonly_aperto.require_write("issue_invoice")
+    with pytest.raises(PermissionDenied):
+        readonly_aperto.require_write("log_time")
+
+
+def test_the_switch_defaults_to_closed() -> None:
+    """An `Actor` built without saying anything about it is closed.
+
+    The default lives on the model rather than only in `Settings`, so a caller that
+    constructs an actor by hand -- a test, a CLI, a future adapter -- gets the safe
+    answer without having to know the setting exists.
+    """
+    assert Actor(id=None, type="mcp", role="admin").full_access is False
+    assert Actor.system().full_access is False

@@ -37,6 +37,31 @@ class Settings(BaseSettings):
     # in production because "it's just a flag" should re-read this paragraph first.
     cookie_secure: bool = True
 
+    # Whether a personal access token may perform the sixteen operations listed in
+    # `actor.AGENT_FORBIDDEN_ACTIONS` -- issuing and annulling invoices, the fiscal
+    # profile, rates, cost categories, period locks, the hours-to-invoice bridge and the
+    # annual estimate -- plus sending mail and preparing a payment reminder.
+    #
+    # `False` by default, and the default is the one nobody has to think about. Those
+    # operations are not merely privileged, they are **irreversible in ways the rest of
+    # the product is not**: issuing consumes a number from a gap-free fiscal register
+    # that cannot be handed back, and a sent email is in somebody's client's inbox. The
+    # worst outcome is not "the agent made a mistake" but "the agent made a mistake and
+    # nobody can undo it".
+    #
+    # Turning it on is a decision about a *specific installation*, which is why it is a
+    # setting and not a code change: this product is single-tenant and self-hosted, and
+    # the person running it may reasonably want their own agent to do everything they
+    # can. Everyone else keeps the closed default without having to know it exists.
+    #
+    # The flag is read once, in `PatService.resolve`, and stamped onto the `Actor` it
+    # builds -- so the capability travels on the credential rather than living in a
+    # global that a caller could be unaware of. That is deliberate: it means a REST
+    # request presenting the same token is treated exactly like the MCP transport
+    # (see the reasoning in `actor.py`), and it is the first step toward residuo R10,
+    # where a token would say what it is *for* instead of inheriting everything.
+    mcp_full_access: bool = False
+
     # The emitter's timezone, and the only one. Every `Date` column in the product is a
     # calendar day in *this* zone: `invoices.data_emissione` (slice 3 §6.2),
     # `costs.data` and `time_entries.data` (slice 4), `deals.chiuso_il` and

@@ -13,6 +13,7 @@ from pigrocrm.core.actor import Actor, Role
 from pigrocrm.core.auth.models import User
 from pigrocrm.core.auth.pat_models import PersonalAccessToken
 from pigrocrm.core.auth.service import ENTITY as USER_ENTITY
+from pigrocrm.core.config import Settings, get_settings
 from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 
 PAT_PREFIX = "pgc_"
@@ -58,9 +59,14 @@ def _digest(raw: str) -> str:
 
 
 class PatService:
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, settings: Settings | None = None) -> None:
         self.session = session
         self.activities = ActivityService(session)
+        # Read here rather than at the point of use, so that what a credential may do is
+        # decided once, where the credential is built. A caller may pass its own
+        # `Settings` -- a test declaring an installation, chiefly -- instead of
+        # inheriting whatever `.env` the process happened to load.
+        self.settings = settings or get_settings()
 
     def create(self, nome: str, actor: Actor) -> tuple[PatRead, str]:
         if actor.id is None:
@@ -137,7 +143,17 @@ class PatService:
 
         role: Role = user.ruolo  # type: ignore[assignment]
         # type="mcp": a PAT identifies an agent, which is what makes the timeline honest.
-        resolved = Actor(id=user.id, type="mcp", role=role)
+        #
+        # `full_access` is stamped here, and this is the only place it is decided. It
+        # travels on the actor rather than being consulted at the point of use, so a REST
+        # request presenting this token behaves exactly like the MCP transport -- the
+        # asymmetry that once let a `curl` issue an invoice while the tool was
+        # unregistered. Closed unless the installation opted in; see
+        # `AGENT_FORBIDDEN_ACTIONS` for what that opens and why it is a decision about a
+        # machine rather than about a role.
+        resolved = Actor(
+            id=user.id, type="mcp", role=role, full_access=self.settings.mcp_full_access
+        )
         # Only the *first* use is recorded, not every one. `resolve()` runs on every
         # single request an agent makes, so an entry per call would double the write
         # volume of the whole API and bury the account timeline under thousands of rows
