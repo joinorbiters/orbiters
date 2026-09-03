@@ -75,6 +75,11 @@ def list_deals(
     customer_id: Annotated[UUID | None, Query()] = None,
     stage_id: Annotated[UUID | None, Query()] = None,
     custom: Annotated[list[SafeStr] | None, Query(description=CUSTOM_QUERY_DESCRIPTION)] = None,
+    # The two drill-throughs of the operational dashboard's signal cards (§6.2). Each card
+    # links here and nowhere else, and the rows returned are counted by the same predicate
+    # function the card's `COUNT` uses -- so the count and the list cannot drift apart.
+    fatturato_non_vinto: Annotated[bool, Query()] = False,
+    da_fatturare: Annotated[bool, Query()] = False,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     # `str`, not `UUID`, since slice 6 -- see the identical comment on list_customers
     # (routers/customers.py). The `cursor` on `list_deal_time_entries` further down
@@ -90,6 +95,8 @@ def list_deals(
         customer_id=customer_id,
         stage_id=stage_id,
         custom=parse_custom_filter(custom),
+        fatturato_non_vinto=fatturato_non_vinto,
+        da_fatturare=da_fatturare,
         limit=limit,
         cursor=cursor,
         sort=sort,

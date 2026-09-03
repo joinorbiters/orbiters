@@ -49,3 +49,17 @@ def get_economic_dashboard(context: McpContext, query: PeriodoQuery) -> dict[str
         .get_economic_dashboard(query, context.actor)
         .model_dump(mode="json")
     )
+
+
+def get_operational_dashboard(context: McpContext) -> dict[str, Any]:
+    """No query object, because §6's dashboard takes no period: its figures are the current
+    week and a backlog, which are the two things that make no sense in the past.
+
+    Registered by Task C6 for the reason recorded on `get_economic_dashboard` above. **Task
+    C7 must not register a second `get_operational_dashboard`.**
+    """
+    return (
+        DashboardService(context.session)
+        .get_operational_dashboard(context.actor)
+        .model_dump(mode="json")
+    )

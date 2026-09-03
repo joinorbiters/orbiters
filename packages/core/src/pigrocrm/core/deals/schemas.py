@@ -161,6 +161,13 @@ class DealListQuery(BaseModel):
     customer_id: UUID | None = None
     stage_id: UUID | None = None
     custom: dict[str, Any] | None = None
+    # The two drill-throughs of the operational dashboard's signal cards (§6.2). Booleans
+    # and not free-text filters: each selects one fixed predicate, and the card that links
+    # here counts rows with that same predicate function -- `invoiced_not_won_predicate`
+    # and `won_with_unbilled_hours_predicate` -- so a card and its list cannot drift apart.
+    # Same shape as `DocumentListQuery.solo_deal_non_vinto`.
+    fatturato_non_vinto: bool = False
+    da_fatturare: bool = False
     # Upper-bounded so a caller (an MCP agent especially) cannot request an
     # unbounded page; matches CustomerListQuery.limit/PersonListQuery.limit exactly.
     limit: int = Field(default=50, ge=1, le=200)

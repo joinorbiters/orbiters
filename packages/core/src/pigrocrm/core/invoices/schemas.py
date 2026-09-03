@@ -281,6 +281,12 @@ class InvoiceListQuery(BaseModel):
     stato: InvoiceStato | None = None
     anno: int | None = Field(default=None, ge=ANNO_MIN, le=ANNO_MAX)
     stato_pagamento: StatoPagamento | None = None
+    # The drill-through of the operational dashboard's "scaduto e non incassato" card
+    # (§6.2). A boolean and not a free-text filter: it selects one fixed predicate, and the
+    # card that links here counts rows with that same predicate function
+    # (`_overdue_predicate`), so the two cannot drift apart. Same shape as
+    # `DocumentListQuery.solo_deal_non_vinto`.
+    scadute: bool = False
     # Bounded here, not only on the router: an MCP tool builds this object directly,
     # with no `Query(...)` bound sitting between it and this schema.
     limit: int = Field(default=50, ge=1, le=200)

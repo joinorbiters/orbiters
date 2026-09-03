@@ -607,6 +607,22 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
             context, PeriodoQuery.model_validate({"da": da, "a": a})
         )
 
+    # Registered by Task C6, with the same reasoning. No parameters at all: §6's dashboard
+    # takes no period, so there is none for an agent to get wrong. Task C7 must not
+    # register a second one.
+
+    @mcp.tool()
+    @guard
+    def get_operational_dashboard() -> dict[str, Any]:
+        """Che cosa c'è da fare adesso: le ore registrate giorno per giorno nella settimana
+        corrente (compresi i giorni senza ore, che è il punto), l'arretrato da fatturare in
+        totale, tre segnali di incoerenza da sistemare -- fatturato ma non vinto, vinto ma
+        da fatturare, scaduto e non incassato -- e le ultime attività. Non prende periodo:
+        la settimana corrente e l'arretrato sono le due cose che nel passato non hanno
+        senso. I segnali sono conteggi: non inviano niente e non cambiano niente.
+        """
+        return dashboard_tools.get_operational_dashboard(context)
+
     # ---- documents ---------------------------------------------------------
     # The download of bytes never goes through MCP (spec 7): a tool returning a
     # base64 PDF inside a model's own context is waste and risk. Every tool below

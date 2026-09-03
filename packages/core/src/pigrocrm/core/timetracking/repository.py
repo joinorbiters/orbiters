@@ -3,13 +3,48 @@ from datetime import date, timedelta
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import ColumnElement, Select, distinct, func, select
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.dashboard.schemas import DayHours, WeekHours
+from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.money import ZERO_HOURS, round_hours, sum_hours
+from pigrocrm.core.pipeline.models import PipelineStage
 from pigrocrm.core.timetracking.models import Cost, TimeEntry
 from pigrocrm.core.timetracking.schemas import CostListQuery, TimeEntryListQuery
+
+
+def won_with_unbilled_hours_predicate() -> tuple[ColumnElement[bool], ...]:
+    """§6.2's "vinto ma da fatturare", as one predicate used by both the count and the list.
+
+    Extracted rather than written twice because §7.2's guarantee -- the card and its
+    drill-through are the same query, not two calculations -- is only true if the predicate
+    is literally the same object graph. Two hand-copied predicates agree until one is
+    edited, and then the dashboard and the list disagree about the same rows with nothing to
+    say which of them is right. The same shape `documents/repository.py` uses for the
+    commercial signal and `invoices/repository.py` for the other two.
+
+    `invoice_line_id IS NULL` is the *link* reading of "not yet invoiced", not the invoice
+    state reading `billed_entry_ids` uses. Deliberately: this signal answers "is there work
+    nobody has put on a document at all", which is the moment somebody has to act, and hours
+    already sitting on a draft line have been acted on. The two readings differ only on a
+    draft, and slice 4 §4.3 is where that distinction is owned.
+
+    Public, unlike its three siblings, because its two callers are in different modules --
+    the `COUNT` here and the drill-through in `deals/repository.py`. A leading underscore
+    imported across a package boundary is a worse signal than a public name.
+
+    Returned as a tuple of clauses so each caller splats it into its own `where(...)`; the
+    joins belong to the caller, because a `COUNT` and a paginated `SELECT` build them
+    differently.
+    """
+    return (
+        TimeEntry.deleted_at.is_(None),
+        TimeEntry.fatturabile.is_(True),
+        TimeEntry.invoice_line_id.is_(None),
+        Deal.deleted_at.is_(None),
+        PipelineStage.tipo == "won",
+    )
 
 
 def month_bounds(anno: int, mese: int) -> tuple[date, date]:
@@ -116,6 +151,30 @@ class TimeEntryRepository:
             # right.
             giorni_senza_ore=[giorno for giorno in giorni_finestra if giorno not in logged],
             ore_totali=sum_hours([row.ore for row in giorni]),
+        )
+
+    def count_won_deals_to_invoice(self) -> int:
+        """§6.2's third signal: deals in a `won` stage with billable, unbilled hours.
+
+        The `da fatturare` state slice 4 §7.3 already defines, counted here rather than
+        redefined -- a second definition of "ready to invoice" is a second source of truth
+        about when to bill a customer.
+
+        Counts **deals**, not entries: the drill-through lists deals, so a deal with twelve
+        unbilled entries is one signal and not twelve. `distinct` is what makes that true,
+        and the inner joins are what keep an entry whose deal is gone out of both sides.
+
+        A `COUNT` across a join, which §3 permits explicitly; a `SUM` across one it does
+        not, and this produces no money figure.
+        """
+        return int(
+            self.session.execute(
+                select(func.count(distinct(Deal.id)))
+                .select_from(TimeEntry)
+                .join(Deal, Deal.id == TimeEntry.deal_id)
+                .join(PipelineStage, PipelineStage.id == Deal.pipeline_stage_id)
+                .where(*won_with_unbilled_hours_predicate())
+            ).scalar_one()
         )
 
     # `list` stays the last method in this class -- the unconditional project rule.

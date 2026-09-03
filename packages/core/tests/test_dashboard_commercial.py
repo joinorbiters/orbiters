@@ -426,11 +426,11 @@ def test_the_service_has_exactly_the_dashboards_that_exist() -> None:
     method added without a tool fails in this file rather than in the architecture test,
     where the message is about a list.
 
-    6B shipped one; Task C4 added `get_economic_dashboard` and registered its tool in the
-    same commit, for the reason `tools/__init__.py` records beside it. Task C6 adds
-    `get_operational_dashboard` and must extend this set in *its* commit -- widening it
-    ahead of the method would leave the assertion green over a method that does not exist,
-    which is the shape of a pin that has stopped pinning.
+    6B shipped one; Tasks C4 and C6 added the other two and registered their tools in the
+    same commits, for the reason `tools/__init__.py` records beside each. The set is
+    widened by the task that adds the method and never ahead of it -- a set widened early
+    leaves the assertion green over a method that does not exist, which is a pin that has
+    stopped pinning.
     """
     import inspect
 
@@ -439,7 +439,11 @@ def test_the_service_has_exactly_the_dashboards_that_exist() -> None:
         for name, member in inspect.getmembers(DashboardService, predicate=inspect.isfunction)
         if not name.startswith("_") and member.__qualname__.startswith("DashboardService.")
     }
-    assert public == {"get_commercial_dashboard", "get_economic_dashboard"}
+    assert public == {
+        "get_commercial_dashboard",
+        "get_economic_dashboard",
+        "get_operational_dashboard",
+    }
 
 
 def test_the_service_never_writes(seeded: Seeded) -> None:

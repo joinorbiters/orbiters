@@ -73,7 +73,7 @@ def _overdue_predicate() -> tuple[ColumnElement[bool], ...]:
     )
 
 
-def _invoiced_not_won_predicate() -> tuple[ColumnElement[bool], ...]:
+def invoiced_not_won_predicate() -> tuple[ColumnElement[bool], ...]:
     """A deal with an issued invoice that is still sitting on an `open` stage (§6.2).
 
     `tipo = 'open'`, not `tipo <> 'won'`. The drill-through is a list of deals to go and
@@ -84,6 +84,11 @@ def _invoiced_not_won_predicate() -> tuple[ColumnElement[bool], ...]:
     Written as a predicate rather than inlined because slice 6 §6.2's card and its
     drill-through must be the *same* predicate: `DealRepository.list` filters on this same
     tuple, so the count on the card and the length of the list behind it cannot drift.
+
+    Public, unlike `_issued_filter` and `_overdue_predicate` beside it, because its second
+    caller lives in another module: `deals/repository.py` imports it for the
+    `fatturato_non_vinto` drill-through. A leading underscore reached across a package
+    boundary is a worse signal than a public name.
     """
     return (
         *_issued_filter(),
@@ -273,7 +278,7 @@ class InvoiceRepository:
                 .select_from(Invoice)
                 .join(Deal, Deal.id == Invoice.deal_id)
                 .join(PipelineStage, PipelineStage.id == Deal.pipeline_stage_id)
-                .where(*_invoiced_not_won_predicate())
+                .where(*invoiced_not_won_predicate())
             ).scalar_one()
         )
 
@@ -311,6 +316,14 @@ class InvoiceRepository:
             stmt = stmt.where(Invoice.anno == query.anno)
         if query.stato_pagamento:
             stmt = stmt.where(Invoice.stato_pagamento == query.stato_pagamento)
+        if query.scadute:
+            # The drill-through of §6.2's "scaduto e non incassato" card, sharing its
+            # predicate literally rather than restating it -- see `_overdue_predicate`,
+            # which `count_scadute_non_incassate` also calls. An **additional** predicate on
+            # the statement built above, never a replacement for it: a drill-through that
+            # silently dropped the caller's own `stato` or `customer_id` would be answering
+            # a different question from the one asked.
+            stmt = stmt.where(*_overdue_predicate())
         if query.cursor:
             stmt = stmt.where(Invoice.id > query.cursor)
         # Keyset pagination on a UUIDv7 id: ordered by creation, stable under inserts.

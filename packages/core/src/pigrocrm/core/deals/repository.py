@@ -9,8 +9,12 @@ from pigrocrm.core.dashboard.schemas import ClosedInPeriod, PipelineStageSummary
 from pigrocrm.core.db import decode_cursor, escape_like, keyset_predicate, order_by
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.deals.schemas import DEAL_SORTS, DealListQuery
+from pigrocrm.core.invoices.models import Invoice
+from pigrocrm.core.invoices.repository import invoiced_not_won_predicate
 from pigrocrm.core.money import percentage_of, round_money
 from pigrocrm.core.pipeline.models import PipelineStage
+from pigrocrm.core.timetracking.models import TimeEntry
+from pigrocrm.core.timetracking.repository import won_with_unbilled_hours_predicate
 
 
 class DealRepository:
@@ -209,6 +213,38 @@ class DealRepository:
         if query.custom:
             # JSONB containment, served by the GIN index.
             stmt = stmt.where(Deal.custom_fields.contains(query.custom))
+        if query.fatturato_non_vinto:
+            # The drill-through of §6.2's "fatturato ma non vinto" card. Written as
+            # `id IN (subquery)` rather than as joins on the outer statement, unlike
+            # `DocumentRepository.list`: a deal has *many* invoices, so joining here would
+            # return a deal once per invoice and the list would be longer than the card
+            # while describing the same set. The count says `COUNT(DISTINCT deal.id)` for
+            # the same reason; a semi-join is the spelling that needs no `distinct` at all,
+            # and it leaves the outer statement's own filters, sort and keyset untouched.
+            #
+            # An **additional** predicate, never a replacement for the statement above: a
+            # drill-through that silently dropped the caller's own filters would be
+            # answering a different question from the one asked.
+            stmt = stmt.where(
+                Deal.id.in_(
+                    select(Deal.id)
+                    .join(Invoice, Invoice.deal_id == Deal.id)
+                    .join(PipelineStage, PipelineStage.id == Deal.pipeline_stage_id)
+                    .where(*invoiced_not_won_predicate())
+                )
+            )
+        if query.da_fatturare:
+            # §6.2's "vinto ma da fatturare", same shape and for the same reason: a deal
+            # has many time entries. The predicate is the one `count_won_deals_to_invoice`
+            # calls, imported rather than restated.
+            stmt = stmt.where(
+                Deal.id.in_(
+                    select(Deal.id)
+                    .join(TimeEntry, TimeEntry.deal_id == Deal.id)
+                    .join(PipelineStage, PipelineStage.id == Deal.pipeline_stage_id)
+                    .where(*won_with_unbilled_hours_predicate())
+                )
+            )
 
         # Residuo R9 -- see `CustomerRepository.list` for the reasoning.
         spec = DEAL_SORTS.resolve(query.sort)
