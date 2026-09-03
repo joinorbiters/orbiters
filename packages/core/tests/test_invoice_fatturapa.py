@@ -15,6 +15,7 @@ from lxml import etree
 from pigrocrm.core.errors import ValidationFailed
 from pigrocrm.core.invoices.fatturapa import (
     FatturaPAExporter,
+    check_party_exportable,
     normalise_fiscal_id,
 )
 from pigrocrm.core.invoices.schemas import (
@@ -479,15 +480,38 @@ def test_a_denomination_outside_latin_1_is_refused_by_field_name() -> None:
     assert caught.value.details["field"] == "ragione_sociale"
 
 
-def test_a_foreign_customer_is_refused_because_the_slice_does_not_do_them() -> None:
-    with pytest.raises(ValidationFailed) as caught:
+def test_a_country_code_that_is_not_a_country_code_is_refused() -> None:
+    """What is left of the refusal this test used to assert.
+
+    It read `test_a_foreign_customer_is_refused_because_the_slice_does_not_do_them`, and
+    it was true: `check_party_exportable` raised on any `nazione != "IT"`. That is no
+    longer the behaviour, and inverting the test is the honest way to record it -- a
+    deleted test leaves nobody able to see that the decision changed, or when.
+
+    What remains checked is that the field is a country code at all. `customers.nazione`
+    is `String(2)`, which admits `"xx"` and `"1"` as readily as `"GB"`, and FPR12's
+    `Nazione` wants two upper-case letters -- so a typo would otherwise reach the file and
+    be rejected by the SdI after a register number had been spent on it.
+    """
+    for sbagliata in ("D", "de1", "1I"):
+        with pytest.raises(ValidationFailed) as caught:
+            FatturaPAExporter().to_bytes(
+                _invoice(
+                    [_line(1, "Consulenza", "1.000000", "100.000000", "100.00")],
+                    cliente=_cliente(nazione=sbagliata),
+                )
+            )
+        assert caught.value.details["field"] == "nazione"
+
+    # And a real one is not refused, which is the whole change.
+    assert_valid(
         FatturaPAExporter().to_bytes(
             _invoice(
                 [_line(1, "Consulenza", "1.000000", "100.000000", "100.00")],
-                cliente=_cliente(nazione="DE"),
+                cliente=_cliente(nazione="DE", codice_sdi=None, pec=None, provincia=""),
             )
         )
-    assert caught.value.details["field"] == "nazione"
+    )
 
 
 def test_an_invoice_with_no_lines_is_refused() -> None:
@@ -583,3 +607,150 @@ def test_two_exports_of_the_same_invoice_are_byte_identical() -> None:
     invoice = _invoice([_line(1, "Consulenza", "1.000000", "1500.000000", "1500.00")])
     exporter = FatturaPAExporter()
     assert exporter.to_bytes(invoice) == exporter.to_bytes(invoice)
+
+
+# --- a customer outside Italy ------------------------------------------------------
+
+
+def _cliente_estero(**overrides: object) -> PartySnapshot:
+    """Acme Srl, London — the record that prompted this.
+
+    A British VAT number of nine digits, no SDI code, no PEC, no province, and a
+    postcode that is not five digits. Every one of those was a refusal until now, and
+    together they made a foreign customer unrepresentable rather than merely awkward.
+    """
+    base: dict[str, object] = {
+        "ragione_sociale": "Acme Srl",
+        "partita_iva": "12345678901",
+        "codice_fiscale": None,
+        "codice_sdi": None,
+        "pec": None,
+        "indirizzo": "Via Vittorio Veneto 12",
+        "cap": "00000",
+        "comune": "London",
+        "provincia": "",
+        "nazione": "GB",
+    }
+    base.update(overrides)
+    return _cliente(**base)
+
+
+def test_a_foreign_customer_is_exportable_at_all() -> None:
+    """The refusal this replaces was unconditional: `check_party_exportable` raised on
+    any `nazione != "IT"` with "questo slice non emette fatture verso l'estero". That
+    made the whole record a dead end -- a customer the CRM would hold and never invoice
+    -- and the workaround it invited (a foreign VAT in `codice_fiscale`, the one fiscal
+    field with no validation) stored the right number under the wrong name and would
+    have written it into the wrong XML element."""
+    xml = FatturaPAExporter().to_bytes(
+        _invoice(
+            [_line(1, "Advisory", "10.000000", "150.000000", "1500.00")],
+            cliente=_cliente_estero(),
+        )
+    )
+    assert_valid(xml)
+
+
+def test_a_foreign_vat_is_announced_as_its_own_country() -> None:
+    """`IdPaese` was hard-coded to `IT`, which was true of every party the exporter could
+    reach while a foreign customer was refused — and a lie the moment one got through.
+    A British VAT number declared as Italian is not a cosmetic error: it is a claim about
+    which register the number belongs to, made to the tax authority."""
+    xml = FatturaPAExporter().to_bytes(
+        _invoice(
+            [_line(1, "Advisory", "1.000000", "100.000000", "100.00")],
+            cliente=_cliente_estero(),
+        )
+    )
+    root = etree.fromstring(xml)
+    cessionario = root.find(".//CessionarioCommittente/DatiAnagrafici/IdFiscaleIVA")
+    assert cessionario is not None
+    assert cessionario.findtext("IdPaese") == "GB"
+    assert cessionario.findtext("IdCodice") == "12345678901"
+
+    # And the emitter is still Italian: the parameter has a default for a reason, and a
+    # change that read the country off the wrong party would pass the assertion above.
+    cedente = root.find(".//CedentePrestatore/DatiAnagrafici/IdFiscaleIVA")
+    assert cedente is not None
+    assert cedente.findtext("IdPaese") == "IT"
+
+
+def test_a_foreign_recipient_is_routed_to_nobody() -> None:
+    """`XXXXXXX` is what the specification reserves for a recipient the SdI does not
+    route to. A foreign customer has no SDI code and no PEC and is not supposed to have
+    either, so demanding one — as `check_recipient_routing` did — was demanding a value
+    that does not exist."""
+    xml = FatturaPAExporter().to_bytes(
+        _invoice(
+            [_line(1, "Advisory", "1.000000", "100.000000", "100.00")],
+            cliente=_cliente_estero(),
+        )
+    )
+    root = etree.fromstring(xml)
+    assert root.findtext(".//DatiTrasmissione/CodiceDestinatario") == "XXXXXXX"
+
+
+def test_a_stray_sdi_code_on_a_foreign_customer_does_not_route_the_file_to_it() -> None:
+    """The country is checked before the code, and this is why. A seven-character code
+    left behind on a record whose country was later changed to `GB` — copied in by hand,
+    or a leftover — would otherwise route somebody else's invoice to an Italian
+    recipient's mailbox."""
+    xml = FatturaPAExporter().to_bytes(
+        _invoice(
+            [_line(1, "Advisory", "1.000000", "100.000000", "100.00")],
+            cliente=_cliente_estero(codice_sdi="ABCDEFG"),
+        )
+    )
+    root = etree.fromstring(xml)
+    assert root.findtext(".//DatiTrasmissione/CodiceDestinatario") == "XXXXXXX"
+
+
+def test_a_missing_province_is_refused_in_italy_and_accepted_outside_it() -> None:
+    """`Provincia` is optional in FPR12 precisely so that a London address is not forced
+    to invent one; requiring it of everybody was the second thing that made a foreign
+    customer unrepresentable. It stays mandatory for an Italian address, where its
+    absence is a real omission."""
+    assert_valid(
+        FatturaPAExporter().to_bytes(
+            _invoice(
+                [_line(1, "Advisory", "1.000000", "100.000000", "100.00")],
+                cliente=_cliente_estero(provincia=""),
+            )
+        )
+    )
+
+    with pytest.raises(ValidationFailed) as caught:
+        FatturaPAExporter().to_bytes(
+            _invoice(
+                [_line(1, "Advisory", "1.000000", "100.000000", "100.00")],
+                cliente=_cliente(provincia=""),
+            )
+        )
+    assert caught.value.details["field"] == "provincia"
+
+
+# --- the widths, checked before a number is spent -----------------------------------
+
+
+def test_a_name_too_long_for_the_schema_is_refused_by_the_pre_check() -> None:
+    """`check_party_exportable` is called by `InvoiceService.issue` *before* the register
+    number is consumed, and used to check presence only. `customers.ragione_sociale` is
+    `String(255)` against FPR12's 80, so an ordinary consortium name passed, the emission
+    committed, and every later export raised forever — leaving annulment as the only
+    remedy for a document that was never wrong, only unprintable.
+
+    Refused before the number is spent costs one correction. Refused after costs a hole
+    in the register.
+    """
+    lungo = "Consorzio Nazionale Servizi Integrati per la Logistica Societa Cooperativa"
+    assert len(lungo) > 0
+    with pytest.raises(ValidationFailed) as caught:
+        check_party_exportable(_cliente(ragione_sociale=lungo * 2), "customer")
+    assert caught.value.details["field"] == "ragione_sociale"
+
+
+def test_a_cap_that_is_not_five_digits_is_refused_by_the_pre_check() -> None:
+    """`customers.cap` is `String(10)`; the schema wants exactly five digits."""
+    with pytest.raises(ValidationFailed) as caught:
+        check_party_exportable(_cliente(cap="2012"), "customer")
+    assert caught.value.details["field"] == "cap"

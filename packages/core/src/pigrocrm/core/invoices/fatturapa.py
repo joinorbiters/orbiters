@@ -64,6 +64,10 @@ NSMAP: dict[str | None, str] = {"p": FPR12_NAMESPACE, "ds": DS_NAMESPACE, "xsi":
 # `PECDestinatario`. Not deducible from the schema, where the field is simply
 # mandatory.
 CODICE_DESTINATARIO_FALLBACK = "0000000"
+# And for a recipient outside Italy, whom the SdI does not route to at all. Seven
+# X's is what the specification reserves for that case; a foreign customer has no SDI
+# code and no PEC and is not supposed to have either.
+CODICE_DESTINATARIO_ESTERO = "XXXXXXX"
 # Immediate VAT liability. The deferred and cash-basis variants are out of scope.
 ESIGIBILITA_IVA = "I"
 BOLLO_VIRTUALE = "SI"
@@ -116,6 +120,34 @@ def normalise_fiscal_id(value: str | None) -> str | None:
     return cleaned if FISCAL_ID_RE.fullmatch(cleaned) else None
 
 
+# FPR12 allows an `IdCodice` of up to 28 characters, which is what makes room for the
+# registers of other countries. Italy's own two shapes are narrower and are checked by
+# `normalise_fiscal_id`; outside Italy there is no shape this exporter can meaningfully
+# assert, since every country issues its own.
+_ID_CODICE_MAX = 28
+
+
+def normalise_foreign_fiscal_id(value: str | None) -> str | None:
+    """The same cleaning as `normalise_fiscal_id`, without Italy's shape rule.
+
+    That function accepts exactly two forms -- an eleven-digit VAT number or a
+    sixteen-character fiscal code -- and answers `None` to everything else so the caller
+    omits a malformed element rather than emitting one. Correct for an Italian party, and
+    the third place a foreign one was silently dropped: a British VAT of nine digits is
+    not malformed, it is simply not Italian, and returning `None` for it produced an
+    invoice with no `IdFiscaleIVA` at all rather than an error anybody could see.
+
+    Nothing is asserted about the shape here on purpose. Twenty-eight countries' registers
+    have twenty-eight shapes, and a guess at one of them would refuse a valid number --
+    the failure this whole change exists to stop. Length is the one bound FPR12 itself
+    gives, and it is enforced where every other width is, in `_text`.
+    """
+    if not value:
+        return None
+    cleaned = _FISCAL_ID_NOISE.sub("", value).upper()
+    return cleaned or None
+
+
 def check_party_exportable(party: PartySnapshot, entity: str) -> None:
     """Refuse, naming the field on the record the user can go and fix (spec 14.9).
 
@@ -130,15 +162,20 @@ def check_party_exportable(party: PartySnapshot, entity: str) -> None:
     field with a regex over Italian street prefixes. They are four real columns on
     `customers`; nothing is guessed, and a missing one refuses.
     """
-    if party.nazione != "IT":
+    nazione = (party.nazione or "").strip().upper()
+    if not _NAZIONE_RE.fullmatch(nazione):
         raise ValidationFailed(
-            entity,
-            "nazione",
-            "questo slice non emette fatture verso l'estero: richiedono un IdPaese "
-            "diverso e CodiceDestinatario XXXXXXX",
-            expected="IT",
+            entity, "nazione", "codice paese non valido", expected="due lettere ISO 3166-1"
         )
-    for field in ("indirizzo", "cap", "comune", "provincia"):
+    italiano = nazione == "IT"
+
+    # `provincia` is required for an Italian address and meaningless outside one: FPR12
+    # makes `Provincia` optional precisely so that a London address is not forced to
+    # invent one. Requiring it of everybody is what made a foreign customer
+    # unrepresentable -- along with the outright refusal that used to stand here, which
+    # this replaces.
+    obbligatori = ("indirizzo", "cap", "comune", "provincia") if italiano else ("indirizzo",)
+    for field in obbligatori:
         if not (getattr(party, field) or "").strip():
             raise ValidationFailed(
                 entity,
@@ -151,6 +188,50 @@ def check_party_exportable(party: PartySnapshot, entity: str) -> None:
             entity, "ragione_sociale", "campo obbligatorio", expected="un valore non vuoto"
         )
 
+    # The formats, and not merely the presence — checked *here* because this function's
+    # whole reason for existing is that `InvoiceService.issue` calls it before consuming
+    # a register number. Presence alone was not enough: `customers.ragione_sociale` is
+    # `String(255)` against FPR12's 80, `indirizzo` and `comune` are `String(255)` and
+    # `String(120)` against 60, and `cap` is `String(10)` where the schema wants exactly
+    # five digits. So an ordinary customer — a long consortium name, a mistyped CAP —
+    # passed this check, the emission committed, and every later `export_xml` raised
+    # forever, leaving annulment as the only remedy. A refusal before the number is spent
+    # costs the user one correction; a refusal after costs them a hole in the register.
+    _check_widths(party, entity, italiano)
+
+
+def _check_widths(party: PartySnapshot, entity: str, italiano: bool) -> None:
+    """The FPR12 constraints that a database column is too wide to enforce.
+
+    Mirrors exactly what `_text` will apply during the export; the two are deliberately
+    the same values, because a check here that were laxer than the writer would let a
+    number be spent on a document that still cannot be produced.
+    """
+    for field, limit in (
+        ("ragione_sociale", _DENOMINAZIONE_MAX),
+        ("indirizzo", _INDIRIZZO_MAX),
+        ("comune", _COMUNE_MAX),
+    ):
+        value = (getattr(party, field) or "").strip()
+        if len(value) > limit:
+            raise ValidationFailed(
+                entity,
+                field,
+                f"troppo lungo per la fattura elettronica: {len(value)} caratteri",
+                expected=f"al massimo {limit} caratteri",
+            )
+
+    cap = (party.cap or "").strip()
+    # Outside Italy the CAP element still has to be five digits, and the convention the
+    # SdI expects for a foreign address is `00000`. Accepted as such rather than demanded
+    # of the user, who has a postcode that is not five digits and no way to make it one.
+    if italiano and not _CAP_RE.fullmatch(cap):
+        raise ValidationFailed(entity, "cap", "CAP non valido", expected="esattamente 5 cifre")
+
+    provincia = (party.provincia or "").strip().upper()
+    if provincia and not _PROVINCIA_RE.fullmatch(provincia):
+        raise ValidationFailed(entity, "provincia", "sigla non valida", expected="due lettere")
+
 
 def check_recipient_routing(party: PartySnapshot) -> None:
     """A customer must have an SDI code or a PEC, or there is no `CodiceDestinatario`.
@@ -159,6 +240,13 @@ def check_recipient_routing(party: PartySnapshot) -> None:
     and shared with `InvoiceService.issue` for the same reason: Acme emitted an empty
     `CodiceDestinatario` here, producing an invalid file with no error at all.
     """
+    if (party.nazione or "").strip().upper() != "IT":
+        # A foreign customer has no SDI code and no PEC, and is not supposed to: the SdI
+        # routes nothing to them. `CODICE_DESTINATARIO_ESTERO` is the placeholder the
+        # specification reserves for exactly this, and `_dati_trasmissione` writes it.
+        # Demanding a code here would make a foreign invoice impossible to issue, which
+        # is what used to happen one function up.
+        return
     if not (party.codice_sdi or "").strip() and not (party.pec or "").strip():
         raise ValidationFailed(
             "customer",
@@ -279,14 +367,22 @@ class FatturaPAExporter:
         self._text(
             sede, "Comune", party.comune, entity=entity, field="comune", max_length=_COMUNE_MAX
         )
-        self._text(
-            sede,
-            "Provincia",
-            party.provincia.strip().upper(),
-            entity=entity,
-            field="provincia",
-            pattern=_PROVINCIA_RE,
-        )
+        # Omitted rather than emitted empty when there is none. `Provincia` is optional
+        # in FPR12 for exactly this reason -- a London address has no two-letter Italian
+        # province and inventing one would be a false statement about where the customer
+        # is. Writing it as `""` would be worse still: `check_party_exportable` keeps it
+        # mandatory for an Italian address, so a blank one here can only mean a party
+        # that is legitimately without.
+        provincia = (party.provincia or "").strip().upper()
+        if provincia:
+            self._text(
+                sede,
+                "Provincia",
+                provincia,
+                entity=entity,
+                field="provincia",
+                pattern=_PROVINCIA_RE,
+            )
         self._text(
             sede,
             "Nazione",
@@ -297,12 +393,33 @@ class FatturaPAExporter:
         )
 
     def _id_fiscale(
-        self, parent: etree._Element, tag: str, id_codice: str, entity: str, field: str
+        self,
+        parent: etree._Element,
+        tag: str,
+        id_codice: str,
+        entity: str,
+        field: str,
+        paese: str = "IT",
     ) -> None:
+        """`IdPaese` says which country's register `IdCodice` belongs to.
+
+        It was hard-coded to `IT`, which was true of every party this exporter could
+        reach while a foreign customer was refused outright — and became a lie the
+        moment one was allowed through: a British VAT number announced as an Italian
+        one. The emitter is Italian by definition of this product and keeps the default;
+        the customer's is read from the customer.
+        """
         block = etree.SubElement(parent, tag)
-        paese = etree.SubElement(block, "IdPaese")
-        paese.text = "IT"
-        self._text(block, "IdCodice", id_codice, entity=entity, field=field)
+        elemento = etree.SubElement(block, "IdPaese")
+        elemento.text = paese.strip().upper()
+        self._text(
+            block,
+            "IdCodice",
+            id_codice,
+            entity=entity,
+            field=field,
+            max_length=_ID_CODICE_MAX,
+        )
 
     # ---- header ----------------------------------------------------------------
 
@@ -337,7 +454,14 @@ class FatturaPAExporter:
         formato.text = FORMATO_TRASMISSIONE
 
         codice_sdi = (cliente.codice_sdi or "").strip().upper()
-        if codice_sdi:
+        if (cliente.nazione or "").strip().upper() != "IT":
+            # Checked before the SDI code, not after: a foreign customer that happens to
+            # carry one — copied in by hand, or left behind by a country change — is
+            # still a foreign customer, and routing the file to an Italian recipient's
+            # code would send it to somebody else entirely.
+            destinatario = etree.SubElement(block, "CodiceDestinatario")
+            destinatario.text = CODICE_DESTINATARIO_ESTERO
+        elif codice_sdi:
             self._text(
                 block,
                 "CodiceDestinatario",
@@ -447,9 +571,23 @@ class FatturaPAExporter:
     def _cessionario(self, header: etree._Element, cliente: PartySnapshot) -> None:
         cessionario = etree.SubElement(header, "CessionarioCommittente")
         anagrafici = etree.SubElement(cessionario, "DatiAnagrafici")
-        piva = normalise_fiscal_id(cliente.partita_iva)
+        paese = (cliente.nazione or "IT").strip().upper()
+        # Italy's two shapes are checked; every other country's is not, because there is
+        # no shape to check. See `normalise_foreign_fiscal_id`.
+        piva = (
+            normalise_fiscal_id(cliente.partita_iva)
+            if paese == "IT"
+            else normalise_foreign_fiscal_id(cliente.partita_iva)
+        )
         if piva is not None:
-            self._id_fiscale(anagrafici, "IdFiscaleIVA", piva, "customer", "partita_iva")
+            self._id_fiscale(
+                anagrafici,
+                "IdFiscaleIVA",
+                piva,
+                "customer",
+                "partita_iva",
+                paese=paese,
+            )
         codice_fiscale = normalise_fiscal_id(cliente.codice_fiscale)
         if codice_fiscale is not None:
             self._text(
