@@ -19,6 +19,13 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return { ...actual, api: { GET: vi.fn(), POST: vi.fn(), PUT: vi.fn(), DELETE: vi.fn() } }
 })
 
+// The economic and operational tabs link out (the fiscal estimate, the three drill-through
+// signals), and a `<Link>` outside a router throws. What those destinations are is asserted
+// in each tab's own file; here the only question is which tab got mounted.
+vi.mock('@tanstack/react-router', () => ({
+  Link: ({ to, children }: { to: string; children: React.ReactNode }) => <a href={to}>{children}</a>,
+}))
+
 const EMPTY_DASHBOARD = {
   periodo: { da: '2026-03-01', a: '2026-03-31' },
   calcolato_alle: '2026-03-15T10:00:00Z',
@@ -29,6 +36,62 @@ const EMPTY_DASHBOARD = {
   chiusure_previste_30_giorni: 0,
   chiusure_non_attribuibili: 0,
   offerte_accettate_deal_non_vinto: 0,
+}
+
+const EMPTY_TOTALS = {
+  ricavi: '0.00',
+  costi_diretti: '0.00',
+  costo_lavoro: '0.00',
+  margine_lordo: '0.00',
+  margine_percentuale: null,
+  deal: 0,
+}
+
+const EMPTY_ECONOMIC = {
+  periodo: { da: '2026-03-01', a: '2026-03-31' },
+  calcolato_alle: '2026-03-15T10:00:00Z',
+  pnl: {
+    da: '2026-03-01',
+    a: '2026-03-31',
+    customer_id: null,
+    chiusi: EMPTY_TOTALS,
+    in_corso: EMPTY_TOTALS,
+    spese_generali: '0.00',
+    periodo_chiuso: false,
+    voci_scritte_in_ritardo: 0,
+    valore_maturato: '0.00',
+    ore_fatturabili_non_fatturate: '0.00',
+    ore_senza_tariffa: 0,
+  },
+  da_incassare: '0.00',
+  scaduto: '0.00',
+  fatture_emesse: 0,
+}
+
+const EMPTY_OPERATIONAL = {
+  calcolato_alle: '2026-03-15T10:00:00Z',
+  settimana: {
+    da: '2026-03-09',
+    a: '2026-03-15',
+    giorni: [{ giorno: '2026-03-09', ore: '0.00' }],
+    giorni_senza_ore: [],
+    ore_totali: '0.00',
+  },
+  arretrato: {
+    ore_fatturabili_non_fatturate: '0.00',
+    valore_maturato: '0.00',
+    voci_senza_tariffa: 0,
+    voci: 0,
+  },
+  segnali: [],
+  attivita_recenti: [],
+}
+
+/** One mock for three endpoints: which tab is mounted decides which one is called. */
+const BY_PATH: Record<string, unknown> = {
+  '/api/dashboard/commerciale': EMPTY_DASHBOARD,
+  '/api/dashboard/economica': EMPTY_ECONOMIC,
+  '/api/dashboard/operativa': EMPTY_OPERATIONAL,
 }
 
 const SEARCH: DashboardSearch = { tab: 'commerciale', da: '2026-03-01', a: '2026-03-31' }
@@ -46,17 +109,33 @@ function renderPage(search = SEARCH) {
 
 beforeEach(() => {
   vi.mocked(api.GET).mockReset()
-  vi.mocked(api.GET).mockResolvedValue({
-    data: EMPTY_DASHBOARD,
-    response: new Response(null, { status: 200 }),
-  } as never)
+  vi.mocked(api.GET).mockImplementation(
+    ((path: string) =>
+      Promise.resolve({
+        data: BY_PATH[path],
+        response: new Response(null, { status: 200 }),
+      })) as never,
+  )
 })
 
 describe('DashboardPage', () => {
   it('renders the tab the URL names, not the first one', async () => {
     renderPage({ ...SEARCH, tab: 'economica' })
-    expect(await screen.findByText(/dashboard economica arriva/i)).toBeInTheDocument()
+    expect(await screen.findByText(/conto economico del periodo/i)).toBeInTheDocument()
     expect(screen.queryByText(/pipeline aperta/i)).not.toBeInTheDocument()
+    // One tab, one request: rendering all three and hiding two would open three snapshot
+    // transactions to draw one screen.
+    expect(api.GET).toHaveBeenCalledTimes(1)
+    expect(api.GET).toHaveBeenCalledWith('/api/dashboard/economica', expect.anything())
+  })
+
+  it('mounts the operational tab with no period, because its question has none', async () => {
+    renderPage({ ...SEARCH, tab: 'operativa' })
+    expect(await screen.findByRole('table', { name: /ore per giorno/i })).toBeInTheDocument()
+    expect(api.GET).toHaveBeenCalledTimes(1)
+    // No second argument at all: not an empty query object, which would still put a `?` in
+    // the URL of a question that has no period to ask about.
+    expect(api.GET).toHaveBeenCalledWith('/api/dashboard/operativa')
   })
 
   it('passes the period from the URL through to the request', async () => {
@@ -99,11 +178,17 @@ describe('DashboardPage', () => {
     )
   })
 
-  it('explains why the two unbuilt tabs are empty instead of showing zeros', async () => {
-    // §17: "cosa che l'utente capisce, a differenza di una scheda che mostra zeri."
+  it('no longer explains away a tab that now exists', async () => {
+    // §17's placeholders were the honest thing to show while slices 3 and 4 had not
+    // landed. Both dashboards exist now, so the paragraph promising them would be the one
+    // untrue sentence on the page -- and this is the assertion that would notice if one
+    // were reinstated as a fallback for an empty response.
     renderPage({ ...SEARCH, tab: 'operativa' })
-    expect(await screen.findByText(/time tracking/i)).toBeInTheDocument()
-    expect(screen.queryByText('0,00 €')).not.toBeInTheDocument()
+    await screen.findByRole('table', { name: /ore per giorno/i })
+    expect(screen.queryByText(/arriva con il time tracking/i)).not.toBeInTheDocument()
+    renderPage({ ...SEARCH, tab: 'economica' })
+    await screen.findAllByText(/conto economico del periodo/i)
+    expect(screen.queryByText(/arriva con la fatturazione/i)).not.toBeInTheDocument()
   })
 
   it('hides the period picker on the operational tab, whose figures have no period', async () => {

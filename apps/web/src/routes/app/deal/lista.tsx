@@ -5,14 +5,47 @@ import { DataTable } from '@/components/DataTable'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { buildDealColumns } from '@/features/deals/columns'
-import { useDeals } from '@/features/deals/queries'
+import { useDeals, type DealsListParams } from '@/features/deals/queries'
 import { useEntitySchema } from '@/lib/schema'
+import { booleanSearchParam } from '@/lib/searchParams'
 
-function DealsList({ initialSearch }: { initialSearch: string }) {
+/**
+ * The two dashboard drill-throughs, and the sentence each of them puts on screen.
+ *
+ * Named here rather than inferred from the URL at the point of use so that a filter can
+ * never be applied without also being *stated*: a list silently shorter than the one the
+ * user asked for is the failure this whole slice calls a partial result. Criterion 2 is
+ * the other half -- these are the same predicates the operational dashboard's counts are
+ * built from, evaluated by the same code in `packages/core`, which is why they travel to
+ * the server rather than being reimplemented over the fetched page.
+ */
+const DRILL_THROUGHS = [
+  {
+    key: 'fatturato_non_vinto',
+    label: 'Fatturato ma non vinto',
+    explanation:
+      'Solo i deal con almeno una fattura emessa che non risultano vinti. Togli il filtro per vedere tutti i deal.',
+  },
+  {
+    key: 'da_fatturare',
+    label: 'Vinto ma da fatturare',
+    explanation:
+      'Solo i deal vinti con ore fatturabili non ancora fatturate. Togli il filtro per vedere tutti i deal.',
+  },
+] as const
+
+function DealsList({
+  initialSearch,
+  filters,
+}: {
+  initialSearch: string
+  filters: Pick<DealsListParams, 'fatturato_non_vinto' | 'da_fatturare'>
+}) {
   const navigate = useNavigate()
   const [search, setSearch] = useState(initialSearch)
   const schema = useEntitySchema('deal')
-  const deals = useDeals({ search: search || undefined })
+  const deals = useDeals({ search: search || undefined, ...filters })
+  const active = DRILL_THROUGHS.filter((candidate) => filters[candidate.key] === true)
 
   // Recomputed every render, not memoised -- same call as `CustomersPage`/
   // `PeoplePage`'s identical line: not worth a `useMemo` whose dependency array
@@ -40,6 +73,27 @@ function DealsList({ initialSearch }: { initialSearch: string }) {
           onChange={(event) => setSearch(event.target.value)}
         />
       </div>
+
+      {active.length > 0 && (
+        <div className="mb-4 space-y-2">
+          {active.map((filter) => (
+            <p
+              key={filter.key}
+              role="status"
+              className="flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm"
+            >
+              <span>
+                <strong>{filter.label}</strong> — {filter.explanation}
+              </span>
+              <Button variant="outline" size="sm" asChild>
+                <Link to="/app/deal/lista" search={{}}>
+                  Rimuovi il filtro
+                </Link>
+              </Button>
+            </p>
+          ))}
+        </div>
+      )}
 
       {deals.data?.truncated && (
         <p
@@ -73,17 +127,30 @@ function DealsList({ initialSearch }: { initialSearch: string }) {
  * back, which is how a fast typist loses characters.
  */
 function DealsListRoute() {
-  const { search } = Route.useSearch()
-  return <DealsList key={search ?? ''} initialSearch={search ?? ''} />
+  const { search, fatturato_non_vinto, da_fatturare } = Route.useSearch()
+  return (
+    <DealsList
+      key={search ?? ''}
+      initialSearch={search ?? ''}
+      filters={{ fatturato_non_vinto, da_fatturare }}
+    />
+  )
 }
 
 export const Route = createFileRoute('/app/deal/lista')({
   component: DealsListRoute,
-  // Declared so the palette can link here with a term (`navigate({ to, search })` is
-  // typed against this). An empty or non-string value is dropped rather than carried as
-  // `?search=`, so the URL never claims a filter that is not applied.
-  validateSearch: (search: Record<string, unknown>): { search?: string } => ({
+  // Declared so the palette can link here with a term, and so the operational dashboard
+  // can link here with a drill-through (`<Link to={...} search={...} />` is typed against
+  // this function's *return* type, not its parameter type). An empty or non-string value
+  // is dropped rather than carried as `?search=`, so the URL never claims a filter that is
+  // not applied -- and the two booleans are carried only when they are literally `true`,
+  // so `?da_fatturare=false` is the absence of a filter rather than a third state.
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { search?: string; fatturato_non_vinto?: boolean; da_fatturare?: boolean } => ({
     search:
       typeof search.search === 'string' && search.search.length > 0 ? search.search : undefined,
+    fatturato_non_vinto: booleanSearchParam(search.fatturato_non_vinto),
+    da_fatturare: booleanSearchParam(search.da_fatturare),
   }),
 })

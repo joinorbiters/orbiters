@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Bot, CircleHelp, Cog, User, type LucideIcon } from 'lucide-react'
+import { formatOccurredAt, humanize, labelForKind } from '@/components/activityLabels'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api, toProblem, unwrap } from '@/lib/api'
@@ -27,36 +28,6 @@ import type { TimelineEntityType } from '@/lib/schema'
  * rule out a fourth value showing up on the wire.
  */
 type ActivityEntry = components['schemas']['ActivityRead']
-
-const KIND_LABELS: Record<string, string> = {
-  created: 'Creato',
-  updated: 'Modificato',
-  deleted: 'Archiviato',
-  restored: 'Ripristinato',
-  stage_changed: 'Cambio stato',
-}
-
-/**
- * Turns a snake_case value this build has no specific label for into a sentence-
- * case phrase -- e.g. a future `email_received` reads as "Email received" instead
- * of `undefined` or a blank cell. Only the first word is capitalized, matching
- * Italian convention (and this file's own `KIND_LABELS`: "Cambio stato", not
- * "Cambio Stato") rather than English-style Title Case, which would read as
- * visibly foreign next to every hand-written label around it. Not a translation
- * (the source values are already a mix of English and Italian domain words),
- * only formatting: the one honest thing to do with a value nobody taught this
- * component about yet. Shared by an unrecognised `kind`, an unrecognised
- * `actor_type`, and the generic payload fallback's field names.
- */
-function humanize(value: string): string {
-  const [first, ...rest] = value.split('_').filter(Boolean)
-  if (!first) return '—'
-  return [first.charAt(0).toUpperCase() + first.slice(1), ...rest].join(' ')
-}
-
-function labelForKind(kind: string): string {
-  return KIND_LABELS[kind] ?? humanize(kind)
-}
 
 type ActorVariant = 'default' | 'secondary' | 'outline'
 
@@ -102,21 +73,6 @@ function ActorBadge({ actorType }: { actorType: string }) {
       {label}
     </Badge>
   )
-}
-
-const dateTimeFormatter = new Intl.DateTimeFormat('it-IT', { dateStyle: 'medium', timeStyle: 'short' })
-
-/**
- * `occurred_at` is a full ISO-8601 datetime with an explicit UTC offset (verified
- * live against the real API: `"2026-08-07T20:26:33.337592Z"`), never a bare
- * "YYYY-MM-DD" -- so, unlike a date-only field (see
- * DynamicFieldRenderer.tsx's `formatIsoDateItalian` and its own docstring on
- * exactly this trap), handing it straight to `new Date(...)` is safe: there is no
- * local-midnight ambiguity to lose a day over, only a real moment in time that
- * `Intl.DateTimeFormat` then renders in the browser's own zone.
- */
-function formatOccurredAt(occurredAt: string): string {
-  return dateTimeFormatter.format(new Date(occurredAt))
 }
 
 /**

@@ -1,5 +1,7 @@
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { CommercialTab } from './CommercialTab'
+import { EconomicTab } from './EconomicTab'
+import { OperationalTab } from './OperationalTab'
 import { PeriodPicker } from './PeriodPicker'
 import { DASHBOARD_TABS, type DashboardSearch } from './search'
 
@@ -45,23 +47,15 @@ export function DashboardPage({
         )}
       </div>
 
+      {/* One tab is mounted at a time, deliberately. Rendering all three and hiding two
+          would issue three requests -- three snapshot transactions, each holding two
+          pooled connections on the API side -- to draw one screen. §17's placeholders that
+          stood here until 6C landed are gone: both dashboards exist now, so a paragraph
+          explaining their absence would be the untrue thing on the page. */}
       {tab === 'commerciale' && <CommercialTab periodo={{ da, a }} />}
-
-      {/* §17: if slices 3 and 4 slip, the tab says why it is empty. A tab full of zeros
-          would be read as "the business made nothing"; this cannot be misread. Sub-plan 6C
-          replaces each of these with its real tab. */}
-      {tab === 'economica' && (
-        <p className="rounded-lg border bg-card p-6 text-sm text-muted-foreground">
-          La dashboard economica arriva con la fatturazione e il conto economico. Finché non ci
-          sono, mostrare degli zeri sarebbe peggio che non mostrare niente.
-        </p>
-      )}
-      {tab === 'operativa' && (
-        <p className="rounded-lg border bg-card p-6 text-sm text-muted-foreground">
-          La dashboard operativa arriva con il time tracking. Finché non c&apos;è, mostrare degli
-          zeri sarebbe peggio che non mostrare niente.
-        </p>
-      )}
+      {tab === 'economica' && <EconomicTab periodo={{ da, a }} />}
+      {/* No period: §6's dashboard is the current week and a backlog. */}
+      {tab === 'operativa' && <OperationalTab />}
     </div>
   )
 }

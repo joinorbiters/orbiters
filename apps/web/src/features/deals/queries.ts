@@ -25,10 +25,21 @@ export type Stage = components['schemas']['PipelineStageRead']
 type DealCreateBody = components['schemas']['DealCreate']
 type DealUpdateBody = components['schemas']['DealUpdate']
 
-interface DealsListParams {
+/**
+ * `fatturato_non_vinto` and `da_fatturare` are the two operational-dashboard
+ * drill-throughs (slice 6 §6.2). They are here rather than expressed as a client-side
+ * filter over the fetched list because criterion 2 requires the card and the list behind
+ * it to be the *same predicate*: `DealRepository.list` and the two counts on the
+ * dashboard share one predicate function in `packages/core`, and a second, approximate
+ * version of it written in the browser is exactly the divergence that requirement exists
+ * to forbid.
+ */
+export interface DealsListParams {
   search?: string
   customer_id?: string
   stage_id?: string
+  fatturato_non_vinto?: boolean
+  da_fatturare?: boolean
 }
 
 /**

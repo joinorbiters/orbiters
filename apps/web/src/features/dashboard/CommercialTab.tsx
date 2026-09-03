@@ -1,6 +1,7 @@
 import { QueryErrorBanner } from '@/components/QueryErrorBanner'
 import { Skeleton } from '@/components/ui/skeleton'
 import { BarRows, BigNumber, type BarRow } from './charts'
+import { money, percent } from './format'
 import { Freshness } from './Freshness'
 import type { Periodo } from './periodo'
 import { useCommercialDashboard } from './queries'
@@ -27,36 +28,6 @@ import { useCommercialDashboard } from './queries'
  *    stage, and a browser-side sum is a figure born here. Per stage is also the more
  *    useful answer -- it says *where* the gaps are.
  */
-
-const euro = new Intl.NumberFormat('it-IT', {
-  style: 'currency',
-  currency: 'EUR',
-  // Mandatory: it-IT's default withholds the thousands separator until the integer part
-  // has five digits, so 1500.00 would print as "1500,00 €".
-  useGrouping: 'always',
-})
-
-function money(value: string): string {
-  // The API's decimal string goes into the formatter verbatim. Never `Number(value)`:
-  // `Number("0.29") * 100` is 28.999999999999996, and a currency formatter fed a float is
-  // how cents disappear. `Intl.NumberFormat.format` accepts a string and parses it with
-  // full decimal precision (ES2023.Intl, which this project's tsconfig already declares
-  // for `useGrouping: 'always'`).
-  //
-  // The cast is to `Intl.StringNumericLiteral` -- the template-literal type that signature
-  // actually takes, `\`${number}\` | "Infinity" | ...` -- and not to `number`, which would
-  // be a lie about what is passed. A `Numeric(12, 2)` column always arrives in that shape.
-  return euro.format(value as Intl.StringNumericLiteral)
-}
-
-function percent(value: string | null | undefined): string {
-  // A dash, not "0,00%": zero per cent means "I lost everything", no closed deals means
-  // something else entirely (§4, and slice 4 §7.1's identical rule for the margin).
-  // `?? null` is not enough: the field is optional in the generated type, so `undefined`
-  // is reachable and must mean the same thing as `null` -- nothing closed.
-  if (value === null || value === undefined) return '—'
-  return `${value.replace('.', ',')}%`
-}
 
 export function CommercialTab({ periodo }: { periodo: Periodo }) {
   const query = useCommercialDashboard(periodo)

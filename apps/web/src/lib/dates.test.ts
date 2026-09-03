@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { formatIsoDateItalian, startOfWeek, toIsoDate, toIsoMonth } from './dates'
+import {
+  formatIsoDateItalian,
+  formatIsoDayMonth,
+  formatIsoWeekday,
+  startOfWeek,
+  toIsoDate,
+  toIsoMonth,
+} from './dates'
 
 describe('formatIsoDateItalian', () => {
   it('renders an ISO date in Italian order', () => {
@@ -23,6 +30,56 @@ describe('formatIsoDateItalian', () => {
   it('shows a malformed value as it was stored rather than as NaN', () => {
     expect(formatIsoDateItalian('non-una-data')).toBe('non-una-data')
     expect(formatIsoDateItalian('')).toBe('')
+  })
+})
+
+describe('formatIsoDayMonth', () => {
+  it("zero-pads the month, which it-IT's own default does not", () => {
+    // `Intl.DateTimeFormat('it-IT').format` renders 19 March as `19/3/2026`. A column of
+    // unpadded dates does not line up, and `19/03` is not findable in it.
+    expect(formatIsoDayMonth('2026-03-19')).toBe('19/03')
+  })
+
+  it('keeps the calendar day when the local zone is behind UTC', () => {
+    // The same trap as `formatIsoDateItalian`, asserted separately: both go through one
+    // private parser now, and this is what would fail if one of them stopped.
+    expect(
+      new Intl.DateTimeFormat('it-IT', {
+        timeZone: 'America/New_York',
+        day: '2-digit',
+        month: '2-digit',
+      }).format(new Date('2026-03-19')),
+    ).toBe('18/03') // what the naive route would have shown
+    expect(formatIsoDayMonth('2026-03-19')).toBe('19/03')
+  })
+
+  it('shows a malformed value as it was stored rather than as NaN', () => {
+    expect(formatIsoDayMonth('non-una-data')).toBe('non-una-data')
+    expect(formatIsoDayMonth('')).toBe('')
+  })
+})
+
+describe('formatIsoWeekday', () => {
+  it('abbreviates the weekday in Italian', () => {
+    // 16 March 2026 is a Monday.
+    expect(formatIsoWeekday('2026-03-16')).toMatch(/^lun/)
+    expect(formatIsoWeekday('2026-03-22')).toMatch(/^dom/)
+  })
+
+  it('names the weekday of the stored day, not of UTC midnight in the local zone', () => {
+    // Behind UTC, `new Date("2026-03-16")` is Sunday evening -- so the naive route would
+    // label a Monday column «dom».
+    expect(
+      new Intl.DateTimeFormat('it-IT', {
+        timeZone: 'America/New_York',
+        weekday: 'short',
+      }).format(new Date('2026-03-16')),
+    ).toMatch(/^dom/)
+    expect(formatIsoWeekday('2026-03-16')).toMatch(/^lun/)
+  })
+
+  it('shows a malformed value as it was stored rather than as NaN', () => {
+    expect(formatIsoWeekday('non-una-data')).toBe('non-una-data')
   })
 })
 
