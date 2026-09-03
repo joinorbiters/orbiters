@@ -26,7 +26,10 @@ from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.db.base import uuid7
 from pigrocrm.core.search.schemas import COUNT_CEILING
 
-_ENTITIES = ["customer", "person", "deal", "document"]
+# Five, and the order is fixed: a palette whose sections move between keystrokes
+# cannot be driven with the keyboard. `invoice` is last, added by Task C12 with the
+# branch that finally makes `SearchEntity`'s fifth member true.
+_ENTITIES = ["customer", "person", "deal", "document", "invoice"]
 
 # The example the tool's own docstring gives an agent, and the one spec §17 names as 6A's
 # reason to exist.
@@ -121,6 +124,12 @@ async def test_the_docstring_promises_the_example_it_is_tested_against(server: A
     assert _DOCSTRING_FRAGMENT in description and _DOCSTRING_PIVA in description, description
     assert "3 caratteri" in description, description
     assert "totale_e_un_minimo" in description, description
+    # The fifth branch, since Task C12. A docstring naming four entity classes when the
+    # tool searches five is how an agent concludes an invoice does not exist rather than
+    # that it did not look -- the same silent partial result the branch was added to close,
+    # moved from the response into the documentation.
+    assert "fatture" in description, description
+    assert "2026/7" in description, description
 
 
 async def test_a_two_character_term_is_a_domain_error_not_a_scan(server: Any) -> None:

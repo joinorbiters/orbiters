@@ -56,11 +56,13 @@ from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.db.base import uuid7
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.documents.models import Document
+from pigrocrm.core.invoices.models import Invoice
 from pigrocrm.core.people.models import Person
 from pigrocrm.core.search.repository import (
     CUSTOMER_FIELDS,
     DEAL_FIELDS,
     DOCUMENT_FIELDS,
+    INVOICE_FIELDS,
     PERSON_FIELDS,
     SearchRepository,
 )
@@ -74,11 +76,16 @@ _RUNS = 20
 # The four searched branches, as `(table, model, fields)`. Every assertion about the
 # ordering is made on all four: `deals` and `documents` search a single column each, and a
 # third sort key silently dropped from one of the two would otherwise never be noticed.
+# The trigram branches, which is every branch's scored query. `invoices` is here for that
+# half of it; its *equality* half orders by `(anno DESC, id DESC)` and never reaches
+# `_scored` at all, so its totality is argued where it lives -- `test_search_invoices.py`'s
+# `test_the_order_is_total_so_two_identical_searches_agree`, which runs both paths.
 _BRANCHES = (
     ("customers", Customer, CUSTOMER_FIELDS),
     ("people", Person, PERSON_FIELDS),
     ("deals", Deal, DEAL_FIELDS),
     ("documents", Document, DOCUMENT_FIELDS),
+    ("invoices", Invoice, INVOICE_FIELDS),
 )
 
 # Four planner configurations, rotated across the twenty runs. Not a trick: a term that
@@ -94,7 +101,7 @@ _ACCESS_PATHS = (
     ("no bitmap scan", "off", "on", "off"),
 )
 
-_FIXED_GROUP_ORDER = ["customer", "person", "deal", "document"]
+_FIXED_GROUP_ORDER = ["customer", "person", "deal", "document", "invoice"]
 
 
 def _set_access_path(session: Session, seqscan: str, indexscan: str, bitmapscan: str) -> None:

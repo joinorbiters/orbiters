@@ -2,8 +2,8 @@
 
 The shape of every branch is the same and the repetition is deliberate: a generic
 "search any model" helper would need the label rule, the subtitle rule, the field set and
-the weight set as parameters, which is four dictionaries keyed by entity plus a dispatch --
-strictly more code than four explicit methods, and unreadable at the point where a plan
+the weight set as parameters, which is five dictionaries keyed by entity plus a dispatch --
+strictly more code than five explicit methods, and unreadable at the point where a plan
 goes wrong.
 
 `etichetta` and `sottotitolo` are built **here**, from the entity's own columns. Not in
@@ -24,6 +24,7 @@ The count and the hits are two queries over **one** predicate, written once in
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -33,10 +34,20 @@ from sqlalchemy.orm import Session
 from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.documents.models import Document
+from pigrocrm.core.invoices.models import Invoice
 from pigrocrm.core.people.models import Person
-from pigrocrm.core.search.schemas import COUNT_CEILING, SearchEntity, SearchGroup, SearchHit
+from pigrocrm.core.search.schemas import (
+    COUNT_CEILING,
+    SearchEntity,
+    SearchGroup,
+    SearchHit,
+    parse_fiscal_number,
+)
 from pigrocrm.core.search.scoring import (
+    SCORE_EXACT,
     SCORE_FLOOR,
+    SCORE_SCALE,
+    WEIGHT_CAUSALE,
     WEIGHT_CODE,
     WEIGHT_EMAIL,
     WEIGHT_IDENTIFYING,
@@ -64,8 +75,12 @@ DEAL_FIELDS: tuple[ScoredField, ...] = (ScoredField("nome", Deal.nome, WEIGHT_ID
 DOCUMENT_FIELDS: tuple[ScoredField, ...] = (
     ScoredField("titolo", Document.titolo, WEIGHT_IDENTIFYING),
 )
+# One field, and `numero` is deliberately not a second one: a fiscal number is matched by
+# equality, not by trigram, and a `ScoredField` is by definition the trigram surface. The
+# equality path is `_invoices_by_number` below.
+INVOICE_FIELDS: tuple[ScoredField, ...] = (ScoredField("causale", Invoice.causale, WEIGHT_CAUSALE),)
 
-# The four models this repository searches all carry `PrimaryKeyMixin`, `TimestampMixin`
+# The five models this repository searches all carry `PrimaryKeyMixin`, `TimestampMixin`
 # and `SoftDeleteMixin`, which is what lets the shared plumbing name `deleted_at`,
 # `updated_at` and `id` without a per-entity accessor. `Any` rather than a Protocol: the
 # alternative is a structural type that restates three mixins this package does not own.
@@ -198,26 +213,33 @@ class SearchRepository:
         )
         return SearchGroup(
             entity=group.entity,
-            hits=self._with_customer_names(group.hits),
+            hits=self._with_customer_names(Deal, group.hits),
             totale=group.totale,
             totale_e_un_minimo=group.totale_e_un_minimo,
         )
 
-    def _with_customer_names(self, hits: list[SearchHit]) -> list[SearchHit]:
+    def _with_customer_names(self, model: _Model, hits: list[SearchHit]) -> list[SearchHit]:
         """One extra lookup, after the limit, for at most `limit` rows.
 
         Resolving the customer name inside the scored query would mean a join evaluated
         over every trigram match rather than over the five rows that survive. A `COUNT`
         may cross a join and a `SUM` may not (spec §3); this is neither -- it is a label
         lookup, and it is placed after `LIMIT` so its cost is bounded by the page.
+
+        `model` is a parameter rather than this method existing twice: `deals` and
+        `invoices` both hang a customer name off a `customer_id` and the query is the same
+        query, so a second copy would be two places for the "after the limit" property to
+        be lost from. It stays one method because there is exactly one rule -- join the
+        owning customer for the rows already chosen -- and not because both models happen
+        to have the column.
         """
         if not hits:
             return hits
-        deal_ids = [hit.id for hit in hits]
+        row_ids = [hit.id for hit in hits]
         pairs = self.session.execute(
-            select(Deal.id, Customer.ragione_sociale)
-            .join(Customer, Customer.id == Deal.customer_id)
-            .where(Deal.id.in_(deal_ids))
+            select(model.id, Customer.ragione_sociale)
+            .join(Customer, Customer.id == model.customer_id)
+            .where(model.id.in_(row_ids))
         ).all()
         names: dict[UUID, str] = {row[0]: row[1] for row in pairs}
         return [hit.model_copy(update={"sottotitolo": names.get(hit.id)}) for hit in hits]
@@ -231,4 +253,125 @@ class SearchRepository:
             limit,
             label=lambda row: row.titolo,
             subtitle=lambda row: row.tipo,
+        )
+
+    def invoices(self, term: str, limit: int) -> SearchGroup:
+        """§8.1's fifth branch: `causale` by trigram, `(anno, numero)` by equality.
+
+        The branch `SearchEntity` has promised since Task A7 and nothing delivered until
+        now: searching an invoice number answered «Nessun risultato» when the truth was
+        "invoices were not looked at", which is the silent partial result §8.6 exists to
+        forbid.
+
+        The two paths are **exclusive**. When the term parses as a fiscal number the
+        equality path runs alone -- served by `uq_invoices_anno_numero`, the unique index
+        slice 3 §3 already creates, so the number half needs no new index at all.
+        Trigramming `123` over `causale` would return every invoice whose description
+        contains 123 beside the one that *is* 123, and the row the user named would be one
+        of a list rather than the answer.
+        """
+        fiscal = parse_fiscal_number(term)
+        if fiscal is not None:
+            return self._invoices_by_number(*fiscal, limit=limit)
+        group = self._group(
+            "invoice",
+            Invoice,
+            INVOICE_FIELDS,
+            term,
+            limit,
+            label=self._invoice_label,
+            subtitle=lambda row: None,
+        )
+        return SearchGroup(
+            entity=group.entity,
+            hits=self._with_customer_names(Invoice, group.hits),
+            totale=group.totale,
+            totale_e_un_minimo=group.totale_e_un_minimo,
+        )
+
+    @staticmethod
+    def _invoice_label(row: Any) -> str:
+        """`2026/7 — causale` when numbered, `bozza — causale` when not.
+
+        `anno`/`numero` are NULL until emission, which is what makes "a failed creation
+        cannot burn a number" true by construction (slice 3). A draft still has to be
+        findable and readable, so the state stands in for the number rather than the label
+        rendering "None/None" -- and `stato` is a closed set the user already sees on the
+        invoice list, so it reads as a fact rather than as a placeholder.
+        """
+        prefix = (
+            f"{row.anno}/{row.numero}"
+            if row.anno is not None and row.numero is not None
+            else row.stato
+        )
+        return f"{prefix} — {row.causale}" if row.causale else prefix
+
+    def _number_predicate(self, anno: int | None, numero: int) -> tuple[ColumnElement[bool], ...]:
+        """What a fiscal-number match *is*, written once and used by both the page and the
+        count -- the same discipline `_predicate` follows for the trigram branches, and for
+        the same reason: a card and its drill-through are one calculation.
+
+        `deleted_at IS NULL` is repeated here rather than inherited: the equality path does
+        not go through `_predicate`, and a soft-deleted invoice found by its number would be
+        the one hole in "a soft delete is a delete as far as a reader is concerned".
+        """
+        clauses: tuple[ColumnElement[bool], ...] = (
+            Invoice.deleted_at.is_(None),
+            Invoice.numero == numero,
+        )
+        if anno is not None:
+            clauses = (*clauses, Invoice.anno == anno)
+        return clauses
+
+    def _invoices_by_number(self, anno: int | None, numero: int, *, limit: int) -> SearchGroup:
+        """The equality half. At most one row per year, so the ceiling is never reached in
+        practice -- and the bounded count is used anyway, because "in practice" is not a
+        property and this way both paths report `totale` by the same rule.
+
+        `ORDER BY anno DESC` is §8.5's "what was touched most recently is more likely what
+        is wanted", expressed in the only ordering a number has. `id DESC` closes it into a
+        total order: `uq_invoices_anno_numero` already makes `(anno, numero)` unique, so it
+        is redundant today, and it costs nothing to not depend on a constraint in another
+        package for criterion 4's byte-identical guarantee.
+        """
+        predicate = self._number_predicate(anno, numero)
+        rows = (
+            self.session.execute(
+                select(Invoice)
+                .where(*predicate)
+                .order_by(Invoice.anno.desc(), Invoice.id.desc())
+                .limit(limit)
+            )
+            .scalars()
+            .all()
+        )
+        inner = (
+            select(literal(1))
+            .select_from(Invoice)
+            .where(*predicate)
+            .limit(COUNT_CEILING + 1)
+            .subquery()
+        )
+        found = self.session.scalar(select(func.count()).select_from(inner)) or 0
+        hits = [
+            SearchHit(
+                entity="invoice",
+                id=row.id,
+                etichetta=self._invoice_label(row),
+                sottotitolo=None,
+                # An exact fiscal-number match is a code match -- §8.5's own "un match su un
+                # codice è voluto" -- so weight 1.00 and score 1.00, exactly what an exact
+                # `partita_iva` match produces. Quantized to the declared scale because
+                # `SearchHit.punteggio` is `Numeric(6, 4)` and a `Decimal("1.00")` would be
+                # a different value on the wire from every other exact match in the payload.
+                punteggio=SCORE_EXACT.quantize(Decimal(1).scaleb(-SCORE_SCALE)),
+                campo="numero",
+            )
+            for row in rows
+        ]
+        return SearchGroup(
+            entity="invoice",
+            hits=self._with_customer_names(Invoice, hits),
+            totale=min(found, COUNT_CEILING),
+            totale_e_un_minimo=found > COUNT_CEILING,
         )

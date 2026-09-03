@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.documents.models import Document
+from pigrocrm.core.invoices.models import Invoice
 from pigrocrm.core.people.models import Person
 
 
@@ -26,6 +27,17 @@ def test_build_corpus_produces_exactly_the_row_counts_it_claims(db_session: Sess
     assert db_session.scalar(select(func.count()).select_from(Person)) == 800
     assert db_session.scalar(select(func.count()).select_from(Deal)) == 2000
     assert db_session.scalar(select(func.count()).select_from(Document)) == 1000
+    assert db_session.scalar(select(func.count()).select_from(Invoice)) == 5000
+    # And `(anno, numero)` really is unique across them, which `uq_invoices_anno_numero`
+    # would have refused anyway -- asserted here so the *reason* the generator divides for
+    # the year and takes the remainder for the number is written down where it is checked,
+    # rather than surfacing as an IntegrityError somebody has to diagnose.
+    assert (
+        db_session.scalar(
+            select(func.count(func.distinct(func.concat(Invoice.anno, "/", Invoice.numero))))
+        )
+        == 5000
+    )
 
 
 def test_build_corpus_plants_the_one_customer_every_search_test_looks_for(

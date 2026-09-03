@@ -41,7 +41,8 @@ ending in `_` prefix-matches any character in that position, and the score for
 always escaped; the prefix arm is new here and needs the same treatment. Task A2 measured
 that the `ESCAPE` clause costs the trigram indexes nothing -- identical plans node for
 node, on all nine columns -- so it stays here exactly as it stands in the four
-repositories.
+repositories that had one at the time; the tenth column, invoices.causale, was added
+with the fifth search branch and inherits the same clause through the same helper.
 
 There is no `lower()` around the trigram column anywhere: `similarity()` normalises to
 lower case internally (`similarity('Rossi','rossi') = 1`), and wrapping the column would
