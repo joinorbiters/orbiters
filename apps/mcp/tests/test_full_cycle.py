@@ -91,7 +91,16 @@ def cycle(mcp_session: Session, tmp_path: Path) -> dict[str, Any]:
     them the emission fails on the customer record rather than on anything this test is
     about.
     """
-    FiscalProfileService(mcp_session).upsert(FiscalProfileUpsert(codice_regime="RF19"), AGENTE)
+    # The install's own configuration, as `Actor.system()` and not as the agent. Two
+    # reasons, and the first is now enforced: `update_fiscal_profile` is one of the
+    # sixteen operations `AGENT_FORBIDDEN_ACTIONS` refuses to any agent credential
+    # whatever its role, so setting the fixture up as `AGENTE` meant building the scene
+    # by doing a thing this very test then asserts an agent cannot do. The second is that
+    # it was never true anyway: nobody installs a CRM by asking an agent to choose the
+    # fiscal regime.
+    FiscalProfileService(mcp_session).upsert(
+        FiscalProfileUpsert(codice_regime="RF19"), Actor.system()
+    )
     EmitterProfileService(mcp_session).upsert(
         EmitterProfileUpsert(
             ragione_sociale="Humancraft di Ivan Sala",
