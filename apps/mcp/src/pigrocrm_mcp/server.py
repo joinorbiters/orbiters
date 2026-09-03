@@ -272,4 +272,19 @@ def build_server(
         from pigrocrm_mcp.tools import gmail as gmail_tools
 
         gmail_tools.register(mcp, context, _guard, resolved_settings)
+
+    if resolved_settings.mcp_full_access:
+        # The other half of the switch. `Actor.full_access` (stamped in
+        # `PatService.resolve`) decides whether the *service* says yes; this decides
+        # whether there is a door at all. Both read the same setting, and
+        # `test_mcp_invoice_ban.py` fails if they disagree -- sixteen registered tools
+        # that all refuse, or sixteen capabilities with no way to reach them, are both
+        # worse than either honest state.
+        #
+        # Conditional for the same reason Gmail is: not registered means not listed and
+        # not callable. An installation that has not opted in does not get sixteen tools
+        # answering «vietato», it gets a surface on which they do not exist.
+        from pigrocrm_mcp.tools import privileged as privileged_tools
+
+        privileged_tools.register(mcp, context, _guard)
     return mcp
