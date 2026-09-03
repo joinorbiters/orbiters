@@ -174,7 +174,35 @@ def test_pat_resolves_to_an_actor_and_records_last_use(db_session: Session) -> N
     assert resolved.id == user.id
     assert resolved.type == "mcp", "a PAT identifies an agent, not a browser session"
     assert resolved.role == "admin"
+    assert resolved.full_access is False, "the default installation does not opt in"
     assert service.list(actor)[0].last_used_at is not None
+
+
+def test_the_installation_decides_what_a_token_may_do(db_session: Session) -> None:
+    """`full_access` is stamped here or nowhere.
+
+    It is the one place an `mcp` actor is built from a credential, so it is the one place
+    that can answer "what may this token do" once rather than at every point of use. A
+    check that read the setting where the operation happens would leave the REST adapter
+    and the MCP adapter free to disagree -- which is exactly the asymmetry that once let a
+    `curl` issue an invoice while the tool was unregistered.
+
+    Both halves asserted against `Settings(_env_file=None, ...)` and never against the
+    ambient process settings: the owner of this repository runs with the switch **on**,
+    and a test that inherited that would assert the opposite of what it claims on his
+    machine and pass anyway.
+    """
+    user = _make_user(db_session, "pat-switch@test.it")
+    actor = Actor(id=user.id, type="user", role="admin")
+
+    chiusa = Settings(_env_file=None)  # type: ignore[call-arg]
+    aperta = Settings(_env_file=None, mcp_full_access=True)  # type: ignore[call-arg]
+
+    _, raw = PatService(db_session, chiusa).create("Claude locale", actor)
+
+    assert PatService(db_session, chiusa).resolve(raw).full_access is False
+    # The same token, the same user, the same role: only the installation changed.
+    assert PatService(db_session, aperta).resolve(raw).full_access is True
 
 
 def test_revoked_pat_stops_working(db_session: Session) -> None:
