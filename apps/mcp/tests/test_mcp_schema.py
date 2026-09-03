@@ -125,3 +125,29 @@ async def test_an_unknown_resource_id_explains_itself(server) -> None:
         with pytest.raises(Exception) as exc:
             await client.read_resource(f"customer://{uuid4()}")
     assert "non trovato" in str(exc.value).lower() or "not found" in str(exc.value).lower()
+
+
+async def test_the_configuration_and_account_timelines_are_not_reachable_from_mcp(
+    server,
+) -> None:
+    """R5 gives users, field definitions, pipeline stages and personal access tokens a
+    timeline. None of them is reachable through `get_timeline`, and that is structural,
+    not a permission check: `entity_type` is a `Literal` of the three entity domains, so
+    the value an agent would have to send is simply not in the tool's schema.
+
+    The reason is the same one that makes an agent's own credential worth auditing at
+    all. A PAT inherits its owner's full role (R10), so a check inside a registered
+    tool is a check an administrator's token passes -- and the account timeline is
+    precisely the record of that token being issued, used and revoked. An agent able to
+    read it could see exactly what its own misuse would look like to whoever comes
+    looking. Narrowing what the tool accepts is the only form of that guarantee a token
+    cannot talk its way past. Asserted against the advertised schema rather than by
+    calling the tool, because that is what an agent actually reads.
+    """
+    async with Client(server) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    entity_type = tools["get_timeline"].input_schema["properties"]["entity_type"]
+    advertised = json.dumps(entity_type)
+    for forbidden in ("user", "field_definition", "pipeline_stage", "personal_access_token"):
+        assert f'"{forbidden}"' not in advertised, advertised

@@ -42,9 +42,28 @@ Contraddice la spec §8.2 («gli errori devono essere azionabili da un modello»
 
 ---
 
-## R5 — Nessun audit trail per configurazione e token
+## R5 — Nessun audit trail per configurazione e token — **CHIUSO (2026-09-03)**
 
-Non esistono voci di timeline per field definition, pipeline stage, utenti e **PAT**. La creazione e la revoca di un token di accesso — cioè l'atto di dare o togliere a un agente le chiavi del CRM — non lasciano alcuna traccia. Sta male accanto allo scopo dichiarato di `activities` nella spec §5.8, e peggio ancora accanto a R10.
+Non esistevano voci di timeline per field definition, pipeline stage, utenti e **PAT**. La creazione e la revoca di un token di accesso — cioè l'atto di dare o togliere a un agente le chiavi del CRM — non lasciavano alcuna traccia. Stava male accanto allo scopo dichiarato di `activities` nella spec §5.8, e peggio ancora accanto a R10.
+
+**Chiuso.** Tutte e quattro scrivono ora sulla stessa tabella `activities`: `kind` è una stringa aperta per progetto, quindi non è servita nessuna migrazione e nessun secondo meccanismo. Ogni voce viene scritta per ultima e prima del commit del chiamante, quindi vive o muore con la modifica che registra (`test_a_*_when_its_audit_entry_cannot_be`).
+
+| Entità | `entity_type` | `kind` | Payload |
+| --- | --- | --- | --- |
+| Field definition | `field_definition` | `created`, `updated`, `archived`, `unarchived` | identità (`entity_type`, `key`, `label`, `field_type`, `required`); su `updated` `changed` + `before`/`after` reali |
+| Pipeline stage | `pipeline_stage` | `created` (con `seeded: true` per i default), `updated`, `deleted` | `nome`, `code`, `tipo`; su `updated` `code` + `before`/`after` |
+| Utente | `user` | `created`, `updated` | `email`, `ruolo`; su `updated` `before`/`after` di `nome`/`ruolo`/`attivo`. Mai la password né il suo hash |
+| PAT | `user` (timeline del proprietario) | `pat_created`, `pat_first_used`, `pat_revoked`, `pat_used_after_revocation` | `token_id`, `nome`. Mai il valore, il prefisso o `token_hash` |
+
+Tre decisioni che vale la pena non dover ricostruire più tardi:
+
+- **I PAT vivono sulla timeline del proprietario**, non su una loro. La domanda che un token solleva riguarda sempre un *account* («chi ha dato a un agente le chiavi di questo, ed è ancora viva?»), e una timeline per token nessuno penserebbe ad aprirla.
+- **Solo il primo uso viene registrato**, non ogni `resolve()`: una voce per richiesta raddoppierebbe le scritture dell'API. `last_used_at` risponde già a «è ancora in uso»; quello che mancava era il passaggio da emesso a vivo.
+- **`pat_used_after_revocation` è l'unico evento davvero nuovo**: un token revocato ancora presentato è o un agente che nessuno ha riconfigurato o una copia del valore dove il proprietario non voleva. Registrato una volta per revoca, non una per tentativo, altrimenti chi possiede il token morto può far crescere la tabella una riga per richiesta. Un token sconosciuto non registra nulla: non c'è un account a cui appenderlo, e una riga per tentativo trasformerebbe l'audit in un amplificatore per chi tenta.
+
+Lettura: `GET /api/users/{id}/timeline` (amministratori, più il proprietario per il proprio account), `GET /api/field-definitions/{id}/timeline` e `GET /api/pipeline-stages/{id}/timeline` (solo amministratori). **Nessuna delle quattro è raggiungibile da MCP**, e non per un controllo di permessi ma per costruzione: `get_timeline` accetta un `Literal` dei tre domini entità. Un PAT eredita il ruolo pieno del proprietario, quindi un controllo dentro un tool registrato è un controllo che il token di un amministratore supera — e la timeline dell'account è esattamente il registro di quel token.
+
+Resta aperto quanto sotto R10: l'audit dice ora *chi* e *quando*, ma un PAT continua a non avere scope né scadenza.
 
 ---
 
@@ -77,7 +96,7 @@ La spec §7 promette «lista con paginazione cursor-based, ordinamento e filtri�
 
 Verificato: il PAT di un amministratore può, via REST, elencare gli utenti, **crearne un altro amministratore**, generare altri PAT per sé stesso, modificare le definizioni dei campi e cancellare clienti.
 
-È la spec §9 come progettata, non un difetto di implementazione. Ma va detto in chiaro: **«dai un token a Claude» oggi significa «dai il tuo account, per sempre, senza traccia di audit» (vedi R5).** Da decidere consapevolmente: scope per token, scadenza, o entrambi.
+È la spec §9 come progettata, non un difetto di implementazione. Ma va detto in chiaro: **«dai un token a Claude» oggi significa «dai il tuo account, per sempre»**. La parte «senza traccia di audit» non vale più — R5 è chiuso, e l'emissione, il primo uso, la revoca e l'uso dopo la revoca sono ora sulla timeline del proprietario — ma è precisamente per questo che la parte «per sempre, con il ruolo pieno» pesa di più: sappiamo *chi* e *quando*, non *fin dove*. Da decidere consapevolmente: scope per token, scadenza, o entrambi.
 
 ---
 
