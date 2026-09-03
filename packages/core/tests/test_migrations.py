@@ -75,6 +75,12 @@ HAND_MAINTAINED_INDEXES = {
     # where a missing index is supposed to fail by name.
     "ix_deals_chiuso_il",
     "ix_documents_stato_dal",
+    # Slice 6, migration 0024. A *descending* expression index over two columns, which is
+    # the fifth shape autogenerate cannot compare: `compare_metadata` does not look at
+    # index expressions at all, so this one would be dropped in total silence and the
+    # global activity feed would go back to sorting the whole table on every dashboard
+    # load. Its declared shape is asserted below, on `indexdef` text.
+    "ix_activities_recent",
 }
 
 TRGM_INDEX_NAMES = frozenset(n for n in HAND_MAINTAINED_INDEXES if n.endswith("_trgm"))
@@ -316,7 +322,7 @@ def test_env_prefers_an_explicit_config_url_over_settings(monkeypatch: pytest.Mo
     finally:
         get_settings.cache_clear()
 
-    assert revision == "0023"
+    assert revision == "0024"
 
 
 def test_env_falls_back_to_settings_when_config_has_no_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -338,7 +344,7 @@ def test_env_falls_back_to_settings_when_config_has_no_url(monkeypatch: pytest.M
         finally:
             get_settings.cache_clear()
 
-    assert revision == "0023"
+    assert revision == "0024"
 
 
 def test_stato_dal_is_backfilled_from_the_timeline_and_chiuso_il_is_not() -> None:
@@ -512,3 +518,33 @@ def test_the_migration_seeds_exactly_one_automation_config_row() -> None:
     # Both defaults are `true`, and they arrive from the *server* default: the migration's
     # INSERT names only `id`. An automation nobody switched on is one nobody knows exists.
     assert rows[0] == (True, True)
+
+
+def test_the_activity_feed_index_is_descending_on_both_columns() -> None:
+    """An ascending index would still be used -- backwards -- but a backward scan of
+    `(occurred_at, id)` yields the tie-break ascending within each instant, which is not
+    the order `ActivityRepository.recent` declares. Asserting the declared shape is what
+    stops a future "simplification" to a single-column ascending index that cannot serve
+    the tie-break at all.
+
+    On `indexdef` text and not through `compare_metadata`, which does not compare index
+    expressions: a descending expression index is exactly the shape a schema diff lets
+    through in silence.
+    """
+    with PostgresContainer("postgres:17-alpine", driver="psycopg") as container:
+        url = container.get_connection_url()
+        upgrade(_alembic_config(url), "head")
+        engine: Engine = create_engine(url)
+        with engine.connect() as connection:
+            definition = connection.execute(
+                text(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE schemaname = 'public' AND indexname = 'ix_activities_recent'"
+                )
+            ).scalar_one()
+        engine.dispose()
+    assert "occurred_at DESC" in definition, definition
+    assert "id DESC" in definition, definition
+    # Both members, in this order: an index on `occurred_at DESC` alone leaves the
+    # tie-break to an in-memory sort, which is the cost this index exists to remove.
+    assert "USING btree (occurred_at DESC, id DESC)" in definition, definition
