@@ -46,13 +46,16 @@ from pigrocrm.core.dashboard.service import DashboardService
 from pigrocrm.core.db import session_factory, today_local
 from pigrocrm.core.db.base import uuid7
 from pigrocrm.core.deals.models import Deal
+from pigrocrm.core.deals.repository import DealRepository
 from pigrocrm.core.deals.schemas import DealListQuery
 from pigrocrm.core.deals.service import DealService
 from pigrocrm.core.documents.models import Document
 from pigrocrm.core.documents.repository import DocumentRepository
 from pigrocrm.core.documents.schemas import DocumentListQuery
+from pigrocrm.core.invoices.repository import InvoiceRepository
 from pigrocrm.core.pipeline.models import PipelineStage
 from pigrocrm.core.pipeline.service import PipelineService
+from pigrocrm.core.timetracking.repository import TimeEntryRepository
 
 READONLY = Actor(id=uuid7(), type="user", role="readonly")
 SEED = Actor(id=None, type="system", role="admin")
@@ -314,4 +317,50 @@ def test_the_count_and_the_list_call_the_same_predicate_function() -> None:
     ):
         assert "_accepted_with_unwon_deal_predicate()" in inspect.getsource(method), (
             f"{method.__name__} must call the shared predicate, not restate it"
+        )
+
+
+# -- criterion 2 on the operational dashboard's three signals ---------------------
+#
+# The counts and their drill-throughs are compared row for row in
+# `test_dashboard_operational.py`, which owns the corpus each signal needs. What is missing
+# there, and is the mechanical half §7.2 actually asks for, is this: that neither side
+# *restates* the predicate. Two hand-copied predicates agree on every corpus anybody thinks
+# to write and diverge the first time one of them is edited -- which is a defect no
+# row-for-row comparison can anticipate, because the corpus that would show it does not
+# exist until after the divergence.
+#
+# Each of the three lives in the repository of the table it filters and has exactly two
+# callers, one per side of the card. The pairs are asserted by name so that a fourth caller
+# added later has to be added here too, and a predicate deleted in favour of an inline
+# `where` fails on the source of the very method that inlined it.
+_SHARED_PREDICATES = [
+    (
+        "invoiced_not_won_predicate()",
+        (InvoiceRepository.count_deals_invoiced_not_won, DealRepository.list),
+    ),
+    (
+        "won_with_unbilled_hours_predicate()",
+        (TimeEntryRepository.count_won_deals_to_invoice, DealRepository.list),
+    ),
+    (
+        "_overdue_predicate()",
+        (InvoiceRepository.count_scadute_non_incassate, InvoiceRepository.list),
+    ),
+]
+
+
+@pytest.mark.parametrize(("predicate", "callers"), _SHARED_PREDICATES, ids=lambda v: str(v)[:40])
+def test_each_signal_and_its_drill_through_call_the_same_predicate_function(
+    predicate: str, callers: tuple[object, ...]
+) -> None:
+    """§7.2 on §6.2's three signals: the card and the list behind it are one predicate.
+
+    Asserted on the source of each individual method, not on the module: a module-wide
+    search would be satisfied by a definition nobody calls, which is the state the codebase
+    would be in one edit after somebody inlined one of the two sides.
+    """
+    for method in callers:
+        assert predicate in inspect.getsource(method), (
+            f"{method.__qualname__} must call {predicate}, not restate it"
         )
