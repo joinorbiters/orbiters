@@ -19,7 +19,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query
 
-from pigrocrm.core.dashboard.schemas import CommercialDashboard, PeriodoQuery
+from pigrocrm.core.dashboard.schemas import (
+    CommercialDashboard,
+    EconomicDashboard,
+    OperationalDashboard,
+    PeriodoQuery,
+)
 from pigrocrm.core.dashboard.service import DashboardService
 from pigrocrm_api.deps import ActorDep, SnapshotSessionDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
@@ -39,3 +44,31 @@ def commerciale(
     a: Annotated[date | None, Query()] = None,
 ) -> CommercialDashboard:
     return DashboardService(session).get_commercial_dashboard(PeriodoQuery(da=da, a=a), actor)
+
+
+@router.get("/economica", response_model=EconomicDashboard)
+def economica(
+    session: SnapshotSessionDep,
+    actor: ActorDep,
+    # The same both-or-neither period as `commerciale`, resolved by the same
+    # `PeriodoQuery.resolve`: the route adds no validation of its own and must not lose the
+    # one the service performs, because `field` is what the web client's `fieldErrorFrom`
+    # reads to put the message under the right input.
+    da: Annotated[date | None, Query()] = None,
+    a: Annotated[date | None, Query()] = None,
+) -> EconomicDashboard:
+    return DashboardService(session).get_economic_dashboard(PeriodoQuery(da=da, a=a), actor)
+
+
+@router.get("/operativa", response_model=OperationalDashboard)
+def operativa(session: SnapshotSessionDep, actor: ActorDep) -> OperationalDashboard:
+    """No period parameter, and not an optional one either.
+
+    §6: its figures are the current week and a backlog, which are the two things that make
+    no sense in the past. An optional `da`/`a` that the service ignored would be a
+    parameter the API advertises and does not honour -- worse than not having it, because
+    the generated client would offer it and a caller would believe it worked. FastAPI
+    ignores undeclared query parameters, so `?da=2020-01-01` is answered with the current
+    week rather than with a period nobody can supply.
+    """
+    return DashboardService(session).get_operational_dashboard(actor)

@@ -1952,6 +1952,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/dashboard/economica": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Economica */
+        get: operations["economica_api_dashboard_economica_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dashboard/operativa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Operativa
+         * @description No period parameter, and not an optional one either.
+         *
+         *     §6: its figures are the current week and a backlog, which are the two things that make
+         *     no sense in the past. An optional `da`/`a` that the service ignored would be a
+         *     parameter the API advertises and does not honour -- worse than not having it, because
+         *     the generated client would offer it and a caller would believe it worked. FastAPI
+         *     ignores undeclared query parameters, so `?da=2020-01-01` is answered with the current
+         *     week rather than with a period nobody can supply.
+         */
+        get: operations["operativa_api_dashboard_operativa_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/automation-config": {
         parameters: {
             query?: never;
@@ -2563,6 +2607,19 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /**
+         * DayHours
+         * @description One point of the week's series. Always present, even at `0.00`.
+         */
+        DayHours: {
+            /**
+             * Giorno
+             * Format: date
+             */
+            giorno: string;
+            /** Ore */
+            ore: string;
+        };
         /** DealCreate */
         DealCreate: {
             /** Nome */
@@ -2914,6 +2971,42 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /**
+         * EconomicDashboard
+         * @description §5. **No new aggregate exists on this page.** Every figure comes from
+         *     `AnalyticsService` or from `InvoiceRepository`.
+         *
+         *     `pnl` embeds the owning service's own model verbatim rather than flattening its fields
+         *     into this one: a flattened copy is a place for a field to be renamed, reordered or
+         *     quietly recombined, and embedding it makes criterion 1's reconciliation an identity
+         *     instead of a comparison.
+         *
+         *     `da_incassare` and `scaduto` are the one pair here that does **not** come from the
+         *     P&L, and they use `totale` rather than `imponibile` because they are a different
+         *     quantity: a receivable is what must arrive in the bank, VAT included -- money
+         *     collected on the State's behalf. Neither enters any margin, and neither shares a total
+         *     row with revenue (§5.2).
+         *
+         *     Deliberately absent (§5.3): any fiscal estimate field, any single deal's margin, and
+         *     any comparison with the same period last year. The fiscal estimate stays at
+         *     `/app/analisi/fiscale`, admin-only, and the dashboard shows a link and not a number --
+         *     a dashboard is the screen most likely to end up in a screenshot or a screen share.
+         */
+        EconomicDashboard: {
+            periodo: components["schemas"]["Periodo"];
+            /**
+             * Calcolato Alle
+             * Format: date-time
+             */
+            calcolato_alle: string;
+            pnl: components["schemas"]["PeriodPnl"];
+            /** Da Incassare */
+            da_incassare: string;
+            /** Scaduto */
+            scaduto: string;
+            /** Fatture Emesse */
+            fatture_emesse: number;
         };
         /** EmailDraftCreate */
         EmailDraftCreate: {
@@ -3831,6 +3924,34 @@ export interface components {
              */
             stato: "bozza" | "inviata" | "accettata" | "rifiutata";
         };
+        /**
+         * OperationalDashboard
+         * @description §6. "What do I have to do now."
+         *
+         *     **No period.** Its figures are the current week and a backlog, which are the two things
+         *     that make no sense in the past -- and it is why the backlog cannot come from
+         *     `period_pnl`, which is by definition of a period (§6.3).
+         *
+         *     **No new economic total.** The only money here is `arretrato.valore_maturato`, which
+         *     belongs to `AnalyticsService` and is labelled accrued value, never revenue.
+         *
+         *     Three signals, not four: "offerta accettata, deal non vinto" is on the *commercial*
+         *     dashboard, because it needs no invoices and therefore shipped in the same sub-plan as
+         *     the automation it cross-checks (§17).
+         */
+        OperationalDashboard: {
+            /**
+             * Calcolato Alle
+             * Format: date-time
+             */
+            calcolato_alle: string;
+            settimana: components["schemas"]["WeekHours"];
+            arretrato: components["schemas"]["UnbilledBacklog"];
+            /** Segnali */
+            segnali: components["schemas"]["Signal"][];
+            /** Attivita Recenti */
+            attivita_recenti: components["schemas"]["ActivityRead"][];
+        };
         /** PatRead */
         PatRead: {
             /**
@@ -4311,6 +4432,30 @@ export interface components {
             /** Gruppi */
             gruppi: components["schemas"]["SearchGroup"][];
         };
+        /**
+         * Signal
+         * @description One of §6.2's inconsistency counts.
+         *
+         *     Not stored, not a flag on a row: a predicate, evaluated on request. A stored signal is
+         *     §1's second source of truth wearing a disguise, and it would need somewhere to be
+         *     recomputed from -- which is the materialised summary §7 refuses.
+         *
+         *     `collegamento` is mandatory in practice: a count with no way to see the rows behind it
+         *     is a number nobody can act on, and §7.2's guarantee is that the count and that list are
+         *     the same predicate. It is typed optional because a signal without a drill-through is a
+         *     thinkable future shape and a lie in the type system is worse than an assertion in a
+         *     test; `test_dashboard_operational.py` is what requires all three to have one today.
+         */
+        Signal: {
+            /** Codice */
+            codice: string;
+            /** Etichetta */
+            etichetta: string;
+            /** Conteggio */
+            conteggio: number;
+            /** Collegamento */
+            collegamento: string | null;
+        };
         /** SollecitiPage */
         SollecitiPage: {
             /** Items */
@@ -4789,6 +4934,44 @@ export interface components {
             tariffa_oraria_default?: number | string | null;
             /** Costo Orario Default */
             costo_orario_default?: number | string | null;
+        };
+        /**
+         * WeekHours
+         * @description §6's first two rows, assembled whole by `TimeEntryRepository`.
+         *
+         *     `giorni` always holds one entry per day of the window, zeros included and in calendar
+         *     order: a series that silently omits its empty days is a chart that lies about its own
+         *     shape, and a week with three worked days would render as three consecutive bars.
+         *
+         *     `giorni_senza_ore` is a field and not something the client derives. Deriving it would
+         *     put a set difference in the browser -- business logic in the frontend, over a set the
+         *     browser would have to reconstruct from a range it was never told -- and the only
+         *     server-side alternative, `DashboardService`, may contain no arithmetic at all (§3).
+         *
+         *     `giorni_senza_ore` means "no entry was written for this day", not "these hours sum to
+         *     zero". The two readings coincide today because `ck_time_entries_ore_range` is
+         *     `ore > 0 AND ore <= 24`, so a day that has rows cannot total zero -- but they are not
+         *     the same statement, and the first is the one that survives the constraint being
+         *     loosened. Telling somebody who entered a day that they forgot it is the one way this
+         *     figure can be actively unhelpful.
+         */
+        WeekHours: {
+            /**
+             * Da
+             * Format: date
+             */
+            da: string;
+            /**
+             * A
+             * Format: date
+             */
+            a: string;
+            /** Giorni */
+            giorni: components["schemas"]["DayHours"][];
+            /** Giorni Senza Ore */
+            giorni_senza_ore: string[];
+            /** Ore Totali */
+            ore_totali: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -21379,6 +21562,243 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CommercialDashboard"];
+                };
+            };
+            /** @description Permesso negato: l'actor non ha il ruolo richiesto. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La risorsa richiesta non esiste o è stata rimossa. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La richiesta è in conflitto con lo stato attuale della risorsa. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Una regola di dominio non è stata rispettata (application/problem+json), oppure il corpo, i parametri o il path della richiesta non hanno la forma attesa e non hanno mai raggiunto l'endpoint (application/json). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    economica_api_dashboard_economica_get: {
+        parameters: {
+            query?: {
+                da?: string | null;
+                a?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EconomicDashboard"];
+                };
+            };
+            /** @description Permesso negato: l'actor non ha il ruolo richiesto. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La risorsa richiesta non esiste o è stata rimossa. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La richiesta è in conflitto con lo stato attuale della risorsa. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Una regola di dominio non è stata rispettata (application/problem+json), oppure il corpo, i parametri o il path della richiesta non hanno la forma attesa e non hanno mai raggiunto l'endpoint (application/json). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    operativa_api_dashboard_operativa_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationalDashboard"];
                 };
             };
             /** @description Permesso negato: l'actor non ha il ruolo richiesto. */

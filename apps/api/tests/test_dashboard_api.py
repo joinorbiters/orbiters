@@ -18,11 +18,13 @@ own `RuntimeError` rather than a wrong number -- which is the whole design of
 """
 
 from collections.abc import Iterator
+from datetime import timedelta
 from decimal import Decimal
+from urllib.parse import parse_qsl, urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, delete
+from sqlalchemy import Engine, delete, select
 
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.customers.models import Customer
@@ -31,6 +33,7 @@ from pigrocrm.core.dashboard.service import DashboardService
 from pigrocrm.core.db import session_factory, today_local
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.documents.models import Document
+from pigrocrm.core.invoices.models import Invoice
 from pigrocrm.core.pipeline.models import PipelineStage
 from pigrocrm.core.pipeline.service import PipelineService
 from pigrocrm_api.deps import get_snapshot_session
@@ -50,6 +53,20 @@ EXPECTED_KEYS = {
     "offerte_accettate_deal_non_vinto",
 }
 
+ECONOMIC_KEYS = {"periodo", "calcolato_alle", "pnl", "da_incassare", "scaduto", "fatture_emesse"}
+
+OPERATIONAL_KEYS = {"calcolato_alle", "settimana", "arretrato", "segnali", "attivita_recenti"}
+
+# Every drill-through this slice ships, as the pair criterion 2 actually cares about: the
+# link a card carries, and the REST list it has to resolve to. A signal whose link named a
+# filter the API does not declare is a card whose list can never equal it -- criterion 2's
+# failure in its purest form, and one no core-side test can see, because the link is only a
+# string until an adapter has to honour it.
+SIGNAL_LINK_TARGETS = {
+    "/app/deal/lista": "/api/deals",
+    "/app/fatture": "/api/invoices",
+}
+
 
 @pytest.fixture
 def dashboard_corpus(client: TestClient, api_engine: Engine) -> Iterator[Engine]:
@@ -66,27 +83,25 @@ def dashboard_corpus(client: TestClient, api_engine: Engine) -> Iterator[Engine]
         customer = Customer(ragione_sociale=f"{_PREFIX} Cliente", nazione="IT", custom_fields={})
         session.add(customer)
         session.flush()
-        session.add(
-            Deal(
-                nome=f"{_PREFIX} aperto",
-                customer_id=customer.id,
-                pipeline_stage_id=stages["lead"].id,
-                valore_previsto=Decimal("1000.00"),
-                probabilita=50,
-                custom_fields={},
-            )
+        aperto = Deal(
+            nome=f"{_PREFIX} aperto",
+            customer_id=customer.id,
+            pipeline_stage_id=stages["lead"].id,
+            valore_previsto=Decimal("1000.00"),
+            probabilita=50,
+            custom_fields={},
         )
-        session.add(
-            Deal(
-                nome=f"{_PREFIX} vinto",
-                customer_id=customer.id,
-                pipeline_stage_id=stages["vinto"].id,
-                valore_previsto=Decimal("5000.00"),
-                probabilita=100,
-                chiuso_il=today_local(),
-                custom_fields={},
-            )
+        session.add(aperto)
+        vinto = Deal(
+            nome=f"{_PREFIX} vinto",
+            customer_id=customer.id,
+            pipeline_stage_id=stages["vinto"].id,
+            valore_previsto=Decimal("5000.00"),
+            probabilita=100,
+            chiuso_il=today_local(),
+            custom_fields={},
         )
+        session.add(vinto)
         session.add(
             Document(
                 customer_id=customer.id,
@@ -95,6 +110,64 @@ def dashboard_corpus(client: TestClient, api_engine: Engine) -> Iterator[Engine]
                 stato="inviata",
                 stato_dal=today_local(),
                 versione_corrente=1,
+                custom_fields={},
+            )
+        )
+        session.flush()
+        # One issued, unpaid, past-due invoice attached to the *open* deal. It is what
+        # stops the two new dashboards from being tested against an empty register, and it
+        # is deliberately load-bearing on six figures at once: `pnl.in_corso` (its deal
+        # sits on an open stage), `fatture_emesse`, `da_incassare`, `scaduto`, and two of
+        # the three operational signals -- `fatturato_non_vinto` and
+        # `scaduto_non_incassato`. Without it, the money-as-a-string test below would be
+        # asserting the type of `"0.00"` on every path, which a dashboard wired to nothing
+        # at all would pass just as well.
+        #
+        # `data_emissione` is today, so the row falls inside the default period (the
+        # current month) whatever day the suite runs; `data_scadenza` is yesterday, so it
+        # is overdue under `_overdue_predicate`'s strict `<`.
+        session.add(
+            Invoice(
+                customer_id=customer.id,
+                deal_id=aperto.id,
+                tipo="fattura",
+                stato="emessa",
+                stato_pagamento="da_incassare",
+                imponibile=Decimal("1000.00"),
+                imposta=Decimal("0.00"),
+                bollo=Decimal("0.00"),
+                totale=Decimal("1000.00"),
+                data_emissione=today_local(),
+                data_scadenza=today_local() - timedelta(days=1),
+                causale=f"{_PREFIX} fattura",
+                tipo_documento="TD01",
+                divisa="EUR",
+                custom_fields={},
+            )
+        )
+        # A second issued invoice that is **not** overdue, on the *won* deal. Without it
+        # every issued invoice in the register would be overdue, and
+        # `test_every_signal_link_names_a_filter_the_api_actually_declares` could not tell
+        # `?scadute=true` from a filter that does nothing at all: the filtered list and the
+        # unfiltered one would be the same length, which is precisely the shape of the
+        # defect criterion 2 exists to catch. It also keeps `fatturato_non_vinto` at one
+        # deal out of two rather than moving the count, because its stage is `won`.
+        session.add(
+            Invoice(
+                customer_id=customer.id,
+                deal_id=vinto.id,
+                tipo="fattura",
+                stato="emessa",
+                stato_pagamento="da_incassare",
+                imponibile=Decimal("500.00"),
+                imposta=Decimal("0.00"),
+                bollo=Decimal("0.00"),
+                totale=Decimal("500.00"),
+                data_emissione=today_local(),
+                data_scadenza=today_local() + timedelta(days=30),
+                causale=f"{_PREFIX} fattura corrente",
+                tipo_documento="TD01",
+                divisa="EUR",
                 custom_fields={},
             )
         )
@@ -114,6 +187,16 @@ def dashboard_corpus(client: TestClient, api_engine: Engine) -> Iterator[Engine]
         client.app.dependency_overrides.pop(get_snapshot_session, None)
         with factory() as session:
             session.execute(delete(Document).where(Document.titolo.like(f"{_PREFIX} %")))
+            # Before the deals: the invoice carries a foreign key to one of them. Scoped
+            # to this file's own customer rather than a wholesale `DELETE FROM invoices`,
+            # which would also destroy whatever another API test has committed.
+            session.execute(
+                delete(Invoice).where(
+                    Invoice.customer_id.in_(
+                        select(Customer.id).where(Customer.ragione_sociale.like(f"{_PREFIX} %"))
+                    )
+                )
+            )
             session.execute(delete(Deal).where(Deal.nome.like(f"{_PREFIX} %")))
             session.execute(delete(Customer).where(Customer.ragione_sociale.like(f"{_PREFIX} %")))
             session.execute(delete(PipelineStage))
@@ -226,6 +309,247 @@ def test_a_readonly_actor_sees_the_dashboard(
 
 def test_an_unauthenticated_request_is_a_401(client: TestClient, dashboard_corpus: Engine) -> None:
     assert client.get("/api/dashboard/commerciale").status_code == 401
+
+
+# -- the economic dashboard ------------------------------------------------------
+
+
+def test_the_economic_dashboard_is_one_request(
+    logged_in: TestClient, dashboard_corpus: Engine
+) -> None:
+    """One endpoint, not one per card. The key set is asserted whole, and the P&L is
+    asserted to be *embedded* rather than flattened: §5 adds no aggregate to this page, so
+    a `ricavi` key at the top level would mean somebody had recombined the two columns on
+    the way out."""
+    response = logged_in.get(
+        "/api/dashboard/economica", params={"da": "2026-03-01", "a": "2026-03-31"}
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert set(body) == ECONOMIC_KEYS
+    assert set(body["pnl"]) >= {
+        "chiusi",
+        "in_corso",
+        "spese_generali",
+        "periodo_chiuso",
+        "voci_scritte_in_ritardo",
+        "valore_maturato",
+        "ore_fatturabili_non_fatturate",
+        "ore_senza_tariffa",
+    }
+
+
+def test_the_economic_endpoint_returns_what_the_service_returns(
+    logged_in: TestClient, dashboard_corpus: Engine
+) -> None:
+    """The adapter is thin on this route too. Compared against the service on its own
+    fresh session over the same committed corpus, never against numbers recomputed here.
+
+    `calcolato_alle` is excluded because the two calls are two transactions and two
+    instants -- that it differs is the property, not a discrepancy.
+    """
+    body = logged_in.get("/api/dashboard/economica").json()
+    with session_factory(dashboard_corpus)() as session:
+        direct = DashboardService(session).get_economic_dashboard(PeriodoQuery(), SEED)
+    expected = direct.model_dump(mode="json")
+    for key in ECONOMIC_KEYS - {"calcolato_alle"}:
+        assert body[key] == expected[key], key
+    # The corpus commits exactly one issued invoice inside the default period, so this is
+    # a figure with a known floor rather than an equality between two zeros.
+    assert body["fatture_emesse"] >= 1
+    assert body["da_incassare"] != "0.00"
+
+
+def test_the_economic_dashboard_carries_no_fiscal_field(
+    logged_in: TestClient, dashboard_corpus: Engine
+) -> None:
+    """§5.3: the fiscal estimate stays at `/app/analisi/fiscale`, admin-only. A dashboard
+    is the screen most likely to end up in a screenshot or a screen share.
+
+    Asserted on the raw response text rather than on the parsed keys, so a fiscal figure
+    nested anywhere inside `pnl` -- where a future field on `PeriodPnl` would land without
+    this file ever being edited -- fails here too.
+    """
+    body = logged_in.get("/api/dashboard/economica").text
+    for forbidden in ("imponibile_fiscale", "imposta_sostitutiva", "contributi", "netto_stimato"):
+        assert forbidden not in body, forbidden
+
+
+def test_an_inverted_period_on_the_economic_endpoint_is_a_422_naming_the_field(
+    logged_in: TestClient, dashboard_corpus: Engine
+) -> None:
+    """The same `PeriodoQuery.resolve`, so the same answer: the route adds no validation
+    of its own and must not lose the one the service performs."""
+    response = logged_in.get(
+        "/api/dashboard/economica", params={"da": "2026-03-31", "a": "2026-03-01"}
+    )
+    assert response.status_code == 422
+    assert response.json()["field"] == "da"
+
+
+# -- the operational dashboard ---------------------------------------------------
+
+
+def test_the_operational_dashboard_takes_no_period(
+    logged_in: TestClient, dashboard_corpus: Engine
+) -> None:
+    """§6: the current week and a backlog are the two things that make no sense in the
+    past, so the endpoint has no period parameter at all -- not an optional one.
+
+    Asserted against the published schema, because that is what a client generates from:
+    an optional `da`/`a` the service ignored would be a parameter the API advertises and
+    does not honour, which is worse than not having one, since a caller would believe it
+    worked.
+    """
+    schema = logged_in.get("/openapi.json").json()
+    params = schema["paths"]["/api/dashboard/operativa"]["get"].get("parameters", [])
+    assert [p["name"] for p in params] == []
+
+    response = logged_in.get("/api/dashboard/operativa")
+    assert response.status_code == 200, response.text
+    assert set(response.json()) == OPERATIONAL_KEYS
+
+
+def test_a_period_on_the_operational_endpoint_is_ignored_not_honoured(
+    logged_in: TestClient, dashboard_corpus: Engine
+) -> None:
+    """A stray `?da=` must not silently produce a period-filtered answer from an endpoint
+    that has no period. FastAPI ignores undeclared query parameters; this pins that the
+    answer is byte-for-byte the one given without it, rather than merely a 200 -- a route
+    that had quietly grown a period would still answer 200.
+
+    `calcolato_alle` and `attivita_recenti` are excluded: the first is a different instant
+    by construction, and the second is a global feed any other committed activity moves.
+    """
+    plain = logged_in.get("/api/dashboard/operativa").json()
+    with_period = logged_in.get(
+        "/api/dashboard/operativa", params={"da": "2020-01-01", "a": "2020-01-31"}
+    )
+    assert with_period.status_code == 200, with_period.text
+    body = with_period.json()
+    for key in ("settimana", "arretrato", "segnali"):
+        assert body[key] == plain[key], key
+
+
+def test_the_operational_endpoint_returns_what_the_service_returns(
+    logged_in: TestClient, dashboard_corpus: Engine
+) -> None:
+    body = logged_in.get("/api/dashboard/operativa").json()
+    with session_factory(dashboard_corpus)() as session:
+        direct = DashboardService(session).get_operational_dashboard(SEED)
+    expected = direct.model_dump(mode="json")
+    for key in ("settimana", "arretrato", "segnali"):
+        assert body[key] == expected[key], key
+
+
+def test_every_signal_carries_a_drill_through_link(
+    logged_in: TestClient, dashboard_corpus: Engine
+) -> None:
+    """§6.2's three signals, in order, each with somewhere to go. A count with no way to
+    see the rows behind it is a number nobody can act on."""
+    body = logged_in.get("/api/dashboard/operativa").json()
+    assert [s["codice"] for s in body["segnali"]] == [
+        "fatturato_non_vinto",
+        "vinto_da_fatturare",
+        "scaduto_non_incassato",
+    ]
+    assert all(s["collegamento"] for s in body["segnali"])
+    # The corpus's invoice makes two of the three non-zero, so the links below are being
+    # checked against cards that have rows behind them.
+    conteggi = {s["codice"]: s["conteggio"] for s in body["segnali"]}
+    assert conteggi["fatturato_non_vinto"] >= 1
+    assert conteggi["scaduto_non_incassato"] >= 1
+
+
+def test_every_signal_link_names_a_filter_the_api_actually_declares(
+    logged_in: TestClient, dashboard_corpus: Engine
+) -> None:
+    """**Criterion 2 at the adapter.** A card and its drill-through are the same predicate,
+    and the core tests prove that for the predicate *functions*. What no core test can see
+    is whether the link the card carries reaches them: `collegamento` is an opaque string
+    until an HTTP client resolves it, and a signal pointing at `?da_fatturarE=true` would
+    silently list every deal -- a list longer than the card, describing a different set.
+
+    So each link is taken apart and its query parameter is looked up in the published
+    OpenAPI schema of the list endpoint it corresponds to, then sent for real: declared,
+    accepted, and narrowing. A parameter FastAPI does not declare is one it ignores.
+    """
+    body = logged_in.get("/api/dashboard/operativa").json()
+    schema = logged_in.get("/openapi.json").json()
+    assert body["segnali"], "no signals, so this test proved nothing"
+
+    for signal in body["segnali"]:
+        parts = urlsplit(signal["collegamento"])
+        target = SIGNAL_LINK_TARGETS[parts.path]
+        declared = {p["name"] for p in schema["paths"][target]["get"]["parameters"]}
+        query = parse_qsl(parts.query)
+        assert query, f"{signal['codice']} links nowhere in particular"
+        for name, value in query:
+            assert name in declared, f"{signal['codice']} -> {target} has no `{name}`"
+            filtered = logged_in.get(target, params={name: value})
+            assert filtered.status_code == 200, filtered.text
+            # And it narrows: the filtered list must not be the unfiltered one. The corpus
+            # has at least one row each filter excludes, so an inert filter shows up here
+            # rather than in a count nobody compares.
+            everything = logged_in.get(target).json()
+            assert len(filtered.json()["items"]) < len(everything["items"]), name
+
+
+# -- both new dashboards ---------------------------------------------------------
+
+
+def test_money_is_serialised_as_a_string_on_both_new_dashboards(
+    logged_in: TestClient, dashboard_corpus: Engine
+) -> None:
+    """A JSON number is a float in every client that parses it, and a float total is the
+    defect this whole slice is built to avoid.
+
+    The corpus puts a real invoice behind `da_incassare`, so this is not the type of a
+    zero a route wired to nothing would also produce.
+    """
+    economic = logged_in.get("/api/dashboard/economica").json()
+    assert isinstance(economic["da_incassare"], str)
+    assert isinstance(economic["scaduto"], str)
+    assert isinstance(economic["pnl"]["chiusi"]["ricavi"], str)
+    assert isinstance(economic["pnl"]["in_corso"]["ricavi"], str)
+    assert economic["da_incassare"] != "0.00"
+
+    operational = logged_in.get("/api/dashboard/operativa").json()
+    assert isinstance(operational["arretrato"]["valore_maturato"], str)
+    assert isinstance(operational["settimana"]["ore_totali"], str)
+
+
+@pytest.mark.parametrize("path", ["commerciale", "economica", "operativa"])
+def test_authentication_does_not_poison_the_snapshot_on_any_dashboard(
+    logged_in: TestClient, dashboard_corpus: Engine, path: str
+) -> None:
+    """The reason all three routes take `SnapshotSessionDep` and not `SessionDep`.
+
+    `ActorDep` resolves the cookie by reading `users`, which autobegins a transaction on
+    the session it was handed, and `_open_snapshot` refuses a session already in one --
+    loudly, rather than running in `READ COMMITTED` and returning a total that was true at
+    no instant. Reaching for `SessionDep` out of habit makes *every* request a 500, and it
+    is parametrised over all three so that the next route added by copy-paste is covered
+    by the copy.
+    """
+    response = logged_in.get(f"/api/dashboard/{path}")
+    assert response.status_code == 200, response.text
+    assert response.json()["calcolato_alle"]
+
+
+@pytest.mark.parametrize("path", ["commerciale", "economica", "operativa"])
+def test_a_readonly_actor_sees_all_three_dashboards(
+    readonly_client: TestClient, dashboard_corpus: Engine, path: str
+) -> None:
+    """§13: no new role and no new authorisation rule. A readonly sees all three."""
+    assert readonly_client.get(f"/api/dashboard/{path}").status_code == 200
+
+
+@pytest.mark.parametrize("path", ["commerciale", "economica", "operativa"])
+def test_an_unauthenticated_request_to_any_dashboard_is_a_401(
+    client: TestClient, dashboard_corpus: Engine, path: str
+) -> None:
+    assert client.get(f"/api/dashboard/{path}").status_code == 401
 
 
 # -- the automation configuration ------------------------------------------------
