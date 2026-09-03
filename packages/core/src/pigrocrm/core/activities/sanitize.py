@@ -14,6 +14,12 @@ therefore never raises. Applied recursively to every `dict` and `list` value it 
     generous limit that only bites on genuinely oversized input, not a real payload.
   - nesting deeper than `MAX_DEPTH` is replaced with a placeholder string, which stops
     both unbounded recursion and unboundedly large stored documents.
+  - `UUID`, `datetime` and `date` become their canonical text form. JSONB serialization
+    goes through `json.dumps`, which has no encoder for any of the three: passing one
+    raises `TypeError` at `flush()` and takes down the operation being audited, which
+    is exactly what this module exists to prevent. They are converted rather than
+    dropped because an audit payload's whole job is to name *which* row and *when* --
+    the configuration audit entries (`auth`, `fields`, `pipeline`) carry both.
 
 This is the same class of defect the custom-field validator closes (see
 `pigrocrm.core.fields.validator`): untrusted data reaching a strict storage layer with
@@ -24,7 +30,9 @@ option that does not fail the write this payload is merely riding along with.
 """
 
 import math
+from datetime import date
 from typing import Any
+from uuid import UUID
 
 MAX_STRING_LENGTH = 2000
 MAX_DEPTH = 10
@@ -60,6 +68,12 @@ def _sanitize_value(value: Any, depth: int) -> Any:
         return _sanitize_float(value)
     if isinstance(value, str):
         return _sanitize_string(value)
+    if isinstance(value, UUID):
+        return str(value)
+    # `datetime` is a subclass of `date`, so this single isinstance covers both, and
+    # `.isoformat()` is defined on both with the meaning we want.
+    if isinstance(value, date):
+        return value.isoformat()
     return value
 
 
