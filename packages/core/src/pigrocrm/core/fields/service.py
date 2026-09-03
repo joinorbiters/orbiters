@@ -3,6 +3,8 @@ from uuid import UUID
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.activities.diff import field_changes
+from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 from pigrocrm.core.fields.models import FieldDefinition
@@ -15,6 +17,41 @@ from pigrocrm.core.fields.schemas import (
 )
 from pigrocrm.core.fields.types import OPTION_TYPES, FieldSpec
 from pigrocrm.core.schemas import reject_cleared_columns, supplied_changes
+
+# The timeline `entity_type` for a field definition. Its own value, not the
+# `entity_type` *column* on the row (which says which entity the custom field belongs
+# to, "customer"/"person"/"deal") -- the two are different questions and both end up
+# in the audit entry, the first as `Activity.entity_type` and the second inside the
+# payload.
+ENTITY = "field_definition"
+
+# Recorded on create/archive/unarchive. Deliberately not the whole row: `position` is
+# cosmetic and `id` is already `Activity.entity_id`, while these five are what an
+# administrator reading the timeline needs to recognise the definition without
+# resolving a UUID -- and `required` is the flag whose flip is the "who turned this
+# off" question this audit exists to answer.
+_IDENTITY_FIELDS = ("entity_type", "key", "label", "field_type", "required")
+
+# The attributes `update` may touch, mirroring `FieldDefinitionUpdate`'s own fields.
+# Listed explicitly rather than derived from the incoming patch so that the "before"
+# snapshot is taken over a fixed, reviewable set: a future field added to the update
+# schema and forgotten here shows up as an unaudited change, which is a visible gap,
+# rather than as a silently mis-shaped payload.
+_AUDITED_FIELDS = ("label", "options", "required", "position")
+
+
+def _identity(field: FieldDefinition) -> dict[str, object]:
+    return {name: getattr(field, name) for name in _IDENTITY_FIELDS}
+
+
+def _snapshot(field: FieldDefinition) -> dict[str, object]:
+    """`options` is copied into a plain list: it is a mutable JSON column, so keeping
+    the live object here would make the "before" snapshot follow the "after" value as
+    soon as the attribute is reassigned, and every options change would audit as
+    unchanged."""
+    values = {name: getattr(field, name) for name in _AUDITED_FIELDS}
+    values["options"] = list(field.options)
+    return values
 
 
 def _check_options(field_type: str, options: list[str]) -> None:
@@ -38,6 +75,7 @@ class FieldDefinitionService:
     def __init__(self, session: Session) -> None:
         self.session = session
         self.repo = FieldDefinitionRepository(session)
+        self.activities = ActivityService(session)
 
     def create(self, data: FieldDefinitionCreate, actor: Actor) -> FieldDefinitionRead:
         actor.require_admin("create_field_definition")
@@ -81,6 +119,11 @@ class FieldDefinitionService:
         field = FieldDefinition(**data.model_dump())
         try:
             self.repo.add(field)
+            # Inside the try, and after the add: `repo.add` flushes, so `field.id`
+            # exists by now, and a collision that only the unique constraint can catch
+            # rolls the audit entry back together with the row it would have claimed
+            # was created.
+            self.activities.record(ENTITY, field.id, "created", actor, _identity(field))
             self.session.commit()
         except IntegrityError as exc:
             # The pre-check above cannot cover a race between two concurrent requests:
@@ -107,8 +150,16 @@ class FieldDefinitionService:
         reject_cleared_columns("field_definition", FieldDefinition, changes)
         if "options" in changes:
             _check_options(field.field_type, changes["options"])
+        before = _snapshot(field)
         for key, value in changes.items():
             setattr(field, key, value)
+
+        # A rename and an archive must not look alike in the timeline: they are
+        # different kinds, and this one carries the old and new label explicitly.
+        # Nothing is recorded when the patch changed nothing -- see `field_changes`.
+        delta = field_changes(before, _snapshot(field))
+        if delta:
+            self.activities.record(ENTITY, field.id, "updated", actor, {"key": field.key, **delta})
         self.session.commit()
         return FieldDefinitionRead.model_validate(field)
 
@@ -129,7 +180,13 @@ class FieldDefinitionService:
         field = self.repo.get(field_id)
         if field is None:
             raise NotFound("field_definition", field_id)
+        was_archived = field.archived
         field.archived = True
+        # Only when it really changed state: archiving an already-archived definition
+        # is a no-op, and an entry for it would claim a decision nobody took. Same
+        # reasoning as `CustomerService.restore`.
+        if not was_archived:
+            self.activities.record(ENTITY, field.id, "archived", actor, _identity(field))
         self.session.commit()
         return FieldDefinitionRead.model_validate(field)
 
@@ -140,7 +197,10 @@ class FieldDefinitionService:
         field = self.repo.get(field_id)
         if field is None:
             raise NotFound("field_definition", field_id)
+        was_archived = field.archived
         field.archived = False
+        if was_archived:
+            self.activities.record(ENTITY, field.id, "unarchived", actor, _identity(field))
         self.session.commit()
         return FieldDefinitionRead.model_validate(field)
 

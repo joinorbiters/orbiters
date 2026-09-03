@@ -3,6 +3,8 @@ from uuid import UUID
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.activities.diff import field_changes
+from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 from pigrocrm.core.pipeline.models import PipelineStage
@@ -26,6 +28,29 @@ DEFAULT_STAGES: list[tuple[str, str, int, int, str]] = [
 ]
 
 
+ENTITY = "pipeline_stage"
+
+# `code` is the stable identity and `tipo` is the only attribute other logic depends
+# on (`default_stage`, and every won/lost reading of a deal), so both belong in an
+# entry that has to stay readable after the stage itself is gone. `nome` is here
+# because it is the only part a human recognises. `posizione` and
+# `probabilita_default` are left out of the identity: they are cosmetic, and their
+# changes are already carried in full by `updated`.
+_IDENTITY_FIELDS = ("nome", "code", "tipo")
+
+# Mirrors `PipelineStageUpdate`'s own fields -- `code` is absent there by design
+# (identity, not a label), so it is absent here too.
+_AUDITED_FIELDS = ("nome", "posizione", "probabilita_default", "tipo")
+
+
+def _identity(stage: PipelineStage) -> dict[str, object]:
+    return {name: getattr(stage, name) for name in _IDENTITY_FIELDS}
+
+
+def _snapshot(stage: PipelineStage) -> dict[str, object]:
+    return {name: getattr(stage, name) for name in _AUDITED_FIELDS}
+
+
 def _check_probability(value: int | None) -> None:
     if value is not None and not 0 <= value <= 100:
         raise ValidationFailed(
@@ -41,6 +66,7 @@ class PipelineService:
     def __init__(self, session: Session) -> None:
         self.session = session
         self.repo = PipelineRepository(session)
+        self.activities = ActivityService(session)
 
     def create(self, data: PipelineStageCreate, actor: Actor) -> PipelineStageRead:
         actor.require_admin("create_pipeline_stage")
@@ -50,6 +76,10 @@ class PipelineService:
         stage = PipelineStage(**data.model_dump())
         try:
             self.repo.add(stage)
+            # After the add (which flushes, so `stage.id` exists) and inside the try:
+            # if the unique index on `code` rejects this row after all, the rollback
+            # below must take the audit entry with it.
+            self.activities.record(ENTITY, stage.id, "created", actor, _identity(stage))
             self.session.commit()
         except IntegrityError as exc:
             # The pre-check above cannot cover a race between two concurrent requests
@@ -68,8 +98,19 @@ class PipelineService:
         changes = supplied_changes(data)
         reject_cleared_columns("pipeline_stage", PipelineStage, changes)
         _check_probability(changes.get("probabilita_default"))
+        before = _snapshot(stage)
         for key, value in changes.items():
             setattr(stage, key, value)
+
+        # `code` rather than `nome` identifies the stage in the payload: `nome` is
+        # exactly what a rename moves, and pinning the entry to a value that the entry
+        # itself is recording a change to would make the timeline unreadable. Nothing
+        # is recorded when the patch changed nothing -- see `field_changes`.
+        delta = field_changes(before, _snapshot(stage))
+        if delta:
+            self.activities.record(
+                ENTITY, stage.id, "updated", actor, {"code": stage.code, **delta}
+            )
         self.session.commit()
         return PipelineStageRead.model_validate(stage)
 
@@ -100,7 +141,13 @@ class PipelineService:
                 "spostali in un altro stato prima di eliminarlo",
                 deals=deal_count,
             )
+        # Snapshotted before the delete: this is the one hard `DELETE` in the domain,
+        # so after `repo.delete` the row is gone and the timeline entry is the only
+        # remaining record that this stage ever existed. `Activity.entity_id` keeps
+        # the id; the payload keeps everything needed to recognise it.
+        identity = _identity(stage)
         self.repo.delete(stage)
+        self.activities.record(ENTITY, stage_id, "deleted", actor, identity)
         self.session.commit()
 
     def get(self, stage_id: UUID) -> PipelineStageRead:
@@ -124,7 +171,7 @@ class PipelineService:
         try:
             for code, nome, posizione, probabilita, tipo in DEFAULT_STAGES:
                 if code not in existing_codes:
-                    self.repo.add(
+                    stage = self.repo.add(
                         PipelineStage(
                             code=code,
                             nome=nome,
@@ -132,6 +179,15 @@ class PipelineService:
                             probabilita_default=probabilita,
                             tipo=tipo,
                         )
+                    )
+                    # `seeded` separates "the installer created this" from "an
+                    # administrator created this by hand", which is the first thing
+                    # asked of a stage nobody remembers configuring. Only the stages
+                    # actually inserted are recorded: a second seed_defaults() on an
+                    # already-seeded database inserts nothing and must therefore say
+                    # nothing, or every restart would grow the timeline for free.
+                    self.activities.record(
+                        ENTITY, stage.id, "created", actor, {**_identity(stage), "seeded": True}
                     )
             self.session.commit()
         except IntegrityError:
