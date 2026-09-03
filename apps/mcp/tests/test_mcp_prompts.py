@@ -25,7 +25,7 @@ a second server, genuinely empty, for about a second of setup and no second cont
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -48,6 +48,8 @@ from pigrocrm.core.pipeline.models import PipelineStage
 from pigrocrm.core.storage import LocalFileStorage
 from pigrocrm.core.timetracking.models import Cost, CostCategory, TimeEntry
 from pigrocrm_mcp.context import ScopedSessionProvider
+from pigrocrm_mcp.prompts import customer as customer_prompts
+from pigrocrm_mcp.prompts import dashboards as dashboard_prompts
 from pigrocrm_mcp.server import build_server
 
 ADMIN = Actor(id=None, type="mcp", role="admin")
@@ -201,35 +203,71 @@ def _seed(factory: sessionmaker[Any]) -> _Seeded:
             ]
         )
 
-        # A general expense: `deal_id IS NULL`, so it lands in `spese_generali` and on no
-        # deal's margin.
-        session.add(
-            Cost(
-                deal_id=None,
-                category_id=categoria.id,
-                data=date(_ANNO, _MESE, 5),
-                importo=Decimal("120.00"),
-                descrizione=f"{_PREFIX} spesa generale",
-                custom_fields={},
-            )
+        # Two costs and two time entries, one of each on the *closed* deal and one on the
+        # open one, plus a general expense. The P&L has two columns and criterion 10 compares
+        # them value by value, so a corpus that only touched one column would leave the other
+        # at zero -- and a zero on both sides of a comparison passes on any implementation at
+        # all, which is what makes the non-zero check in that test more than a formality.
+        session.add_all(
+            [
+                Cost(
+                    deal_id=won_deal.id,
+                    category_id=categoria.id,
+                    data=date(_ANNO, _MESE, 8),
+                    importo=Decimal("310.00"),
+                    descrizione=f"{_PREFIX} costo diretto sul vinto",
+                    custom_fields={},
+                ),
+                # `deal_id IS NULL`: a general expense lands in `spese_generali` and on no
+                # deal's margin.
+                Cost(
+                    deal_id=None,
+                    category_id=categoria.id,
+                    data=date(_ANNO, _MESE, 5),
+                    importo=Decimal("120.00"),
+                    descrizione=f"{_PREFIX} spesa generale",
+                    custom_fields={},
+                ),
+            ]
         )
         # Billable, unbilled, with a rate: the only way `valore_maturato` and
         # `ore_fatturabili_non_fatturate` are non-zero on both the period P&L and the
-        # register-wide backlog.
-        session.add(
-            TimeEntry(
-                deal_id=open_deal.id,
-                user_id=user.id,
-                data=date(_ANNO, _MESE, 12),
-                ore=Decimal("6.00"),
-                descrizione=f"{_PREFIX} analisi",
-                fatturabile=True,
-                tariffa_applicata=Decimal("80.000000"),
-                tariffa_origine="manuale",
-                costo_applicato=Decimal("30.000000"),
-                costo_origine="manuale",
-                custom_fields={},
-            )
+        # register-wide backlog. `costo_applicato` is what makes `costo_lavoro` non-zero.
+        session.add_all(
+            [
+                TimeEntry(
+                    deal_id=open_deal.id,
+                    user_id=user.id,
+                    data=date(_ANNO, _MESE, 12),
+                    ore=Decimal("6.00"),
+                    descrizione=f"{_PREFIX} analisi",
+                    fatturabile=True,
+                    tariffa_applicata=Decimal("80.000000"),
+                    tariffa_origine="manuale",
+                    costo_applicato=Decimal("30.000000"),
+                    costo_origine="manuale",
+                    custom_fields={},
+                ),
+                # `fatturabile=False`, and it is what puts this deal in the `chiusi` column
+                # at all. A deal's P&L state is not its stage: `deal_summary` calls a deal on
+                # a `won` stage "da fatturare" -- which lands in `in_corso` -- for as long as
+                # it has one billable hour nobody has invoiced. A non-billable hour still
+                # costs exactly what it would have cost billed, so `chiusi.costo_lavoro` is
+                # non-zero all the same, which is the figure this row exists to produce.
+                TimeEntry(
+                    deal_id=won_deal.id,
+                    user_id=user.id,
+                    data=date(_ANNO, _MESE, 14),
+                    ore=Decimal("9.00"),
+                    descrizione=f"{_PREFIX} consegna",
+                    fatturabile=False,
+                    tariffa_applicata=None,
+                    tariffa_origine="assente",
+                    costo_applicato=Decimal("30.000000"),
+                    costo_origine="manuale",
+                    custom_fields={},
+                ),
+            ]
         )
         # The global recent feed is what `ore-da-registrare` reads to propose a deal. Two
         # entries on the same deal, so the deduplication has something to do.
@@ -644,3 +682,345 @@ async def test_stato_cliente_on_an_unknown_customer_is_a_domain_error(mcp_server
     with pytest.raises(Exception) as caught:  # noqa: PT011 -- the SDK wraps it in ValueError
         await mcp_server.get_prompt("stato-cliente", {"customer_id": str(uuid4())})
     assert "customer" in str(caught.value).lower()
+
+
+# == criterion 10 =================================================================
+#
+# Two prohibitions and two positive claims, and the second positive one is the reason this
+# block exists at all. "The prompts carry the context, and not the tax" is a statement about
+# *size*, and a test that only checked the words in a prompt would pass on a briefing that
+# pasted the whole register into the model's context window on every render.
+
+# Field names, not concepts. Criterion 10: "verificato per nome di campo, non per
+# intenzione". The first four are the fiscal estimate's own fields (slice 4 §11); the last
+# three are the parameters it is derived from, which are just as sensitive and would let a
+# reader reconstruct it.
+FORBIDDEN_FISCAL_FIELDS = frozenset(
+    {
+        "imponibile_fiscale",
+        "imposta_sostitutiva",
+        "contributi",
+        "netto_stimato",
+        "coefficiente_redditivita",
+        "aliquota_imposta_sostitutiva",
+        "aliquota_inps",
+    }
+)
+
+# The resources that exist. §11.1 adds none, and inventing `dashboard://commerciale?da=...`
+# in order to have a URI to embed would be adding one without saying so.
+KNOWN_RESOURCE_URIS = frozenset({"customer://", "person://", "deal://"})
+
+_ALL_PROMPTS = (
+    ("revisione-pipeline", {}),
+    ("chiusura-mese", {"anno": _ANNO, "mese": _MESE}),
+    ("ore-da-registrare", {}),
+)
+
+# How many extra rows the inflation fixture commits. Comfortably above every cap so that a
+# cap removed shows up as growth of hundreds of characters rather than of a handful -- a cap
+# asserted against a corpus smaller than itself is a comment, not a test.
+_EXTRA_ROWS = 40
+
+# What a prompt may grow by when the register grows by `_EXTRA_ROWS` rows it would otherwise
+# have listed. Deliberately tiny, and it is what makes the two growth tests below say
+# something: they measure the second batch, not the first, so the register is already past
+# every cap when the "before" reading is taken and the only legitimate growth left is the
+# truncation line's own count going from two digits to two digits. An uncapped section would
+# grow by roughly two thousand characters instead, at about fifty characters a row.
+_GROWTH_BUDGET = 40
+
+
+@pytest.fixture
+def inflate(prompt_corpus: Corpus) -> Callable[[int], None]:
+    """Commit `_EXTRA_ROWS` more sent offers and unpaid invoices, on demand.
+
+    A callable rather than a fixture that has already run, so a test can take its own
+    "before" reading and the comparison is between two renders of the same server rather than
+    between two servers that differ in more than one way.
+
+    It takes a batch number because the growth tests call it **twice**: once to push the
+    register past every cap, and again to measure. Growing from below a cap up to it is
+    legitimate growth and would have made the bound meaningless -- the first version of this
+    test measured exactly that and reported 440 characters for a cap that was working
+    perfectly. Everything it writes carries the file's prefix, so the existing teardown
+    removes it.
+    """
+
+    def _inflate(batch: int) -> None:
+        with prompt_corpus.factory() as session:
+            for index in range(_EXTRA_ROWS):
+                serial = batch * _EXTRA_ROWS + index
+                session.add(
+                    Document(
+                        customer_id=prompt_corpus.customer_id,
+                        tipo="offerta",
+                        titolo=f"{_PREFIX} offerta massa {serial:03d}",
+                        stato="inviata",
+                        stato_dal=today_local() - timedelta(days=serial + 1),
+                        versione_corrente=1,
+                        custom_fields={},
+                    )
+                )
+                session.add(
+                    Invoice(
+                        customer_id=prompt_corpus.customer_id,
+                        tipo="fattura",
+                        stato="emessa",
+                        stato_pagamento="da_incassare",
+                        anno=_ANNO,
+                        numero=9100 + serial,
+                        imponibile=Decimal("10.00"),
+                        imposta=Decimal("0.00"),
+                        bollo=Decimal("0.00"),
+                        totale=Decimal("10.00"),
+                        data_emissione=date(_ANNO, _MESE, 1),
+                        data_scadenza=date(_ANNO, _MESE, 1) + timedelta(days=serial),
+                        causale=f"{_PREFIX} massa {serial:03d}",
+                        tipo_documento="TD01",
+                        divisa="EUR",
+                        custom_fields={},
+                    )
+                )
+            session.commit()
+
+    return _inflate
+
+
+# -- the tax ---------------------------------------------------------------------
+
+
+async def test_revisione_pipeline_does_not_grow_with_the_register(
+    mcp_server: Any, inflate: Callable[[int], None]
+) -> None:
+    """**The bound.** A prompt's cost is paid in the model's context window on every render,
+    so a section that grows with the register is a tax the user pays for rows nobody asked
+    about.
+
+    Asserted as growth rather than as an absolute size: an absolute budget is a number
+    somebody tunes upward the first time it fails, while growth is the property itself -- the
+    prompt is the same size whether the register holds forty sent offers or eighty.
+
+    The first `inflate` is not the measurement; it is what puts the register past the cap so
+    that the measurement means something. Growing from two offers up to the cap of ten is
+    legitimate growth, and measuring *that* is how this test read 440 characters for a cap
+    that was working perfectly. Removing `[:PENDING_OFFERS_SHOWN]` now fails it by roughly
+    two thousand.
+    """
+    inflate(0)
+    before = len(_text_of(await mcp_server.get_prompt("revisione-pipeline", {})))
+    inflate(1)
+    after = len(_text_of(await mcp_server.get_prompt("revisione-pipeline", {})))
+    assert after - before <= _GROWTH_BUDGET, (
+        f"the prompt grew by {after - before} characters when {_EXTRA_ROWS} offers were "
+        "added to a register that was already past the cap"
+    )
+
+
+async def test_revisione_pipeline_shows_the_cap_and_admits_the_rest(
+    mcp_server: Any, inflate: Callable[[int], None]
+) -> None:
+    """The other half of a cap: the rows that are not here are named.
+
+    A briefing that omits its tail silently cannot be told apart from a short register, and
+    the count comes from `offerte_in_attesa_totale` -- the number the owning service
+    reported -- not from the length of a list this prompt has already truncated.
+    """
+    inflate(0)
+    text_block = _text_of(await mcp_server.get_prompt("revisione-pipeline", {}))
+    section = text_block.split("## Offerte inviate in attesa di risposta", 1)[1]
+    listed = [line for line in section.splitlines() if line.startswith("- ")]
+    assert len(listed) == dashboard_prompts.PENDING_OFFERS_SHOWN
+    assert "righe non mostrate" in section
+
+
+async def test_stato_cliente_does_not_grow_with_the_register(
+    mcp_server: Any, seeded_customer: _Identified, inflate: Callable[[int], None]
+) -> None:
+    """The same bound on the prompt whose list is the customer's own receivables.
+
+    The embedded card is measured too, not only the text block: it is the larger half of this
+    message, and a bound that ignored it would be a bound on the cheaper half.
+    """
+    args = {"customer_id": str(seeded_customer.id)}
+    inflate(0)
+    first = await mcp_server.get_prompt("stato-cliente", args)
+    before = len(_text_of(first)) + len(_resource_text(first))
+    inflate(1)
+    second = await mcp_server.get_prompt("stato-cliente", args)
+    after = len(_text_of(second)) + len(_resource_text(second))
+    assert after - before <= _GROWTH_BUDGET, (
+        f"the briefing grew by {after - before} characters when {_EXTRA_ROWS} unpaid "
+        "invoices were added"
+    )
+
+
+async def test_stato_cliente_shows_the_cap_and_admits_the_rest(
+    mcp_server: Any, seeded_customer: _Identified, inflate: Callable[[int], None]
+) -> None:
+    inflate(0)
+    text_block = _text_of(
+        await mcp_server.get_prompt("stato-cliente", {"customer_id": str(seeded_customer.id)})
+    )
+    listed = [line for line in text_block.splitlines() if line.startswith("- ")]
+    assert len(listed) == customer_prompts.UNPAID_INVOICES_SHOWN
+    assert "ce ne sono altre" in text_block
+
+
+# -- the two prohibitions --------------------------------------------------------
+
+
+async def test_no_prompt_contains_a_fiscal_field_by_name(
+    mcp_server: Any, seeded_customer: _Identified
+) -> None:
+    """Criterion 10's first prohibition, checked over every rendered message of every prompt.
+
+    Slice 4 §11 reason 4 keeps the fiscal estimate off the MCP surface because a PAT has no
+    scopes (residuo R10) and is therefore indistinguishable from full access. A prompt that
+    carried it would bypass that decision without calling the tool that deliberately does not
+    exist -- and nobody would think to look for it in a prompt.
+
+    By field name, not by intention, and over the raw messages rather than the text blocks:
+    a fiscal figure smuggled into the embedded resource would be just as reachable.
+    """
+    cases = [*_ALL_PROMPTS, ("stato-cliente", {"customer_id": str(seeded_customer.id)})]
+    for name, args in cases:
+        rendered = await mcp_server.get_prompt(name, args)
+        haystack = str(rendered.messages).lower()
+        assert haystack, name
+        for field in FORBIDDEN_FISCAL_FIELDS:
+            assert field not in haystack, f"{name} carries the fiscal field {field}"
+
+
+def test_no_prompt_reaches_a_service_method_on_an_exclusion_list() -> None:
+    """Criterion 10's second prohibition: a prompt is another packaging of the same
+    permissions, not a shortcut through them.
+
+    `test_mcp_surface_coverage.py` sweeps `tools/` and `resources/` for reachability and does
+    not sweep `prompts/`, so a prompt calling an excluded method would be a hole in exactly
+    the artefact built to have none. This is the narrow version of that sweep: the names that
+    are excluded *because exposing them would be wrong*, matched on the call.
+    """
+    prompts_dir = Path(__file__).resolve().parents[1] / "src" / "pigrocrm_mcp" / "prompts"
+    source = "\n".join(path.read_text(encoding="utf-8") for path in prompts_dir.rglob("*.py"))
+    assert source, "no prompt source was read, so this test proved nothing"
+    for excluded in (
+        "get_fiscal_estimate",
+        "update_automation_config",
+        "bind_time_to_invoice",
+        "close_period",
+        "reopen_period",
+        "recalculate_rates",
+        "update_user_rates",
+        "update_deal_rate",
+        "issue",
+        "annul",
+        "export_xml",
+    ):
+        assert f".{excluded}(" not in source, (
+            f"a prompt reaches {excluded}, which is on an MCP exclusion list -- a prompt is "
+            "another packaging of the same permissions, not a shortcut through them"
+        )
+
+
+# -- the figures are the owning service's, to the cent ---------------------------
+
+
+async def test_chiusura_mese_matches_the_pnl_value_by_value(
+    mcp_server: Any, prompt_corpus: Corpus
+) -> None:
+    """Criterion 10's positive half: the rendered figures are `period_pnl`'s, compared value
+    by value and not by eye.
+
+    A prompt that reformats a margin is a second source of truth with a friendly tone. The
+    comparison undoes exactly one substitution, the decimal comma, and nothing else, so a
+    figure re-derived rather than printed fails here -- `float(value)`, a different scale, a
+    different rounding.
+
+    Worth saying plainly, because the obvious version of this claim is false: a `:.2f` would
+    **not** be caught on this corpus, and cannot be on any corpus, because every money field
+    in this product is already `Numeric(_, 2)` and `round_money` has already run. That is the
+    reason the assertion compares `str(value)` rather than a formatted string -- the defect
+    it can actually see is a figure that went through `float`, and that one is real.
+
+
+    Every figure is asserted to be non-zero first. The corpus exists to make that true, and
+    without the check a comparison between a P&L of zeros and a template printing zeros would
+    pass on any implementation at all.
+    """
+    from pigrocrm.core.analytics.schemas import PeriodPnlQuery
+    from pigrocrm.core.analytics.service import AnalyticsService
+    from pigrocrm.core.db import month_bounds
+
+    da, a = month_bounds(_ANNO, _MESE)
+    with prompt_corpus.factory() as session:
+        pnl = AnalyticsService(session).period_pnl(
+            PeriodPnlQuery(da=da, a=a, customer_id=None), ADMIN
+        )
+
+    text_block = _text_of(
+        await mcp_server.get_prompt("chiusura-mese", {"anno": _ANNO, "mese": _MESE})
+    )
+
+    for label, value in (
+        ("chiusi.ricavi", pnl.chiusi.ricavi),
+        ("chiusi.costi_diretti", pnl.chiusi.costi_diretti),
+        ("chiusi.costo_lavoro", pnl.chiusi.costo_lavoro),
+        ("chiusi.margine_lordo", pnl.chiusi.margine_lordo),
+        ("in_corso.ricavi", pnl.in_corso.ricavi),
+        ("spese_generali", pnl.spese_generali),
+        ("valore_maturato", pnl.valore_maturato),
+    ):
+        assert value != 0, f"{label} is zero, so comparing it proves nothing"
+        assert str(value).replace(".", ",") in text_block, label
+
+    assert str(pnl.voci_scritte_in_ritardo) in text_block
+    assert ("sì" if pnl.periodo_chiuso else "no") in text_block
+
+
+# -- no new resource -------------------------------------------------------------
+
+
+async def test_stato_cliente_is_the_only_prompt_with_a_resource_block(
+    mcp_server: Any, seeded_customer: _Identified
+) -> None:
+    """§10: it is the only one because it is the only one whose resource already exists."""
+    for name, args in _ALL_PROMPTS:
+        rendered = await mcp_server.get_prompt(name, args)
+        assert _resource_uris(rendered) == [], name
+
+    rendered = await mcp_server.get_prompt(
+        "stato-cliente", {"customer_id": str(seeded_customer.id)}
+    )
+    assert _resource_uris(rendered) == [f"customer://{seeded_customer.id}"]
+
+
+async def test_no_prompt_introduces_a_new_resource_uri_scheme(
+    mcp_server: Any, seeded_customer: _Identified
+) -> None:
+    """Criterion 10: the URIs the four embed are listed and checked for new ones. A resource
+    is a surface, and adding one silently is adding a surface silently."""
+    cases = [*_ALL_PROMPTS, ("stato-cliente", {"customer_id": str(seeded_customer.id)})]
+    seen: set[str] = set()
+    for name, args in cases:
+        rendered = await mcp_server.get_prompt(name, args)
+        for uri in _resource_uris(rendered):
+            seen.add(uri.split("//")[0] + "//")
+    assert seen, "no prompt embedded any resource, so this test proved nothing"
+    assert seen <= KNOWN_RESOURCE_URIS, f"new resource schemes: {seen - KNOWN_RESOURCE_URIS}"
+
+
+async def test_the_registered_resource_templates_are_still_exactly_three(
+    mcp_server: Any,
+) -> None:
+    """The other half of "no new resource": not only that no prompt embeds a new URI, but
+    that none was registered at all. §11.1 -- the existing three stay the way an agent is
+    made to **read** before it **acts**."""
+    templates = {
+        str(template.uri_template) for template in await mcp_server.list_resource_templates()
+    }
+    assert templates == {
+        "customer://{customer_id}",
+        "person://{person_id}",
+        "deal://{deal_id}",
+    }

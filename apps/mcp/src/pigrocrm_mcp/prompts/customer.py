@@ -39,9 +39,17 @@ def stato_cliente(context: McpContext, customer_id: str) -> list[dict[str, Any]]
     if CustomerRepository(context.session).get(identifier) is None:
         raise NotFound("customer", identifier)
 
-    unpaid = InvoiceRepository(context.session).unpaid_for_customer(
-        identifier, limit=UNPAID_INVOICES_SHOWN
+    # One row past the cap, and then discarded: it is asked for only so the prompt can say
+    # that it truncated. A briefing that omits its tail silently cannot be told apart from a
+    # short register, which is the reading that gets somebody told a customer owes less than
+    # they do -- and there is no count to print here because `sum_da_incassare` has no
+    # per-customer form and adding one to have a nicer sentence would be a second aggregate
+    # over the same rows.
+    fetched = InvoiceRepository(context.session).unpaid_for_customer(
+        identifier, limit=UNPAID_INVOICES_SHOWN + 1
     )
+    unpaid = fetched[:UNPAID_INVOICES_SHOWN]
+    troncato = len(fetched) > UNPAID_INVOICES_SHOWN
 
     lines = ["## Fatture non incassate", ""]
     if not unpaid:
@@ -57,6 +65,12 @@ def stato_cliente(context: McpContext, customer_id: str) -> list[dict[str, Any]]
             scadenza = invoice.data_scadenza or "senza scadenza"
             totale = str(invoice.totale).replace(".", ",")
             lines.append(f"- {numero} — {totale} € (totale con IVA), scadenza {scadenza}")
+        if troncato:
+            lines += [
+                "",
+                f"_Mostrate le {UNPAID_INVOICES_SHOWN} con scadenza più vicina; ce ne sono "
+                "altre. L'elenco completo è `list_invoices`._",
+            ]
     lines += [
         "",
         "---",
