@@ -514,6 +514,29 @@ class InvoiceService:
                 expected=f"una data dal {anno_corrente}-01-01 in poi",
             )
 
+    def _check_issuable(self, source: Invoice, from_proforma: bool) -> None:
+        """Whether this row may still become a fiscal document.
+
+        Extracted because `issue` asks it twice — cheaply before taking the year's
+        counter lock, and authoritatively after — and two copies of a refusal message
+        drift. See `issue`'s docstring for why once is not enough.
+        """
+        if from_proforma:
+            if source.stato != "confermata":
+                raise Conflict(
+                    ENTITY,
+                    "solo una proforma confermata si converte in fattura",
+                    stato_attuale=source.stato,
+                    stato_richiesto="confermata",
+                )
+        elif source.stato != "bozza":
+            raise Conflict(
+                ENTITY,
+                f"una fattura in stato '{source.stato}' e' gia' stata emessa: "
+                "una correzione e' un annullamento e una nuova fattura",
+                stato_attuale=source.stato,
+            )
+
     def issue(self, invoice_id: UUID, data: InvoiceIssue, actor: Actor) -> InvoiceRead:
         """Consume a register number. **One transaction, in this exact order.**
 
@@ -551,14 +574,24 @@ class InvoiceService:
         the one documented exception to "one service method = one transaction", and
         spec 3 mandates it.
 
-        Deliberately out of scope: two concurrent `issue()` calls racing on the exact
-        *same* `invoice_id`. Nothing below locks the source row itself (only the
-        year's counter), which every other write method in this class shares --
-        `update`, `replace_lines`, `confirm_proforma` and `soft_delete` all read via
-        `_require` with no lock either. Closing that would mean deciding a lock order
-        between a source row and the counter row for the one method that touches both,
-        a change with no test in this task's brief to prove it against; recorded here
-        rather than fixed silently.
+        Two concurrent `issue()` calls on the same `invoice_id` are **in** scope, and
+        this is the one method in the class where that matters. The others --
+        `update`, `replace_lines`, `confirm_proforma`, `soft_delete` -- also read via
+        `_require` without a lock, and a race there is an ordinary lost update: the
+        second write wins and the row is consistent. Here the loser would consume a
+        register number and then overwrite the winner's number on the very same row,
+        leaving the first number owned by no invoice. `uq_invoices_anno_numero` cannot
+        see it, because the row simply carries a different number. That is a permanent
+        gap in the register -- the single property this whole design exists to
+        guarantee, and the reason it is a locked counter row rather than a `SEQUENCE`.
+
+        The cure needs no new lock and no lock-order decision. The state is checked
+        twice: once before the counter lock, to refuse an obviously-doomed request
+        without serialising on it, and once *after*, which is the authoritative one.
+        `lock_counter` blocks until the other emission's transaction ends, so by the
+        time this transaction holds that lock the competing commit is visible, and the
+        re-read sees `emessa`. The order stays counter-then-row throughout, so the
+        deadlock argument in `lock_counter`'s own docstring is unchanged.
         """
         actor.require_admin("issue_invoice")
         source = self._require(invoice_id)
@@ -567,24 +600,20 @@ class InvoiceService:
         self._check_issue_date(data_emissione, oggi_in_italia().year)
 
         from_proforma = source.tipo == "proforma"
-        if from_proforma:
-            if source.stato != "confermata":
-                raise Conflict(
-                    ENTITY,
-                    "solo una proforma confermata si converte in fattura",
-                    stato_attuale=source.stato,
-                    stato_richiesto="confermata",
-                )
-        elif source.stato != "bozza":
-            raise Conflict(
-                ENTITY,
-                f"una fattura in stato '{source.stato}' e' gia' stata emessa: "
-                "una correzione e' un annullamento e una nuova fattura",
-                stato_attuale=source.stato,
-            )
+        self._check_issuable(source, from_proforma)
 
         # Step 2. From here on, every other emission for this year waits.
         counter = self.repo.lock_counter(anno)
+
+        # And only now is the state answer trustworthy. The check above ran against a
+        # read taken before any lock: a competing `issue()` on this same row could have
+        # been between its own check and its own commit at that moment. Acquiring the
+        # counter lock is what orders the two transactions -- it is released only at the
+        # other one's commit -- so re-reading here sees whatever that emission actually
+        # did. Without this, both calls pass the check, both take a number, and the
+        # second overwrites the first: one number consumed and carried by nobody.
+        self.session.refresh(source)
+        self._check_issuable(source, from_proforma)
 
         # Step 3. Validations and totals, after the lock and before the increment.
         _, profile = self._regime()
