@@ -36,18 +36,23 @@ from datetime import datetime
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.activities.repository import ActivityRepository
+from pigrocrm.core.activities.schemas import ActivityRead
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.analytics.schemas import PeriodPnlQuery
 from pigrocrm.core.analytics.service import AnalyticsService
 from pigrocrm.core.dashboard.schemas import (
     CommercialDashboard,
     EconomicDashboard,
+    OperationalDashboard,
     PeriodoQuery,
+    Signal,
 )
-from pigrocrm.core.db import window_from
+from pigrocrm.core.db import current_week, window_from
 from pigrocrm.core.deals.repository import DealRepository
 from pigrocrm.core.documents.repository import DocumentRepository
 from pigrocrm.core.invoices.repository import InvoiceRepository
+from pigrocrm.core.timetracking.repository import TimeEntryRepository
 
 # The property §7.1 requires, named so the tests can assert on the same constant the code
 # uses rather than on a duplicated string literal.
@@ -55,6 +60,9 @@ SNAPSHOT_ISOLATION = "REPEATABLE READ"
 
 _PENDING_OFFERS_SHOWN = 20
 _EXPECTED_CLOSURE_WINDOW_DAYS = 30
+# §6.1: fifty rows, not paginated. A complete history is the entity's own timeline, which
+# already exists; a paginated global feed would be a second way to browse the same rows.
+_RECENT_ACTIVITIES = 50
 
 
 class DashboardService:
@@ -64,6 +72,8 @@ class DashboardService:
         self.documents = DocumentRepository(session)
         self.analytics = AnalyticsService(session)
         self.invoices = InvoiceRepository(session)
+        self.entries = TimeEntryRepository(session)
+        self.activities = ActivityRepository(session)
 
     def _open_snapshot(self) -> datetime:
         """Begin the one read-only `REPEATABLE READ` transaction, and return its instant.
@@ -177,4 +187,66 @@ class DashboardService:
             da_incassare=self.invoices.sum_da_incassare(),
             scaduto=self.invoices.sum_scaduto(),
             fatture_emesse=self.invoices.count_emesse_in_periodo(periodo.da, periodo.a),
+        )
+
+    def get_operational_dashboard(self, actor: Actor) -> OperationalDashboard:
+        """§6. **No period parameter**, deliberately: the current week and a backlog are the
+        two things that make no sense in the past, so there is nothing here to get wrong --
+        and it is why the backlog comes from `unbilled_backlog`, which has no period, rather
+        than from `period_pnl`, which is by definition of one (§6.3).
+
+        The three signals are built here as `Signal` rows, and that is composition and not
+        arithmetic: each `conteggio` is a `COUNT` its own repository produced, and every
+        label and link is a literal. `core/dashboard/` still contains no `*`, `/` or `-`,
+        and `test_dashboard_no_arithmetic.py` is what confirms it rather than this sentence.
+
+        None of the three is stored and none is a flag on a row -- they are predicates,
+        evaluated on request. A stored signal is §1's second source of truth in disguise,
+        and it would need somewhere to be recomputed from, which is the materialised summary
+        §7 refuses.
+
+        Every `collegamento` names a filter that exists and that shares its predicate
+        function with the count beside it (criterion 2), so a card and the list behind it
+        cannot describe different rows: `invoiced_not_won_predicate`,
+        `won_with_unbilled_hours_predicate` and `_overdue_predicate` each have exactly two
+        callers, one per side.
+
+        The fourth signal of §6.2 is not here: "offerta accettata, deal non vinto" is on the
+        commercial dashboard, because it needs no invoices and therefore shipped with the
+        automation it cross-checks (§17).
+
+        `current_week()` is read **before** the snapshot opens, like the period on the other
+        two dashboards: it needs no transaction, and it keeps the first statement of the
+        session the one that fixes the snapshot.
+        """
+        da, a = current_week()
+        calcolato_alle = self._open_snapshot()
+        return OperationalDashboard(
+            calcolato_alle=calcolato_alle,
+            settimana=self.entries.week_hours(da, a),
+            arretrato=self.analytics.unbilled_backlog(actor),
+            segnali=[
+                Signal(
+                    codice="fatturato_non_vinto",
+                    etichetta="Fatturato ma non vinto",
+                    conteggio=self.invoices.count_deals_invoiced_not_won(),
+                    collegamento="/app/deal/lista?fatturato_non_vinto=true",
+                ),
+                Signal(
+                    codice="vinto_da_fatturare",
+                    etichetta="Vinto ma da fatturare",
+                    conteggio=self.entries.count_won_deals_to_invoice(),
+                    collegamento="/app/deal/lista?da_fatturare=true",
+                ),
+                Signal(
+                    codice="scaduto_non_incassato",
+                    etichetta="Scaduto e non incassato",
+                    conteggio=self.invoices.count_scadute_non_incassate(),
+                    collegamento="/app/fatture?scadute=true",
+                ),
+            ],
+            attivita_recenti=[
+                ActivityRead.model_validate(row)
+                for row in self.activities.recent(_RECENT_ACTIVITIES)
+            ],
         )

@@ -16,7 +16,8 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from pigrocrm.core.analytics.schemas import PeriodPnl
+from pigrocrm.core.activities.schemas import ActivityRead
+from pigrocrm.core.analytics.schemas import PeriodPnl, UnbilledBacklog
 from pigrocrm.core.db import month_bounds, today_local, window_from
 from pigrocrm.core.errors import ValidationFailed
 
@@ -221,3 +222,45 @@ class WeekHours(BaseModel):
     # §10 reads the same field.
     giorni_senza_ore: list[date]
     ore_totali: Decimal = Field(max_digits=10, decimal_places=2)
+
+
+class Signal(BaseModel):
+    """One of §6.2's inconsistency counts.
+
+    Not stored, not a flag on a row: a predicate, evaluated on request. A stored signal is
+    §1's second source of truth wearing a disguise, and it would need somewhere to be
+    recomputed from -- which is the materialised summary §7 refuses.
+
+    `collegamento` is mandatory in practice: a count with no way to see the rows behind it
+    is a number nobody can act on, and §7.2's guarantee is that the count and that list are
+    the same predicate. It is typed optional because a signal without a drill-through is a
+    thinkable future shape and a lie in the type system is worse than an assertion in a
+    test; `test_dashboard_operational.py` is what requires all three to have one today.
+    """
+
+    codice: str
+    etichetta: str
+    conteggio: int
+    collegamento: str | None
+
+
+class OperationalDashboard(BaseModel):
+    """§6. "What do I have to do now."
+
+    **No period.** Its figures are the current week and a backlog, which are the two things
+    that make no sense in the past -- and it is why the backlog cannot come from
+    `period_pnl`, which is by definition of a period (§6.3).
+
+    **No new economic total.** The only money here is `arretrato.valore_maturato`, which
+    belongs to `AnalyticsService` and is labelled accrued value, never revenue.
+
+    Three signals, not four: "offerta accettata, deal non vinto" is on the *commercial*
+    dashboard, because it needs no invoices and therefore shipped in the same sub-plan as
+    the automation it cross-checks (§17).
+    """
+
+    calcolato_alle: datetime
+    settimana: WeekHours
+    arretrato: UnbilledBacklog
+    segnali: list[Signal]
+    attivita_recenti: list[ActivityRead]

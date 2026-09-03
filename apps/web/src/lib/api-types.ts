@@ -1637,6 +1637,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/analytics/backlog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Backlog
+         * @description No period parameter, deliberately: see `AnalyticsService.unbilled_backlog`.
+         *
+         *     Placed beside the other analytics reads rather than under `/dashboard`, because the
+         *     figure belongs to `AnalyticsService` and §3 forbids a dashboard module from owning
+         *     one -- its euro value is a product of two columns.
+         */
+        get: operations["backlog_api_analytics_backlog_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/gmail/account": {
         parameters: {
             query?: never;
@@ -3954,6 +3978,12 @@ export interface components {
             in_corso: components["schemas"]["PnlTotals"];
             /** Spese Generali */
             spese_generali: string;
+            /** Valore Maturato */
+            valore_maturato: string;
+            /** Ore Fatturabili Non Fatturate */
+            ore_fatturabili_non_fatturate: string;
+            /** Ore Senza Tariffa */
+            ore_senza_tariffa: number;
             /** Periodo Chiuso */
             periodo_chiuso: boolean;
             /** Voci Scritte In Ritardo */
@@ -4669,6 +4699,26 @@ export interface components {
             custom_fields?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /**
+         * UnbilledBacklog
+         * @description What is waiting to be invoiced, with no period.
+         *
+         *     Separate from `PeriodPnl`'s three same-named fields on purpose (§5): those are the
+         *     period's figures, these are the total. Two different numbers with the same name is the
+         *     fastest way to lose a reader's trust, so the *labels* carry the scope -- "nel periodo"
+         *     on the economic dashboard, "in totale" on the operational one -- and the two are never
+         *     rendered side by side.
+         */
+        UnbilledBacklog: {
+            /** Ore Fatturabili Non Fatturate */
+            ore_fatturabili_non_fatturate: string;
+            /** Valore Maturato */
+            valore_maturato: string;
+            /** Voci Senza Tariffa */
+            voci_senza_tariffa: number;
+            /** Voci */
+            voci: number;
         };
         /** UserCreate */
         UserCreate: {
@@ -6972,6 +7022,8 @@ export interface operations {
                 stage_id?: string | null;
                 /** @description Filtro sui campi personalizzati (JSONB), ripetibile per più chiavi: ?custom=settore:IT&custom=priorita:alta restituisce solo le righe che soddisfano entrambe (stessa semantica di contenimento JSONB usata dal service). Ogni valore è confrontato come stringa esatta; un valore senza il separatore ':' vale come chiave con valore vuoto, non genera un errore. Chiama GET /api/schema/{entity_type} per conoscere le chiavi disponibili. */
                 custom?: string[] | null;
+                fatturato_non_vinto?: boolean;
+                da_fatturare?: boolean;
                 limit?: number;
                 cursor?: string | null;
                 /** @description created_at | updated_at | nome */
@@ -14094,6 +14146,7 @@ export interface operations {
                 stato?: ("bozza" | "emessa" | "annullata" | "confermata" | "consumata") | null;
                 anno?: number | null;
                 stato_pagamento?: ("da_incassare" | "incassato") | null;
+                scadute?: boolean;
                 limit?: number;
                 cursor?: string | null;
             };
@@ -19059,6 +19112,123 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FiscalEstimate"];
+                };
+            };
+            /** @description Permesso negato: l'actor non ha il ruolo richiesto. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La risorsa richiesta non esiste o è stata rimossa. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La richiesta è in conflitto con lo stato attuale della risorsa. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Una regola di dominio non è stata rispettata (application/problem+json), oppure il corpo, i parametri o il path della richiesta non hanno la forma attesa e non hanno mai raggiunto l'endpoint (application/json). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    backlog_api_analytics_backlog_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnbilledBacklog"];
                 };
             };
             /** @description Permesso negato: l'actor non ha il ruolo richiesto. */

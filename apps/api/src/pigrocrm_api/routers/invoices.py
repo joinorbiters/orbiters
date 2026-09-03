@@ -64,6 +64,10 @@ def list_invoices(
     stato: Annotated[InvoiceStato | None, Query()] = None,
     anno: Annotated[int | None, Query(ge=ANNO_MIN, le=ANNO_MAX)] = None,
     stato_pagamento: Annotated[StatoPagamento | None, Query()] = None,
+    # The drill-through of the operational dashboard's "scaduto e non incassato" card
+    # (§6.2). The card links here and nowhere else, and the rows returned are counted by
+    # the same predicate function the card's `COUNT` uses.
+    scadute: Annotated[bool, Query()] = False,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     cursor: Annotated[UUID | None, Query()] = None,
 ) -> InvoicePage:
@@ -74,6 +78,7 @@ def list_invoices(
         stato=stato,
         anno=anno,
         stato_pagamento=stato_pagamento,
+        scadute=scadute,
         limit=limit,
         cursor=cursor,
     )
