@@ -15,10 +15,41 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
+from pigrocrm.core.invoices.schemas import MONEY_DECIMAL_PLACES, MONEY_MAX_DIGITS
+
 MONEY_EXPONENT = Decimal("0.01")
 FACTOR_EXPONENT = Decimal("0.000001")
 RATE_EXPONENT = Decimal("0.01")
 _HUNDRED = Decimal("100")
+
+# The smallest amount a `Numeric(12, 2)` column cannot hold: 10^10, because the scale takes
+# two of the twelve digits and Postgres refuses anything that does not *round* to an
+# absolute value below that. Derived from the two width constants rather than written as a
+# literal, so widening the column is one edit.
+#
+# Declared here because this is the module that produces the values those columns receive.
+# `quantita` and `prezzo_unitario` are `Numeric(12, 6)` and their Pydantic bounds mirror
+# that faithfully -- but the column their *product* lands in is `Numeric(12, 2)`, and no
+# bound on two factors can express a bound on the product: 100000 x 100000 is two valid
+# six-digit factors and an eleven-digit result. Summation reaches the same place without
+# any large line at all, since an invoice may carry `MAX_LINES` of them.
+MONEY_MAX_EXCLUSIVE = Decimal(10) ** (MONEY_MAX_DIGITS - MONEY_DECIMAL_PLACES)
+
+
+def overflows_money_column(value: Decimal) -> bool:
+    """True when `value` cannot be stored in one of the `Numeric(12, 2)` money columns.
+
+    On the *rounded* value, which is what is stored and what Postgres measures: 9999999999.995
+    is below the limit and rounds to a number that is not.
+
+    On the absolute value, because a discount is a line (spec 6.1 rule 6) and a line total is
+    legitimately negative; a check on the signed value would leave half the range open.
+
+    A predicate rather than a raise: `totals.py` is deliberately free of the database, the
+    regime and the exporter, and a domain error naming a field belongs to the service that
+    knows which field the caller supplied.
+    """
+    return abs(round_money(value)) >= MONEY_MAX_EXCLUSIVE
 
 
 def round_money(value: Decimal) -> Decimal:

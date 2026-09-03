@@ -5,6 +5,14 @@ duplication: without it an over-long string reaches Postgres as `DataError` and 
 value beyond a `Numeric`'s capacity as `NumericValueOutOfRange`, neither of which is
 an `IntegrityError`, so no handler catches either and the caller's session is left
 poisoned. This project has paid for that class of defect seven times.
+
+The eighth was different, and it is why this paragraph now has a second one: a bound
+here can only ever cover a column the caller *writes*. `quantita` and `prezzo_unitario`
+mirror `Numeric(12, 6)` faithfully and their **product** lands in a `Numeric(12, 2)`,
+which no bound on two factors can express -- 100000 x 100000 is two valid six-digit
+factors and an eleven-digit result. Every *derived* amount is therefore bounded in
+`InvoiceService`, before the flush, by `totals.py::overflows_money_column`. Mirroring the
+column widths is necessary and is not sufficient.
 """
 
 from datetime import date, datetime
