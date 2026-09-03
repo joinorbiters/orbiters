@@ -3,6 +3,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, status
 
+from pigrocrm.core.activities.schemas import ActivityRead
+from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.fields.schemas import (
     EntityType,
     FieldDefinitionCreate,
@@ -51,3 +53,17 @@ def unarchive(field_id: UUID, session: SessionDep, actor: ActorDep) -> FieldDefi
     """Symmetric to archive: the stored JSONB values were never touched, only the
     field's visibility changes."""
     return FieldDefinitionService(session).unarchive(field_id, actor)
+
+
+@router.get("/{field_id}/timeline", response_model=list[ActivityRead])
+def timeline(
+    field_id: UUID,
+    session: SessionDep,
+    actor: ActorDep,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> list[ActivityRead]:
+    """Administrators only, matching exactly who may change a definition. A rename and
+    an archive are separate kinds here, so "it is called something else now" is never
+    confused with "it is gone from every form"."""
+    actor.require_admin("read_field_definition_timeline")
+    return ActivityService(session).timeline("field_definition", field_id, limit)
