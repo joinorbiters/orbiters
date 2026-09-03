@@ -366,8 +366,29 @@ class TimeEntryService:
         self.session.commit()
 
     def restore(self, entry_id: UUID, actor: Actor) -> TimeEntryRead:
+        """Refuses when the entry's deal is archived.
+
+        `DealService.soft_delete` refuses while a deal still has live hours, so that no
+        aggregate over `time_entries` can report work against a deal the deal list cannot
+        show. That invariant has a back door if this method does not check it too --
+        archive the hours, archive the now-empty deal, restore the hours -- and the exact
+        state the guard exists to prevent is back. It is the same back door
+        `DealService.restore` closes for the customer/deal pair, one level down.
+
+        Checked unconditionally, not only when the entry really was archived: the invariant
+        is about the entry's state *after* this call, not about what changed.
+        """
         actor.require_write("restore_time_entry")
         entry = self._require(entry_id, include_deleted=True)
+
+        deal = self.deals.get(entry.deal_id, include_deleted=True)
+        if deal is not None and deal.deleted_at is not None:
+            raise Conflict(
+                ENTITY,
+                "il deal è archiviato: ripristina prima il deal",
+                deal_id=str(deal.id),
+            )
+
         self.locks.assert_writable(ENTITY, "data", entry.data)
         was_deleted = entry.deleted_at is not None
         entry.deleted_at = None

@@ -478,7 +478,8 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
     @mcp.tool()
     @guard
     def archive_deal(deal_id: str) -> dict[str, str]:
-        """Archivia un deal (reversibile con `restore_deal`)."""
+        """Archivia un deal (reversibile con `restore_deal`). Fallisce se ha ore
+        registrate: fatturale o archiviale prima."""
         return deals.archive(context, deal_id)
 
     @mcp.tool()
@@ -963,7 +964,8 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
     @mcp.tool()
     @guard
     def restore_time_entry(entry_id: str) -> dict[str, Any]:
-        """Ripristina una voce di ore archiviata."""
+        """Ripristina una voce di ore archiviata. Fallisce se il deal è archiviato:
+        ripristina prima il deal."""
         return timetracking.restore_time_entry(context, entry_id)
 
     @mcp.tool()

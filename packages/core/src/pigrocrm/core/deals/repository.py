@@ -189,6 +189,30 @@ class DealRepository:
             or 0
         )
 
+    def count_active_time_entries(self, deal_id: UUID) -> int:
+        """Live `time_entries` rows on this deal -- the guard `soft_delete` reads.
+
+        Every entry, not only the billable unbilled ones, and that width is the whole
+        point. The defect this closes was `unbilled_backlog` counting hours whose deal had
+        been archived, but `week_hours`, `hours_in_range` and `labour_cost_in_range` read
+        the same table with the same `deleted_at IS NULL` and no join to `deals` either. A
+        guard shaped like one aggregate's predicate would leave the others exactly as they
+        were; a guard on "is there any live hour here at all" gives all of them the single
+        invariant they need -- no live time entry hangs off an archived deal -- with none
+        of them learning about `deals`.
+
+        Counted rather than fetched: the caller needs to know whether to refuse and how
+        many rows to name, and a deal can carry hundreds.
+        """
+        return (
+            self.session.scalar(
+                select(func.count(TimeEntry.id)).where(
+                    TimeEntry.deal_id == deal_id, TimeEntry.deleted_at.is_(None)
+                )
+            )
+            or 0
+        )
+
     # `list` is defined LAST in this class on purpose: `def list(...)` rebinds `list` in
     # the class namespace, and Python 3.13 evaluates annotations eagerly, so a later
     # `-> list[...]` would raise `TypeError` at import time.
