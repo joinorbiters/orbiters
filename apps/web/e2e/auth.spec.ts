@@ -27,8 +27,17 @@ test('a correct login reaches the dashboard and logout returns to login', async 
   await page.getByLabel('Password').fill(PASSWORD)
   await page.getByRole('button', { name: 'Accedi' }).click()
 
-  await expect(page).toHaveURL(/\/app(\/|$)/)
-  await expect(page.getByText('Ciao E2E')).toBeVisible()
+  // `(\?|$)` rather than `(\/|$)`: `/app/` carries a `validateSearch` since slice 6, so a
+  // correct login lands on `/app?tab=commerciale&da=…&a=…`. The old alternation was also
+  // satisfied by `/app/login` itself, which is the failure mode `helpers.ts::login`
+  // documents at length.
+  await expect(page).toHaveURL(/\/app\/?(\?|$)/)
+  // Two facts, because either alone is satisfied by the wrong screen: the shell knows who
+  // is logged in, and the dashboard behind it actually rendered. This used to read
+  // `Ciao E2E`, the greeting on the placeholder that stood at `/app/` until the real
+  // dashboard replaced it — a string no screen prints any more.
+  await expect(page.getByText('E2E', { exact: true })).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'Commerciale' })).toBeVisible()
 
   await page.getByRole('button', { name: 'Esci' }).click()
   await expect(page).toHaveURL(/\/app\/login$/)
