@@ -86,10 +86,50 @@ class PeriodPnl(BaseModel):
     # unacceptable consequence -- a deal's margin would move when a *different* deal was
     # invoiced.
     spese_generali: Decimal
+    # Added by slice 6 §5: the informative rows the economic dashboard shows under a
+    # heading that is not "ricavi", and which enter no margin. Same names as `DealPnl`'s
+    # because they are the same quantity on a different object; the scope lives in the
+    # label ("nel periodo" here, "in totale" on the operational dashboard), never in the
+    # field name, and §5 forbids the two ever being rendered side by side.
+    #
+    # One difference from `DealPnl` is deliberate and is recorded here because the names
+    # are identical: `DealPnl.valore_maturato` is `ricavi + valore delle ore non
+    # fatturate`, an estimate of what the deal will finally have been worth. There is no
+    # such reading for a period -- a period's revenue is already its own reported row, and
+    # adding it in again would put revenue under a heading that says "non sono ricavi".
+    # So this one is the accrued value of the unbilled billable hours **alone**, which is
+    # what the card that prints it is labelled: "Valore maturato non fatturato".
+    valore_maturato: Decimal = Field(max_digits=12, decimal_places=2)
+    ore_fatturabili_non_fatturate: Decimal = Field(max_digits=8, decimal_places=2)
+    # A count of entries, not a quantity of hours, exactly like `DealPnl.ore_senza_tariffa`
+    # -- and scoped to the same rows as the two figures above it, so the three can be
+    # reconciled with each other on the card that shows them together.
+    ore_senza_tariffa: int
     # Whether the number can still move, which is the thing a reader most needs to know
     # and costs a COUNT over two columns that already exist (§6.4).
     periodo_chiuso: bool
     voci_scritte_in_ritardo: int
+
+
+class UnbilledBacklog(BaseModel):
+    """What is waiting to be invoiced, with no period.
+
+    Separate from `PeriodPnl`'s three same-named fields on purpose (§5): those are the
+    period's figures, these are the total. Two different numbers with the same name is the
+    fastest way to lose a reader's trust, so the *labels* carry the scope -- "nel periodo"
+    on the economic dashboard, "in totale" on the operational one -- and the two are never
+    rendered side by side.
+    """
+
+    ore_fatturabili_non_fatturate: Decimal = Field(max_digits=8, decimal_places=2)
+    # `Σ ROUND(ore × tariffa_applicata, 2)` -- slice 4 §7.3's formula, computed here
+    # because §3 forbids `core/dashboard/` any multiplication at all. It is **not**
+    # revenue and enters no margin: the revenue is the invoice.
+    valore_maturato: Decimal = Field(max_digits=12, decimal_places=2)
+    # A rate of zero and no rate are different facts (slice 4 §5.1). These rows are in
+    # `ore_fatturabili_non_fatturate` and contribute nothing to `valore_maturato`.
+    voci_senza_tariffa: int
+    voci: int
 
 
 class BudgetQuery(BaseModel):
@@ -177,4 +217,5 @@ __all__ = [
     "PeriodPnl",
     "PeriodPnlQuery",
     "PnlTotals",
+    "UnbilledBacklog",
 ]

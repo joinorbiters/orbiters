@@ -20,8 +20,8 @@ from sqlalchemy import ColumnElement, Select, func, select
 from sqlalchemy.orm import InstrumentedAttribute, Session
 
 from pigrocrm.core.deals.models import Deal
-from pigrocrm.core.invoices.models import Invoice
-from pigrocrm.core.money import ZERO_MONEY, line_value, round_money, sum_money
+from pigrocrm.core.invoices.models import Invoice, InvoiceLine
+from pigrocrm.core.money import ZERO_MONEY, line_value, round_money, sum_hours, sum_money
 from pigrocrm.core.timetracking.models import Cost, TimeEntry
 
 # `Self`-preserving, so a scoped statement keeps the row type its `select()` gave it and
@@ -188,6 +188,59 @@ class AnalyticsRepository:
         )
         stmt = self._customer_scope(stmt, customer_id, TimeEntry.deal_id)
         return {row[0]: Decimal(row[1]) for row in self.session.execute(stmt).all()}
+
+    def unbilled_backlog(
+        self, da: date | None = None, a: date | None = None, customer_id: UUID | None = None
+    ) -> tuple[Decimal, Decimal, int, int]:
+        """`(ore, valore, voci_senza_tariffa, voci)` over billable hours not yet invoiced.
+
+        With no window it is the whole arrears, over every period there has ever been:
+        "quanto ho da fatturare" is not a question about March (slice 6 §6.3). With one it
+        is the same quantity restricted to the period, which is what `PeriodPnl`'s three
+        slice-6 fields carry -- one aggregate over `time_entries`, called twice with
+        different bounds, rather than two definitions of the same phrase.
+
+        **"Not yet invoiced" is a fact about the invoice's state, not about the link.** An
+        hour attached to a line of a *draft* is still counted here, because a draft is not
+        revenue and its lines are rewritten wholesale by slice 3 without orphaning
+        anything -- the reading `billed_entry_ids` fixed for slice 4 §4.3, and the one
+        `deal_pnl` and `deal_summary` already use. A `NOT EXISTS` rather than that
+        function's `IN`, because this query has no bounded list of entries to look up: the
+        backlog is defined by the absence of a binding, over a table nobody hands us.
+
+        `Σ ROUND(ore × tariffa_applicata, 2)` per row and then summed, in Python and not
+        in SQL, for the reason `labour_cost_in_range` gives above: `money.py` is the single
+        authority on `ROUND_HALF_UP`, and Postgres's own `round()` would be a second
+        implementation of it. The rows pulled back are only the *unbilled* billable ones,
+        which is by nature a small set -- everything that has been invoiced has left it.
+
+        `tariffa_applicata IS NULL` rows are counted in `ore` and in `voci_senza_tariffa`
+        and contribute nothing to `valore`: a missing rate is not a rate of zero, and
+        `line_value` is what refuses to conflate them.
+        """
+        billed = (
+            select(InvoiceLine.id)
+            .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
+            .where(InvoiceLine.id == TimeEntry.invoice_line_id, *_revenue_filter())
+        )
+        stmt = select(TimeEntry.ore, TimeEntry.tariffa_applicata).where(
+            TimeEntry.deleted_at.is_(None),
+            TimeEntry.fatturabile.is_(True),
+            ~billed.exists(),
+        )
+        if da is not None:
+            stmt = stmt.where(TimeEntry.data >= da)
+        if a is not None:
+            stmt = stmt.where(TimeEntry.data <= a)
+        stmt = self._customer_scope(stmt, customer_id, TimeEntry.deal_id)
+
+        rows = self.session.execute(stmt).all()
+        return (
+            sum_hours([ore for ore, _ in rows]),
+            sum_money([line_value(ore, tariffa) for ore, tariffa in rows]),
+            sum(1 for _, tariffa in rows if tariffa is None),
+            len(rows),
+        )
 
     def late_entry_count(self, da: date, a: date) -> int:
         """How many rows dated inside the period were written **after** it ended
