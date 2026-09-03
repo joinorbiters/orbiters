@@ -34,3 +34,18 @@ def get_commercial_dashboard(context: McpContext, query: PeriodoQuery) -> dict[s
         .get_commercial_dashboard(query, context.actor)
         .model_dump(mode="json")
     )
+
+
+def get_economic_dashboard(context: McpContext, query: PeriodoQuery) -> dict[str, Any]:
+    """Registered by Task C4 rather than by Task C7, which owns 6C's surface, for the same
+    reason Task B8 registered `get_commercial_dashboard` above: the moment the service
+    method exists, both coverage tests demand it be a tool or a named exclusion, and "a
+    later task decides" is the placeholder Task A11 spent a whole task deleting. **Task C7
+    must not register a second `get_economic_dashboard`** -- it still owns the REST route
+    and the adapter tests.
+    """
+    return (
+        DashboardService(context.session)
+        .get_economic_dashboard(query, context.actor)
+        .model_dump(mode="json")
+    )

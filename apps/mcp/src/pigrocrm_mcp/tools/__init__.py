@@ -584,6 +584,29 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
             context, PeriodoQuery.model_validate({"da": da, "a": a})
         )
 
+    # Registered by Task C4, which created `get_economic_dashboard`, for the reason given
+    # beside the tool above: a service method with no tool and no named exclusion turns
+    # both coverage tests red the moment it exists, and deferring one to a later task is
+    # the placeholder Task A11 spent a whole task deleting. Task C7 owns the rest of 6C's
+    # surface -- the REST routes and this tool's own MCP test -- and must not register a
+    # second `get_economic_dashboard`.
+
+    @mcp.tool()
+    @guard
+    def get_economic_dashboard(da: IsoDateStr = None, a: IsoDateStr = None) -> dict[str, Any]:
+        """Il conto economico del periodo in una sola chiamata: ricavi, costi diretti, costo
+        del lavoro e margine, in due colonne separate -- `chiusi` e `in_corso` -- che non
+        vanno sommate fra loro, più le spese generali, il valore maturato non ancora
+        fatturato, il totale da incassare e la quota già scaduta. `da_incassare` e `scaduto`
+        non hanno periodo: una fattura di febbraio non pagata è dovuta anche guardando
+        marzo. Ogni cifra è letta nello stesso istante, indicato da `calcolato_alle`. `da` e
+        `a` sono date `YYYY-MM-DD` e vanno insieme: senza, il periodo è il mese corrente.
+        Non contiene nessuna stima fiscale.
+        """
+        return dashboard_tools.get_economic_dashboard(
+            context, PeriodoQuery.model_validate({"da": da, "a": a})
+        )
+
     # ---- documents ---------------------------------------------------------
     # The download of bytes never goes through MCP (spec 7): a tool returning a
     # base64 PDF inside a model's own context is waste and risk. Every tool below

@@ -421,10 +421,17 @@ def test_a_readonly_actor_sees_the_whole_dashboard(seeded: Seeded) -> None:
     assert result.offerte_in_attesa
 
 
-def test_the_service_has_exactly_one_public_method_in_6b() -> None:
-    """Sub-plan 6C appends two more, each with its own tool. Pinned here so a method added
-    without a tool fails in this file rather than in the architecture test, where the
-    message is about a list."""
+def test_the_service_has_exactly_the_dashboards_that_exist() -> None:
+    """One entry per dashboard, and each of them with its own MCP tool. Pinned here so a
+    method added without a tool fails in this file rather than in the architecture test,
+    where the message is about a list.
+
+    6B shipped one; Task C4 added `get_economic_dashboard` and registered its tool in the
+    same commit, for the reason `tools/__init__.py` records beside it. Task C6 adds
+    `get_operational_dashboard` and must extend this set in *its* commit -- widening it
+    ahead of the method would leave the assertion green over a method that does not exist,
+    which is the shape of a pin that has stopped pinning.
+    """
     import inspect
 
     public = {
@@ -432,7 +439,7 @@ def test_the_service_has_exactly_one_public_method_in_6b() -> None:
         for name, member in inspect.getmembers(DashboardService, predicate=inspect.isfunction)
         if not name.startswith("_") and member.__qualname__.startswith("DashboardService.")
     }
-    assert public == {"get_commercial_dashboard"}
+    assert public == {"get_commercial_dashboard", "get_economic_dashboard"}
 
 
 def test_the_service_never_writes(seeded: Seeded) -> None:
