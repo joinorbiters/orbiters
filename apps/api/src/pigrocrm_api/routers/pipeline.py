@@ -1,7 +1,10 @@
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Query, status
 
+from pigrocrm.core.activities.schemas import ActivityRead
+from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.pipeline.schemas import (
     PipelineStageCreate,
     PipelineStageRead,
@@ -43,3 +46,17 @@ def seed(session: SessionDep, actor: ActorDep) -> list[PipelineStageRead]:
     here -- see that method's docstring. This router is back to the same
     validate/resolve/call/serialize shape as every other endpoint."""
     return PipelineService(session).seed_defaults(actor)
+
+
+@router.get("/{stage_id}/timeline", response_model=list[ActivityRead])
+def timeline(
+    stage_id: UUID,
+    session: SessionDep,
+    actor: ActorDep,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> list[ActivityRead]:
+    """Administrators only, matching who may change a stage. Deliberately still
+    answerable after the stage is gone: `delete` is the one hard DELETE in the domain,
+    and the entry it leaves is the only remaining record that the stage existed."""
+    actor.require_admin("read_pipeline_stage_timeline")
+    return ActivityService(session).timeline("pipeline_stage", stage_id, limit)
