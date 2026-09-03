@@ -343,7 +343,18 @@ class TimeEntryService:
         (§2.2, last row)."""
         actor.require_write("delete_time_entry")
         entry = self._require(entry_id)
-        if billed_entry_ids(self.session, [entry]):
+        # `invoice_line_id is not None`, and deliberately **not** `billed_entry_ids`.
+        # That helper answers "bound to a line of an *issued* invoice", which is the
+        # right question for freezing a rate and the wrong one here: the database's own
+        # `ck_time_entries_billed_not_deleted` is `deleted_at IS NULL OR invoice_line_id
+        # IS NULL`, which does not care what state the invoice is in.
+        #
+        # With the narrower guard, an entry bound to a *draft* line — which is what
+        # `bind_time_to_invoice` produces, and the ordinary case between choosing the
+        # hours and issuing — sailed past this check and hit the CHECK at commit. The
+        # user got a 500 carrying a `CheckViolation`, instead of the sentence written
+        # immediately below, which was already the correct thing to say to them.
+        if entry.invoice_line_id is not None:
             raise Conflict(
                 ENTITY,
                 "la voce è legata a una riga di fattura: scollegala prima di cancellarla",

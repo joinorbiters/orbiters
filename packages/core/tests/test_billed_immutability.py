@@ -69,6 +69,43 @@ def test_an_hour_on_a_draft_invoice_is_still_editable(
     )
 
 
+def test_deleting_an_hour_bound_to_a_draft_is_refused_in_words_not_in_a_500(
+    db_session: Session,
+    seeded_deal_id: UUID,
+    seeded_user_id: UUID,
+    draft_invoice_line_id: UUID,
+) -> None:
+    """Editable is not deletable, and the two guards ask different questions.
+
+    `billed_entry_ids` answers "bound to a line of an *issued* invoice", which is the
+    right question for freezing a rate and the wrong one for deletion: the database's
+    own `ck_time_entries_billed_not_deleted` is `deleted_at IS NULL OR invoice_line_id
+    IS NULL`, and does not care what state the invoice is in.
+
+    While `soft_delete` guarded on the narrower one, an entry bound to a *draft* line --
+    which is exactly what `bind_time_to_invoice` produces, in the ordinary window between
+    choosing the hours and issuing -- passed the check and hit the CHECK at commit. The
+    caller got a 500 carrying a `CheckViolation` instead of the sentence the service had
+    already written for them. Found by review and reproduced against real Postgres; this
+    is the test that was missing, because the neighbouring one exercises the constraint
+    through raw SQL and never through the service.
+    """
+    service = TimeEntryService(db_session)
+    entry_id = _log(service, seeded_deal_id, seeded_user_id)
+    entry = _bind(db_session, entry_id, draft_invoice_line_id)
+    # The precondition that makes this test about the gap rather than about the freeze.
+    assert billed_entry_ids(db_session, [entry]) == set()
+
+    with pytest.raises(Conflict) as caught:
+        service.soft_delete(entry_id, WRITER)
+    assert "scollegala" in caught.value.message
+
+    # Refused, not merely complained about: the row is still there and still undeleted.
+    db_session.rollback()
+    survivor = db_session.get(TimeEntry, entry_id)
+    assert survivor is not None and survivor.deleted_at is None
+
+
 def test_issuing_the_invoice_freezes_the_bound_hour(
     db_session: Session,
     seeded_deal_id: UUID,
