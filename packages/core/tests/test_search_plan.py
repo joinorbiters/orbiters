@@ -61,6 +61,7 @@ from corpus import INFLATED, build_corpus
 from sqlalchemy import Engine, delete, event, func, select, text
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.activities.repository import ActivityRepository
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.db import session_factory
@@ -460,3 +461,106 @@ def test_the_assertion_fails_for_a_predicate_the_index_cannot_serve(
     )
     with pytest.raises(AssertionError, match="sequentially scanned customers"):
         _assert_served_by_its_trigram_indexes(_BRANCHES[0], _TERM_UNSELECTIVE, [plan])
+
+
+# --- the global activity feed (slice 6 §6.1, §7.3) -----------------------------------
+#
+# Not a search branch, and it lives here anyway for the one reason this file exists: a
+# plan assertion needs a table big enough that a sequential scan is not simply the
+# cheapest plan. `activities` is empty in every other test -- they all roll back -- so the
+# rows are planted committed and removed again, exactly as `inflated` does for the four
+# searched tables.
+#
+# The rows carry a `kind` nothing else writes, and the cleanup deletes by that `kind`
+# rather than truncating: `activities` is the one table a stray committed row in would be
+# invisible to every schema check and visible to every later feed assertion.
+
+_FEED_PROBE_KIND = "feed_plan_probe"
+_FEED_PROBE_ROWS = 5_000
+
+
+@pytest.fixture
+def activity_feed_corpus(inflated: Engine) -> Iterator[Session]:
+    """`_FEED_PROBE_ROWS` committed activities, analysed, then removed.
+
+    Inserted with one `generate_series` statement rather than through `ActivityService`:
+    five thousand ORM flushes would cost more than the corpus this fixture hangs off, and
+    nothing about the plan depends on how the rows got there. Distinct `occurred_at` values
+    one second apart, so the ordering the index serves is a real ordering and not five
+    thousand ties.
+
+    `ANALYZE` and not `VACUUM (ANALYZE)`: the metapage statistics the module docstring is
+    about belong to GIN indexes. This one is a B-tree, whose selectivity the planner reads
+    from the ordinary column statistics `ANALYZE` writes.
+    """
+    factory = session_factory(inflated)
+    try:
+        with factory() as session:
+            session.execute(
+                text(
+                    "INSERT INTO activities "
+                    "(id, entity_type, entity_id, kind, actor_type, payload, occurred_at) "
+                    "SELECT gen_random_uuid(), 'deal', gen_random_uuid(), :kind, 'system', "
+                    "'{}'::jsonb, "
+                    "TIMESTAMPTZ '2026-01-01 00:00:00+00' + (g * interval '1 second') "
+                    "FROM generate_series(1, :rows) AS g"
+                ),
+                {"kind": _FEED_PROBE_KIND, "rows": _FEED_PROBE_ROWS},
+            )
+            session.execute(text("ANALYZE activities"))
+            session.commit()
+        with factory() as session:
+            yield session
+    finally:
+        with factory() as session:
+            session.execute(
+                text("DELETE FROM activities WHERE kind = :kind"), {"kind": _FEED_PROBE_KIND}
+            )
+            session.execute(text("ANALYZE activities"))
+            session.commit()
+
+
+def _feed_plan(session: Session) -> str:
+    """The plan of the statement `ActivityRepository.recent` actually sends.
+
+    Captured off the engine rather than written out here, for the reason this whole file
+    gives: a hand-written lookalike measures the lookalike, and a repository that lost its
+    `ORDER BY` would still pass a test that explained the SQL the test wrote itself.
+    """
+    captured = _capture(session, lambda: ActivityRepository(session).recent())
+    assert len(captured) == 1, captured
+    statement, parameters = captured[0]
+    return _explain(session, statement, parameters)
+
+
+def test_the_global_activity_feed_uses_its_own_index(activity_feed_corpus: Session) -> None:
+    """§6.1 and §7.3: no `Seq Scan` on `activities`.
+
+    `ix_activities_entity` puts the ordering column third and cannot serve a global feed
+    ordered by date, so a dedicated `(occurred_at DESC, id DESC)` index has to exist and
+    has to be chosen.
+    """
+    plan = _feed_plan(activity_feed_corpus)
+    assert "ix_activities_recent" in plan, plan
+    assert "Seq Scan on activities" not in plan, plan
+
+
+def test_the_feed_assertion_fails_without_its_index(activity_feed_corpus: Session) -> None:
+    """The falsifier, in the same shape as `test_the_assertion_fails_without_the_index`.
+
+    Without it the test above is a claim about five thousand rows that would pass on five,
+    where a sequential scan is simply the cheapest plan and the index name never appears
+    either. Dropped inside a savepoint so the rollback -- not a `CREATE INDEX` in a
+    `finally` that could itself fail -- is what puts it back.
+    """
+    savepoint = activity_feed_corpus.begin_nested()
+    try:
+        activity_feed_corpus.execute(text("DROP INDEX ix_activities_recent"))
+        degraded = _feed_plan(activity_feed_corpus)
+        assert "ix_activities_recent" not in degraded, degraded
+        assert "Seq Scan on activities" in degraded, degraded
+    finally:
+        savepoint.rollback()
+
+    # And it is back, so the falsifier cannot be why a later test passes or fails.
+    assert "ix_activities_recent" in _feed_plan(activity_feed_corpus)

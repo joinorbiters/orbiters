@@ -1,9 +1,12 @@
+from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.activities.models import Activity
+from pigrocrm.core.activities.repository import ActivityRepository
 from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.errors import ValidationFailed
@@ -209,3 +212,96 @@ def test_timeline_accepts_the_boundary_values(db_session: Session) -> None:
     assert service.timeline("customer", entity_id, limit=1) == service.timeline(
         "customer", entity_id, limit=200
     )
+
+
+# --- slice 6 §6.1: the global feed ---------------------------------------------------
+#
+# Planted with an explicit `occurred_at` rather than through `ActivityService.record`,
+# which stamps `datetime.now(UTC)`. Two rows written in one flush can land on the same
+# microsecond, and a test whose expected order depends on whether they did is a test that
+# fails once a month on a fast machine for no reason anybody can reproduce. Here the
+# instants are chosen, so the ordering assertion is about the query and nothing else.
+
+FEED_ORIGIN = datetime(2026, 3, 1, 9, 0, tzinfo=UTC)
+
+
+def _plant(session: Session, entity_type: str, n: int, *, minute: int) -> Activity:
+    activity = Activity(
+        entity_type=entity_type,
+        entity_id=uuid4(),
+        kind="created",
+        actor_id=USER.id,
+        actor_type=USER.type,
+        payload={"n": n},
+        occurred_at=FEED_ORIGIN + timedelta(minutes=minute),
+    )
+    session.add(activity)
+    session.flush()
+    return activity
+
+
+def test_recent_returns_the_newest_activities_across_every_entity(db_session: Session) -> None:
+    """§6.1's feed. Across every entity, which is what distinguishes it from `timeline`.
+
+    The rows are inserted in an order that is neither their chronological order nor its
+    reverse, so an implementation that returned them in insertion order -- which is what a
+    `select()` with no `ORDER BY` very often does on a freshly written table -- gives a
+    different answer from the one asserted.
+    """
+    _plant(db_session, "deal", 3, minute=3)
+    _plant(db_session, "customer", 102, minute=7)
+    _plant(db_session, "deal", 0, minute=0)
+    _plant(db_session, "customer", 100, minute=5)
+    _plant(db_session, "deal", 4, minute=4)
+    _plant(db_session, "customer", 101, minute=6)
+    _plant(db_session, "deal", 1, minute=1)
+    _plant(db_session, "deal", 2, minute=2)
+
+    rows = ActivityRepository(db_session).recent(limit=4)
+    assert len(rows) == 4
+    # Newest first, and both entity types present in the newest four -- the whole point of
+    # a feed that is not a timeline.
+    assert [row.payload["n"] for row in rows] == [102, 101, 100, 4]
+    assert {row.entity_type for row in rows} == {"customer", "deal"}
+
+
+def test_recent_is_bounded_by_its_limit(db_session: Session) -> None:
+    """Fifty rows at most and no cursor: a complete history is the entity's own timeline,
+    and a paginated global feed would be a second way to browse the same rows."""
+    for index in range(60):
+        _plant(db_session, "deal", index, minute=index)
+
+    repo = ActivityRepository(db_session)
+    assert len(repo.recent(limit=50)) == 50
+    # The default is the same fifty, so a caller that passes nothing gets the bounded feed
+    # rather than the whole table.
+    assert len(repo.recent()) == 50
+    assert [row.payload["n"] for row in repo.recent(limit=3)] == [59, 58, 57]
+
+
+def test_recent_breaks_the_tie_on_the_identifier(db_session: Session) -> None:
+    """`occurred_at` alone is not a total order: entries written in one transaction share
+    it to the microsecond often enough to matter, and a feed that reorders between reads
+    looks like data changing.
+
+    Every row here carries the *same* instant, so `ORDER BY occurred_at DESC` on its own
+    leaves the order entirely to the planner and this assertion is the tie-break's alone.
+    """
+    planted: list[UUID] = [_plant(db_session, "deal", index, minute=0).id for index in range(20)]
+
+    rows = ActivityRepository(db_session).recent(limit=20)
+    assert [row.id for row in rows] == sorted(planted, reverse=True)
+
+
+def test_recent_is_not_scoped_to_one_entity_the_way_timeline_is(db_session: Session) -> None:
+    """The two methods answer different questions, and the difference is observable: the
+    same rows, read one way, are one entity's history and read the other way are the
+    installation's."""
+    service = ActivityService(db_session)
+    mine = uuid4()
+    service.record("deal", mine, "created", USER)
+    service.record("deal", uuid4(), "created", USER)
+    db_session.flush()
+
+    assert len(service.timeline("deal", mine)) == 1
+    assert len(ActivityRepository(db_session).recent()) == 2

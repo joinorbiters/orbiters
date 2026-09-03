@@ -25,6 +25,30 @@ class ActivityRepository:
         )
         return list(self.session.execute(stmt).scalars())
 
+    def recent(self, limit: int = 50) -> list[Activity]:
+        """The global activity feed of §6.1: newest first, across every entity.
+
+        Not paginated, and fifty rows at most. A complete history of activity is the
+        entity's own `timeline`, which already exists; a paginated global feed would be a
+        second way to browse the same rows, with its own cursor to get wrong.
+
+        Served by `ix_activities_recent`, and `test_search_plan.py` asserts on the plan --
+        this query is fast either way on a small table and slow in production, which is the
+        combination a latency test cannot catch. `ix_activities_entity` cannot serve it:
+        its ordering column is third.
+
+        The `id` tie-break is the same one `timeline` and `by_kind` carry, for the same
+        reason: `occurred_at` has microsecond resolution and rows written in one
+        transaction can share it.
+        """
+        return list(
+            self.session.execute(
+                select(Activity)
+                .order_by(Activity.occurred_at.desc(), Activity.id.desc())
+                .limit(limit)
+            ).scalars()
+        )
+
     def by_kind(self, kinds: Sequence[str], limit: int = 20) -> list[Activity]:
         """Activities of the given kinds, newest first, across every entity.
 
