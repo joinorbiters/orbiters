@@ -15,7 +15,7 @@
  */
 
 /**
- * Renders an ISO `YYYY-MM-DD` string as `gg/mm/aaaa`.
+ * An ISO `YYYY-MM-DD` as a `Date` at *local* midnight, or `null` if it is not one.
  *
  * `new Date("2026-08-06")` parses as UTC *midnight*; formatting that with
  * `Intl.DateTimeFormat` renders it in whichever zone the browser is in. East of
@@ -23,22 +23,64 @@
  * UTC midnight is the previous evening, so the displayed date silently loses a day.
  * Building the `Date` from its year/month/day parts puts construction and formatting in
  * the same zone, so the calendar day survives wherever this runs.
+ *
+ * Two guards, not one. The `undefined` check is what all three original copies of this
+ * carried, and it is what `noUncheckedIndexedAccess` needs to narrow a `.split` result
+ * down to three numbers -- but it only catches a *short* value. `"non-una-data".split("-")`
+ * has exactly three parts, none of them `undefined`, all three `NaN`: it sailed past that
+ * guard, `new Date(NaN, NaN, NaN)` is an Invalid Date, and `Intl.DateTimeFormat.format`
+ * throws `RangeError: Invalid time value` on one. Every copy documented a fallback to the
+ * raw string and then crashed the surrounding cell instead. `Number.isFinite` is the half
+ * that was missing; it narrows nothing on its own (it is typed
+ * `(value: unknown) => boolean`), which is why both checks are here rather than one.
+ *
+ * Private, and returning `null` rather than the raw string, so that each formatter below
+ * decides its own fallback while there is exactly one place that knows the trap.
  */
-export function formatIsoDateItalian(value: string): string {
+function localDateFromIso(value: string): Date | null {
   const [year, month, day] = value.split('-').map(Number)
-  // Two guards, not one. The `undefined` check is what all three copies of this
-  // function carried, and it is what `noUncheckedIndexedAccess` needs to narrow a
-  // `.split` result down to three numbers -- but it only catches a *short* value.
-  // `"non-una-data".split("-")` has exactly three parts, none of them `undefined`, all
-  // three `NaN`: it sailed past that guard, `new Date(NaN, NaN, NaN)` is an Invalid
-  // Date, and `Intl.DateTimeFormat.format` throws `RangeError: Invalid time value` on
-  // one. Every copy documented a fallback to the raw string and then crashed the
-  // surrounding cell instead. `Number.isFinite` is the half that was missing; it
-  // narrows nothing on its own (it is typed `(value: unknown) => boolean`), which is
-  // why both checks are here rather than one.
-  if (year === undefined || month === undefined || day === undefined) return value
-  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return value
-  return new Intl.DateTimeFormat('it-IT').format(new Date(year, month - 1, day))
+  if (year === undefined || month === undefined || day === undefined) return null
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null
+  return new Date(year, month - 1, day)
+}
+
+/** Renders an ISO `YYYY-MM-DD` string as `gg/mm/aaaa`. */
+export function formatIsoDateItalian(value: string): string {
+  const local = localDateFromIso(value)
+  if (local === null) return value
+  return new Intl.DateTimeFormat('it-IT').format(local)
+}
+
+const dayMonthFormatter = new Intl.DateTimeFormat('it-IT', { day: '2-digit', month: '2-digit' })
+
+/**
+ * The same date as `gg/mm`, for a label that has to carry a day without the year.
+ *
+ * Zero-padded, which `it-IT`'s own default is not: `Intl.DateTimeFormat('it-IT').format`
+ * renders 19 March as `19/3/2026`, so a column of dates would not line up and `19/03`
+ * would not be findable. The dashboard's week of missing days is the call site this
+ * exists for; the year is redundant there because the heading already names the week.
+ */
+export function formatIsoDayMonth(value: string): string {
+  const local = localDateFromIso(value)
+  if (local === null) return value
+  return dayMonthFormatter.format(local)
+}
+
+const weekdayFormatter = new Intl.DateTimeFormat('it-IT', { weekday: 'short' })
+
+/**
+ * The weekday of an ISO date, abbreviated: `lun`, `mar`, ...
+ *
+ * A seven-column week is read by weekday, not by date -- and a date under each column
+ * would also make a day that *was* logged with zero hours indistinguishable, in a text
+ * search, from one that was never logged at all. The days actually missing are named
+ * with `formatIsoDayMonth` where that distinction is the point.
+ */
+export function formatIsoWeekday(value: string): string {
+  const local = localDateFromIso(value)
+  if (local === null) return value
+  return weekdayFormatter.format(local)
 }
 
 /**

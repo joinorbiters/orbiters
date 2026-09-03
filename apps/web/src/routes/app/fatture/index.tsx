@@ -1,6 +1,7 @@
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import { DataTable } from '@/components/DataTable'
+import { Button } from '@/components/ui/button'
 import {
   Select,
   SelectContent,
@@ -9,6 +10,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { buildInvoiceColumns } from '@/features/invoices/columns'
+import { booleanSearchParam } from '@/lib/searchParams'
 import {
   INVOICE_STATE_LABELS,
   useInvoices,
@@ -33,15 +35,24 @@ const STATI = [
 
 function InvoicesPage() {
   const navigate = useNavigate()
+  const { scadute } = Route.useSearch()
   const [tipo, setTipo] = useState(ANY)
   const [stato, setStato] = useState(ANY)
 
   // Cast at the boundary, not in the state: `Select` deals in strings, and the two
   // option lists are built from the same constants the API's literals come from, so a
   // value that is not a legal `InvoiceTipo`/`InvoiceStato` cannot be produced here.
+  //
+  // `scadute` comes from the URL rather than from a control, because it is a
+  // drill-through and not a filter of this page's own: the operational dashboard counts
+  // overdue invoices with `_overdue_predicate` in `InvoiceRepository`, and this list is
+  // the same predicate evaluated on the same rows (criterion 2). Re-deciding "overdue"
+  // here -- comparing `data_scadenza` against today's date in the browser -- is how the
+  // count and the list start disagreeing on an invoice due today.
   const invoices = useInvoices({
     tipo: tipo === ANY ? undefined : (tipo as InvoiceTipo),
     stato: stato === ANY ? undefined : (stato as InvoiceStato),
+    scadute,
   })
 
   const columns = buildInvoiceColumns()
@@ -56,6 +67,23 @@ function InvoicesPage() {
           vengono emesse.
         </p>
       </header>
+
+      {scadute === true && (
+        <p
+          role="status"
+          className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm"
+        >
+          <span>
+            <strong>Scadute e non incassate</strong> — solo le fatture emesse la cui scadenza è
+            passata e che non risultano incassate. Togli il filtro per vedere tutte le fatture.
+          </span>
+          <Button variant="outline" size="sm" asChild>
+            <Link to="/app/fatture" search={{}}>
+              Rimuovi il filtro
+            </Link>
+          </Button>
+        </p>
+      )}
 
       <div className="mb-4 flex gap-3">
         <Select value={tipo} onValueChange={setTipo}>
@@ -100,4 +128,12 @@ function InvoicesPage() {
   )
 }
 
-export const Route = createFileRoute('/app/fatture/')({ component: InvoicesPage })
+export const Route = createFileRoute('/app/fatture/')({
+  component: InvoicesPage,
+  // Declared so the operational dashboard can link here with its "scaduto e non incassato"
+  // drill-through: `<Link to={...} search={...} />` is typed against this function's
+  // *return* type. `scadute` is the only search param this list reads.
+  validateSearch: (search: Record<string, unknown>): { scadute?: boolean } => ({
+    scadute: booleanSearchParam(search.scadute),
+  }),
+})

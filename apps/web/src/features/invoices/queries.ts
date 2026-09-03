@@ -29,6 +29,15 @@ export interface InvoiceFilters {
   stato?: InvoiceStato
   anno?: number
   stato_pagamento?: StatoPagamento
+  /**
+   * The "scaduto e non incassato" drill-through of the operational dashboard (slice 6
+   * §6.2). Server-side, and not a filter applied to the fetched page here, because the
+   * card's count and this list share one predicate in `InvoiceRepository`
+   * (`_overdue_predicate`): a second version of "overdue" written in the browser would
+   * disagree with the count beside it on exactly the boundary cases -- an invoice due
+   * today, one already collected -- that the predicate exists to settle.
+   */
+  scadute?: boolean
   limit?: number
   cursor?: string
 }

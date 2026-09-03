@@ -6,6 +6,9 @@ import { queryKeys } from '@/lib/query'
 import type { Periodo } from './periodo'
 
 export type CommercialDashboard = components['schemas']['CommercialDashboard']
+export type EconomicDashboard = components['schemas']['EconomicDashboard']
+export type OperationalDashboard = components['schemas']['OperationalDashboard']
+export type Signal = components['schemas']['Signal']
 export type PipelineStageSummary = components['schemas']['PipelineStageSummary']
 export type PendingOffer = components['schemas']['PendingOffer']
 export type AutomationsDescription = components['schemas']['AutomationsDescription']
@@ -22,6 +25,26 @@ export function useCommercialDashboard(periodo: Periodo) {
   return useQuery({
     queryKey: queryKeys.dashboard('commerciale', periodo),
     queryFn: () => unwrap(api.GET('/api/dashboard/commerciale', { params: { query: periodo } })),
+    staleTime: DASHBOARD_STALE_MS,
+  })
+}
+
+export function useEconomicDashboard(periodo: Periodo) {
+  return useQuery({
+    queryKey: queryKeys.dashboard('economica', periodo),
+    queryFn: () => unwrap(api.GET('/api/dashboard/economica', { params: { query: periodo } })),
+    staleTime: DASHBOARD_STALE_MS,
+  })
+}
+
+export function useOperationalDashboard() {
+  return useQuery({
+    // An empty params object in the key, not the period: §6's dashboard is the current week
+    // and a backlog, so there is no period in the question and none in what identifies the
+    // answer. The `['dashboard']` prefix is still the first element, which is what
+    // `useUpdateAutomationConfig`'s prefix invalidation relies on.
+    queryKey: queryKeys.dashboard('operativa', {}),
+    queryFn: () => unwrap(api.GET('/api/dashboard/operativa')),
     staleTime: DASHBOARD_STALE_MS,
   })
 }
