@@ -818,6 +818,13 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
 
     @mcp.tool()
     @guard
+    def list_invoice_register_gaps(anno: int) -> list[dict[str, Any]]:
+        """I numeri che il registro di `anno` non porta per dichiarazione esplicita, con
+        il motivo. Vuoto se non ci sono buchi dichiarati."""
+        return invoices.list_register_gaps(context, anno)
+
+    @mcp.tool()
+    @guard
     def get_invoice(invoice_id: str) -> dict[str, Any]:
         """Legge una fattura o una proforma: numero, stato, totali e righe."""
         return invoices.get(context, invoice_id)

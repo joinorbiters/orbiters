@@ -58,6 +58,17 @@ def search(context: McpContext, query: InvoiceListQuery) -> dict[str, Any]:
     }
 
 
+def list_register_gaps(context: McpContext, anno: int) -> list[dict[str, Any]]:
+    """Every table row is a fact somebody already declared, never a computation: this
+    reads `register_gaps` (the same query `GET /api/invoices/register/{anno}/gaps`
+    answers), it writes nothing, and it needs nothing an installation has to open --
+    unlike `import_issued_invoice`/`declare_invoice_register_gaps`, which write the
+    register and stay behind `mcp_full_access`."""
+    return [
+        g.model_dump(mode="json") for g in _invoices(context).register_gaps(anno, context.actor)
+    ]
+
+
 def get(context: McpContext, invoice_id: str) -> dict[str, Any]:
     service = _invoices(context)
     invoice = service.get(UUID(invoice_id), context.actor)

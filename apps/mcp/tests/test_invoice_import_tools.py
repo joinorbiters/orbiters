@@ -151,3 +151,29 @@ async def test_import_registers_the_invoice_and_names_the_gaps(
         # And the gap really is declared now: nothing left undeclared for the year.
         after = await client.call_tool("import_issued_invoice", {"dati": _dati(10, "2026-06-06")})
         assert _payload(after)["buchi_non_dichiarati"] == []
+
+
+async def test_list_invoice_register_gaps_reads_what_was_declared(
+    mcp_session: Session, tmp_path: Path
+) -> None:
+    """`list_invoice_register_gaps` is a plain read: it stays on the surface of a
+    default installation, unlike the two tools above -- it writes nothing and reads a
+    table the REST API's `GET /api/invoices/register/{anno}/gaps` already exposes."""
+    names = {
+        tool.name for tool in await _server(mcp_session, tmp_path, full_access=False).list_tools()
+    }
+    assert "list_invoice_register_gaps" in names
+    assert not {"import_issued_invoice", "declare_invoice_register_gaps"} <= names
+
+    async with Client(_server(mcp_session, tmp_path, full_access=True)) as client:
+        await client.call_tool(
+            "declare_invoice_register_gaps",
+            {"anno": 2027, "buchi": [{"numero": 3, "motivo": "annullata in the previous system"}]},
+        )
+
+    async with Client(_server(mcp_session, tmp_path, full_access=False)) as client:
+        result = await client.call_tool("list_invoice_register_gaps", {"anno": 2027})
+        rows = _payload(result)
+        rows = rows["result"] if isinstance(rows, dict) and "result" in rows else rows
+        assert rows[0]["numero"] == 3
+        assert rows[0]["motivo"] == "annullata in the previous system"
