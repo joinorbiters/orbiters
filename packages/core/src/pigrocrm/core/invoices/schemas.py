@@ -286,7 +286,13 @@ class InvoiceImport(BaseModel):
 
     `anno`/`numero` come from the caller because they are facts about a document that
     exists; the counter follows them (§3.2 rule 3). Totals are declared **and** verified,
-    never recomputed: the document commands, the CRM checks the sums."""
+    never recomputed: the document commands, the CRM checks the sums.
+
+    No `riferimento`: `invoices.riferimento` is constrained by
+    `ck_invoices_riferimento_only_on_proforma` to `NULL` on every `tipo = 'fattura'`
+    row, and an import always produces a `fattura`. the previous system's free-text description
+    belongs in `causale` and in the line's own `descrizione`.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -297,7 +303,6 @@ class InvoiceImport(BaseModel):
     customer_id: UUID
     deal_id: UUID | None = None
     causale: SafeStr | None = Field(default=None, max_length=CAUSALE_MAX_LENGTH)
-    riferimento: SafeStr | None = Field(default=None, max_length=RIFERIMENTO_MAX_LENGTH)
     righe: list[InvoiceLineImport] = Field(min_length=1, max_length=MAX_LINES)
     imponibile: Decimal = Field(max_digits=MONEY_MAX_DIGITS, decimal_places=MONEY_DECIMAL_PLACES)
     imposta: Decimal = Field(max_digits=MONEY_MAX_DIGITS, decimal_places=MONEY_DECIMAL_PLACES)

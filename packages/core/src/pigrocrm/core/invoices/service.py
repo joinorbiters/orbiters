@@ -825,12 +825,26 @@ class InvoiceService:
         self._check_owner(data.customer_id, data.deal_id)
         self._check_import_date(data.data_emissione)
         self._check_declared_totals(data)
+        if data.anno != data.data_emissione.year:
+            raise ValidationFailed(
+                ENTITY,
+                "anno",
+                "l'anno del registro deve essere quello della data di emissione",
+                expected=f"anno = {data.data_emissione.year}",
+            )
         if data.stato_pagamento == "incassato" and data.data_incasso is None:
             raise ValidationFailed(
                 ENTITY,
                 "data_incasso",
                 "un incasso senza data non e' un incasso",
                 expected="la data in cui il pagamento e' arrivato",
+            )
+        if data.stato_pagamento != "incassato" and data.data_incasso is not None:
+            raise ValidationFailed(
+                ENTITY,
+                "data_incasso",
+                "una data di incasso senza incasso non ha senso",
+                expected="stato_pagamento = incassato, oppure nessuna data",
             )
         counter = self.repo.lock_counter(data.anno)
         if data.numero in self.repo.numbers_present(data.anno):
@@ -884,7 +898,6 @@ class InvoiceService:
                 stato="emessa",
                 anno=data.anno,
                 numero=data.numero,
-                riferimento=data.riferimento,
                 data_emissione=data.data_emissione,
                 data_scadenza=data.data_scadenza
                 or data.data_emissione + timedelta(days=profile.giorni_scadenza),
