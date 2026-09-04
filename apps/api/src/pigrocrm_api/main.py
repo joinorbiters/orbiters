@@ -15,6 +15,7 @@ from pigrocrm_api.routers import (
     dashboard,
     deals,
     documents,
+    drive,
     email_drafts,
     emitter,
     fields,
@@ -78,6 +79,7 @@ def create_app() -> FastAPI:
         period_locks,
         analytics,
         gmail,
+        drive,
         email_drafts,
         payment_reminders,
         # Slice 6. The tuple is grouped by slice rather than sorted -- the import list
