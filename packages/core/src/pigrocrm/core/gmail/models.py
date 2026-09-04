@@ -102,6 +102,13 @@ class GoogleOAuthState(Base, PrimaryKeyMixin, TimestampMixin):
 
     Expired rows are pruned on each sync cycle -- unlike `refresh_tokens`, which
     residuo R8 records as never pruned at all.
+
+    `purpose` is what spec 9 §5.2 adds for the Drive credential: one in-flight
+    authorisation registry serves both flows, so the callback for one cannot be replayed
+    as if it belonged to the other. It defaults to `"gmail"` because every row this table
+    held before Drive existed was one, and the existing Gmail flow never sets it -- the
+    column has to keep meaning "this state started a Gmail connection" for a row nobody
+    touched, not "this state's purpose happens to be unknown".
     """
 
     __tablename__ = "google_oauth_states"
@@ -113,6 +120,7 @@ class GoogleOAuthState(Base, PrimaryKeyMixin, TimestampMixin):
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    purpose: Mapped[str] = mapped_column(String(10), nullable=False, default="gmail")
 
 
 class GmailMessage(Base, PrimaryKeyMixin, TimestampMixin):

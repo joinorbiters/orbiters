@@ -1,0 +1,98 @@
+"""Schemas for the Drive credential (spec 9 §5.2) -- a second grant, kept apart from
+Gmail's own `gmail/schemas.py` the same way `drive/models.py` keeps
+`GoogleDriveAccount` apart from `GoogleAccount`: two independent OAuth grants, not one
+wider one.
+"""
+
+from datetime import datetime
+from typing import Annotated, Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from pigrocrm.core.validation import SafeStr
+
+# A Drive file id, never a query nor free text: Google mints these as URL-safe base64
+# strings, in practice a good deal longer than ten characters, but there is no published
+# minimum. Ten is a floor generous enough to admit every real id while still refusing the
+# obviously-wrong single-character or few-character inputs a typo would produce, and it
+# is what makes `DriveRootsUpdate` reject a Drive *query* -- `'x' in parents or name
+# contains 'a'` -- outright rather than forwarding it to the Drive API as a folder id.
+_DRIVE_ID_PATTERN = r"^[A-Za-z0-9_-]{10,128}$"
+_DriveId = Annotated[SafeStr, Field(pattern=_DRIVE_ID_PATTERN)]
+
+DRIVE_SCOPE_READONLY = "https://www.googleapis.com/auth/drive.readonly"
+DRIVE_SCOPE_FILE = "https://www.googleapis.com/auth/drive.file"
+# `openid` + `email` identify *which* Google identity was connected, the same reason
+# `gmail/schemas.py`'s `REQUESTED_SCOPES` carries them: without the stable `sub` there is
+# no way to refuse a reconnection that points at a different account by mistake.
+# `drive.readonly` is what lets the CRM read the configured root folders;
+# `drive.file` is the narrower grant that lets it write only what it itself created,
+# which is what `storage_folder_id` writes into.
+DRIVE_REQUESTED_SCOPES: tuple[str, ...] = (
+    "openid",
+    "email",
+    DRIVE_SCOPE_READONLY,
+    DRIVE_SCOPE_FILE,
+)
+
+# The same four values, and the same distinction between them, as `gmail/schemas.py`'s
+# `GmailStatus` -- see `GoogleDriveAccount.status`'s docstring for why the four are kept
+# apart from `GmailStatus` rather than shared with it.
+DriveStatus = Literal["active", "expired", "revoked", "disconnected"]
+
+
+class GoogleDriveAccountRead(BaseModel):
+    """What the settings page shows for the Drive connection. No token, in either form:
+    not the plaintext, not the ciphertext, not the nonce -- the same rule as
+    `GoogleAccountRead`."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    email_address: str
+    scopes_granted: list[str]
+    status: DriveStatus
+    consent_expires_at: datetime | None
+    root_folder_ids: list[str]
+    storage_folder_id: str | None
+    last_error: str | None
+    last_error_at: datetime | None
+    connected_at: datetime
+    disconnected_at: datetime | None
+
+
+# The four things that can be wrong, and `None` for "nothing is" -- the Drive twin of
+# `gmail/schemas.py`'s `GmailBannerReason`. `disconnected` is absent for the same reason
+# it is absent there: a Drive the user unhooked on purpose is not a fault to warn about.
+DriveBannerReason = Literal["revoked", "expiring", "expired", "scope_missing"] | None
+
+
+class DriveHealth(BaseModel):
+    """Everything the shell banner needs for Drive, in one response -- the Drive twin of
+    `gmail/schemas.py`'s `GmailHealth`, including its two reasons for existing:
+    `banner_text` is a distinct field because the action behind each reason differs, and
+    `configured` is what tells an installation with no Google client apart from an owner
+    who simply has not connected Drive yet, which `account is None` alone cannot."""
+
+    account: GoogleDriveAccountRead | None
+    banner: DriveBannerReason
+    banner_text: str | None
+    missing_scopes: list[str]
+    configured: bool
+
+
+class DriveRootsUpdate(BaseModel):
+    """Which folders the CRM may read from, and which one it may write generated
+    documents into.
+
+    Both fields hold Drive file ids and nothing else -- `_DriveId`'s pattern is what
+    keeps a Drive *query* (`'x' in parents or name contains 'a'`, valid syntax for
+    `files.list`'s `q` parameter) from ever reaching this table disguised as a folder id.
+    `extra="forbid"` is not needed here the way it is on the wider Create/Update schemas
+    elsewhere: there are only the two fields a Drive configuration has, and nothing else
+    to guard against.
+    """
+
+    root_folder_ids: list[_DriveId] = Field(min_length=1, max_length=20)
+    storage_folder_id: _DriveId | None = None
