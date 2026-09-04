@@ -203,19 +203,26 @@ def register(
         `totale`, `stato_pagamento`, `data_incasso` (richiesta se incassato),
         `trasmessa_esternamente_il`, `pdf_sorgente` {document_id}, `note_interne` e
         `importata_da` (fisso a `"the previous system"`, l'unica provenienza che questa fetta importa).
-        I totali devono tornare al centesimo. La descrizione libera di the previous system (es.
+        I totali devono tornare al centesimo: `imponibile` uguale alla somma dei
+        `prezzo_totale` di riga e `imponibile + imposta` uguale a `totale`. Il `bollo` si
+        dichiara a parte e **non** entra nel totale (lo assolve l'emittente in modo
+        virtuale), esattamente come per una fattura emessa da PigroCRM. La descrizione
+        libera di the previous system (es.
         "900142/0426/...") va in `causale` e nella `descrizione` della riga, mai in un
         campo a se stante: `InvoiceImport` non ha un `riferimento`, riservato alle
         proforma.
 
-        La riga entra nel registro gia' **emessa**, con il suo numero: l'unica via
-        indietro e' `annul_invoice`, che lascia comunque traccia e non libera il
-        numero. La risposta elenca in `buchi_non_dichiarati` i numeri che mancano fra
+        La riga entra nel registro gia' **emessa**, con il suo numero, e **l'import non
+        si disfa**: se `trasmessa_esternamente_il` e' valorizzato -- come per una fattura
+        gia' trasmessa allo SdI da the previous system, cioe' il caso normale qui -- nemmeno
+        `annul_invoice` la annulla, perche' da quel punto la correzione e' una nota di
+        credito che PigroCRM non emette. Verifica i dati **prima** di chiamare.
+        La risposta elenca in `buchi_non_dichiarati` i numeri che mancano fra
         quelli importati: vanno dichiarati con `declare_invoice_register_gaps` prima che
         PigroCRM possa emettere la fattura successiva.
         """
         service = InvoiceService(context.session, context.storage)
-        payload = InvoiceImport(**dati)
+        payload = InvoiceImport.model_validate(dati)
         fattura = service.import_issued(payload, context.actor)
         return {
             "fattura": fattura.model_dump(mode="json"),
@@ -234,7 +241,9 @@ def register(
         fatture in quell'anno e' bloccata.
         """
         service = InvoiceService(context.session, context.storage)
-        result = service.declare_gaps(anno, RegisterGapsDeclare(buchi=buchi), context.actor)  # type: ignore[arg-type]
+        result = service.declare_gaps(
+            anno, RegisterGapsDeclare.model_validate({"buchi": buchi}), context.actor
+        )
         return [g.model_dump(mode="json") for g in result]
 
     # ---- rates, and rewriting what work was worth -----------------------------------

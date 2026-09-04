@@ -99,8 +99,11 @@ def _body(customer_id: str, numero: int, giorno: str) -> dict[str, Any]:
         ],
         "imponibile": "2700.00",
         "imposta": "0.00",
+        # The stamp is declared beside the total, never inside it: the identity the
+        # service checks is `imponibile + imposta == totale` (slice 3 `sum_totals`, and
+        # the previous system's own register, whose «Totale» column always equals «Imp. Reddito»).
         "bollo": "2.00",
-        "totale": "3422.00",
+        "totale": "2700.00",
         "stato_pagamento": "incassato",
         "data_incasso": "2026-05-20",
     }
@@ -112,20 +115,23 @@ def test_an_admin_imports_and_sees_the_undeclared_gaps(
     fiscal_profile: dict[str, Any],
     emitter: dict[str, Any],
 ) -> None:
-    first = logged_in.post("/api/invoices/import", json=_body(customer["id"], 7, "2026-05-05"))
+    # Numero 1 first, so the register starts where a register starts: the undeclared-gap
+    # scan runs from 1, so importing a 7 on its own would (correctly) report the six
+    # holes underneath it, which is a different fact from the one this test is about.
+    first = logged_in.post("/api/invoices/import", json=_body(customer["id"], 1, "2026-05-05"))
     assert first.status_code == 201, first.text
     assert first.json()["fattura"]["importata_da"] == "the previous system"
     assert first.json()["buchi_non_dichiarati"] == []
 
-    second = logged_in.post("/api/invoices/import", json=_body(customer["id"], 9, "2026-06-05"))
+    second = logged_in.post("/api/invoices/import", json=_body(customer["id"], 3, "2026-06-05"))
     assert second.status_code == 201, second.text
-    assert second.json()["buchi_non_dichiarati"] == [8]
+    assert second.json()["buchi_non_dichiarati"] == [2]
 
     gaps = logged_in.post(
-        "/api/invoices/register/2026/gaps", json={"buchi": [{"numero": 8, "motivo": "annullata"}]}
+        "/api/invoices/register/2026/gaps", json={"buchi": [{"numero": 2, "motivo": "annullata"}]}
     )
     assert gaps.status_code == 200, gaps.text
-    assert [g["numero"] for g in gaps.json()] == [8]
+    assert [g["numero"] for g in gaps.json()] == [2]
     assert logged_in.get("/api/invoices/register/2026/gaps").json()[0]["motivo"] == "annullata"
 
     # No artefact is produced by an import (the router's own docstring says so): the
@@ -154,3 +160,15 @@ def test_a_collaborator_cannot_import(logged_in: TestClient, customer: dict[str,
         "/api/invoices/import", json=_body(customer["id"], 7, "2026-05-05")
     )
     assert response.status_code == 403, response.text
+
+
+def test_a_number_beyond_the_register_is_a_422(
+    logged_in: TestClient, customer: dict[str, Any]
+) -> None:
+    """`MAX_NUMERO` is a bound on `InvoiceImport`, so FastAPI refuses the body before the
+    router builds a service or the service takes the year's counter lock -- a 422 from
+    the schema, not a 409 from the register."""
+    response = logged_in.post(
+        "/api/invoices/import", json=_body(customer["id"], 900142, "2026-05-05")
+    )
+    assert response.status_code == 422, response.text
