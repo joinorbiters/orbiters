@@ -112,6 +112,8 @@ Non esiste nessun utente né password di default (la lezione diretta delle crede
 hardcoded di the previous system):
 
 ```
+# I dati di Postgres stanno sull'host in PIGROCRM_DATA_DIR (vedi .env.example): un reset di
+# Docker non li tocca. Backup: `scripts/backup-db.sh` (pg_dumpall datato, ultimi 30 tenuti).
 docker compose exec api uv run --no-sync pigrocrm createadmin --email admin@tuodominio.it --nome "Nome Cognome"
 ```
 

@@ -23,3 +23,5 @@ dist/
 
 # Storage locale dei documenti (LocalFileStorage)
 var/
+# Postgres data when PIGROCRM_DATA_DIR is left at its default
+data/
