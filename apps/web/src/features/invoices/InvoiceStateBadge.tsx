@@ -20,5 +20,14 @@ const STATE_VARIANT: Record<InvoiceStato, 'default' | 'secondary' | 'destructive
  *  state. The other three entity screens split them the same way. */
 export function InvoiceStateBadge({ invoice }: { invoice: Invoice }) {
   const stato = invoice.stato as InvoiceStato
-  return <Badge variant={STATE_VARIANT[stato] ?? 'secondary'}>{INVOICE_STATE_LABELS[stato]}</Badge>
+  return (
+    <span className="inline-flex gap-1">
+      <Badge variant={STATE_VARIANT[stato] ?? 'secondary'}>{INVOICE_STATE_LABELS[stato]}</Badge>
+      {invoice.importata_da != null ? (
+        <Badge variant="outline">
+          importata da {invoice.importata_da === 'acme' ? 'Acme' : invoice.importata_da}
+        </Badge>
+      ) : null}
+    </span>
+  )
 }
