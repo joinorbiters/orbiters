@@ -12,6 +12,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -1026,7 +1027,52 @@ class InvoiceService:
             )
 
     def _adopt_original_pdf(self, invoice: Invoice, document_id: UUID) -> UUID:
-        raise NotImplementedError  # Task 6
+        """Link the PDF the customer actually received. Never rendered: a PDF produced
+        today with today's layout would not be that document (§3.5)."""
+        document = self.documents.repo.get(document_id)
+        if document is None or document.deleted_at is not None:
+            raise NotFound("document", document_id)
+        if document.tipo != "fattura":
+            raise ValidationFailed(
+                ENTITY,
+                "pdf_sorgente",
+                "il documento non e' di tipo fattura",
+                expected="un documento con tipo 'fattura'",
+            )
+        if document.customer_id != invoice.customer_id:
+            raise ValidationFailed(
+                ENTITY,
+                "pdf_sorgente",
+                "il documento appartiene a un altro cliente",
+                expected=f"un documento del cliente {invoice.customer_id}",
+            )
+        if not document.versione_corrente:
+            raise ValidationFailed(
+                ENTITY,
+                "pdf_sorgente",
+                "il documento non ha ancora un file caricato",
+                expected="un documento con almeno una versione PDF",
+            )
+        current = self.documents.repo.version(document.id, document.versione_corrente)
+        if current is None or current.content_type != "application/pdf":
+            raise ValidationFailed(
+                ENTITY,
+                "pdf_sorgente",
+                "la versione corrente del documento non e' un PDF",
+                expected="application/pdf",
+            )
+        taken = (
+            self.session.execute(select(Invoice.id).where(Invoice.pdf_document_id == document_id))
+            .scalars()
+            .first()
+        )
+        if taken is not None:
+            raise Conflict(
+                ENTITY,
+                "questo PDF e' gia' collegato a un'altra fattura",
+                document_id=str(document_id),
+            )
+        return document.id
 
     def _check_register_year(self, anno: int) -> None:
         """Bound `anno` before it reaches a lock or a query.
@@ -1463,6 +1509,14 @@ class InvoiceService:
                 "una bozza non ha ancora un numero e non produce un file FatturaPA",
                 stato=invoice.stato,
             )
+        if invoice.importata_da is not None:
+            raise Conflict(
+                ENTITY,
+                f"fattura importata da {invoice.importata_da}: l'XML e' quello gia' trasmesso "
+                "allo SdI dal gestionale precedente, questo CRM non ne produce un secondo",
+                anno=invoice.anno,
+                numero=invoice.numero,
+            )
 
         export = self._for_export(invoice)
         # Re-checked here even though `issue` already checked: the snapshot could have
@@ -1513,6 +1567,14 @@ class InvoiceService:
         """
         actor.require_write("produce_invoice_artifacts")
         invoice = self._require(invoice_id)
+        if invoice.importata_da is not None:
+            raise Conflict(
+                ENTITY,
+                f"fattura importata da {invoice.importata_da}: il PDF e' l'originale caricato, "
+                "non si rigenera",
+                anno=invoice.anno,
+                numero=invoice.numero,
+            )
         export = (
             self._for_export_proforma(invoice, actor)
             if invoice.tipo == "proforma"
