@@ -195,11 +195,22 @@ def register(
         suo numero e la sua data: il contatore dell'anno sale fino a quel numero e non
         viene prodotto nessun XML, perche' quello e' gia' stato trasmesso allo SdI.
 
-        `dati` ha la forma di `InvoiceImport`: anno, numero, data_emissione, customer_id,
-        righe (con prezzo_totale, aliquota_iva e natura come stampati sul documento),
-        imponibile, imposta, bollo, totale, stato_pagamento, data_incasso,
-        trasmessa_esternamente_il, pdf_sorgente {document_id}. I totali devono tornare al
-        centesimo. La risposta elenca in `buchi_non_dichiarati` i numeri che mancano fra
+        `dati` ha la forma di `InvoiceImport`, campo per campo: `anno`, `numero`,
+        `data_emissione`, `data_scadenza` (opzionale, altrimenti calcolata dal regime),
+        `customer_id`, `deal_id` (opzionale), `causale`, `righe` (ciascuna con
+        `descrizione`, `quantita`, `prezzo_unitario`, `prezzo_totale`, `aliquota_iva` e
+        `natura` come stampati sul documento), `imponibile`, `imposta`, `bollo`,
+        `totale`, `stato_pagamento`, `data_incasso` (richiesta se incassato),
+        `trasmessa_esternamente_il`, `pdf_sorgente` {document_id}, `note_interne` e
+        `importata_da` (fisso a `"acme"`, l'unica provenienza che questa fetta importa).
+        I totali devono tornare al centesimo. La descrizione libera di Acme (es.
+        "207571/0426/...") va in `causale` e nella `descrizione` della riga, mai in un
+        campo a se stante: `InvoiceImport` non ha un `riferimento`, riservato alle
+        proforma.
+
+        La riga entra nel registro gia' **emessa**, con il suo numero: l'unica via
+        indietro e' `annul_invoice`, che lascia comunque traccia e non libera il
+        numero. La risposta elenca in `buchi_non_dichiarati` i numeri che mancano fra
         quelli importati: vanno dichiarati con `declare_invoice_register_gaps` prima che
         PigroCRM possa emettere la fattura successiva.
         """

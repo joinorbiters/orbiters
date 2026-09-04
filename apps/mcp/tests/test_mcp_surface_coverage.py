@@ -144,16 +144,13 @@ _INTERNE: dict[Method, str] = {
     ("InvoiceService", "undeclared_gaps"): (
         "lettura interna, senza actor: `issue` la chiama per rifiutare l'emissione "
         "nativa finche' un buco del registro non e' stato importato o dichiarato "
-        "(slice 9 §3.2 regola 4). E' anche il modo in cui `import_issued_invoice` "
-        "riporta `buchi_non_dichiarati` -- ma quella chiamata vive in `privileged.py`, "
-        "esente da questa scansione come il resto degli atti fiscali"
-    ),
-    ("InvoiceService", "register_gaps"): (
-        "meta' di sola lettura di `declare_gaps` (slice 9 §3.2 regola 4): quest'ultimo "
-        "gia' autorizza, blocca il contatore e scrive prima di chiamarla per comporre "
-        "la risposta. Prende `actor` solo per rispecchiare la firma del chiamante -- "
-        "come `TimeReportService.variables_for` -- ma non lo usa per nessun controllo, "
-        "perche' l'autorizzazione e' gia' avvenuta in `declare_gaps`"
+        "(slice 9 §3.2 regola 4). Gli altri due chiamanti sono adapter, non "
+        "`packages/core`, ma nessuno dei due e' un tool o una resource di questa "
+        "scansione: `import_issued_invoice` la usa per comporre "
+        "`buchi_non_dichiarati`, e vive in `privileged.py`, esente da questa scansione "
+        "come il resto degli atti fiscali; `POST /api/invoices/import` la usa per lo "
+        "stesso campo nella sua risposta REST, un adapter che questa scansione non "
+        "copre affatto"
     ),
     ("GmailOAuthService", "redirect_uri"): "e' l'URL fisso che Google confronta "
     "carattere per carattere, non un'operazione",
