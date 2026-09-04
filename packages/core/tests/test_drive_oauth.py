@@ -368,7 +368,7 @@ def _drive_service_account(session: Session) -> GoogleDriveAccountService:
 
 
 def _drive_actor(user: User) -> Actor:
-    return Actor(id=user.id, type="user", role="admin")  # type: ignore[arg-type]
+    return Actor(id=user.id, type="user", role="admin")
 
 
 def _connected_drive_account(
@@ -420,6 +420,49 @@ def test_health_on_a_revoked_drive_account_shows_the_revoked_banner(
     assert health.banner == "revoked"
     assert "revocato" in (health.banner_text or "")
     assert account.email_address in (health.banner_text or "")
+
+
+def test_health_on_a_disconnected_drive_account_shows_no_banner(
+    db_session: Session, admin_user: User
+) -> None:
+    """Nothing is wrong: the user unhooked Drive on purpose. The account is still
+    returned -- the settings page needs to show *something* was connected -- only the
+    banner is silent, the same treatment `test_gmail_degradation.py`'s
+    `test_a_mailbox_the_user_disconnected_shows_no_banner` gives Gmail."""
+    account = _connected_drive_account(db_session, admin_user, status="disconnected")
+    health = _drive_service_account(db_session).health(_drive_actor(admin_user))
+    assert health.banner is None
+    assert health.banner_text is None
+    assert health.account is not None
+    assert health.account.status == "disconnected"
+    assert health.account.email_address == account.email_address
+
+
+def test_health_on_an_expired_drive_account_shows_the_expired_banner(
+    db_session: Session, admin_user: User
+) -> None:
+    account = _connected_drive_account(db_session, admin_user, status="expired")
+    health = _drive_service_account(db_session).health(_drive_actor(admin_user))
+    assert health.banner == "expired"
+    assert "scaduto" in (health.banner_text or "")
+    assert account.email_address in (health.banner_text or "")
+
+
+def test_health_reports_a_consent_already_past_its_date_as_expired_not_expiring(
+    db_session: Session, admin_user: User
+) -> None:
+    """The window is "within 48 hours", and a date already in the past is inside it by
+    arithmetic -- it must not read as a gentle heads-up about the future. The Drive
+    twin of `test_gmail_degradation.py`'s
+    `test_a_consent_already_past_its_date_is_not_reported_as_merely_expiring`."""
+    account = _connected_drive_account(db_session, admin_user)
+    account.consent_expires_at = datetime.now(UTC) - timedelta(hours=2)
+    db_session.flush()
+
+    health = _drive_service_account(db_session).health(_drive_actor(admin_user))
+
+    assert health.banner == "expired"
+    assert "scaduto" in (health.banner_text or "")
 
 
 def test_health_within_the_warning_window_shows_the_expiring_banner_with_the_date(
@@ -486,6 +529,20 @@ def test_usable_on_an_expired_account_raises_consent_expired(
 def test_usable_without_a_drive_account_refuses_naming_impostazioni_drive(
     db_session: Session, admin_user: User
 ) -> None:
+    with pytest.raises(Conflict, match="Impostazioni → Drive") as caught:
+        _drive_service_account(db_session).usable(
+            _drive_actor(admin_user), scope=DRIVE_SCOPE_READONLY, feature="la lettura dei documenti"
+        )
+    assert not isinstance(caught.value, CredentialRevoked)
+
+
+def test_usable_on_a_disconnected_account_refuses_the_same_way_as_no_account(
+    db_session: Session, admin_user: User
+) -> None:
+    """A Drive the user unhooked on purpose is folded into the same refusal as "no row
+    at all" by `_present`: there is nothing left to gate a use of. It must not read as
+    `CredentialRevoked` -- that would be a lie about the user's own action."""
+    _connected_drive_account(db_session, admin_user, status="disconnected")
     with pytest.raises(Conflict, match="Impostazioni → Drive") as caught:
         _drive_service_account(db_session).usable(
             _drive_actor(admin_user), scope=DRIVE_SCOPE_READONLY, feature="la lettura dei documenti"
@@ -568,6 +625,42 @@ def test_set_roots_persists_both_fields_and_records_the_activity(
     assert len(rows) == 1
     assert rows[0].payload["root_folder_ids"] == ["1AbCdEfGhIjKlMnOpQ", "2AbCdEfGhIjKlMnOpQ"]
     assert rows[0].payload["storage_folder_id"] == "3AbCdEfGhIjKlMnOpQ"
+
+
+def test_set_roots_admits_a_revoked_or_expired_account(
+    db_session: Session, admin_user: User
+) -> None:
+    """Fixing the folder list is not a use of the credential, unlike `usable`'s gate:
+    the person most likely to be looking at this screen is the one trying to recover
+    from exactly one of these two states, so both are let through."""
+    service = _drive_service_account(db_session)
+    for status in ("revoked", "expired"):
+        account = _connected_drive_account(
+            db_session, admin_user, email_address=f"{status}@example.it", status=status
+        )
+        read = service.set_roots(
+            DriveRootsUpdate(root_folder_ids=["1AbCdEfGhIjKlMnOpQ"]), _drive_actor(admin_user)
+        )
+        assert read.root_folder_ids == ["1AbCdEfGhIjKlMnOpQ"]
+        db_session.refresh(account)
+        assert account.root_folder_ids == ["1AbCdEfGhIjKlMnOpQ"]
+        assert account.status == status, "set_roots must not itself change the credential's status"
+        db_session.delete(account)
+        db_session.flush()
+
+
+def test_set_roots_refuses_a_disconnected_account_the_same_way_as_no_account(
+    db_session: Session, admin_user: User
+) -> None:
+    """Unlike `revoked`/`expired` above, a Drive the user unhooked on purpose has no
+    folders to configure -- the same refusal `_present` gives `usable` for a
+    disconnected row."""
+    _connected_drive_account(db_session, admin_user, status="disconnected")
+    with pytest.raises(Conflict, match="Impostazioni → Drive") as caught:
+        _drive_service_account(db_session).set_roots(
+            DriveRootsUpdate(root_folder_ids=["1AbCdEfGhIjKlMnOpQ"]), _drive_actor(admin_user)
+        )
+    assert not isinstance(caught.value, CredentialRevoked)
 
 
 def test_set_roots_without_a_drive_account_is_a_conflict(
