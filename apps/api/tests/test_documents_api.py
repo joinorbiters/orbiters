@@ -1,6 +1,11 @@
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+
+from pigrocrm.core.config import Settings
+from pigrocrm.core.storage.lazy_drive import LazyUserDriveStorage
+from pigrocrm_api.deps import get_storage
 
 
 def _customer(client: TestClient) -> str:
@@ -210,3 +215,38 @@ def test_the_openapi_document_declares_the_new_routes(logged_in: TestClient) -> 
         "/api/emitter",
     ):
         assert path in paths, path
+
+
+def test_an_upload_before_drive_is_connected_is_a_409_that_says_what_to_do(
+    logged_in: TestClient, api_session: Session
+) -> None:
+    """`PIGROCRM_STORAGE_BACKEND=gdrive` with no service account means the documents go
+    to the titolare's own Drive, and until they have connected it and chosen a folder
+    there is nowhere to put them. The API still starts -- that is the whole point of the
+    storage resolving late -- so the refusal happens here, at the upload, and it has to
+    arrive as a problem document naming the screen that fixes it rather than as a 500.
+
+    `get_storage` is overridden rather than `PIGROCRM_STORAGE_BACKEND` set, because the
+    factory's own choice is core's test (`test_storage_factory.py`); what this asserts
+    is the *rendering* of what that choice produced.
+    """
+    bind = api_session.get_bind()
+    logged_in.app.dependency_overrides[get_storage] = lambda: LazyUserDriveStorage(
+        lambda: Session(bind=bind, join_transaction_mode="create_savepoint"),
+        Settings(_env_file=None),  # type: ignore[call-arg]
+    )
+    customer_id = _customer(logged_in)
+    document_id = logged_in.post(
+        "/api/documents", json={"customer_id": customer_id, "tipo": "documento", "titolo": "Doc"}
+    ).json()["id"]
+
+    response = logged_in.post(
+        f"/api/documents/{document_id}/versions",
+        files={"file": ("scansione.pdf", b"%PDF-1.7\nfinto\n", "application/pdf")},
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.headers["content-type"].startswith("application/problem+json")
+    body = response.json()
+    assert body["code"] == "conflict"
+    assert "Impostazioni → Drive" in body["detail"]

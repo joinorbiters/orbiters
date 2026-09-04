@@ -36,10 +36,14 @@ from uuid import UUID
 
 import jwt
 
+from pigrocrm.core.config import Settings, decode_google_token_key
 from pigrocrm.core.drive.errors import DriveCredentialRevoked, drive_unavailable
+from pigrocrm.core.drive.models import GoogleDriveAccount
 from pigrocrm.core.errors import Conflict
+from pigrocrm.core.gmail.crypto import unseal
 from pigrocrm.core.gmail.errors import CredentialRevoked, GmailUnavailable
 from pigrocrm.core.gmail.tokens import GoogleTokenClient
+from pigrocrm.core.gmail.transport import GmailTransport
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 # Not "drive.file". That narrower scope only grants visibility into files the app
@@ -409,3 +413,53 @@ class DriveTransport:
         if status >= 400:
             _decode(status, payload, what)
         return payload
+
+
+def user_transport_for(
+    account: GoogleDriveAccount,
+    settings: Settings,
+    *,
+    http: HttpCall | None = None,
+    tokens: GoogleTokenClient | None = None,
+) -> DriveTransport:
+    """A Drive transport driven by one stored account's own credential.
+
+    Three steps, and the reason this is a function rather than three lines at each call
+    site: unseal the refresh token from the row, wrap it in a `UserTokens` provider over
+    the slice 5 token client, hand that to a `DriveTransport`. Both callers that need a
+    user-credentialled Drive -- the document storage (9D) and the Drive reader (9C) --
+    need exactly those three steps, and a second copy of them would be a second place
+    the plaintext refresh token exists as a local variable. It exists here for the
+    length of this call and reaches nothing but `UserTokens`, which does not print it.
+
+    Nothing is validated about the account beyond its credential being decipherable:
+    whether this Drive may be *used* -- status, scopes -- is
+    `GoogleDriveAccountService.usable`'s question, asked before anything is composed,
+    and repeating it here would put the same rule in two places with no rule for which
+    one wins.
+
+    `tokens` exists so the composition can be tested against a fake of Google's token
+    endpoint. Left out, a fresh `GoogleTokenClient` is built the way the API's own
+    `token_client` builds one; the caller keeps the transport for as long as its
+    resolution is valid, so that client's per-account cache is what stops one upload
+    from becoming one OAuth round-trip per Drive call.
+    """
+    refresh_token = unseal(
+        account.refresh_token_ciphertext,
+        account.refresh_token_nonce,
+        decode_google_token_key(settings),
+    )
+    return DriveTransport(
+        tokens=UserTokens(
+            account_id=account.id,
+            email_address=account.email_address,
+            refresh_token=refresh_token,
+            tokens=tokens
+            or GoogleTokenClient(
+                client_id=settings.google_client_id,
+                client_secret=settings.google_client_secret,
+                transport=GmailTransport(),
+            ),
+        ),
+        http=http,
+    )

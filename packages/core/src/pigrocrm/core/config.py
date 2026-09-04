@@ -94,6 +94,16 @@ class Settings(BaseSettings):
     # genuinely self-hostable (spec 5). Switching to `gdrive` moves *new* bytes only
     # -- the ones already written stay where they are, and moving them is an explicit
     # migration, not a side effect of an environment variable.
+    #
+    # `gdrive` is finished by one of two routes, and the environment chooses which:
+    # either the two service-account variables below, or -- with neither of them set --
+    # the Google account the titolare connects from Impostazioni → Drive, writing into
+    # the folder they pick there. The second route has nothing to configure here: it
+    # lives in a row, so `storage_from_settings` returns a storage that resolves it at
+    # the first upload rather than at startup, and the API boots before Drive is
+    # connected. Naming either service-account variable selects the first route and
+    # makes the other one required, so a half-finished setup fails at startup instead
+    # of quietly using somebody's personal credential.
     storage_backend: Literal["local", "gdrive"] = "local"
     storage_local_root: str = "./var/documents"
     # The service account's JSON key, inline. `PIGROCRM_GDRIVE_ROOT_FOLDER_ID` must
