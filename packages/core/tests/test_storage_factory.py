@@ -159,10 +159,11 @@ def _lazy(
     *,
     drive: FakeDrive | RecordingHttp,
     gmail: FakeGmail,
+    sessions: Callable[[], Session] | None = None,
 ) -> LazyUserDriveStorage:
     settings = gmail_settings(storage_backend="gdrive")
     return LazyUserDriveStorage(
-        _sessions(db_session),
+        sessions or _sessions(db_session),
         settings,
         http=drive,
         tokens=_token_client(gmail, settings),
@@ -494,6 +495,52 @@ def test_after_a_revocation_the_next_operation_asks_for_configuration_again(
 
     with pytest.raises(StorageNotConfigured):
         storage.put(KEY, PDF, "application/pdf")
+
+
+def test_a_failed_revocation_record_never_hides_the_revocation_itself(
+    db_session: Session,
+) -> None:
+    """The bookkeeping is best effort; the failure it describes is not.
+
+    Recording the revocation needs a second session, and everything about that second
+    session can fail on its own -- a pool that has no connection left, a row somebody
+    else is holding, a `commit` that loses a race. Left unguarded, any of those replaces
+    `DriveCredentialRevoked` with a SQLAlchemy error: the caller then sees an internal
+    failure instead of "il consenso è stato revocato", the API renders a 500 rather than
+    a 409, and the row it was trying to mark is still `active` anyway -- so the reader
+    loses both the sentence and the record.
+
+    The accepted consequence is asserted too: the row *stays* `active`. That is honest
+    about what a swallowed exception costs. The next refresh will meet the same
+    `invalid_grant` and try to record it again, which is exactly the retry a database
+    that was momentarily unavailable needs -- and it is a far better failure mode than a
+    revocation reported as an outage.
+    """
+    account_id = _account(db_session).id
+    working = _sessions(db_session)
+    opened = 0
+
+    def sessions() -> Session:
+        nonlocal opened
+        opened += 1
+        if opened == 2:  # 1 is the resolution, 2 is the revocation record
+            raise RuntimeError("nessuna connessione disponibile nel pool")
+        return working()
+
+    storage = _lazy(
+        db_session,
+        drive=FakeDrive(root_id=STORAGE_FOLDER),
+        gmail=FakeGmail(revoked=True),
+        sessions=sessions,
+    )
+
+    with pytest.raises(DriveCredentialRevoked):
+        storage.put(KEY, PDF, "application/pdf")
+
+    assert opened == 2  # the record really was attempted, and really did fail
+    db_session.expire_all()
+    stored = db_session.get(GoogleDriveAccount, account_id)
+    assert stored is not None and stored.status == "active"
 
 
 # --- user_transport_for: the token composition, written once --------------------------
