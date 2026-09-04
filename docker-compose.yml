@@ -19,8 +19,14 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-pigrocrm}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?serve una password}
       POSTGRES_DB: ${POSTGRES_DB:-pigrocrm}
+    # Data on the host, never in a Docker-managed volume: a `docker system prune`,
+    # a Docker Desktop reset or a reinstall must not be able to take the register with
+    # them (decision of 2026-09-04, after a daemon reset scared everyone). Set
+    # PIGROCRM_DATA_DIR to a directory outside the repository, e.g. ~/pigrocrm-data/postgres.
     volumes:
-      - pigrocrm-db:/var/lib/postgresql/data
+      - ${PIGROCRM_DATA_DIR:-./data/postgres}:/var/lib/postgresql/data
+    ports:
+      - '${PIGROCRM_DB_PORT:-127.0.0.1:55432}:5432'
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-pigrocrm}']
       interval: 5s
@@ -60,5 +66,3 @@ services:
     ports:
       - '127.0.0.1:8080:80'
 
-volumes:
-  pigrocrm-db:
