@@ -23,7 +23,12 @@ from pigrocrm.core.gmail.models import (  # noqa: F401
     GoogleOAuthState,
     PaymentReminder,
 )
-from pigrocrm.core.invoices.models import Invoice, InvoiceCounter, InvoiceLine  # noqa: F401
+from pigrocrm.core.invoices.models import (  # noqa: F401
+    Invoice,
+    InvoiceCounter,
+    InvoiceLine,
+    InvoiceRegisterGap,
+)
 from pigrocrm.core.people.models import Person  # noqa: F401
 from pigrocrm.core.pipeline.models import PipelineStage  # noqa: F401
 from pigrocrm.core.templates.models import Template  # noqa: F401

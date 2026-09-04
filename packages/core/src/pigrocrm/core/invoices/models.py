@@ -16,7 +16,7 @@ paths get a `CHECK` on top, which an `ENUM` would not have made unnecessary anyw
 an `ENUM` cannot express that `stato` depends on `tipo`.
 """
 
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -24,6 +24,7 @@ from uuid import UUID
 from sqlalchemy import (
     CheckConstraint,
     Date,
+    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -116,6 +117,11 @@ class Invoice(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     motivo_annullamento: Mapped[str | None] = mapped_column(String(500), default=None)
     note_interne: Mapped[str | None] = mapped_column(Text, default=None)
     custom_fields: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    # `'the previous system'` for a row registered by slice 9's import: issued elsewhere, numbered
+    # elsewhere, and therefore without an XML or a PDF this CRM produced. `NULL` is the
+    # ordinary case. A string rather than a boolean because the *source* is the fact
+    # worth keeping: a second migration one day would not be "imported = true" twice.
+    importata_da: Mapped[str | None] = mapped_column(String(20), default=None)
 
     __table_args__ = (
         # Two state machines share one column, so the legal pairs are a table
@@ -265,4 +271,37 @@ class InvoiceCounter(Base):
     )
 
 
-__all__ = ["PROFORMA_SEQUENCE_NAME", "Invoice", "InvoiceCounter", "InvoiceLine"]
+class InvoiceRegisterGap(Base, PrimaryKeyMixin):
+    """A number the register does not carry, on purpose, with the reason why.
+
+    The register has to be gap-free (spec 3), and an import from another system meets
+    numbers that were consumed there and never became an invoice -- annulled before
+    transmission, a test run, a numbering slip. Refusing the import would lock the
+    history out; inventing rows would forge documents. So the gap is *declared*: one
+    row, one number, one reason, one author. `test_invoice_import.py` proves the import
+    refuses an undeclared gap.
+    """
+
+    __tablename__ = "invoice_register_gaps"
+
+    anno: Mapped[int] = mapped_column(Integer, nullable=False)
+    numero: Mapped[int] = mapped_column(Integer, nullable=False)
+    motivo: Mapped[str] = mapped_column(String(500), nullable=False)
+    dichiarato_da: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"), default=None)
+    dichiarato_il: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+    __table_args__ = (
+        UniqueConstraint("anno", "numero", name="uq_invoice_register_gaps_anno_numero"),
+        CheckConstraint("numero >= 1", name="ck_invoice_register_gaps_numero_positive"),
+    )
+
+
+__all__ = [
+    "PROFORMA_SEQUENCE_NAME",
+    "Invoice",
+    "InvoiceCounter",
+    "InvoiceLine",
+    "InvoiceRegisterGap",
+]
