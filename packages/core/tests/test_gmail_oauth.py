@@ -32,8 +32,9 @@ from pigrocrm.core.activities.models import Activity
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.auth.models import User
 from pigrocrm.core.config import Settings
+from pigrocrm.core.drive.models import GoogleDriveAccount
 from pigrocrm.core.errors import Conflict, DomainError, PermissionDenied
-from pigrocrm.core.gmail.crypto import unseal
+from pigrocrm.core.gmail.crypto import seal, unseal
 from pigrocrm.core.gmail.models import (
     GmailMessage,
     GmailMessageLink,
@@ -350,6 +351,35 @@ def test_reconnecting_a_different_mailbox_is_refused_and_names_both(db_session: 
     assert "someone.else@gmail.com" in caught.value.message
     account = db_session.execute(select(GoogleAccount)).scalars().one()
     assert account.email_address == "ada@acme.it"
+
+
+def test_reconnecting_when_a_different_drive_identity_is_connected_is_refused(
+    db_session: Session,
+) -> None:
+    """The mirror of `GoogleDriveOAuthService.complete`'s own cross-identity check
+    (spec 9 §5.2): the mailbox and the Drive of one CRM installation must name the
+    same Google identity, or neither flow's grant may be stored over the other."""
+    user = _user(db_session)
+    ciphertext, nonce = seal("1//0gDriveRefresh", KEY)
+    db_session.add(
+        GoogleDriveAccount(
+            user_id=user.id,
+            google_sub="sub-drive",
+            email_address="drive@acme.it",
+            refresh_token_ciphertext=ciphertext,
+            refresh_token_nonce=nonce,
+            scopes_granted=[],
+            status="active",
+        )
+    )
+    db_session.flush()
+    fake = _fake(sub="sub-other")
+    service = _service(db_session, fake)
+
+    with pytest.raises(Conflict) as caught:
+        service.complete(code="c", state=_state_of(service, _actor(user)), actor=_actor(user))
+    assert "drive@acme.it" in caught.value.message
+    assert _accounts(db_session) == []
 
 
 def test_the_same_google_identity_under_a_different_address_is_refused_too(

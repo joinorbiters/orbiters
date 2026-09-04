@@ -96,9 +96,11 @@ class GmailRepository:
         self.session.flush()
         return state
 
-    def consume_state(self, jti: str, now: datetime) -> GoogleOAuthState | None:
+    def consume_state(
+        self, jti: str, now: datetime, purpose: str = "gmail"
+    ) -> GoogleOAuthState | None:
         """Marks the row consumed and returns it, or returns `None` if it does not
-        exist, has expired, or was already consumed.
+        exist, has expired, was already consumed, or was minted for a different flow.
 
         One statement, deliberately: a conditional `UPDATE ... WHERE consumed_at IS
         NULL ... RETURNING`. Postgres serialises two concurrent callbacks carrying the
@@ -109,6 +111,14 @@ class GmailRepository:
 
         A read-then-write pair over the same column would pass every single-threaded
         test and hand two callbacks the same authorisation code.
+
+        `purpose` defaults to `"gmail"`, the value every row carried before Drive
+        existed (see `GoogleOAuthState.purpose`'s docstring), so `GmailOAuthService`
+        needs no change to keep filtering on it. It is part of the `WHERE` and not a
+        check on the row after the fact, so a state minted for the other flow simply
+        does not match this statement at all: it is left exactly as it was, still
+        single-use and still redeemable by its own flow's callback. Answering `None`
+        here must not spend it -- a Drive state is not this method's to consume.
         """
         return self.session.execute(
             update(GoogleOAuthState)
@@ -116,6 +126,7 @@ class GmailRepository:
                 GoogleOAuthState.jti == jti,
                 GoogleOAuthState.consumed_at.is_(None),
                 GoogleOAuthState.expires_at > now,
+                GoogleOAuthState.purpose == purpose,
             )
             .values(consumed_at=now)
             .returning(GoogleOAuthState)
