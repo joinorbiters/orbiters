@@ -228,7 +228,7 @@ git commit -m "feat(invoices): importata_da column and declared register gaps (s
 - Produces:
   - `InvoiceLineImport(descrizione: SafeStr, quantita: Decimal = 1, unita_misura: SafeStr | None, prezzo_unitario: Decimal, prezzo_totale: Decimal, aliquota_iva: Decimal, natura: SafeStr | None = None, riferimento_normativo: SafeStr | None = None)` — `extra="forbid"`.
   - `PdfSorgente(document_id: UUID)`.
-  - `InvoiceImport(anno: int, numero: int, data_emissione: date, data_scadenza: date | None, customer_id: UUID, deal_id: UUID | None, causale: SafeStr | None, riferimento: SafeStr | None, righe: list[InvoiceLineImport] (min 1, max MAX_LINES), imponibile: Decimal, imposta: Decimal, bollo: Decimal, totale: Decimal, stato_pagamento: StatoPagamento = "da_incassare", data_incasso: date | None, trasmessa_esternamente_il: date | None, pdf_sorgente: PdfSorgente | None, note_interne: SafeStr | None, importata_da: Literal["acme"] = "acme")` — `extra="forbid"`, `anno` fra 2000 e 2100, `numero >= 1`.
+  - `InvoiceImport(anno: int, numero: int, data_emissione: date, data_scadenza: date | None, customer_id: UUID, deal_id: UUID | None, causale: SafeStr | None, righe: list[InvoiceLineImport] (min 1, max MAX_LINES), imponibile: Decimal, imposta: Decimal, bollo: Decimal, totale: Decimal, stato_pagamento: StatoPagamento = "da_incassare", data_incasso: date | None, trasmessa_esternamente_il: date | None, pdf_sorgente: PdfSorgente | None, note_interne: SafeStr | None, importata_da: Literal["acme"] = "acme")` — `extra="forbid"`, `anno` fra 2000 e 2100, `numero >= 1`.
   - `RegisterGapIn(numero: int >= 1, motivo: SafeStr max 500)`, `RegisterGapsDeclare(buchi: list[RegisterGapIn], min 1)`, `RegisterGapRead(anno, numero, motivo, dichiarato_da, dichiarato_il)`.
   - `InvoiceRead.importata_da: str | None`.
 
@@ -366,7 +366,6 @@ class InvoiceImport(BaseModel):
     customer_id: UUID
     deal_id: UUID | None = None
     causale: SafeStr | None = Field(default=None, max_length=CAUSALE_MAX_LENGTH)
-    riferimento: SafeStr | None = Field(default=None, max_length=RIFERIMENTO_MAX_LENGTH)
     righe: list[InvoiceLineImport] = Field(min_length=1, max_length=MAX_LINES)
     imponibile: Decimal = Field(max_digits=MONEY_MAX_DIGITS, decimal_places=2)
     imposta: Decimal = Field(max_digits=MONEY_MAX_DIGITS, decimal_places=2)
@@ -563,6 +562,8 @@ git commit -m "feat(invoices): repository queries for import — neighbours, pre
 ---
 
 ### Task 4: `InvoiceService.import_issued` — percorso felice e regole di registro
+
+> Ruling (review Task 4): `riferimento` non fa parte di `InvoiceImport` — su `invoices` è il riferimento di una proforma per vincolo `ck_invoices_riferimento_only_on_proforma`; la descrizione Acme va in `causale`. Il servizio verifica inoltre `anno == data_emissione.year` e rifiuta `data_incasso` senza `stato_pagamento = incassato`.
 
 **Files:**
 - Modify: `packages/core/src/pigrocrm/core/invoices/service.py` (nuovo metodo dopo `issue`; costante `IMPORT_ACTION`)
@@ -803,7 +804,6 @@ In `service.py`, subito dopo `issue` (e prima di `_backfill`-style internals), c
                 stato="emessa",
                 anno=data.anno,
                 numero=data.numero,
-                riferimento=data.riferimento,
                 data_emissione=data.data_emissione,
                 data_scadenza=data.data_scadenza
                 or data.data_emissione + timedelta(days=profile.giorni_scadenza),
