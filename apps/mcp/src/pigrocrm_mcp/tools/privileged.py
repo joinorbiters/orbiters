@@ -1,4 +1,5 @@
-"""The sixteen operations an installation has to ask for.
+"""The operations an installation has to ask for: the sixteen of slices 3 and 4, and
+Gmail discovery.
 
 Registered only when `Settings.mcp_full_access` is true, exactly the way `tools/gmail.py`
 is registered only when Gmail is configured — and for the same reason, expressed twice.
@@ -43,9 +44,13 @@ from mcp.server import MCPServer
 
 from pigrocrm.core.analytics.schemas import BindTimeRequest
 from pigrocrm.core.analytics.service import AnalyticsService
+from pigrocrm.core.config import Settings, gmail_configured
 from pigrocrm.core.errors import ValidationFailed
 from pigrocrm.core.fiscal.schemas import FiscalProfileUpsert
 from pigrocrm.core.fiscal.service import FiscalProfileService
+from pigrocrm.core.gmail.sync import GmailSyncService
+from pigrocrm.core.gmail.tokens import GoogleTokenClient
+from pigrocrm.core.gmail.transport import GmailTransport
 from pigrocrm.core.invoices.schemas import InvoiceAnnul, InvoiceIssue, InvoiceTransmitted
 from pigrocrm.core.invoices.service import InvoiceService
 from pigrocrm.core.timetracking.categories import CostCategoryService
@@ -86,8 +91,12 @@ def _required_day(value: str) -> date:
     return parsed
 
 
-def register(mcp: MCPServer, context: McpContext, guard: Callable[..., Any]) -> None:
-    """Registered only when `mcp_full_access` is on — see `server.py`."""
+def register(
+    mcp: MCPServer, context: McpContext, guard: Callable[..., Any], settings: Settings
+) -> None:
+    """Registered only when `mcp_full_access` is on — see `server.py`. `settings` is
+    read for one more condition: the Gmail tool below exists only when there is a
+    mailbox to ask, exactly as `tools/gmail.py` does."""
 
     # ---- fiscal acts ---------------------------------------------------------------
 
@@ -345,3 +354,37 @@ def register(mcp: MCPServer, context: McpContext, guard: Callable[..., Any]) -> 
             .get_fiscal_estimate(anno, context.actor)
             .model_dump(mode="json")
         )
+
+    # ---- Gmail ---------------------------------------------------------------------
+
+    if gmail_configured(settings):
+
+        @mcp.tool()
+        @guard
+        def discover_gmail_correspondents(customer_id: UUID) -> dict[str, Any]:
+            """Chi, al dominio di un cliente, ha scritto o ricevuto mail dalla casella
+            collegata. Il passo *prima* di `list_gmail_messages`: un cliente nuovo con
+            un sito e nessuna persona non ha indirizzi da cui il CRM possa partire.
+
+            Il dominio viene letto dalla scheda cliente (sito web, altrimenti l'email
+            aziendale), mai da un parametro: non c'è testo libero che arrivi a Gmail.
+            La risposta è una lista di indirizzi con nome, numero di messaggi e ultima
+            data, e `gia_in_anagrafica` dice quali esistono già. **Non salva nulla**:
+            la corrispondenza entra nel CRM solo quando una persona mette l'indirizzo
+            su una Persona o sul Cliente, e da quel momento la sincronizzazione la
+            archivia. Interroga Google, quindi spende la quota Gmail del titolare sotto
+            il suo consenso OAuth: è la ragione per cui esiste solo su un'installazione
+            che ha aperto `mcp_full_access`.
+            """
+            transport = GmailTransport()
+            service = GmailSyncService(
+                context.session,
+                settings=settings,
+                transport=transport,
+                tokens=GoogleTokenClient(
+                    client_id=settings.google_client_id,
+                    client_secret=settings.google_client_secret,
+                    transport=transport,
+                ),
+            )
+            return service.discover(customer_id, actor=context.actor).model_dump(mode="json")

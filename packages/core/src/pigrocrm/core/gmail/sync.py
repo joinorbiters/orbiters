@@ -28,6 +28,7 @@ Nothing here logs, and no message body, subject or address is put into an except
 failure carries the counters and Google's own status, which is all a caller can act on.
 """
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -44,10 +45,21 @@ from pigrocrm.core.gmail.crypto import unseal
 from pigrocrm.core.gmail.errors import CredentialRevoked
 from pigrocrm.core.gmail.models import GmailMessage, GoogleAccount
 from pigrocrm.core.gmail.parse import ParsedMessage, parse_message
-from pigrocrm.core.gmail.query import build_list_queries, messages_list_url, thread_get_url
+from pigrocrm.core.gmail.query import (
+    build_list_queries,
+    customer_domain,
+    discovery_query,
+    messages_list_url,
+    thread_get_url,
+)
 from pigrocrm.core.gmail.repository import GmailRepository
 from pigrocrm.core.gmail.roster import AddressRoster, EntityRef
-from pigrocrm.core.gmail.schemas import SCOPE_READONLY, SyncReport
+from pigrocrm.core.gmail.schemas import (
+    SCOPE_READONLY,
+    DiscoveredCorrespondent,
+    DiscoveryReport,
+    SyncReport,
+)
 from pigrocrm.core.gmail.send import reconcile_only
 from pigrocrm.core.gmail.tokens import GoogleTokenClient
 from pigrocrm.core.gmail.transport import GmailTransport
@@ -58,8 +70,21 @@ _FIRST_CYCLE_DAYS = 30
 
 _SYNC_ACTION = "sincronizzare Gmail"
 _BACKFILL_ACTION = "sincronizzare lo storico Gmail"
+# Also the name under which `AGENT_FORBIDDEN_ACTIONS` lists it: an agent gets this only
+# on an installation that opened `mcp_full_access`, like every other spend of the
+# owner's own resources.
+_DISCOVER_ACTION = "discover_gmail_correspondents"
 _WHAT_LIST = "elenco dei messaggi"
 _WHAT_THREAD = "lettura di una conversazione"
+
+
+@dataclass
+class _Correspondent:
+    """A running tally for one address while discovery reads threads."""
+
+    count: int = 0
+    last: datetime | None = None
+    name: str = ""
 
 
 class GmailSyncService:
@@ -281,6 +306,75 @@ class GmailSyncService:
             return report
         finally:
             self.repo.release_sync_lock(account.id)
+
+    def discover(self, customer_id: UUID, *, actor: Actor) -> DiscoveryReport:
+        """Who at this customer's domain the connected mailbox has actually written to.
+
+        The step *before* the roster: a new customer with a website and no people gives
+        the backfill nothing to ask about, and the alternative was guessing addresses
+        one at a time. One query, scoped to the domain taken from the customer record --
+        `discovery_query` refuses anything else, and nothing typed by the caller reaches
+        the `q` -- and the answer is a list of addresses for a person to add.
+
+        Stores nothing and moves no watermark. Spec 4.2 is kept whole: the mirror
+        widens when somebody puts an address on a Person, not when this finds one.
+        Threads are read in full like everywhere else, so that a colleague who only
+        ever appeared in copy is found too.
+        """
+        require_gmail_configured(self.settings)
+        actor.require_write(_DISCOVER_ACTION)
+        account = self._account(actor)
+        self.accounts.usable(actor, scope=SCOPE_READONLY, feature="la ricerca dei corrispondenti")
+        customer = self.session.get(Customer, customer_id)
+        if customer is None or customer.deleted_at is not None:
+            raise NotFound("customer", customer_id)
+        domain = customer_domain(sito_web=customer.sito_web, email=customer.email)
+        if domain is None:
+            raise Conflict(
+                "gmail_discovery",
+                f"il cliente {customer_id} non ha un dominio da cui partire: indica il sito "
+                "web o un'email aziendale (non webmail) sulla scheda cliente",
+            )
+        report = DiscoveryReport(started_at=datetime.now(UTC), dominio=domain)
+        token = self._access_token(account)
+        mailbox = account.email_address.strip().lower()
+        suffix = f"@{domain}"
+        tally: dict[str, _Correspondent] = {}
+        for thread_id in self._relevant_threads((discovery_query(domain),), token):
+            report.threads_scanned += 1
+            payload = self.transport.json(
+                "GET", thread_get_url(thread_id), token=token, what=_WHAT_THREAD
+            )
+            for raw in payload.get("messages") or []:
+                if not isinstance(raw, dict):
+                    continue
+                # Bodies are never decoded here: a name and an address are all this
+                # needs, and reading the text of mail nobody chose to store is not
+                # what discovery is for.
+                parsed = parse_message(raw, body_max_bytes=0, store_bodies=False)
+                report.messages_seen += 1
+                participants = [parsed.from_address, *parsed.to_addresses, *parsed.cc_addresses]
+                for address in dict.fromkeys(participants):
+                    if not address.endswith(suffix) or address == mailbox:
+                        continue
+                    entry = tally.setdefault(address, _Correspondent())
+                    entry.count += 1
+                    if entry.last is None or parsed.internal_date > entry.last:
+                        entry.last = parsed.internal_date
+                    if not entry.name:
+                        entry.name = parsed.display_names.get(address, "")
+        known = set(self.roster.known_addresses())
+        report.corrispondenti = [
+            DiscoveredCorrespondent(
+                indirizzo=address,
+                nome=entry.name,
+                messaggi=entry.count,
+                ultimo_messaggio=entry.last,
+                gia_in_anagrafica=address in known,
+            )
+            for address, entry in sorted(tally.items(), key=lambda item: (-item[1].count, item[0]))
+        ]
+        return report
 
     # ---- internals ---------------------------------------------------------------
 

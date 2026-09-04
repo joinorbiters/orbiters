@@ -102,6 +102,11 @@ _VIETATE: dict[Method, str] = {
     ("PeriodLockService", "reopen_period"): "riapertura di periodo (slice 4 §11)",
     ("AnalyticsService", "bind_time_to_invoice"): "precede l'emissione (slice 4 §11)",
     ("AnalyticsService", "get_fiscal_estimate"): "posizione fiscale del titolare (slice 4 §11)",
+    ("GmailSyncService", "discover"): (
+        "interroga Gmail sul dominio del cliente a carico della quota e del consenso "
+        "del titolare, come `sync` e `backfill`; a differenza loro l'installazione puo' "
+        "aprirla con `mcp_full_access`"
+    ),
 }
 
 

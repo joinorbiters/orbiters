@@ -137,6 +137,33 @@ class GmailHealth(BaseModel):
     configured: bool
 
 
+class DiscoveredCorrespondent(BaseModel):
+    """One address at the customer's domain that the connected mailbox has actually
+    exchanged mail with. A suggestion, not a record: nothing is written until a person
+    puts the address on a Person or the Customer."""
+
+    model_config = ConfigDict(frozen=True)
+
+    indirizzo: str
+    # The display name the headers gave, or "" when they never did.
+    nome: str
+    messaggi: int
+    ultimo_messaggio: datetime | None
+    gia_in_anagrafica: bool
+
+
+class DiscoveryReport(BaseModel):
+    """What one discovery found. Addresses and names are the *point* of this report,
+    which is what separates it from `SyncReport`: it goes back to whoever asked and to
+    nobody else, and it is never logged."""
+
+    started_at: datetime
+    dominio: str
+    threads_scanned: int = 0
+    messages_seen: int = 0
+    corrispondenti: list[DiscoveredCorrespondent] = []
+
+
 class GmailBackfillRequest(BaseModel):
     """One entity's history, on demand (spec 4.4).
 

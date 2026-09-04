@@ -201,7 +201,13 @@ def test_no_helper_can_build_a_url_that_takes_a_caller_supplied_search_string() 
     ]
     assert sorted(exported) == [
         "build_address_clause",
+        # The three discovery builders take a *domain*, checked against an alphabet
+        # narrower than a hostname's, or derive it from the customer record -- never a
+        # search string. See `test_gmail_discovery.py`.
+        "build_domain_clause",
         "build_list_queries",
+        "customer_domain",
+        "discovery_query",
         "message_get_url",
         "messages_list_url",
         "rfc822msgid_query",
@@ -294,3 +300,17 @@ def test_the_guard_above_would_notice_a_hand_built_listing_url(tmp_path: Path) -
     )
     literals = _string_constants(offender)
     assert any(fragment in literal for literal in literals for fragment in URL_FRAGMENTS)
+
+
+def test_a_full_backfill_has_no_after_clause_at_all() -> None:
+    """Found in production: Gmail answers *nothing* to `after:0`. The fake accepted it as
+    "since the epoch", every test passed, and `backfill(full=True)` -- the one call spec
+    4.4 makes a person ask for by hand -- returned an empty report against a mailbox
+    with the very threads discovery had just listed. "No horizon" is spelled by leaving
+    the clause out, not by naming the beginning of time."""
+    (query,) = build_list_queries(["ada@acme.it"], after_epoch=0)
+    assert query == "(from:ada@acme.it OR to:ada@acme.it)"
+    assert "after:" not in query
+    # And a real horizon still gets its clause.
+    (bounded,) = build_list_queries(["ada@acme.it"], after_epoch=1700000000)
+    assert bounded.endswith(" after:1700000000")
