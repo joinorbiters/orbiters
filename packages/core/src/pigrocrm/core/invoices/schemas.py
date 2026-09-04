@@ -246,6 +246,100 @@ class PaymentState(BaseModel):
     data_incasso: date | None = None
 
 
+class InvoiceLineImport(BaseModel):
+    """One line of an invoice issued elsewhere, exactly as that document printed it.
+
+    Unlike `InvoiceLineIn`, `natura`, `riferimento_normativo` and `prezzo_totale` are
+    accepted: the regime strategy did not compute this document and must not rewrite it.
+    The service still checks that the declared totals add up (§3.3).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    descrizione: SafeStr = Field(max_length=DESCRIZIONE_MAX_LENGTH)
+    quantita: Decimal = Field(
+        default=Decimal("1.000000"),
+        max_digits=FACTOR_MAX_DIGITS,
+        decimal_places=FACTOR_DECIMAL_PLACES,
+    )
+    unita_misura: SafeStr | None = Field(default=None, max_length=UNITA_MISURA_MAX_LENGTH)
+    prezzo_unitario: Decimal = Field(
+        max_digits=FACTOR_MAX_DIGITS, decimal_places=FACTOR_DECIMAL_PLACES
+    )
+    prezzo_totale: Decimal = Field(max_digits=MONEY_MAX_DIGITS, decimal_places=MONEY_DECIMAL_PLACES)
+    aliquota_iva: Decimal = Field(max_digits=RATE_MAX_DIGITS, decimal_places=RATE_DECIMAL_PLACES)
+    natura: SafeStr | None = Field(default=None, max_length=NATURA_MAX_LENGTH)
+    riferimento_normativo: SafeStr | None = None
+
+
+class PdfSorgente(BaseModel):
+    """Where the original PDF already is. Slice 9A knows one place -- a `documents` row
+    with an uploaded version; 9C adds `drive_file_id`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: UUID
+
+
+class InvoiceImport(BaseModel):
+    """A fattura issued by the previous system, declared field by field (spec 9 §3.3).
+
+    `anno`/`numero` come from the caller because they are facts about a document that
+    exists; the counter follows them (§3.2 rule 3). Totals are declared **and** verified,
+    never recomputed: the document commands, the CRM checks the sums."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    anno: int = Field(ge=2000, le=2100)
+    numero: int = Field(ge=1)
+    data_emissione: date
+    data_scadenza: date | None = None
+    customer_id: UUID
+    deal_id: UUID | None = None
+    causale: SafeStr | None = Field(default=None, max_length=CAUSALE_MAX_LENGTH)
+    riferimento: SafeStr | None = Field(default=None, max_length=RIFERIMENTO_MAX_LENGTH)
+    righe: list[InvoiceLineImport] = Field(min_length=1, max_length=MAX_LINES)
+    imponibile: Decimal = Field(max_digits=MONEY_MAX_DIGITS, decimal_places=MONEY_DECIMAL_PLACES)
+    imposta: Decimal = Field(max_digits=MONEY_MAX_DIGITS, decimal_places=MONEY_DECIMAL_PLACES)
+    bollo: Decimal = Field(max_digits=MONEY_MAX_DIGITS, decimal_places=MONEY_DECIMAL_PLACES)
+    totale: Decimal = Field(max_digits=MONEY_MAX_DIGITS, decimal_places=MONEY_DECIMAL_PLACES)
+    stato_pagamento: StatoPagamento = "da_incassare"
+    data_incasso: date | None = None
+    trasmessa_esternamente_il: date | None = None
+    pdf_sorgente: PdfSorgente | None = None
+    note_interne: SafeStr | None = None
+    importata_da: Literal["acme"] = "acme"
+
+
+class RegisterGapIn(BaseModel):
+    """One declared hole in the numbering sequence -- a `numero` the previous system
+    used but that will never be imported, with the reason a reader needs (spec 9 §3.4)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    numero: int = Field(ge=1)
+    motivo: SafeStr = Field(max_length=MOTIVO_ANNULLAMENTO_MAX_LENGTH)
+
+
+class RegisterGapsDeclare(BaseModel):
+    """A batch declaration: gaps are typically discovered together, at the end of an
+    import run, so the caller declares them as one list rather than one call each."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    buchi: list[RegisterGapIn] = Field(min_length=1, max_length=200)
+
+
+class RegisterGapRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    anno: int
+    numero: int
+    motivo: str
+    dichiarato_da: UUID | None
+    dichiarato_il: datetime
+
+
 class InvoiceRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -272,6 +366,7 @@ class InvoiceRead(BaseModel):
     xml_hash_sha256: str | None
     pdf_document_id: UUID | None
     xml_document_id: UUID | None
+    importata_da: str | None
     origine_proforma_id: UUID | None
     annullata_il: date | None
     motivo_annullamento: str | None
