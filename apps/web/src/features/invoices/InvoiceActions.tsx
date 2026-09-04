@@ -34,6 +34,10 @@ export function InvoiceActions({ invoice }: { invoice: Invoice }) {
   const isProformaReady = invoice.tipo === 'proforma' && invoice.stato === 'confermata'
   const canIssue = isDraftFattura || isProformaReady
   const isIssued = invoice.tipo === 'fattura' && invoice.stato === 'emessa'
+  // An invoice pigroCRM imported from the previous system never had its own XML rendered here: the
+  // one on file is whatever was transmitted at the time, so offering to regenerate it
+  // would silently replace a legally-filed document with a reconstruction.
+  const isImported = invoice.importata_da != null
 
   /**
    * Emission and the render are two steps, deliberately.
@@ -108,23 +112,27 @@ export function InvoiceActions({ invoice }: { invoice: Invoice }) {
               <Download className="mr-2 size-4" />
               PDF
             </Button>
-            <Button variant="outline" onClick={() => void onDownload('xml')}>
-              <Download className="mr-2 size-4" />
-              XML FatturaPA
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() =>
-                artifacts.mutate(undefined, {
-                  onSuccess: () => toast.success('Documenti rigenerati'),
-                  onError: (error) => toast.error(toProblem(error).detail),
-                })
-              }
-              disabled={artifacts.isPending}
-            >
-              <RefreshCw className="mr-2 size-4" />
-              Rigenera documenti
-            </Button>
+            {isImported ? null : (
+              <Button variant="outline" onClick={() => void onDownload('xml')}>
+                <Download className="mr-2 size-4" />
+                XML FatturaPA
+              </Button>
+            )}
+            {isImported ? null : (
+              <Button
+                variant="outline"
+                onClick={() =>
+                  artifacts.mutate(undefined, {
+                    onSuccess: () => toast.success('Documenti rigenerati'),
+                    onError: (error) => toast.error(toProblem(error).detail),
+                  })
+                }
+                disabled={artifacts.isPending}
+              >
+                <RefreshCw className="mr-2 size-4" />
+                Rigenera documenti
+              </Button>
+            )}
             <Button variant="destructive" onClick={() => setAnnulOpen(true)}>
               <Ban className="mr-2 size-4" />
               Annulla

@@ -5,6 +5,7 @@ import type { ReactNode } from 'react'
 import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { InvoiceActions } from './InvoiceActions'
+import { InvoiceStateBadge } from './InvoiceStateBadge'
 import type { Invoice } from './queries'
 import { api } from '@/lib/api'
 
@@ -108,5 +109,21 @@ describe('InvoiceActions', () => {
     wrap(<InvoiceActions invoice={ISSUED} />)
     await userEvent.click(screen.getByRole('button', { name: /^annulla$/i }))
     expect(screen.getByText(/Il numero resta nel registro/)).toBeInTheDocument()
+  })
+
+  it('hides the XML and regenerate actions for an invoice imported from the previous system', () => {
+    const imported = { ...ISSUED, importata_da: 'the previous system' } as Invoice
+    wrap(<InvoiceActions invoice={imported} />)
+    expect(screen.queryByRole('button', { name: /XML FatturaPA/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Rigenera/i })).toBeNull()
+    // The PDF stays: for an imported invoice it is the original document, not one
+    // pigroCRM produced, so there is nothing to regenerate but nothing to hide either.
+    expect(screen.getByRole('button', { name: /^PDF$/i })).toBeInTheDocument()
+  })
+
+  it('shows the "imported from the previous system" badge next to the state badge', () => {
+    const imported = { ...ISSUED, importata_da: 'the previous system' } as Invoice
+    wrap(<InvoiceStateBadge invoice={imported} />)
+    expect(screen.getByText(/importata da the previous system/i)).toBeInTheDocument()
   })
 })
