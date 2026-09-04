@@ -1,0 +1,228 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { render, screen, waitFor, within } from '@testing-library/react'
+import userEvent, { PointerEventsCheckLevel } from '@testing-library/user-event'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { DrivePanel } from './DrivePanel'
+import type { DriveHealth } from './queries'
+import { api } from '@/lib/api'
+
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    api: { GET: vi.fn(), POST: vi.fn(), PATCH: vi.fn(), DELETE: vi.fn() },
+  }
+})
+
+function ok(data: unknown) {
+  return { data, response: new Response(null, { status: 200 }) } as never
+}
+
+function failed(error: unknown, status: number) {
+  return { error, response: new Response(null, { status }) } as never
+}
+
+const READONLY = 'https://www.googleapis.com/auth/drive.readonly'
+const FILE = 'https://www.googleapis.com/auth/drive.file'
+
+const ROOT_ID_1 = 'AAAAAAAAAAAAAAAAAAAA'
+const ROOT_ID_2 = 'BBBBBBBBBBBBBBBBBBBB'
+const STORAGE_ID = 'CCCCCCCCCCCCCCCCCCCC'
+
+const ACCOUNT = {
+  id: '00000000-0000-7000-8000-000000000001',
+  email_address: 'ada@acme.it',
+  scopes_granted: ['openid', 'email', READONLY, FILE],
+  status: 'active' as const,
+  consent_expires_at: null,
+  root_folder_ids: [ROOT_ID_1],
+  storage_folder_id: STORAGE_ID,
+  last_error: null,
+  last_error_at: null,
+  connected_at: '2026-08-01T09:00:00Z',
+  disconnected_at: null,
+}
+
+const CONNECTED: DriveHealth = {
+  account: ACCOUNT,
+  banner: null,
+  banner_text: null,
+  missing_scopes: [],
+  configured: true,
+}
+
+const NOT_CONFIGURED: DriveHealth = {
+  account: null,
+  banner: null,
+  banner_text: null,
+  missing_scopes: [],
+  configured: false,
+}
+
+const NOT_CONNECTED: DriveHealth = { ...NOT_CONFIGURED, configured: true }
+
+function renderPanel() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={client}>
+      <DrivePanel />
+    </QueryClientProvider>,
+  )
+}
+
+beforeEach(() => {
+  vi.mocked(api.GET).mockReset()
+  vi.mocked(api.POST).mockReset()
+  vi.mocked(api.PATCH).mockReset()
+  vi.mocked(api.DELETE).mockReset()
+})
+
+describe('DrivePanel', () => {
+  it('shows the connected account, its status and the configured roots', async () => {
+    vi.mocked(api.GET).mockResolvedValue(ok(CONNECTED))
+    renderPanel()
+
+    expect(await screen.findByText('ada@acme.it')).toBeInTheDocument()
+    expect(screen.getByText(/attiva/)).toBeInTheDocument()
+    expect(screen.getByDisplayValue(ROOT_ID_1)).toBeInTheDocument()
+    expect(screen.getByDisplayValue(STORAGE_ID)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Scollega Drive' })).toBeInTheDocument()
+  })
+
+  it('says Drive is not available on this installation rather than showing a broken panel', async () => {
+    vi.mocked(api.GET).mockResolvedValue(ok(NOT_CONFIGURED))
+    renderPanel()
+
+    expect(
+      await screen.findByText(/non è configurato su questa installazione/),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /Collega/ })).not.toBeInTheDocument()
+  })
+
+  it('offers the consent flow when Drive is configured but no account is connected', async () => {
+    vi.mocked(api.GET).mockResolvedValue(ok(NOT_CONNECTED))
+    renderPanel()
+
+    expect(
+      await screen.findByRole('link', { name: 'Collega Google Drive' }),
+    ).toHaveAttribute('href', '/api/drive/oauth/start')
+    expect(screen.queryByText(/non è configurato su questa installazione/)).not.toBeInTheDocument()
+  })
+
+  it('renders the error banner instead of an empty panel when the request failed', async () => {
+    vi.mocked(api.GET).mockResolvedValue(failed({ detail: 'database non raggiungibile' }, 503))
+    renderPanel()
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('database non raggiungibile')
+    expect(screen.queryByRole('button', { name: 'Scollega Drive' })).not.toBeInTheDocument()
+  })
+
+  it('shows the banner and hides the roots form when banner_text is set', async () => {
+    vi.mocked(api.GET).mockResolvedValue(
+      ok({
+        ...CONNECTED,
+        account: { ...ACCOUNT, status: 'revoked' as const },
+        banner: 'revoked',
+        banner_text: 'Il consenso Google per ada@acme.it è stato revocato: ricollega Drive.',
+      }),
+    )
+    renderPanel()
+
+    expect(await screen.findByText(/è stato revocato/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Aggiungi cartella' })).not.toBeInTheDocument()
+    expect(screen.queryByDisplayValue(ROOT_ID_1)).not.toBeInTheDocument()
+    // Disconnecting stays available even with a broken credential.
+    expect(screen.getByRole('button', { name: 'Scollega Drive' })).toBeInTheDocument()
+  })
+
+  it('asks for confirmation before disconnecting, and only calls DELETE once confirmed', async () => {
+    vi.mocked(api.GET).mockResolvedValue(ok(CONNECTED))
+    vi.mocked(api.DELETE).mockResolvedValue(ok(undefined))
+    renderPanel()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Scollega Drive' }))
+    expect(screen.getByText('Scollegare Google Drive?')).toBeInTheDocument()
+    expect(api.DELETE).not.toHaveBeenCalled()
+
+    // Radix marks `document.body` `pointer-events: none` while the dialog is open (its
+    // own scroll lock, restored on close) -- real browsers still resolve the click
+    // because the content itself opts back in, but jsdom's computed style does not
+    // reflect that override, so the click-time check is disabled for this one click.
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never })
+    const dialog = screen.getByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Scollega Drive' }))
+    await waitFor(() => expect(api.DELETE).toHaveBeenCalledWith('/api/drive/account'))
+  })
+
+  it('cancels without calling DELETE', async () => {
+    vi.mocked(api.GET).mockResolvedValue(ok(CONNECTED))
+    renderPanel()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Scollega Drive' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Annulla' }))
+
+    expect(screen.queryByText('Scollegare Google Drive?')).not.toBeInTheDocument()
+    expect(api.DELETE).not.toHaveBeenCalled()
+  })
+
+  it('rejects a malformed folder id client-side and disables Salva', async () => {
+    vi.mocked(api.GET).mockResolvedValue(ok(CONNECTED))
+    renderPanel()
+
+    const input = await screen.findByDisplayValue(ROOT_ID_1)
+    await userEvent.clear(input)
+    await userEvent.type(input, 'short')
+
+    expect(await screen.findByText(/L'ID non è valido/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Salva' })).toBeDisabled()
+    expect(api.PATCH).not.toHaveBeenCalled()
+  })
+
+  it('adds a folder row, saves the roots and shows a success toast', async () => {
+    vi.mocked(api.GET).mockResolvedValue(ok(CONNECTED))
+    vi.mocked(api.PATCH).mockResolvedValue(
+      ok({ ...ACCOUNT, root_folder_ids: [ROOT_ID_1, ROOT_ID_2] }),
+    )
+    renderPanel()
+
+    await screen.findByDisplayValue(ROOT_ID_1)
+    await userEvent.click(screen.getByRole('button', { name: 'Aggiungi cartella' }))
+    const idInputs = screen.getAllByPlaceholderText('ID cartella Drive')
+    await userEvent.type(idInputs[1]!, ROOT_ID_2)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Salva' }))
+
+    await waitFor(() => expect(api.PATCH).toHaveBeenCalled())
+    expect(vi.mocked(api.PATCH).mock.calls[0]?.[1]).toMatchObject({
+      body: { root_folder_ids: [ROOT_ID_1, ROOT_ID_2], storage_folder_id: STORAGE_ID },
+    })
+  })
+
+  it('sends storage_folder_id as null when the field is cleared', async () => {
+    vi.mocked(api.GET).mockResolvedValue(ok(CONNECTED))
+    vi.mocked(api.PATCH).mockResolvedValue(ok(ACCOUNT))
+    renderPanel()
+
+    const storageInput = await screen.findByDisplayValue(STORAGE_ID)
+    await userEvent.clear(storageInput)
+    await userEvent.click(screen.getByRole('button', { name: 'Salva' }))
+
+    await waitFor(() => expect(api.PATCH).toHaveBeenCalled())
+    expect(vi.mocked(api.PATCH).mock.calls[0]?.[1]).toMatchObject({
+      body: { root_folder_ids: [ROOT_ID_1], storage_folder_id: null },
+    })
+  })
+
+  it('shows why saving the roots failed', async () => {
+    vi.mocked(api.GET).mockResolvedValue(ok(CONNECTED))
+    vi.mocked(api.PATCH).mockResolvedValue(
+      failed({ code: 'validation_failed', detail: 'ID cartella non valido' }, 422),
+    )
+    renderPanel()
+
+    await screen.findByDisplayValue(ROOT_ID_1)
+    await userEvent.click(screen.getByRole('button', { name: 'Salva' }))
+
+    expect(await screen.findByText('ID cartella non valido')).toBeInTheDocument()
+  })
+})
