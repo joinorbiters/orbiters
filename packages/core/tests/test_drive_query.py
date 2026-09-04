@@ -35,6 +35,7 @@ import pytest
 from pigrocrm.core.drive import query as module
 from pigrocrm.core.drive.query import (
     DRIVE_API_ROOT,
+    checked_outside_id,
     children_query,
     escape_query_value,
     file_export_url,
@@ -102,6 +103,41 @@ def test_a_folder_id_that_could_break_out_of_the_query_is_refused() -> None:
         with pytest.raises(ValidationFailed) as caught:
             children_query(folder_id)
         assert caught.value.details["field"] == "folder_id"
+
+
+def test_checked_outside_id_names_the_field_it_was_given() -> None:
+    """Lo stesso controllo, due nomi. Un id che arriva da fuori puo' essere la cartella
+    radice incollata dal titolare o il file che un agente ha chiesto di leggere, e la
+    forma pretesa e' identica -- ma il messaggio no: chi legge «non e\' un id di
+    cartella Drive» dopo aver passato l'id di un *file* va a cercare l'errore nella
+    configurazione delle radici invece che nel parametro che ha scritto lui.
+    """
+    assert checked_outside_id(FOLDER, field="folder_id") == FOLDER
+    assert checked_outside_id(FOLDER, field="file_id") == FOLDER
+
+    with pytest.raises(ValidationFailed) as as_file:
+        checked_outside_id("abc", field="file_id")
+    assert as_file.value.details["field"] == "file_id"
+    assert as_file.value.details["entity"] == "drive_query"
+
+    with pytest.raises(ValidationFailed) as as_folder:
+        checked_outside_id("abc", field="folder_id")
+    assert as_folder.value.details["field"] == "folder_id"
+    # Una sola frase per i due, e che non nomini nessuno dei due tipi: e' la forma
+    # dell'id che e' sbagliata, non cosa c'e' dall'altra parte.
+    assert as_file.value.details["reason"] == as_folder.value.details["reason"]
+    assert "cartella" not in as_file.value.details["reason"]
+
+
+def test_checked_outside_id_is_the_check_children_query_already_did() -> None:
+    """La stessa severita' di prima, non una nuova: gli id che `children_query`
+    rifiutava restano rifiutati, e con lo stesso `field`."""
+    for hostile in ("", "abc", "1AbCd/EfGhIjKlMnOpQ", "x" * 129, "1AbCdEfGhIjKlMnOpQ "):
+        with pytest.raises(ValidationFailed) as caught:
+            checked_outside_id(hostile, field="folder_id")
+        assert caught.value.details["field"] == "folder_id"
+        with pytest.raises(ValidationFailed):
+            children_query(hostile)
 
 
 # --- guardia uno: l'URL di elenco rifiuta tutto cio' che non sia un elenco di figli --
@@ -356,6 +392,7 @@ def test_no_helper_takes_a_caller_supplied_search_string() -> None:
         and value.__module__ == module.__name__
     )
     assert exported == [
+        "checked_outside_id",
         "children_query",
         "escape_query_value",
         "file_export_url",

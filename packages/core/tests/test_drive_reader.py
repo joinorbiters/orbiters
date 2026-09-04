@@ -36,7 +36,12 @@ from pigrocrm.core.config import DRIVE_TEXT_MAX_BYTES_DEFAULT, Settings
 from pigrocrm.core.drive import reader as reader_module
 from pigrocrm.core.drive.errors import DriveCredentialRevoked
 from pigrocrm.core.drive.models import GoogleDriveAccount
-from pigrocrm.core.drive.reader import MAX_ROOT_WALK_LEVELS, DriveReader, drive_reader_for
+from pigrocrm.core.drive.reader import (
+    MAX_ROOT_WALK_LEVELS,
+    MAX_ROOT_WALK_REQUESTS,
+    DriveReader,
+    drive_reader_for,
+)
 from pigrocrm.core.drive.schemas import DRIVE_SCOPE_FILE, DRIVE_SCOPE_READONLY
 from pigrocrm.core.drive.text import DOCX_MIME, PDF_MIME, PROVENIENZA, TEXT_TRUNCATION_MARKER
 from pigrocrm.core.drive.transport import DriveTransport, UserTokens
@@ -314,6 +319,26 @@ def test_the_walk_upward_stops_after_twenty_levels() -> None:
     assert _reader(drive).is_within_roots(shallow) is True
 
 
+def test_the_walk_upward_stops_after_a_bounded_number_of_requests() -> None:
+    """The level bound is not the only way the walk can grow: Drive lets a file have
+    many parents, so one level can be three hundred folders wide. A file whose
+    ancestry fans out past the request bound is reported outside the roots rather than
+    spending three hundred calls on Google's quota to find out."""
+    drive = _tree()
+    fan = []
+    for index in range(MAX_ROOT_WALK_REQUESTS + 50):
+        fan.append(
+            drive.add_folder(f"F{index}", parent=OUTSIDE_FOLDER, file_id=f"1Fan{index:013d}")
+        )
+    wide = drive.add_file(
+        "molti genitori.txt", parent=fan[0], mime="text/plain", file_id="1MoltiGenitori000"
+    )
+    drive.files[wide].parents = fan
+
+    assert _reader(drive).is_within_roots(wide) is False
+    assert len(drive.requests) <= MAX_ROOT_WALK_REQUESTS + 1
+
+
 def test_the_walk_asks_drive_about_each_folder_at_most_once_per_call() -> None:
     """A file with two parents that share an ancestor: the cache is what keeps the walk
     linear in the number of folders instead of exponential in the number of paths."""
@@ -395,6 +420,28 @@ def test_read_bytes_refuses_a_file_drive_says_is_too_big_before_downloading_it()
 
     assert excinfo.value.details["entity"] == "drive_file"
     assert not any(request.params.get("alt") == ["media"] for request in drive.requests)
+
+
+def test_read_bytes_max_bytes_can_tighten_the_download_ceiling_but_never_widen_it() -> None:
+    """`max_bytes` is a caller's own limit, not a permission: a tool that asked for
+    500 MB would otherwise raise the ceiling this reader was built with, and the
+    ceiling exists precisely because the caller does not decide it."""
+    drive = _tree()
+    reader = _reader(drive, download_max_bytes=100)
+    big = drive.add_file(
+        "grosso.txt",
+        parent=SUB_FOLDER,
+        mime="text/plain",
+        content=b"x" * 500,
+        file_id="1FileGrosso000000",
+    )
+
+    with pytest.raises(Conflict):
+        reader.read_bytes(big, max_bytes=10_000_000)
+    assert not any(request.params.get("alt") == ["media"] for request in drive.requests)
+    # Tightening still works, on a file the ceiling would have allowed.
+    with pytest.raises(Conflict):
+        reader.read_bytes(TXT_FILE, max_bytes=4)
 
 
 def test_read_bytes_refuses_bytes_that_arrive_over_the_ceiling_even_undeclared() -> None:
@@ -501,6 +548,23 @@ def test_an_id_that_is_not_a_drive_id_is_refused_before_any_request(bad: str) ->
             call(bad)
 
     assert drive.requests == []
+
+
+def test_a_bad_file_id_is_refused_as_a_file_id_and_a_folder_id_as_a_folder_id() -> None:
+    """Which parameter was wrong is the whole content of the message. «non è un id di
+    cartella Drive» in answer to a *file* id sends the reader to check the configured
+    roots, which are fine, instead of the id they typed."""
+    reader = _reader(_tree())
+
+    for call in (reader.read_bytes, reader.read_text):
+        with pytest.raises(ValidationFailed) as caught:
+            call("corto")
+        assert caught.value.details["field"] == "file_id"
+
+    for call in (reader.list_children, reader.is_within_roots):
+        with pytest.raises(ValidationFailed) as caught:
+            call("corto")
+        assert caught.value.details["field"] == "folder_id"
 
 
 # --- the credential -------------------------------------------------------------------

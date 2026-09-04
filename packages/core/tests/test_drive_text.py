@@ -18,12 +18,16 @@ matters here: a page with a `Tj` operator in it, and a page with none.
 """
 
 import io
+import struct
+import tracemalloc
 import zipfile
 
 import pytest
 
 from pigrocrm.core.drive.text import (
     DOCX_MIME,
+    DOCX_XML_MAX_BYTES,
+    MAX_PDF_PAGES,
     PDF_MIME,
     PROVENIENZA,
     TEXT_TRUNCATION_MARKER,
@@ -100,14 +104,6 @@ def minimal_docx(paragraphs: list[list[str]]) -> bytes:
     arrives as three `w:t` nodes that have to be concatenated *without* a separator,
     while the paragraph boundary is the one place a newline belongs.
     """
-    body = ""
-    for runs in paragraphs:
-        body += "<w:p>" + "".join(f'<w:r><w:t xml:space="preserve">{r}</w:t></w:r>' for r in runs)
-        body += "</w:p>"
-    document = (
-        f'<?xml version="1.0" encoding="UTF-8"?>'
-        f'<w:document xmlns:w="{WORD_NS}"><w:body>{body}</w:body></w:document>'
-    )
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w") as archive:
         archive.writestr(
@@ -115,8 +111,19 @@ def minimal_docx(paragraphs: list[list[str]]) -> bytes:
             '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/'
             'package/2006/content-types"/>',
         )
-        archive.writestr("word/document.xml", document)
+        archive.writestr("word/document.xml", _document_xml(paragraphs))
     return out.getvalue()
+
+
+def _document_xml(paragraphs: list[list[str]]) -> str:
+    body = ""
+    for runs in paragraphs:
+        body += "<w:p>" + "".join(f'<w:r><w:t xml:space="preserve">{r}</w:t></w:r>' for r in runs)
+        body += "</w:p>"
+    return (
+        f'<?xml version="1.0" encoding="UTF-8"?>'
+        f'<w:document xmlns:w="{WORD_NS}"><w:body>{body}</w:body></w:document>'
+    )
 
 
 # --- the four types this slice reads -------------------------------------------------
@@ -214,6 +221,56 @@ def test_a_docx_whose_xml_expands_beyond_the_ceiling_is_never_decompressed() -> 
     assert drive_text(out.getvalue(), mime=DOCX_MIME, max_bytes=262_144).testo == ""
 
 
+def test_a_docx_that_lies_about_how_big_its_xml_is_still_allocates_nothing() -> None:
+    """The declared size is the *attacker's* number: a zip's headers say how big a
+    member expands to, and rewriting them costs nothing. So the refusal on
+    `file_size` is only the cheap first pass -- the member is then read through a
+    bounded `read(DOCX_XML_MAX_BYTES + 1)`, which is what makes the ceiling a real
+    memory bound rather than a statement about a field.
+
+    Measured with `tracemalloc` and not merely asserted in prose: before this bound
+    existed, this 200 KB file made `ZipFile.read` decompress its way to hundreds of
+    megabytes before the CRC finally failed.
+    """
+    honest = "a" * (64 * 1024 * 1024)
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("word/document.xml", honest)
+    # The uncompressed size, as written into the local header and the central
+    # directory. Both are rewritten to a harmless 1 KB, which is exactly the lie a
+    # crafted `.docx` tells.
+    lying = out.getvalue().replace(struct.pack("<I", len(honest)), struct.pack("<I", 1024))
+    assert lying != out.getvalue()
+    assert len(lying) < 200_000
+    assert zipfile.ZipFile(io.BytesIO(lying)).getinfo("word/document.xml").file_size == 1024
+
+    tracemalloc.start()
+    try:
+        result = drive_text(lying, mime=DOCX_MIME, max_bytes=262_144)
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert result.testo == ""
+    # Bounded by the *ceiling*, not by the payload: 64 MiB of markup went in and the
+    # read allocated the ceiling twice over -- once in `zipfile`'s own decompression
+    # buffer, once in the bytes handed back -- and nothing more. Before the bound, the
+    # same 200 KB file peaked past the whole 64 MiB.
+    assert peak < 3 * DOCX_XML_MAX_BYTES, f"peak allocation was {peak} bytes"
+
+
+def test_a_docx_at_the_xml_ceiling_is_still_read() -> None:
+    """The bound refuses what is *over* the ceiling, so a document exactly at it must
+    survive: a guard that also rejected the largest legitimate file would be a smaller
+    ceiling wearing this one's number."""
+    filler = "b" * (DOCX_XML_MAX_BYTES - 2_000)
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("word/document.xml", _document_xml([[filler]]))
+
+    assert drive_text(out.getvalue(), mime=DOCX_MIME, max_bytes=100).testo.startswith("bbb")
+
+
 def test_a_text_file_is_decoded_as_utf8() -> None:
     result = drive_text("Perizia già firmata".encode(), mime="text/plain", max_bytes=262_144)
 
@@ -287,6 +344,19 @@ def test_the_pages_of_a_pdf_are_joined_and_cut_at_the_ceiling() -> None:
     assert cut.troncato is True
     assert cut.testo.startswith("Pagina 0 di venti")
     assert "Pagina 19 di venti" not in cut.testo
+
+
+def test_a_pdf_is_read_for_at_most_the_page_cap() -> None:
+    """The byte budget stops a *long* document; this stops a wide one whose pages are
+    each nearly empty -- a five-thousand-page fax archive whose text is two kilobytes
+    would otherwise be parsed in full, page by page, for nothing."""
+    pdf = minimal_pdf_pages([[f"Pagina {n}"] for n in range(MAX_PDF_PAGES + 5)])
+
+    result = drive_text(pdf, mime=PDF_MIME, max_bytes=262_144)
+
+    assert "Pagina 0" in result.testo
+    assert f"Pagina {MAX_PDF_PAGES + 4}" not in result.testo
+    assert result.testo.count("Pagina") == MAX_PDF_PAGES
 
 
 def test_max_bytes_must_be_positive() -> None:
