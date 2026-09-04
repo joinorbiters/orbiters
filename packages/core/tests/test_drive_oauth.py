@@ -2,11 +2,13 @@
 
 import base64
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 import pytest
+from fakes.fake_drive import FakeDrive
 from fakes.fake_gmail import FakeGmail
 from fakes.gmail_fixtures import TOKEN_KEY, gmail_settings
 from pydantic import ValidationError
@@ -27,7 +29,8 @@ from pigrocrm.core.drive.schemas import (
     DriveRootsUpdate,
     GoogleDriveAccountRead,
 )
-from pigrocrm.core.errors import Conflict
+from pigrocrm.core.drive.transport import DriveTransport
+from pigrocrm.core.errors import Conflict, ValidationFailed
 from pigrocrm.core.gmail.crypto import seal, unseal
 from pigrocrm.core.gmail.errors import ConsentExpired, CredentialRevoked
 from pigrocrm.core.gmail.models import GoogleAccount, GoogleOAuthState
@@ -408,12 +411,43 @@ def test_a_gmail_state_cannot_complete_the_drive_flow(
 # --- GoogleDriveAccountService: health, the gate, and the configured roots -----------
 
 
-def _drive_service_account(session: Session) -> GoogleDriveAccountService:
-    return GoogleDriveAccountService(session, settings=gmail_settings())
+def _drive_service_account(
+    session: Session,
+    *,
+    transport_factory: Callable[[GoogleDriveAccount], DriveTransport] | None = None,
+) -> GoogleDriveAccountService:
+    return GoogleDriveAccountService(
+        session, settings=gmail_settings(), transport_factory=transport_factory
+    )
 
 
 def _drive_actor(user: User) -> Actor:
     return Actor(id=user.id, type="user", role="admin")
+
+
+class _StubTokens:
+    """A `TokenProvider` that never dials out: `set_roots`'s verification only needs
+    *a* bearer token to put on the one `files.get` it makes, never a real one, since
+    every fake in this module answers any `Authorization` header."""
+
+    def access_token(self) -> str:
+        return "at-set-roots-test"
+
+    def forget(self) -> None:
+        pass
+
+
+def _fake_transport_factory(
+    drive: FakeDrive,
+) -> Callable[[GoogleDriveAccount], DriveTransport]:
+    """A `transport_factory` over a `FakeDrive`, for `set_roots`'s own verification
+    call -- the composition the class docstring says a test supplies in place of
+    `user_transport_for`."""
+
+    def factory(_account: GoogleDriveAccount) -> DriveTransport:
+        return DriveTransport(tokens=_StubTokens(), http=drive, sleep=lambda _: None)
+
+    return factory
 
 
 def _connected_drive_account(
@@ -671,7 +705,9 @@ def test_set_roots_persists_both_fields_and_records_the_activity(
     db_session: Session, admin_user: User
 ) -> None:
     account = _connected_drive_account(db_session, admin_user)
-    service = _drive_service_account(db_session)
+    drive = FakeDrive()
+    drive.add_folder("Fatture", parent=drive.root_id, file_id="3AbCdEfGhIjKlMnOpQ")
+    service = _drive_service_account(db_session, transport_factory=_fake_transport_factory(drive))
 
     read = service.set_roots(
         DriveRootsUpdate(
@@ -707,7 +743,9 @@ def test_a_patch_that_omits_the_storage_folder_keeps_it_and_leaves_it_out_of_the
     had asked for that.
     """
     account = _connected_drive_account(db_session, admin_user)
-    service = _drive_service_account(db_session)
+    drive = FakeDrive()
+    drive.add_folder("Fatture", parent=drive.root_id, file_id="3AbCdEfGhIjKlMnOpQ")
+    service = _drive_service_account(db_session, transport_factory=_fake_transport_factory(drive))
     service.set_roots(
         DriveRootsUpdate(
             root_folder_ids=["1AbCdEfGhIjKlMnOpQ"], storage_folder_id="3AbCdEfGhIjKlMnOpQ"
@@ -745,7 +783,9 @@ def test_an_explicit_null_storage_folder_clears_it(db_session: Session, admin_us
     clearing the write folder is a thing a person is allowed to ask for, and the
     timeline records that they did."""
     account = _connected_drive_account(db_session, admin_user)
-    service = _drive_service_account(db_session)
+    drive = FakeDrive()
+    drive.add_folder("Fatture", parent=drive.root_id, file_id="3AbCdEfGhIjKlMnOpQ")
+    service = _drive_service_account(db_session, transport_factory=_fake_transport_factory(drive))
     service.set_roots(
         DriveRootsUpdate(
             root_folder_ids=["1AbCdEfGhIjKlMnOpQ"], storage_folder_id="3AbCdEfGhIjKlMnOpQ"
@@ -828,3 +868,166 @@ def test_set_roots_is_refused_for_a_readonly_actor(db_session: Session, admin_us
         _drive_service_account(db_session).set_roots(
             DriveRootsUpdate(root_folder_ids=["1AbCdEfGhIjKlMnOpQ"]), reader
         )
+
+
+# --- set_roots verifies the write folder before saving it (slice 9D, task 3) --------
+
+
+def test_set_roots_refuses_a_storage_folder_the_fake_does_not_know_and_writes_nothing(
+    db_session: Session, admin_user: User
+) -> None:
+    """Choosing the write folder has to prove it is reachable with the owner's own
+    credential -- a folder the fake (standing in for this account's Drive) has never
+    heard of is either the wrong id or one nobody shared with this account, and either
+    way that is a validation problem now, not a failed upload later. Nothing on the
+    row or in the timeline may change when it is refused."""
+    account = _connected_drive_account(db_session, admin_user)
+    original_roots = list(account.root_folder_ids)
+    original_storage = account.storage_folder_id
+    drive = FakeDrive()  # knows nothing about "9NonEsisteSuDriveXXXX"
+    service = _drive_service_account(db_session, transport_factory=_fake_transport_factory(drive))
+
+    with pytest.raises(ValidationFailed) as caught:
+        service.set_roots(
+            DriveRootsUpdate(
+                root_folder_ids=["1AbCdEfGhIjKlMnOpQ"],
+                storage_folder_id="9NonEsisteSuDriveXXXX",
+            ),
+            _drive_actor(admin_user),
+        )
+
+    assert caught.value.details["field"] == "storage_folder_id"
+    assert "9NonEsisteSuDriveXXXX" in caught.value.details["reason"]
+    db_session.refresh(account)
+    assert account.root_folder_ids == original_roots
+    assert account.storage_folder_id == original_storage
+    kinds = db_session.execute(select(Activity.kind)).scalars().all()
+    assert "drive.radici_impostate" not in kinds
+
+
+def test_set_roots_saves_a_storage_folder_the_fake_confirms_exists(
+    db_session: Session, admin_user: User
+) -> None:
+    account = _connected_drive_account(db_session, admin_user)
+    drive = FakeDrive()
+    drive.add_folder("Fatture", parent=drive.root_id, file_id="3AbCdEfGhIjKlMnOpQ")
+    service = _drive_service_account(db_session, transport_factory=_fake_transport_factory(drive))
+
+    read = service.set_roots(
+        DriveRootsUpdate(
+            root_folder_ids=["1AbCdEfGhIjKlMnOpQ"], storage_folder_id="3AbCdEfGhIjKlMnOpQ"
+        ),
+        _drive_actor(admin_user),
+    )
+
+    assert read.storage_folder_id == "3AbCdEfGhIjKlMnOpQ"
+    db_session.refresh(account)
+    assert account.storage_folder_id == "3AbCdEfGhIjKlMnOpQ"
+
+
+def test_set_roots_refuses_a_storage_folder_that_is_actually_a_file(
+    db_session: Session, admin_user: User
+) -> None:
+    """Existing and visible is not enough: `storage_folder_id` has to name a folder, or
+    every upload beneath it would try to create children inside a file."""
+    account = _connected_drive_account(db_session, admin_user)
+    drive = FakeDrive()
+    drive.add_file("fattura.pdf", parent=drive.root_id, file_id="3AbCdEfGhIjKlMnOpQXX")
+    service = _drive_service_account(db_session, transport_factory=_fake_transport_factory(drive))
+
+    with pytest.raises(ValidationFailed) as caught:
+        service.set_roots(
+            DriveRootsUpdate(
+                root_folder_ids=["1AbCdEfGhIjKlMnOpQ"], storage_folder_id="3AbCdEfGhIjKlMnOpQXX"
+            ),
+            _drive_actor(admin_user),
+        )
+
+    assert caught.value.details["field"] == "storage_folder_id"
+    db_session.refresh(account)
+    assert account.storage_folder_id is None
+
+
+def test_set_roots_never_verifies_the_read_only_root_folders(
+    db_session: Session, admin_user: User
+) -> None:
+    """`root_folder_ids` are read roots, verified only at the moment they are used, by
+    the Drive reader -- not here. A root id the fake has never heard of must not block
+    saving a write folder the same fake *does* confirm exists."""
+    _connected_drive_account(db_session, admin_user)
+    drive = FakeDrive()
+    drive.add_folder("Fatture", parent=drive.root_id, file_id="3AbCdEfGhIjKlMnOpQ")
+    service = _drive_service_account(db_session, transport_factory=_fake_transport_factory(drive))
+
+    read = service.set_roots(
+        DriveRootsUpdate(
+            root_folder_ids=["9NonEsisteSuDriveXXXX"],
+            storage_folder_id="3AbCdEfGhIjKlMnOpQ",
+        ),
+        _drive_actor(admin_user),
+    )
+
+    assert read.root_folder_ids == ["9NonEsisteSuDriveXXXX"]
+    assert read.storage_folder_id == "3AbCdEfGhIjKlMnOpQ"
+    # Exactly one Drive call: the write-folder verification. A root id the fake has
+    # never heard of would have raised had it been checked here too.
+    assert len(drive.calls) == 1
+
+
+def test_set_roots_makes_no_drive_call_when_the_storage_folder_is_kept_or_cleared(
+    db_session: Session, admin_user: User
+) -> None:
+    """Omitting `storage_folder_id` (keep the one already stored) or naming `null`
+    (clear it) are both legal PATCHes that never touch Drive: there is nothing new to
+    prove reachable in either case."""
+    _connected_drive_account(db_session, admin_user)
+    drive = FakeDrive()
+    service = _drive_service_account(db_session, transport_factory=_fake_transport_factory(drive))
+
+    service.set_roots(
+        DriveRootsUpdate(root_folder_ids=["1AbCdEfGhIjKlMnOpQ"]), _drive_actor(admin_user)
+    )
+    service.set_roots(
+        DriveRootsUpdate(root_folder_ids=["2AbCdEfGhIjKlMnOpQ"], storage_folder_id=None),
+        _drive_actor(admin_user),
+    )
+
+    assert drive.calls == []
+
+
+def test_set_roots_records_a_revocation_discovered_while_verifying_the_storage_folder(
+    db_session: Session, admin_user: User
+) -> None:
+    """A refresh answering `invalid_grant` during the verification call is the same
+    fact `mark_revoked` records everywhere else it can be learned: the row moves to
+    `revoked` and the exception continues, unflattened -- it must not be reported as a
+    bad folder id, which is a different problem with a different fix."""
+    account = _connected_drive_account(db_session, admin_user)
+
+    class _RevokedTokens:
+        def access_token(self) -> str:
+            raise DriveCredentialRevoked(account.id, account.email_address)
+
+        def forget(self) -> None:
+            pass
+
+    def revoked_transport_factory(_account: GoogleDriveAccount) -> DriveTransport:
+        return DriveTransport(tokens=_RevokedTokens(), http=FakeDrive(), sleep=lambda _: None)
+
+    service = _drive_service_account(db_session, transport_factory=revoked_transport_factory)
+
+    with pytest.raises(DriveCredentialRevoked):
+        service.set_roots(
+            DriveRootsUpdate(
+                root_folder_ids=["1AbCdEfGhIjKlMnOpQ"], storage_folder_id="3AbCdEfGhIjKlMnOpQ"
+            ),
+            _drive_actor(admin_user),
+        )
+
+    db_session.expire_all()
+    stored = db_session.get(GoogleDriveAccount, account.id)
+    assert stored is not None
+    assert stored.status == "revoked"
+    kinds = db_session.execute(select(Activity.kind)).scalars().all()
+    assert "drive.credenziale_revocata" in kinds
+    assert "drive.radici_impostate" not in kinds

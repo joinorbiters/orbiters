@@ -16,16 +16,24 @@ reason it gets none for Gmail -- a Drive the person unhooked on purpose is not a
 `root_folder_ids`/`storage_folder_id` are Drive's own configuration, not the
 credential, which is why `set_roots` lives here rather than in `drive/oauth.py`:
 writing them is a settings change, not a re-consent, and it commits on its own
-transaction the same way `GoogleAccountService.set_store_bodies` does. Verifying the
-chosen `storage_folder_id` is actually writable is 9D's job (the first real call
-against Drive); this module only ever writes ids a person typed, never dereferences
-them.
+transaction the same way `GoogleAccountService.set_store_bodies` does.
+
+`storage_folder_id` alone is dereferenced, and only when it is being set to a new,
+non-null id: `set_roots` proves the folder exists, is visible to this credential, and
+is actually a folder -- one `files.get` through the owner's own transport, before a
+single column is written -- so a titolare who pastes the id of a file, a folder they
+cannot see, or a typo learns it on the spot rather than on the CRM's first upload.
+`root_folder_ids` are read roots and are never dereferenced here; they are verified at
+the moment they are used, by the Drive reader. `transport_factory` exists solely so a
+test can point that one `files.get` at a fake instead of Google -- production always
+takes the default, `transport/user_transport_for`.
 
 One new `activities` kind lives here: `drive.radici_impostate`, alongside
 `drive.credenziale_revocata` -- `activities.kind` is open by project (slice 1 §5.8),
 so neither costs a migration.
 """
 
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
@@ -35,6 +43,7 @@ from pigrocrm.core.actor import Actor
 from pigrocrm.core.config import Settings, gmail_configured
 from pigrocrm.core.drive.errors import DriveConsentExpired, DriveCredentialRevoked
 from pigrocrm.core.drive.models import GoogleDriveAccount
+from pigrocrm.core.drive.query import FOLDER_MIME, file_meta_url
 from pigrocrm.core.drive.repository import DriveRepository
 from pigrocrm.core.drive.schemas import (
     DRIVE_SCOPE_FILE,
@@ -44,7 +53,8 @@ from pigrocrm.core.drive.schemas import (
     DriveRootsUpdate,
     GoogleDriveAccountRead,
 )
-from pigrocrm.core.errors import Conflict
+from pigrocrm.core.drive.transport import DriveTransport, user_transport_for
+from pigrocrm.core.errors import Conflict, ValidationFailed
 
 # The same 48-hour lead as Gmail's `CONSENT_WARNING_HOURS`: one Google OAuth client
 # grants both credentials, so Testing-mode's seven-day window and the moment a warning
@@ -75,13 +85,34 @@ _SCOPE_TEXT = (
     "Ricollega Drive da Impostazioni → Drive per concederla."
 )
 
+# What the one `files.get` call in `_verify_storage_folder` tells the transport it is
+# doing. `Conflict.details["what"]` carries this back, which is what tells a 404 there
+# apart from a 404 anywhere else in the same call (the token endpoint, notably) -- see
+# `_verify_storage_folder`'s own docstring.
+_WHAT_VERIFY_STORAGE_FOLDER = "verifica della cartella di scrittura"
+
 
 class GoogleDriveAccountService:
-    def __init__(self, session: Session, *, settings: Settings) -> None:
+    def __init__(
+        self,
+        session: Session,
+        *,
+        settings: Settings,
+        transport_factory: Callable[[GoogleDriveAccount], DriveTransport] | None = None,
+    ) -> None:
         self.session = session
         self.settings = settings
         self.repo = DriveRepository(session)
         self.activities = ActivityService(session)
+        # Production takes the default: a transport built from this row's own sealed
+        # refresh token, the same composition `drive/reader.py` and `storage/
+        # lazy_drive.py` use. A test supplies its own, over a fake of the network,
+        # so `_verify_storage_folder`'s one `files.get` never dials out.
+        self._transport_factory: Callable[[GoogleDriveAccount], DriveTransport] = (
+            transport_factory
+            if transport_factory is not None
+            else lambda account: user_transport_for(account, self.settings)
+        )
 
     def health(self, actor: Actor) -> DriveHealth:
         """One call answers the whole shell banner for Drive.
@@ -219,9 +250,15 @@ class GoogleDriveAccountService:
         folders to configure. Unlike `usable`, a revoked or expired credential is
         still allowed through here -- fixing the folder list is not a use of the
         credential, and the person most likely to be looking at this screen is the
-        one trying to recover from exactly that state. Verifying that
-        `storage_folder_id` is actually writable is 9D's job, at the first real call;
-        this method only ever stores ids a person typed.
+        one trying to recover from exactly that state.
+
+        **Choosing the write folder proves it is writable.** A new, non-null
+        `storage_folder_id` is verified against Drive -- `_verify_storage_folder`,
+        below -- *before* anything on the row changes, so a titolare who pastes the
+        wrong id gets `ValidationFailed` naming it and nothing is written, rather than
+        discovering the mistake on the CRM's first upload. `root_folder_ids` are read
+        roots and are never dereferenced here; a Drive query against them only ever
+        runs when the reader actually uses one.
 
         **PATCH semantics, and why `model_fields_set` is read here.** The route is a
         `PATCH`: it changes the fields the request named and leaves the rest alone.
@@ -232,10 +269,15 @@ class GoogleDriveAccountService:
         the read roots erase the write folder, and record `storage_folder_id: None` in
         the timeline as though somebody had asked for that. `model_fields_set` is the
         one place the difference still exists, so it is what decides: named (with an id
-        or with `null`) means write it and record it, absent means neither.
+        or with `null`) means write it and record it, absent means neither -- and only
+        naming a real id, never `null`, means verify it.
         """
         actor.require_write(_ROOTS_ACTION)
         account = self._present(actor)
+        if "storage_folder_id" in data.model_fields_set and data.storage_folder_id is not None:
+            # Before any mutation: a failed verification must leave the row and the
+            # timeline exactly as they were.
+            self._verify_storage_folder(account, data.storage_folder_id)
         account.root_folder_ids = list(data.root_folder_ids)
         payload: dict[str, object] = {"root_folder_ids": list(data.root_folder_ids)}
         if "storage_folder_id" in data.model_fields_set:
@@ -252,6 +294,61 @@ class GoogleDriveAccountService:
         )
         self.session.commit()
         return GoogleDriveAccountRead.model_validate(account)
+
+    def _verify_storage_folder(self, account: GoogleDriveAccount, folder_id: str) -> None:
+        """Proves `folder_id` is reachable with `account`'s own credential and is
+        itself a folder, before `set_roots` writes it anywhere.
+
+        The same call `GDriveStorage.verify_root_accessible` makes for a service
+        account's configured root -- a `files.get` for `id,mimeType` -- made here
+        instead for the folder a titolare just chose, through their own transport
+        (`self._transport_factory`, a real `DriveTransport` in production, a fake one
+        in a test). Only existence, visibility and shape are checked: whether Drive
+        will actually accept a write there has no cheap way to be asked ahead of one,
+        and `verify_root_accessible` settles for exactly this same proof at startup.
+
+        A 404 here means the id names nothing this credential can see -- the wrong id,
+        a folder never shared with this account -- and becomes a `ValidationFailed` on
+        `storage_folder_id` naming it, the same shape every other bad field on this
+        schema fails with. Any other Drive refusal (403, 5xx, a broken credential's own
+        401) is not a bad id and propagates as the `Conflict` the transport raised.
+        `DriveCredentialRevoked` is caught ahead of that, because it is not `Conflict`
+        as a *symptom of this call* -- it is the same fact `mark_revoked` already
+        records everywhere else a refresh answers `invalid_grant` -- so it is recorded
+        here too, then re-raised unflattened.
+        """
+        transport = self._transport_factory(account)
+        try:
+            meta = transport.json(
+                "GET",
+                file_meta_url(folder_id, fields="id,mimeType"),
+                what=_WHAT_VERIFY_STORAGE_FOLDER,
+            )
+        except DriveCredentialRevoked:
+            self.mark_revoked(
+                account, Actor.system(), _REVOKED_TEXT.format(email=account.email_address)
+            )
+            raise
+        except Conflict as failed:
+            if (
+                failed.details.get("what") == _WHAT_VERIFY_STORAGE_FOLDER
+                and failed.details.get("status") == 404
+            ):
+                raise ValidationFailed(
+                    "google_drive_account",
+                    "storage_folder_id",
+                    f"la cartella {folder_id} non è raggiungibile con questo account "
+                    "Google: verifica l'id o condividila con l'account collegato",
+                    expected="l'id di una cartella visibile a questo account Google",
+                ) from failed
+            raise
+        if meta.get("mimeType") != FOLDER_MIME:
+            raise ValidationFailed(
+                "google_drive_account",
+                "storage_folder_id",
+                f"{folder_id} non è una cartella di Google Drive",
+                expected="l'id di una cartella, non di un file",
+            )
 
     # --- internals -------------------------------------------------------------------
 
