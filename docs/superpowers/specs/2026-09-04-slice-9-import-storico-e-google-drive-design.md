@@ -85,9 +85,12 @@ Le stesse dello slice 3, applicate ai numeri dichiarati:
    li inventa e non li blocca: il chiamante passa `buchi_dichiarati: [1, 4, 6]` con un motivo
    testuale per ciascuno (es. «annullata in Acme prima della trasmissione»). Il servizio scrive
    una riga `invoice_register_gaps(anno, numero, motivo, dichiarato_da, dichiarato_il)`. Un
-   numero mancante **non dichiarato** fra il minimo importato e `ultimo_numero` è un errore
+   numero mancante **non dichiarato** fra 1 e `ultimo_numero` è un errore
    dell'import, non un avviso: il registro senza buchi è la proprietà che lo slice 3 esiste per
-   difendere, e un buco muto è indistinguibile da una fattura persa.
+   difendere, e un buco muto è indistinguibile da una fattura persa. Il limite inferiore è **1**,
+   non il minimo importato: il registro di un anno comincia sempre dall'1, quindi un 1 mancante è
+   un buco esattamente come un 8 mancante — ed è proprio il caso del 2026 di Acme, la cui prima
+   fattura è la 2.
 5. **Solo anni chiusi o l'anno corrente fino a oggi**: `data_emissione` non nel futuro.
 6. **Nessun import dopo la prima emissione nativa dello stesso anno**, salvo numeri inferiori
    al primo emesso da PigroCRM. Tradotto: si importa lo storico *prima* di cominciare, o si
@@ -113,9 +116,13 @@ note_interne?, importata_da: "acme"
 («207571/0426/…») è una causale, quindi va in `causale` e nella riga.
 
 **I totali sono dichiarati e verificati, non ricalcolati.** Il documento fiscale è quello
-emesso da Acme: il CRM deve registrare *quel* totale. Ma verifica che `imponibile + imposta +
-bollo = totale` e che `imponibile = Σ prezzo_totale di riga` al centesimo; una discordanza è un
-`ValidationFailed` che nomina i due valori. È lo stesso principio dei totali dello slice 3 §6.1,
+emesso da Acme: il CRM deve registrare *quel* totale. Ma verifica che `imponibile + imposta =
+totale` e che `imponibile = Σ prezzo_totale di riga` al centesimo; una discordanza è un
+`ValidationFailed` che nomina i due valori. Il **bollo non entra nel totale**: si dichiara a
+parte (verificato non negativo, mai sommato), perché `DatiBollo/BolloVirtuale` afferma che è
+l'emittente ad averlo assolto in modo virtuale — è la stessa identità che `sum_totals` dello
+slice 3 (§6.1 regola 4 e §7.2) scrive per una fattura emessa qui, e il registro Acme concorda:
+la colonna «Totale» coincide sempre con «Imp. Reddito». È lo stesso principio dei totali dello slice 3 §6.1,
 letto al contrario: lì il CRM calcola e il documento segue, qui il documento comanda e il CRM
 controlla che i conti tornino.
 
