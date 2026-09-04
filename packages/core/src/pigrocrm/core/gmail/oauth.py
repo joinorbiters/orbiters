@@ -45,6 +45,7 @@ from sqlalchemy.orm import Session
 from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.config import Settings, decode_google_token_key, require_gmail_configured
+from pigrocrm.core.drive.repository import DriveRepository
 from pigrocrm.core.errors import Conflict
 from pigrocrm.core.gmail.crypto import seal
 from pigrocrm.core.gmail.models import GoogleAccount, GoogleOAuthState
@@ -172,6 +173,24 @@ class GmailOAuthService:
                 f"{grant.email_address}: scollega prima l'account attuale",
                 connected=existing.email_address,
                 offered=grant.email_address,
+            )
+
+        # The mirror of `GoogleDriveOAuthService.complete`'s own cross-identity check
+        # (spec 9 §5.2): two independent grants naming two different Google identities
+        # would leave this installation's mailbox and its Drive belonging to two
+        # different people, with nothing short of comparing the rows by hand to notice.
+        # Skipped once the Drive credential has been explicitly disconnected, for the
+        # same reason the mailbox comparison above is.
+        drive_account = DriveRepository(self.session).account_for_user(actor.id)
+        if (
+            drive_account is not None
+            and drive_account.disconnected_at is None
+            and drive_account.google_sub != grant.subject
+        ):
+            raise Conflict(
+                "google_account",
+                "questa casella appartiene a un account Google diverso dal Drive "
+                f"collegato ({drive_account.email_address}): usa lo stesso account",
             )
 
         account = self._store(existing, grant, actor.id, now)
