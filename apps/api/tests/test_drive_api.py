@@ -16,6 +16,7 @@ property of the *adapter* rather than of the domain:
 unconfigured, which is the state the first tests need.
 """
 
+import json
 from collections.abc import Iterator
 from typing import Any
 
@@ -25,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from pigrocrm.core.config import Settings, get_settings
 from pigrocrm.core.drive.models import GoogleDriveAccount
+from pigrocrm.core.drive.transport import DriveTransport
 
 TOKEN_KEY_B64 = "a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s="  # 32 bytes of "k"
 CLIENT_SECRET = "il-segreto-del-client"
@@ -206,6 +208,40 @@ def test_a_callback_with_a_state_nobody_issued_never_reports_a_connection(
 # --- the roots configuration -------------------------------------------------------------
 
 
+def _stub_writable_folder(monkeypatch: pytest.MonkeyPatch, folder_id: str) -> None:
+    """Points `set_roots`'s write-folder verification (slice 9D task 3) at a fake Drive
+    that confirms `folder_id` exists, without touching the network or this row's own
+    (placeholder, undecryptable) refresh token.
+
+    `GoogleDriveAccountService`'s router construction (`routers/drive.py`) takes no
+    `transport_factory` -- there is no dependency seam for one -- so this replaces the
+    *default* the class falls back to, `drive/account.py`'s own
+    `user_transport_for`, at the name the service looks it up under. Every other test
+    in this file either never names a new `storage_folder_id` or clears it, neither of
+    which `set_roots` verifies (see its own docstring), so this is the one seam only
+    this one test needs.
+    """
+
+    class _StubTokens:
+        def access_token(self) -> str:
+            return "at-test"
+
+        def forget(self) -> None:
+            pass
+
+    def stub_http(
+        method: str, url: str, headers: dict[str, str], body: bytes | None
+    ) -> tuple[int, bytes]:
+        return 200, json.dumps(
+            {"id": folder_id, "mimeType": "application/vnd.google-apps.folder"}
+        ).encode()
+
+    def factory(_account: GoogleDriveAccount, _settings: Settings) -> DriveTransport:
+        return DriveTransport(tokens=_StubTokens(), http=stub_http, sleep=lambda _: None)
+
+    monkeypatch.setattr("pigrocrm.core.drive.account.user_transport_for", factory)
+
+
 def test_setting_roots_without_a_connected_account_is_a_conflict(
     logged_in: TestClient, drive_ready: TestClient
 ) -> None:
@@ -214,9 +250,14 @@ def test_setting_roots_without_a_connected_account_is_a_conflict(
 
 
 def test_setting_roots_on_a_connected_account_updates_them(
-    logged_in: TestClient, drive_ready: TestClient, api_session: Session, admin_user: Any
+    logged_in: TestClient,
+    drive_ready: TestClient,
+    api_session: Session,
+    admin_user: Any,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _connected_account(api_session, admin_user.id)
+    _stub_writable_folder(monkeypatch, STORAGE_ID)
 
     response = logged_in.patch(
         "/api/drive/account/roots",
