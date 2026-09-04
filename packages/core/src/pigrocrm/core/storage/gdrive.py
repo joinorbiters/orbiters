@@ -56,6 +56,14 @@ FOLDER_MIME = "application/vnd.google-apps.folder"
 # for; see the module docstring.
 APP_PROPERTY_KEY = "pigrocrm_key"
 _MULTIPART_BOUNDARY = "pigrocrm-boundary-7f3c1a"
+# What each call tells the transport it is doing. Named, because obtaining the access
+# token is itself a call through the same transport, so a failure has to be attributed
+# before it is interpreted: a 404 from the *token* endpoint is not a missing document,
+# and a 403 there is not an unshared folder. `_decode` puts this string in
+# `Conflict.details["what"]` for exactly that comparison.
+_WHAT_API = "richiesta a Google Drive"
+_WHAT_DOWNLOAD = "download da Google Drive"
+_WHAT_VERIFY = "verifica della cartella radice"
 
 
 def _escape_drive_query(value: str) -> str:
@@ -122,7 +130,7 @@ class GDriveStorage:
         self, method: str, url: str, *, body: bytes | None = None, content_type: str | None = None
     ) -> dict[str, Any]:
         return self._transport.json(
-            method, url, body=body, content_type=content_type, what="richiesta a Google Drive"
+            method, url, body=body, content_type=content_type, what=_WHAT_API
         )
 
     # ---- folders: placement and human navigation only, never identity ---------
@@ -283,13 +291,15 @@ class GDriveStorage:
             raise NotFound("document_blob", key)
         url = self._url(f"{DRIVE_FILES_URL}/{file_id}", alt="media")
         try:
-            return self._transport.bytes("GET", url, what="download da Google Drive")
+            return self._transport.bytes("GET", url, what=_WHAT_DOWNLOAD)
         except Conflict as failed:
-            if failed.details.get("status") == 404:
+            if failed.details.get("what") == _WHAT_DOWNLOAD and failed.details.get("status") == 404:
                 # Found a moment ago by `_find_file_by_key`, gone now: a concurrent
                 # delete, not a bug in the query. Either way, "no such document" is the
                 # honest answer to give this caller.
                 raise NotFound("document_blob", key) from failed
+            # A 404 from anywhere else in this call -- the token endpoint, notably --
+            # is not a missing document and must not be reported as one.
             raise
 
     def delete(self, key: str) -> None:
@@ -345,8 +355,14 @@ class GDriveStorage:
             includeItemsFromAllDrives="true",
         )
         try:
-            parsed = self._transport.json("GET", url, what="verifica della cartella radice")
+            parsed = self._transport.json("GET", url, what=_WHAT_VERIFY)
         except Conflict as failed:
+            if failed.details.get("what") != _WHAT_VERIFY:
+                # The credential was refused before the folder was ever asked about.
+                # Telling an operator to re-share a folder when the private key is
+                # wrong is precisely the wrong-thing-to-fix this method exists to
+                # prevent, so an authentication failure is reported as itself.
+                raise
             raise RuntimeError(
                 "PIGROCRM_GDRIVE_ROOT_FOLDER_ID non e' raggiungibile dal service "
                 f"account (HTTP {failed.details.get('status')}). Verificare che la "
