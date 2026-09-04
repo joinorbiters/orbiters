@@ -49,13 +49,14 @@ MCP_SRC = Path(__file__).resolve().parents[1] / "src" / "pigrocrm_mcp"
 TOOLS_DIR = MCP_SRC / "tools"
 RESOURCES_DIR = MCP_SRC / "resources"
 # Skipped by `_reachable`, so that "reachable" here means "reachable on a default
-# installation". `tools/privileged.py` is registered only when `mcp_full_access` is
-# on, so counting its calls would make the sixteen banned operations look reachable
-# everywhere -- including on the installations the exclusions below exist to describe.
-# `test_mcp_invoice_ban.py` owns the other half: that those calls appear in that one
-# file and nowhere unconditional, and that `server.py` reaches it only behind the
+# installation". Both modules are registered only when `mcp_full_access` is on
+# (`tools/drive_privileged.py` needs a configured Google client as well), so counting
+# their calls would make the banned operations look reachable everywhere -- including on
+# the installations the exclusions below exist to describe.
+# `test_mcp_invoice_ban.py` owns the other half: that those calls appear in one of those
+# files and nowhere unconditional, and that `server.py` reaches each only behind the
 # guard.
-PRIVILEGED = TOOLS_DIR / "privileged.py"
+PRIVILEGED_MODULES = (TOOLS_DIR / "privileged.py", TOOLS_DIR / "drive_privileged.py")
 CORE_DIR = Path(__file__).resolve().parents[3] / "packages" / "core" / "src" / "pigrocrm" / "core"
 
 Method = tuple[str, str]
@@ -111,6 +112,51 @@ _VIETATE: dict[Method, str] = {
         "interroga Gmail sul dominio del cliente a carico della quota e del consenso "
         "del titolare, come `sync` e `backfill`; a differenza loro l'installazione puo' "
         "aprirla con `mcp_full_access`"
+    ),
+    ("DocumentService", "import_bytes"): (
+        "archivia byte che il CRM non ha prodotto, presi dal Drive del titolare a "
+        "carico della sua quota e del suo consenso (slice 9 §4.2: `import_drive_file`); "
+        "raggiungibile solo da `tools/drive_privileged.py`, cioe' dietro "
+        "`mcp_full_access` **e** un client Google configurato"
+    ),
+}
+
+
+# 1b. Forbidden, but on a receiver this file's sweep cannot see. `_service_methods`
+#     enumerates classes whose name ends in `Service`, which is this codebase's own rule
+#     for "a domain service" and the reason the inventory is mechanical rather than a
+#     list. `DriveReader` is not one: it is a confined *capability object* built by
+#     `drive_reader_for`, holding a transport and a tuple of roots, with no session and
+#     no actor -- and it is deliberately not a service, because whether this credential
+#     may be used at all was decided before it was constructed.
+#
+#     So its methods can be neither swept nor excluded above: `_VIETATE` is keyed by
+#     `(service, method)` and `test_every_declared_exclusion_still_names_a_real_method`
+#     asserts the service half is really in `SERVICES`, which would fail for every
+#     `DriveReader` pair. They are recorded here instead, with the same obligation --
+#     each name must be in `FORBIDDEN_SERVICE_CALLS`, and `test_the_forbidden_block_
+#     names_exactly_what_the_ban_test_bans` counts these alongside `_VIETATE` so the two
+#     files still cannot drift.
+#
+#     `is_within_roots` is the one `DriveReader` method that is *not* here, and it is not
+#     an omission: no tool calls it, so putting it in `FORBIDDEN_SERVICE_CALLS` would
+#     fail the ban test's "and it appears in a privileged module" half. It needs no ban
+#     of its own regardless -- it is the guard `list_children` and the two `read_*` apply
+#     internally, and reaching it would require the very `DriveReader` that
+#     `test_no_unconditional_module_can_even_obtain_a_drive_reader` denies.
+_FUORI_DAL_SETACCIO: dict[Method, str] = {
+    ("DriveReader", "list_children"): (
+        "elenca una cartella del Drive personale del titolare (slice 9 §4.2)"
+    ),
+    ("DriveReader", "read_text"): (
+        "restituisce il contenuto di un file del titolare: dato non attendibile, a "
+        "carico della sua quota Drive (slice 9 §4.2)"
+    ),
+    ("DriveReader", "read_bytes"): (
+        "come `read_text`, in byte: e' cio' che `import_drive_file` archivia (slice 9 §4.2)"
+    ),
+    ("DriveReader", "describe_roots"): (
+        "nomina le radici configurate, il punto d'ingresso di `list_drive_files` (slice 9 §4.1)"
     ),
 }
 
@@ -517,7 +563,7 @@ def _reachable(known: set[str]) -> set[Method]:
     found: set[Method] = set()
     for base in (TOOLS_DIR, RESOURCES_DIR):
         for path in sorted(base.rglob("*.py")):
-            if path == PRIVILEGED:
+            if path in PRIVILEGED_MODULES:
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
@@ -641,11 +687,42 @@ def test_the_forbidden_block_names_exactly_what_the_ban_test_bans() -> None:
     written: the bare-name bans on names, and the qualified ones as the `(service,
     method)` pairs they are -- comparing those on the name alone would accept
     `EmitterProfileService.upsert` standing in for `FiscalProfileService.upsert`, which
-    is the exact confusion the qualified list exists to prevent."""
-    assert {method for _, method in _VIETATE} == set(FORBIDDEN_SERVICE_CALLS) | {
+    is the exact confusion the qualified list exists to prevent.
+
+    `_FUORI_DAL_SETACCIO` counts on the same side of the equality as `_VIETATE`, which
+    is what keeps it from becoming a place to hide a ban: a name moved there to avoid
+    writing a category still has to appear in `FORBIDDEN_SERVICE_CALLS`, and
+    `test_nothing_hides_in_the_out_of_sweep_block` checks its receivers really are
+    outside the sweep rather than merely declared to be."""
+    dichiarate = {method for _, method in _VIETATE} | {method for _, method in _FUORI_DAL_SETACCIO}
+    assert dichiarate == set(FORBIDDEN_SERVICE_CALLS) | {
         method for _, method in FORBIDDEN_QUALIFIED_CALLS
     }
     assert set(FORBIDDEN_QUALIFIED_CALLS) <= set(_VIETATE)
+
+
+def test_nothing_hides_in_the_out_of_sweep_block() -> None:
+    """`_FUORI_DAL_SETACCIO` is an escape hatch, so it needs a lock.
+
+    Its whole justification is that the receiver is not a class this file's inventory
+    can enumerate. A `*Service` method listed there would be excluded from the
+    taxonomy's arithmetic *and* from
+    `test_every_declared_exclusion_still_names_a_real_method`'s check that the method
+    still exists -- a reason with nothing holding it to reality, which is precisely what
+    the six categories above were built to avoid.
+    """
+    for service, method in _FUORI_DAL_SETACCIO:
+        assert service not in SERVICES, (
+            f"'{service}' e' un servizio di packages/core: la sua esclusione va in una "
+            "delle sei categorie sopra, dove il metodo viene verificato ancora esistente"
+        )
+        assert (service, method) not in ESCLUSIONI
+    # And the block is not vacuous. That each name is a real method of a real class is
+    # already proved elsewhere and better: `test_mcp_invoice_ban.py`'s
+    # `test_the_privileged_module_is_the_only_place_they_appear` requires every one of
+    # them to be *called* from a privileged module, which a deleted or renamed method
+    # cannot be. This file stays a pure AST walk with no import from `packages/core`.
+    assert ("DriveReader", "read_text") in _FUORI_DAL_SETACCIO
 
 
 @pytest.mark.parametrize(("service", "method"), FORBIDDEN_QUALIFIED_CALLS)

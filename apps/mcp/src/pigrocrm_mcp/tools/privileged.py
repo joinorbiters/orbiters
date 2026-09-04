@@ -201,7 +201,10 @@ def register(
         `descrizione`, `quantita`, `prezzo_unitario`, `prezzo_totale`, `aliquota_iva` e
         `natura` come stampati sul documento), `imponibile`, `imposta`, `bollo`,
         `totale`, `stato_pagamento`, `data_incasso` (richiesta se incassato),
-        `trasmessa_esternamente_il`, `pdf_sorgente` {document_id}, `note_interne` e
+        `trasmessa_esternamente_il`, `pdf_sorgente` -- esattamente uno fra
+        {document_id} (un documento gia' caricato nel CRM) e {drive_file_id} (il PDF
+        originale su una cartella Drive configurata: l'import lo scarica e lo archivia
+        da se', quindi non serve passare da `import_drive_file`) -- `note_interne` e
         `importata_da` (fisso a `"acme"`, l'unica provenienza che questa fetta importa).
         I totali devono tornare al centesimo: `imponibile` uguale alla somma dei
         `prezzo_totale` di riga e `imponibile + imposta` uguale a `totale`. Il `bollo` si
