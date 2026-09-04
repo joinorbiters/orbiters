@@ -154,6 +154,9 @@ _INTERNE: dict[Method, str] = {
     ),
     ("GmailOAuthService", "redirect_uri"): "e' l'URL fisso che Google confronta "
     "carattere per carattere, non un'operazione",
+    ("GoogleDriveOAuthService", "redirect_uri"): "stessa ragione di "
+    "`GmailOAuthService.redirect_uri`: e' l'URL fisso che Google confronta carattere "
+    "per carattere, non un'operazione (slice 9 §5.1)",
     ("PeriodLockService", "assert_writable"): "guardia invocata dagli altri servizi",
     ("PeriodLockService", "is_closed"): "guardia invocata dagli altri servizi",
     ("PipelineService", "default_stage"): "risolve lo stage iniziale di un nuovo deal",
@@ -204,6 +207,15 @@ _CREDENZIALI: dict[Method, str] = {
     "Google verso il callback: nessun agente puo' averlo",
     ("GmailOAuthService", "disconnect"): "revocare l'accesso a una casella di terzi (e "
     "cancellarne la corrispondenza) e' una decisione della persona",
+    ("GoogleDriveOAuthService", "start"): "stessa ragione di `GmailOAuthService.start` "
+    "(spec 9 §5.1): il consenso Google si da' da un browser, non da un tool -- l'URL di "
+    "autorizzazione non e' percorribile da un agente",
+    ("GoogleDriveOAuthService", "complete"): "stessa ragione di "
+    "`GmailOAuthService.complete`: il `code` esiste solo dentro il redirect di Google "
+    "verso il callback, nessun agente puo' averlo",
+    ("GoogleDriveOAuthService", "disconnect"): "stessa ragione di "
+    "`GmailOAuthService.disconnect`: revocare l'accesso a un servizio di terzi e' una "
+    "decisione della persona",
     ("GmailSyncService", "sync"): (
         "il consenso a leggere la casella e' della persona, e lo e' anche il momento in "
         "cui viene esercitato: `sync` va a prendere posta da un servizio terzo, sotto "
