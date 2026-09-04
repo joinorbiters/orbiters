@@ -692,3 +692,14 @@ def test_no_failure_of_the_cycle_carries_a_token(db_session: Session) -> None:
     assert REFRESH_TOKEN not in printed
     assert fake.access_token not in printed
     assert TOKEN_KEY.decode() not in printed
+
+
+def test_the_fake_refuses_the_query_real_gmail_answers_nothing_to() -> None:
+    """`after:0` is the divergence that let a broken full backfill pass: the fake treated
+    it as "since the epoch" while Gmail returns an empty page. A fake that is more
+    lenient than the real thing turns a passing test into a false statement, so it now
+    refuses the query the way spec 4.1's empty-`q` refusal already does."""
+    from fakes.gmail_query import matches
+
+    with pytest.raises(AssertionError):
+        matches(_message(1, frm="ada@acme.it", to=MAILBOX, thread="t1"), "from:ada@acme.it after:0")

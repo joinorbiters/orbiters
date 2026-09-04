@@ -272,7 +272,10 @@ def test_full_history_has_no_horizon_and_keeps_the_address_filter(db_session: Se
     assert _stored(db_session) == {"antico"}
     listings = _listings(fake)
     assert len(listings) == 1
-    assert "after:0" in (listings[0].q or "")
+    # No `after:` clause at all -- not `after:0`. Gmail answers an empty page to a
+    # literal `after:0` (found in production, see `test_gmail_query.py`), so "no
+    # horizon" has to be spelled by leaving the clause out.
+    assert "after:" not in (listings[0].q or "")
     assert "from:ada@acme.it" in (listings[0].q or "")
     # "No horizon" is about time, never about relevance.
     _assert_every_listing_is_filtered(fake, {"ada@acme.it"})
