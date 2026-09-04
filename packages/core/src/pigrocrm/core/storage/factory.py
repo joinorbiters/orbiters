@@ -20,7 +20,7 @@ def storage_from_settings(settings: Settings) -> DocumentStorage:
                 "PIGROCRM_GDRIVE_ROOT_FOLDER_ID",
                 expected="entrambe le variabili valorizzate",
             )
-        storage = GDriveStorage(
+        storage = GDriveStorage.from_service_account(
             service_account_json=settings.gdrive_service_account_json,
             root_folder_id=settings.gdrive_root_folder_id,
         )
