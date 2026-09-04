@@ -42,6 +42,12 @@ def _after_epoch_seconds(value: str) -> int:
     fake reject a legal query -- the same class of mistake as ignoring an operator,
     just failing in the other direction."""
     if value.isdigit():
+        if int(value) == 0:
+            raise AssertionError(
+                "FakeGmail refuses `after:0`: real Gmail answers an empty page to it, so a "
+                "fake that reads it as 'since the epoch' would let a broken full backfill "
+                "pass. Leave the clause out to mean 'no horizon'."
+            )
         return int(value)
     try:
         parsed = datetime.strptime(value, "%Y/%m/%d").replace(tzinfo=UTC)
