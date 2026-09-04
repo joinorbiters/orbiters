@@ -84,6 +84,11 @@ _VIETATE: dict[Method, str] = {
     ("InvoiceService", "annul"): "atto fiscale irreversibile (slice 3 §11)",
     ("InvoiceService", "mark_transmitted_externally"): "atto fiscale (slice 3 §11)",
     ("InvoiceService", "export_xml"): "esiste solo per una fattura emessa (slice 3 §11)",
+    (
+        "InvoiceService",
+        "import_issued",
+    ): "scrive nel registro fiscale un numero deciso altrove (slice 9 §3)",
+    ("InvoiceService", "declare_gaps"): "dichiara i buchi del registro fiscale (slice 9 §3.2)",
     ("TimeEntryService", "recalculate_rates"): "riscrive il passato (slice 4 §11)",
     ("TimeEntryService", "update_user_rates"): "configurazione tariffaria (slice 4 §11)",
     ("TimeEntryService", "update_deal_rate"): "configurazione tariffaria (slice 4 §11)",
@@ -136,6 +141,20 @@ _INTERNE: dict[Method, str] = {
     ("EmitterProfileService", "as_template_values"): "alimenta il renderer dei template",
     ("FieldDefinitionService", "specs_for"): "alimenta la validazione dei campi custom",
     ("FiscalProfileService", "snapshot"): "lettura interna del regime, senza actor",
+    ("InvoiceService", "undeclared_gaps"): (
+        "lettura interna, senza actor: `issue` la chiama per rifiutare l'emissione "
+        "nativa finche' un buco del registro non e' stato importato o dichiarato "
+        "(slice 9 §3.2 regola 4). E' anche il modo in cui `import_issued_invoice` "
+        "riporta `buchi_non_dichiarati` -- ma quella chiamata vive in `privileged.py`, "
+        "esente da questa scansione come il resto degli atti fiscali"
+    ),
+    ("InvoiceService", "register_gaps"): (
+        "meta' di sola lettura di `declare_gaps` (slice 9 §3.2 regola 4): quest'ultimo "
+        "gia' autorizza, blocca il contatore e scrive prima di chiamarla per comporre "
+        "la risposta. Prende `actor` solo per rispecchiare la firma del chiamante -- "
+        "come `TimeReportService.variables_for` -- ma non lo usa per nessun controllo, "
+        "perche' l'autorizzazione e' gia' avvenuta in `declare_gaps`"
+    ),
     ("GmailOAuthService", "redirect_uri"): "e' l'URL fisso che Google confronta "
     "carattere per carattere, non un'operazione",
     ("PeriodLockService", "assert_writable"): "guardia invocata dagli altri servizi",

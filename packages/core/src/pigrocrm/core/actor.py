@@ -75,6 +75,11 @@ AGENT_FORBIDDEN_ACTIONS: frozenset[str] = frozenset(
         # owner's quota under the owner's consent, exactly as a backfill does, and the
         # same switch says whether this installation wants its agent able to do that.
         "discover_gmail_correspondents",
+        # Slice 9 §3.6: writing a numbered, issued row straight into the fiscal register,
+        # and declaring the numbers it will never carry. Both change what the register
+        # says about the past, which is the property every other entry here protects.
+        "import_issued_invoice",
+        "declare_invoice_register_gaps",
     }
 )
 
