@@ -77,6 +77,9 @@ class GmailOAuthService:
         self.settings = settings
         self.tokens = tokens
         self.repo = GmailRepository(session)
+        # Read-only here: only the cross-identity check in `complete` uses it, to read
+        # the Drive row of the same CRM user. See that check for why.
+        self.drive = DriveRepository(session)
         self.activities = ActivityService(session)
 
     @property
@@ -181,7 +184,7 @@ class GmailOAuthService:
         # different people, with nothing short of comparing the rows by hand to notice.
         # Skipped once the Drive credential has been explicitly disconnected, for the
         # same reason the mailbox comparison above is.
-        drive_account = DriveRepository(self.session).account_for_user(actor.id)
+        drive_account = self.drive.account_for_user(actor.id)
         if (
             drive_account is not None
             and drive_account.disconnected_at is None
