@@ -166,4 +166,4 @@ EOF
 Atteso: `14 righe valide`. Questo controlla solo la forma (`InvoiceImport`), non le
 regole del servizio (numeri liberi nel registro, cronologia, contatore) né la
 risoluzione reale dei clienti — quelle si verificano solo al momento dell'import vero,
-passo 3.
+passo 4.
