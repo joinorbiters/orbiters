@@ -11,6 +11,7 @@ force either a new tool or an edit to another slice's declared list.
 
 from datetime import date
 from decimal import Decimal
+from typing import cast
 from uuid import UUID
 
 from sqlalchemy import ColumnElement, delete, distinct, func, select, text
@@ -23,6 +24,7 @@ from pigrocrm.core.invoices.models import (
     Invoice,
     InvoiceCounter,
     InvoiceLine,
+    InvoiceRegisterGap,
 )
 from pigrocrm.core.invoices.schemas import InvoiceListQuery
 from pigrocrm.core.money import round_money
@@ -206,6 +208,64 @@ class InvoiceRepository:
             .limit(1)
         )
         return self.session.execute(stmt).scalars().first()
+
+    # --- slice 9's import queries -------------------------------------------------
+
+    def neighbour_dates(self, anno: int, numero: int) -> tuple[date | None, date | None]:
+        """The dates on either side of `numero` in the register of `anno`.
+
+        `last_issued_date` answers "what came last"; an import inserts *between*
+        existing numbers, so monotonicity has to be checked against the nearest lower
+        and the nearest higher number, whatever their states -- an annulled row keeps
+        its place in the order exactly as it does for `last_issued_date`.
+        """
+        before = (
+            select(Invoice.data_emissione)
+            .where(Invoice.anno == anno, Invoice.numero.is_not(None), Invoice.numero < numero)
+            .order_by(Invoice.numero.desc())
+            .limit(1)
+        )
+        after = (
+            select(Invoice.data_emissione)
+            .where(Invoice.anno == anno, Invoice.numero.is_not(None), Invoice.numero > numero)
+            .order_by(Invoice.numero.asc())
+            .limit(1)
+        )
+        return (
+            self.session.execute(before).scalars().first(),
+            self.session.execute(after).scalars().first(),
+        )
+
+    def numbers_present(self, anno: int) -> set[int]:
+        stmt = select(Invoice.numero).where(Invoice.anno == anno, Invoice.numero.is_not(None))
+        # `Invoice.numero` is `Mapped[int | None]` at the column-type level; the
+        # `is_not(None)` clause above is what the database enforces, and this cast is
+        # what tells mypy the same thing rather than re-filtering `None` at runtime.
+        return cast(set[int], set(self.session.execute(stmt).scalars().all()))
+
+    def first_native_number(self, anno: int) -> int | None:
+        """The lowest number this CRM itself issued in `anno` (§3.2 rule 6)."""
+        stmt = select(func.min(Invoice.numero)).where(
+            Invoice.anno == anno, Invoice.numero.is_not(None), Invoice.importata_da.is_(None)
+        )
+        return self.session.execute(stmt).scalar_one()
+
+    def declared_gaps(self, anno: int) -> set[int]:
+        stmt = select(InvoiceRegisterGap.numero).where(InvoiceRegisterGap.anno == anno)
+        return set(self.session.execute(stmt).scalars().all())
+
+    def gaps(self, anno: int) -> list[InvoiceRegisterGap]:
+        stmt = (
+            select(InvoiceRegisterGap)
+            .where(InvoiceRegisterGap.anno == anno)
+            .order_by(InvoiceRegisterGap.numero)
+        )
+        return list(self.session.execute(stmt).scalars().all())
+
+    def add_gap(self, gap: InvoiceRegisterGap) -> InvoiceRegisterGap:
+        self.session.add(gap)
+        self.session.flush()
+        return gap
 
     # --- slice 6's dashboard aggregates ------------------------------------------
 
