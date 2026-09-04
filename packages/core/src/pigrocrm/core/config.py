@@ -17,6 +17,14 @@ MIN_JWT_SECRET_LENGTH = 32
 # AES-256-GCM, which is what encrypts `google_accounts.refresh_token_ciphertext`.
 GOOGLE_TOKEN_KEY_BYTES = 32
 
+# The default ceiling on the text of one Drive file (`drive/reader.py::read_text`).
+# A module constant as well as a field default because `DriveReader` takes the number,
+# not a `Settings`: it is a reader of Drive, not of this installation's configuration,
+# and `drive_reader_for` is the one place the two meet. Same 256 KB as
+# `gmail_body_max_bytes`, and for the same reason -- a generous limit that only bites
+# on the anomalous, so that what a person reads is the document and not a policy.
+DRIVE_TEXT_MAX_BYTES_DEFAULT = 262_144
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="PIGROCRM_", env_file=".env", extra="ignore")
@@ -129,6 +137,11 @@ class Settings(BaseSettings):
     gmail_body_max_bytes: int = 262_144
     gmail_attachment_max_bytes: int = 20_971_520
     gmail_send_grace_minutes: int = 15
+    # --- Drive (slice 9C). The text of one file the titolare pointed at, capped.
+    # `ge=1` because a ceiling of zero would return an empty document for every file
+    # and read as "this file has no text"; the upper bound is what an agent's context
+    # and an HTTP response can carry without the cap being a fiction.
+    drive_text_max_bytes: int = Field(default=DRIVE_TEXT_MAX_BYTES_DEFAULT, ge=1, le=10_485_760)
     # Whether reconciliation may rely on Gmail preserving the Message-ID we supply.
     # Spec 6.3 requires this to be verified rather than assumed, because the fallback
     # (matching on recipient + subject + internalDate) is an approximate comparison and

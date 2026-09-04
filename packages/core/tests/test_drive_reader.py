@@ -1,0 +1,727 @@
+"""`DriveReader`: the children of the configured roots, the text of one file, nothing
+else.
+
+The failure spec 9C names is reading somebody's Drive -- the photos of their children,
+their rent contract, the folder of another job. Three guards stand between this code
+and that, and this file is the third: `drive/query.py` refuses to *build* a widened
+listing, `test_drive_query.py` refuses to let a Drive URL be written anywhere else,
+and the tests here inspect what the fake transport was actually *asked*. The first two
+would both accept `children_query("<a folder in somebody's Drive>")`; only this one
+can tell that the folder named in the request belongs to the hierarchy the titolare
+configured -- which is why `test_every_files_list_of_this_module_stayed_inside_the_roots`
+at the bottom re-reads every request every scenario above made.
+
+The other property under test is the one that has no message: a folder or a file
+outside the roots is `NotFound`, and it is `NotFound` in the same words whether it does
+not exist, exists in a part of the Drive the titolare did not configure, or exists in
+somebody else's Drive entirely. Telling those apart would answer the question "is
+there a file with this id?" for anyone who can call the tool.
+"""
+
+from datetime import UTC, datetime
+from typing import Any
+from uuid import uuid4
+
+import pytest
+from fakes.fake_drive import GOOGLE_DOC_MIME, FakeDrive, RecordedRequest
+from fakes.gmail_fixtures import TOKEN_KEY, gmail_settings
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+from test_drive_text import minimal_docx, minimal_pdf
+
+from pigrocrm.core.activities.models import Activity
+from pigrocrm.core.actor import Actor
+from pigrocrm.core.auth.models import User
+from pigrocrm.core.config import DRIVE_TEXT_MAX_BYTES_DEFAULT, Settings
+from pigrocrm.core.drive import reader as reader_module
+from pigrocrm.core.drive.errors import DriveCredentialRevoked
+from pigrocrm.core.drive.models import GoogleDriveAccount
+from pigrocrm.core.drive.reader import MAX_ROOT_WALK_LEVELS, DriveReader, drive_reader_for
+from pigrocrm.core.drive.schemas import DRIVE_SCOPE_FILE, DRIVE_SCOPE_READONLY
+from pigrocrm.core.drive.text import DOCX_MIME, PDF_MIME, PROVENIENZA, TEXT_TRUNCATION_MARKER
+from pigrocrm.core.drive.transport import DriveTransport, UserTokens
+from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
+from pigrocrm.core.gmail.crypto import seal
+
+FOLDER_MIME = "application/vnd.google-apps.folder"
+
+# Ids of the shape Drive really uses, because `folder_id` and `file_id` arrive from
+# outside and `query.py` holds them to the strict pattern (ten characters at least):
+# `FakeDrive`'s own generated ids ("id2") are legitimate for an id *Drive* returned,
+# but not for one a caller supplies.
+ROOT_FOLDER = "1RadiceClientiAAAA"
+SUB_FOLDER = "1SottocartellaACME"
+PDF_FILE = "1PreventivoPdfXXXX"
+DOC_FILE = "1NoteGoogleDocYYYY"
+TXT_FILE = "1AppuntiTestoZZZZZ"
+SCAN_FILE = "1ScansioneSenzaTxt"
+OUTSIDE_FOLDER = "1CartellaPersonale"
+OUTSIDE_FILE = "1FotoDeiFigliJpeg1"
+
+PDF_WITH_TEXT = minimal_pdf(["Preventivo per ACME", "Totale 1.000 euro"])
+SCAN_WITHOUT_TEXT = minimal_pdf([])
+DOC_TEXT = "Chiamare il commercialista entro venerdì."
+TXT_TEXT = "Appunti: rivedere il preventivo, poi mandarlo."
+
+# Every `FakeDrive` any test in this module built. Read only by the guard test at the
+# bottom, which is the reason it exists: the promise "no listing ever leaves the
+# configured roots" is a property of the whole module's traffic, not of one scenario.
+_DRIVES: list[FakeDrive] = []
+
+
+class StubTokens:
+    """One fixed token, `forget` a no-op: none of these tests exercises the credential,
+    which is `test_drive_transport.py`'s job."""
+
+    def access_token(self) -> str:
+        return "at-1"
+
+    def forget(self) -> None:
+        pass
+
+
+class RevokedTokens:
+    """The provider of an account whose grant Google has dropped. What `UserTokens`
+    raises when a refresh comes back `invalid_grant`."""
+
+    def __init__(self, account_id: Any = None, email_address: str = "io@example.it") -> None:
+        self._account_id = account_id
+        self._email = email_address
+
+    def access_token(self) -> str:
+        raise DriveCredentialRevoked(self._account_id, self._email)
+
+    def forget(self) -> None:
+        pass
+
+
+def _tree() -> FakeDrive:
+    """One configured root with a subfolder in it, and a second top-level folder that
+    is *not* configured -- so "inside the roots" is not accidentally true of everything
+    on the drive."""
+    drive = FakeDrive()
+    _DRIVES.append(drive)
+    drive.add_folder("Clienti", parent=drive.root_id, file_id=ROOT_FOLDER)
+    drive.add_folder("ACME", parent=ROOT_FOLDER, file_id=SUB_FOLDER)
+    drive.add_file(
+        "Note",
+        parent=ROOT_FOLDER,
+        mime=GOOGLE_DOC_MIME,
+        content=DOC_TEXT.encode(),
+        file_id=DOC_FILE,
+    )
+    drive.add_file(
+        "Preventivo.pdf", parent=SUB_FOLDER, mime=PDF_MIME, content=PDF_WITH_TEXT, file_id=PDF_FILE
+    )
+    drive.add_file(
+        "Appunti.txt",
+        parent=SUB_FOLDER,
+        mime="text/plain",
+        content=TXT_TEXT.encode(),
+        file_id=TXT_FILE,
+    )
+    drive.add_file(
+        "Scansione.pdf",
+        parent=SUB_FOLDER,
+        mime=PDF_MIME,
+        content=SCAN_WITHOUT_TEXT,
+        file_id=SCAN_FILE,
+    )
+    drive.add_folder("Personale", parent=drive.root_id, file_id=OUTSIDE_FOLDER)
+    drive.add_file(
+        "figli.jpg",
+        parent=OUTSIDE_FOLDER,
+        mime="image/jpeg",
+        content=b"\xff\xd8\xff\xe0",
+        file_id=OUTSIDE_FILE,
+    )
+    return drive
+
+
+def _reader(
+    drive: FakeDrive,
+    *,
+    roots: tuple[str, ...] = (ROOT_FOLDER,),
+    tokens: Any = None,
+    http: Any = None,
+    **kwargs: Any,
+) -> DriveReader:
+    transport = DriveTransport(
+        tokens=tokens or StubTokens(), http=http or drive, sleep=lambda _: None
+    )
+    return DriveReader(transport, roots=roots, **kwargs)
+
+
+def _listings(drive: FakeDrive) -> list[RecordedRequest]:
+    return [request for request in drive.requests if request.is_files_list]
+
+
+def _paths(drive: FakeDrive) -> list[str]:
+    return [request.path for request in drive.requests]
+
+
+# --- listing -------------------------------------------------------------------------
+
+
+def test_lists_the_children_of_a_configured_root() -> None:
+    drive = _tree()
+
+    listing = _reader(drive).list_children(ROOT_FOLDER)
+
+    by_name = {entry.nome: entry for entry in listing.items}
+    assert set(by_name) == {"ACME", "Note"}
+    assert by_name["ACME"].cartella is True
+    assert by_name["ACME"].mime == FOLDER_MIME
+    # A folder and a Google Doc have no bytes on Drive, so they have no size -- and
+    # `None` is not the same answer as `0`, which would say "an empty file".
+    assert by_name["ACME"].dimensione is None
+    assert by_name["Note"].dimensione is None
+    assert by_name["Note"].cartella is False
+    assert by_name["Note"].id == DOC_FILE
+    assert by_name["Note"].modificato_il == datetime(2026, 1, 1, tzinfo=UTC)
+    assert listing.next_page_token is None
+
+
+def test_lists_the_children_of_a_folder_inside_a_root() -> None:
+    """The subfolder is not itself configured: what makes it listable is that it is
+    *under* a configured root."""
+    drive = _tree()
+
+    listing = _reader(drive).list_children(SUB_FOLDER)
+
+    by_name = {entry.nome: entry for entry in listing.items}
+    assert set(by_name) == {"Preventivo.pdf", "Appunti.txt", "Scansione.pdf"}
+    assert by_name["Preventivo.pdf"].dimensione == len(PDF_WITH_TEXT)
+    assert by_name["Preventivo.pdf"].mime == PDF_MIME
+    assert by_name["Preventivo.pdf"].cartella is False
+
+
+def test_a_folder_outside_the_roots_is_not_found_and_no_listing_is_ever_issued() -> None:
+    """The heart of the slice. `files.list` is not attempted and then filtered: it is
+    never sent at all, so there is no window in which Google was asked about a folder
+    the titolare did not configure."""
+    drive = _tree()
+
+    with pytest.raises(NotFound) as excinfo:
+        _reader(drive).list_children(OUTSIDE_FOLDER)
+
+    assert excinfo.value.details["entity"] == "drive_file"
+    assert excinfo.value.details["identifier"] == OUTSIDE_FOLDER
+    assert _listings(drive) == []
+
+
+def test_a_folder_that_does_not_exist_is_refused_in_exactly_the_same_words() -> None:
+    """Deliberately indistinguishable from the test above: an answer that told the two
+    apart would answer "does a file with this id exist?" for anybody who can call the
+    tool."""
+    drive = _tree()
+    missing = "1QuestoNonEsiste00"
+
+    with pytest.raises(NotFound) as absent:
+        _reader(drive).list_children(missing)
+    with pytest.raises(NotFound) as outside:
+        _reader(drive).list_children(OUTSIDE_FOLDER)
+
+    assert absent.value.details["entity"] == outside.value.details["entity"]
+    assert absent.value.args[0].replace(missing, "X") == outside.value.args[0].replace(
+        OUTSIDE_FOLDER, "X"
+    )
+    assert _listings(drive) == []
+
+
+def test_a_page_token_is_forwarded_and_the_next_one_comes_back() -> None:
+    """Pagination is Drive's, not the reader's: the reader never chooses a page size --
+    `files_list_url` cannot even express one -- so this test makes Drive answer in
+    pages of one, which is exactly what a folder of four thousand files does on its
+    own.
+    """
+    drive = _tree()
+
+    def one_at_a_time(method: str, url: str, headers: dict[str, str], body: bytes | None) -> Any:
+        if "q=" in url:
+            url = f"{url}&pageSize=1"
+        return drive(method, url, headers, body)
+
+    reader = _reader(drive, http=one_at_a_time)
+    first = reader.list_children(ROOT_FOLDER)
+    assert len(first.items) == 1
+    assert first.next_page_token is not None
+
+    second = reader.list_children(ROOT_FOLDER, page_token=first.next_page_token)
+    assert len(second.items) == 1
+    assert second.next_page_token is None
+    assert {first.items[0].nome, second.items[0].nome} == {"ACME", "Note"}
+    assert [request.params.get("pageToken") for request in _listings(drive)] == [
+        None,
+        [first.next_page_token],
+    ]
+
+
+# --- the walk upward -----------------------------------------------------------------
+
+
+def test_a_file_in_a_subfolder_of_a_root_is_within_the_roots() -> None:
+    drive = _tree()
+
+    assert _reader(drive).is_within_roots(PDF_FILE) is True
+
+
+def test_a_configured_root_is_itself_within_the_roots_without_asking_drive() -> None:
+    """No request at all: the answer is in the configuration, and a folder the titolare
+    named does not need Google's opinion."""
+    drive = _tree()
+
+    assert _reader(drive).is_within_roots(ROOT_FOLDER) is True
+    assert drive.requests == []
+
+
+def test_a_file_in_another_top_level_folder_is_outside_the_roots() -> None:
+    drive = _tree()
+
+    assert _reader(drive).is_within_roots(OUTSIDE_FILE) is False
+
+
+def test_a_file_at_the_drive_root_that_is_not_a_root_is_outside() -> None:
+    """The walk ends at the Drive's own root, which has no parents. Reaching it is the
+    answer "no configured root is above this file", not a reason to keep going."""
+    drive = _tree()
+    drive.add_file(
+        "sparso.txt", parent=drive.root_id, mime="text/plain", file_id="1FileNellaRadice"
+    )
+
+    assert _reader(drive).is_within_roots("1FileNellaRadice") is False
+
+
+def test_the_walk_upward_stops_after_twenty_levels() -> None:
+    """A folder nested deeper than the bound is reported outside rather than walked
+    forever: Drive lets a file have several parents, so "walk up" is a graph, and a
+    cycle in it is a Drive bug this code must survive rather than trust away."""
+    drive = _tree()
+    parent = ROOT_FOLDER
+    for level in range(MAX_ROOT_WALK_LEVELS + 5):
+        parent = drive.add_folder(f"L{level}", parent=parent, file_id=f"1Livello{level:010d}")
+    deep = drive.add_file(
+        "in fondo.txt", parent=parent, mime="text/plain", file_id="1MoltoProfondo"
+    )
+
+    reader = _reader(drive)
+    assert reader.is_within_roots(deep) is False
+    assert len(drive.requests) <= MAX_ROOT_WALK_LEVELS + 1
+
+    shallow = drive.add_file(
+        "vicino.txt", parent="1Livello0000000002", mime="text/plain", file_id="1PocoProfondo1234"
+    )
+    assert _reader(drive).is_within_roots(shallow) is True
+
+
+def test_the_walk_asks_drive_about_each_folder_at_most_once_per_call() -> None:
+    """A file with two parents that share an ancestor: the cache is what keeps the walk
+    linear in the number of folders instead of exponential in the number of paths."""
+    drive = _tree()
+    left = drive.add_folder("sinistra", parent=OUTSIDE_FOLDER, file_id="1RamoSinistro0000")
+    right = drive.add_folder("destra", parent=OUTSIDE_FOLDER, file_id="1RamoDestro000000")
+    shared = drive.add_file(
+        "condiviso.txt", parent=left, mime="text/plain", file_id="1FileCondiviso000"
+    )
+    drive.files[shared].parents = [left, right]
+
+    assert _reader(drive).is_within_roots(shared) is False
+
+    asked = [path.rsplit("/", 1)[-1] for path in _paths(drive)]
+    assert sorted(asked) == sorted(set(asked)), asked
+    assert OUTSIDE_FOLDER in asked
+
+
+# --- bytes ---------------------------------------------------------------------------
+
+
+def test_read_bytes_returns_the_bytes_and_the_mime() -> None:
+    drive = _tree()
+
+    content, mime = _reader(drive).read_bytes(PDF_FILE)
+
+    assert content == PDF_WITH_TEXT
+    assert mime == PDF_MIME
+
+
+def test_read_bytes_of_a_google_doc_exports_it_as_plain_text() -> None:
+    """A Google Doc has no bytes of its own -- `alt=media` on one answers 403 -- so the
+    only thing that can be read is Drive's own `text/plain` export, and the mime that
+    comes back says so rather than repeating the native type."""
+    drive = _tree()
+
+    content, mime = _reader(drive).read_bytes(DOC_FILE)
+
+    assert content == DOC_TEXT.encode()
+    assert mime == "text/plain"
+    assert any(path.endswith("/export") for path in _paths(drive))
+    assert not any(request.params.get("alt") == ["media"] for request in drive.requests)
+
+
+def test_read_bytes_of_a_folder_is_refused() -> None:
+    drive = _tree()
+
+    with pytest.raises(Conflict) as excinfo:
+        _reader(drive).read_bytes(SUB_FOLDER)
+
+    assert excinfo.value.details["entity"] == "drive_file"
+    assert not any(request.params.get("alt") == ["media"] for request in drive.requests)
+
+
+def test_read_bytes_outside_the_roots_downloads_nothing() -> None:
+    drive = _tree()
+
+    with pytest.raises(NotFound):
+        _reader(drive).read_bytes(OUTSIDE_FILE)
+
+    assert not any(request.params.get("alt") == ["media"] for request in drive.requests)
+    assert _listings(drive) == []
+
+
+def test_read_bytes_refuses_a_file_drive_says_is_too_big_before_downloading_it() -> None:
+    """The size travels in the metadata, so a 900 MB video is refused without a byte of
+    it crossing the network."""
+    drive = _tree()
+    big = drive.add_file(
+        "enorme.txt",
+        parent=SUB_FOLDER,
+        mime="text/plain",
+        content=b"x" * 500,
+        file_id="1FileEnorme00000",
+    )
+
+    with pytest.raises(Conflict) as excinfo:
+        _reader(drive).read_bytes(big, max_bytes=100)
+
+    assert excinfo.value.details["entity"] == "drive_file"
+    assert not any(request.params.get("alt") == ["media"] for request in drive.requests)
+
+
+def test_read_bytes_refuses_bytes_that_arrive_over_the_ceiling_even_undeclared() -> None:
+    """An export has no declared size -- Drive cannot know how long the text will be
+    before producing it -- so the ceiling is checked again on what actually arrived."""
+    drive = _tree()
+
+    with pytest.raises(Conflict):
+        _reader(drive).read_bytes(DOC_FILE, max_bytes=4)
+
+
+# --- text ----------------------------------------------------------------------------
+
+
+def test_read_text_of_a_pdf_with_a_text_layer() -> None:
+    drive = _tree()
+
+    result = _reader(drive).read_text(PDF_FILE)
+
+    assert "Preventivo per ACME" in result.testo
+    assert result.mime == PDF_MIME
+    assert result.troncato is False
+    assert result.provenienza == PROVENIENZA
+
+
+def test_read_text_of_a_scan_is_empty_and_not_truncated() -> None:
+    drive = _tree()
+
+    result = _reader(drive).read_text(SCAN_FILE)
+
+    assert result.testo == ""
+    assert result.troncato is False
+
+
+def test_read_text_of_a_google_doc_reports_the_exported_type() -> None:
+    drive = _tree()
+
+    result = _reader(drive).read_text(DOC_FILE)
+
+    assert result.testo == DOC_TEXT
+    assert result.mime == "text/plain"
+
+
+def test_read_text_of_a_docx() -> None:
+    drive = _tree()
+    docx = drive.add_file(
+        "Contratto.docx",
+        parent=SUB_FOLDER,
+        mime=DOCX_MIME,
+        content=minimal_docx([["Contratto ", "quadro"], ["Durata annuale"]]),
+        file_id="1ContrattoDocx000",
+    )
+
+    assert _reader(drive).read_text(docx).testo == "Contratto quadro\nDurata annuale"
+
+
+def test_read_text_truncates_at_the_configured_ceiling_with_a_marker() -> None:
+    drive = _tree()
+
+    result = _reader(drive, text_max_bytes=10).read_text(TXT_FILE)
+
+    assert result.troncato is True
+    assert result.testo == TXT_TEXT[:10] + TEXT_TRUNCATION_MARKER
+
+
+def test_read_text_max_bytes_overrides_the_configured_ceiling() -> None:
+    drive = _tree()
+    reader = _reader(drive, text_max_bytes=10)
+
+    assert reader.read_text(TXT_FILE, max_bytes=1_000).troncato is False
+
+
+def test_the_default_ceiling_is_the_settings_default() -> None:
+    drive = _tree()
+
+    assert _reader(drive).read_text(TXT_FILE).testo == TXT_TEXT
+    assert DRIVE_TEXT_MAX_BYTES_DEFAULT == 262_144
+    assert Settings(_env_file=None).drive_text_max_bytes == DRIVE_TEXT_MAX_BYTES_DEFAULT  # type: ignore[call-arg]
+
+
+# --- the id itself -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        "corto",
+        "1AbCdEfGhI' in parents or '1XyZ",
+        "../../files/1AbCdEfGhIjKl",
+        "1AbCdEfGhIjKl\n",
+    ],
+)
+def test_an_id_that_is_not_a_drive_id_is_refused_before_any_request(bad: str) -> None:
+    """Every caller-supplied id is checked against `query.py`'s strict pattern *first*.
+    Not because the builders would let it through -- they would not -- but because the
+    refusal has to happen before the metadata call, or a malformed id would already
+    have been sent to Google once."""
+    drive = _tree()
+    reader = _reader(drive)
+
+    for call in (reader.list_children, reader.is_within_roots, reader.read_bytes, reader.read_text):
+        with pytest.raises(ValidationFailed):
+            call(bad)
+
+    assert drive.requests == []
+
+
+# --- the credential -------------------------------------------------------------------
+
+
+def test_a_revoked_credential_calls_back_once_and_re_raises() -> None:
+    """`DriveCredentialRevoked` is not swallowed and not re-worded: the callback records
+    the fact (that is `drive_reader_for`'s wiring) and the exception continues, so the
+    caller stops rather than carrying on against a dead credential."""
+    drive = _tree()
+    seen: list[int] = []
+    reader = _reader(drive, tokens=RevokedTokens(), on_revoked=lambda: seen.append(1))
+
+    with pytest.raises(DriveCredentialRevoked):
+        reader.list_children(ROOT_FOLDER)
+    assert seen == [1]
+
+    with pytest.raises(DriveCredentialRevoked):
+        reader.read_text(PDF_FILE)
+    assert seen == [1, 1]
+
+
+def test_without_a_callback_a_revoked_credential_still_raises() -> None:
+    drive = _tree()
+
+    with pytest.raises(DriveCredentialRevoked):
+        _reader(drive, tokens=RevokedTokens()).list_children(ROOT_FOLDER)
+
+
+# --- drive_reader_for ------------------------------------------------------------------
+
+
+REFRESH_TOKEN = "1//0gDriveRefreshToken"
+
+
+def _account(
+    session: Session,
+    *,
+    scopes: tuple[str, ...] = (DRIVE_SCOPE_READONLY, DRIVE_SCOPE_FILE),
+    status: str = "active",
+    roots: tuple[str, ...] = (ROOT_FOLDER,),
+) -> GoogleDriveAccount:
+    user = User(
+        email=f"drive-{uuid4().hex[:8]}@example.it",
+        nome="Owner",
+        password_hash="x",
+        ruolo="admin",
+        attivo=True,
+    )
+    session.add(user)
+    session.flush()
+    ciphertext, nonce = seal(REFRESH_TOKEN, TOKEN_KEY)
+    account = GoogleDriveAccount(
+        user_id=user.id,
+        google_sub=f"sub-{user.id}",
+        email_address="io@example.it",
+        refresh_token_ciphertext=ciphertext,
+        refresh_token_nonce=nonce,
+        scopes_granted=list(scopes),
+        status=status,
+        root_folder_ids=list(roots),
+    )
+    session.add(account)
+    session.flush()
+    return account
+
+
+def _actor(account: GoogleDriveAccount) -> Actor:
+    return Actor(id=account.user_id, type="user", role="admin")
+
+
+def _inject(monkeypatch: pytest.MonkeyPatch, drive: FakeDrive, providers: list[Any]) -> None:
+    """The transport seam, pointed at an in-memory Drive -- the same monkeypatch
+    `apps/mcp/tests/test_gmail_discovery_tool.py` uses for `GmailTransport`. The token
+    provider `drive_reader_for` built is *captured* on the way past and then replaced by
+    a stub, so the composition can be asserted without Google's token endpoint being
+    called at all."""
+
+    def capture(*, tokens: Any, **_: Any) -> DriveTransport:
+        providers.append(tokens)
+        return DriveTransport(tokens=StubTokens(), http=drive, sleep=lambda _: None)
+
+    monkeypatch.setattr(reader_module, "DriveTransport", capture)
+
+
+def test_drive_reader_for_composes_the_reader_from_the_stored_account(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    account = _account(db_session)
+    drive = _tree()
+    providers: list[Any] = []
+    _inject(monkeypatch, drive, providers)
+
+    reader = drive_reader_for(
+        db_session, _actor(account), gmail_settings(), feature="la lettura da Drive"
+    )
+    listing = reader.list_children(ROOT_FOLDER)
+
+    assert {entry.nome for entry in listing.items} == {"ACME", "Note"}
+    # The roots come from the row, so a reader cannot be pointed anywhere else.
+    with pytest.raises(NotFound):
+        reader.list_children(OUTSIDE_FOLDER)
+    # And the credential is this account's, with the refresh token really unsealed.
+    assert len(providers) == 1
+    provider = providers[0]
+    assert isinstance(provider, UserTokens)
+    assert provider.account_id == account.id
+    assert provider.email_address == "io@example.it"
+    assert provider.refresh_token == REFRESH_TOKEN
+
+
+def test_drive_reader_for_refuses_a_revoked_account_before_composing_anything(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    account = _account(db_session, status="revoked")
+    drive = _tree()
+    _inject(monkeypatch, drive, [])
+
+    with pytest.raises(DriveCredentialRevoked):
+        drive_reader_for(db_session, _actor(account), gmail_settings(), feature="la lettura")
+
+    assert drive.requests == []
+
+
+def test_drive_reader_for_refuses_a_grant_without_the_read_scope(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    account = _account(db_session, scopes=(DRIVE_SCOPE_FILE,))
+    drive = _tree()
+    _inject(monkeypatch, drive, [])
+
+    with pytest.raises(Conflict) as excinfo:
+        drive_reader_for(db_session, _actor(account), gmail_settings(), feature="la lettura")
+
+    assert excinfo.value.details["feature"] == "la lettura"
+    assert excinfo.value.details["scope"] == DRIVE_SCOPE_READONLY
+    assert drive.requests == []
+
+
+def test_a_revocation_discovered_mid_read_marks_the_account_and_re_raises(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one place the system can *learn* a Drive grant is gone is a refresh that
+    answers `invalid_grant`, and `mark_revoked` commits on its own behalf so the fact
+    outlives the rollback of whatever operation discovered it."""
+    account = _account(db_session)
+    drive = _tree()
+    monkeypatch.setattr(
+        reader_module,
+        "DriveTransport",
+        lambda **_: DriveTransport(
+            tokens=RevokedTokens(account.id), http=drive, sleep=lambda _: None
+        ),
+    )
+
+    reader = drive_reader_for(db_session, _actor(account), gmail_settings(), feature="la lettura")
+    with pytest.raises(DriveCredentialRevoked):
+        reader.list_children(ROOT_FOLDER)
+
+    db_session.refresh(account)
+    assert account.status == "revoked"
+    assert account.last_error is not None
+    assert "Drive" in account.last_error
+    assert REFRESH_TOKEN not in account.last_error
+    kinds = db_session.execute(
+        select(Activity.kind).where(Activity.entity_id == account.id)
+    ).scalars()
+    assert "drive.credenziale_revocata" in list(kinds)
+
+
+def test_drive_reader_for_uses_the_configured_text_ceiling(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    account = _account(db_session)
+    drive = _tree()
+    _inject(monkeypatch, drive, [])
+
+    reader = drive_reader_for(
+        db_session,
+        _actor(account),
+        gmail_settings(drive_text_max_bytes=10),
+        feature="la lettura",
+    )
+
+    assert reader.read_text(TXT_FILE).troncato is True
+
+
+# --- the guard over the whole module ---------------------------------------------------
+
+
+def _within(drive: FakeDrive, roots: tuple[str, ...]) -> set[str]:
+    """Every id under `roots`, walked downward through the fake's own state -- the set
+    of folders a listing is entitled to name."""
+    seen = set(roots)
+    while True:
+        found = {
+            entry.id
+            for entry in drive.files.values()
+            if any(parent in seen for parent in entry.all_parents)
+        }
+        if found <= seen:
+            return seen
+        seen |= found
+
+
+def test_every_files_list_of_this_module_stayed_inside_the_roots() -> None:
+    """Guard three, and the one the other two cannot be: it reads the requests the fake
+    transport actually received across every scenario above, and checks that each
+    `files.list` named a folder of the configured hierarchy and nothing else.
+
+    Depends on running after the tests above, which is how pytest orders a module. Run
+    alone it proves nothing, so it says so rather than passing vacuously.
+    """
+    listings = [
+        (drive, request) for drive in _DRIVES for request in drive.requests if request.is_files_list
+    ]
+    assert len(listings) >= 5, "the scenarios above issued almost no listing at all"
+    for drive, request in listings:
+        q = request.q or ""
+        allowed = _within(drive, (ROOT_FOLDER,))
+        named = [candidate for candidate in allowed if f"'{candidate}' in parents" in q]
+        assert named, f"a files.list that names no folder of the roots: {q}"
+        assert "contains" not in q.lower(), q
+        assert " or " not in q.lower(), q

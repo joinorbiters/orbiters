@@ -39,6 +39,15 @@ dependencies = [
   # means in practice. The architecture test resolves this entry to the module root
   # `openpyxl` with no override needed.
   "openpyxl==3.1.5",
+  # PDF text extraction for `drive/text.py`. Pure Python, no binary: the alternative
+  # the test suite already uses -- shelling out to `pdftotext` -- is a Poppler binary
+  # that happens to be in the API image because Pandoc put it there, which is a fine
+  # thing for a test fixture to lean on and a bad thing for a production read path
+  # (`packages/core` is imported by the MCP image too, and a `FileNotFoundError` from
+  # `subprocess.run` is not a failure a person reading a document can act on).
+  # Pinned like every other entry here, and declared because
+  # `test_architecture.py` builds core's import allowlist from this list.
+  "pypdf==6.17.0",
 ]
 
 [project.scripts]
