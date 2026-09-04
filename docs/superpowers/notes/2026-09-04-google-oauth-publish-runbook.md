@@ -75,10 +75,12 @@ PIGROCRM_REFRESH_TOKEN_DAYS=180
 - `PIGROCRM_GOOGLE_APP_UNVERIFIED=false` dice al CRM che il progetto non è più in Testing:
   da questo momento non valorizza più `consent_expires_at` sui nuovi consensi, e il banner
   di scadenza a 48 ore smette di comparire.
-- `PIGROCRM_REFRESH_TOKEN_DAYS=180` allunga a sei mesi la sessione dell'app (di default 30
-  giorni): con la rotazione a scorrimento del refresh token, chi usa il CRM non rivede più
-  il login, chi lo lascia fermo sei mesi sì. Non tocca il token di accesso, che resta a 15
-  minuti.
+- `PIGROCRM_REFRESH_TOKEN_DAYS=180` **è già il default** (`config.py`, task T1 di questa
+  fetta): scriverla qui non cambia il comportamento di un'installazione che non la
+  sovrascrive, e la si tiene nel blocco solo per rendere esplicito nel `.env` quanto dura
+  la sessione. Con la rotazione a scorrimento del refresh token, chi usa il CRM non rivede
+  più il login, chi lo lascia fermo sei mesi sì. Non tocca il token di accesso, che resta
+  a 15 minuti.
 
 ### 5. Riavviare l'API
 
