@@ -11,8 +11,13 @@ posto in cui un URL di Drive puo' essere costruito. Due guardie, perche' ognuna 
 e' a una modifica di distanza dall'essere sconfitta:
 
   * `files_list_url` rifiuta un `q` privo di una clausola `'<id>' in parents` ben
-    formata, e rifiuta l'operatore di ricerca libera `contains`, il che rende il bug
-    non costruibile invece che soltanto vietato;
+    formata, rifiuta l'operatore di ricerca libera `contains`, e rifiuta `or`, `not` e
+    le parentesi -- perche' la clausola `in parents` limita l'elenco solo se e' l'unica
+    cosa che decide dove si guarda: `'<id>' in parents or mimeType='application/pdf'`
+    la contiene e ciononostante elenca ogni PDF del Drive. Insieme rendono il bug non
+    costruibile invece che soltanto vietato. I due controlli sugli operatori girano su
+    uno scheletro con i literal fra apici svuotati, perche' `contains` dentro il nome
+    di un cliente non e' un operatore;
   * `tests/test_drive_query.py` cammina l'AST di ogni file sorgente e fallisce se un
     literal contiene l'host di Drive, quello di upload o un path `/files`, cosi' che
     chi volesse bypassare questo modulo non abbia piu' un posto dove scrivere l'URL.
@@ -26,7 +31,8 @@ nessuna superficie di questa slice che ne offra una, e il modo piu' economico di
 tenerlo vero e' non avere niente da chiamare.
 
 **Due severita' per gli id, non una distrazione.** Un id che arriva da fuori (la
-cartella radice che il titolare ha incollato) passa da `_checked_folder_id`, che
+cartella radice che il titolare ha incollato in `google_drive_accounts.root_folder_ids`)
+passa da `_checked_folder_id`, che
 pretende la forma di un id di Drive vero: 10-128 caratteri dell'alfabeto opaco di
 Google. Un id che Drive stesso ci ha appena restituito -- il figlio di un elenco, la
 cartella che `files.create` ha creato -- passa da `_checked_id`, che ha lo stesso
@@ -34,6 +40,16 @@ alfabeto senza minimo di lunghezza: qui la minaccia non e' un'espressione di ric
 scelta da qualcuno, e' il path traversal verso un altro endpoint, e a quello basta
 l'alfabeto. Pretendere dieci caratteri anche da questi significherebbe pretendere che
 gli id di Drive abbiano una lunghezza minima *documentata*, che non hanno.
+
+C'e' una terza sorgente di id, e passa anche lei dal controllo lasco: la cartella radice
+dello storage (`Settings.gdrive_root_folder_id`, cioe'
+`PIGROCRM_GDRIVE_ROOT_FOLDER_ID`), che `GDriveStorage` interpola come parent di ogni
+cartella che crea e passa a `file_meta_url` in `verify_root_accessible`. Arriva da un
+operatore, non da un elenco di Drive, quindi la severita' maggiore le si addirebbe --
+ma e' un valore di configurazione letto una volta all'avvio, non un parametro di
+richiesta, ed e' proprio `verify_root_accessible` a dire all'avvio, con un messaggio
+comprensibile, che non e' raggiungibile. Alzarla adesso romperebbe le installazioni la
+cui radice e' scritta in una forma che Drive accetta e questo regex no.
 """
 
 import re
@@ -74,8 +90,20 @@ _SCOPED_TO_A_FOLDER = re.compile(r"'[A-Za-z0-9_\-]{1,128}' in parents")
 # L'operatore di ricerca libera di Drive, in ogni sua forma (`name contains`,
 # `fullText contains`). Rifiutato anche dentro una cartella: l'import elenca e decide
 # dopo, e ammettere `contains` qui vorrebbe dire ammettere che una stringa di ricerca
-# arrivi da fuori.
+# arrivi da fuori. Cercato sullo *scheletro* (vedi `_skeleton`), mai sul `q` grezzo:
+# la parola dentro un valore fra apici non e' un operatore, e confonderla con uno
+# significa far fallire ogni upload di un cliente che si chiama "Contains S.r.l.".
 _FULL_TEXT_SEARCH = re.compile(r"\bcontains\b", re.IGNORECASE)
+# I tre modi di *allargare* un filtro invece di restringerlo. `or` e `not` sono ovvi;
+# le parentesi lo sono meno, ma servono a raggruppare un `or` e nessuna query che questo
+# modulo costruisce ne ha bisogno, quindi vietarle costa niente e chiude la scappatoia
+# di annidare l'`or`. Anche questi sullo scheletro: un nome di cartella puo'
+# legittimamente contenere una `(` o la parola "or".
+_WIDENS_THE_FILTER = re.compile(r"\bor\b|\bnot\b|[()]", re.IGNORECASE)
+# Un literal fra apici, con l'escaping di `escape_query_value` gia' applicato: `\\.`
+# copre sia `\'` sia `\\`, quindi la scansione non perde il conto delle virgolette
+# proprio sul valore piu' ostile.
+_QUOTED = re.compile(r"'(?:[^'\\]|\\.)*'")
 
 
 def escape_query_value(value: str) -> str:
@@ -144,6 +172,20 @@ def folder_by_name_query(parent_id: str, name: str) -> str:
     return " and ".join(clauses)
 
 
+def _skeleton(q: str) -> str:
+    """Il `q` con ogni literal fra apici svuotato, cioe' la sua sola struttura.
+
+    E' su questo che si guarda per gli operatori, perche' un operatore dentro un valore
+    non e' un operatore. La ragione sociale di un cliente diventa un segmento di storage
+    key, quindi un nome di cartella, quindi il valore di un `name='...'`: cercare
+    `contains` nel `q` grezzo vorrebbe dire far fallire ogni put e ogni get del cliente
+    "Contains S.r.l." con un `ValidationFailed` su una query che il CRM aveva costruito
+    lui. Svuotare invece di eliminare mantiene le virgolette al loro posto, cosi' che
+    `name='' and '' in parents` resti leggibile come struttura.
+    """
+    return _QUOTED.sub("''", q)
+
+
 def _with_params(base: str, **params: str) -> str:
     """Ogni chiamata dichiara di saper gestire uno Shared Drive.
 
@@ -157,22 +199,45 @@ def _with_params(base: str, **params: str) -> str:
 def files_list_url(q: str, *, page_token: str | None = None, fields: str) -> str:
     """Il solo modo di costruire un URL di `files.list` in questo codebase.
 
-    Rifiuta un `q` che non sia limitato a una cartella precisa e uno che contenga
-    `contains`. Quel rifiuto e' il meccanismo di spec 9C: un elenco che esca dalla
+    Tre rifiuti, che insieme sono il meccanismo di spec 9C -- un elenco che esca dalla
     cartella indicata dal titolare, o una ricerca di testo nel suo Drive, non si possono
-    costruire, quindi non si possono spedire per sbaglio.
+    costruire, quindi non si possono spedire per sbaglio:
+
+    1. un `q` senza una clausola `'<id>' in parents` ben formata non e' limitato a
+       nessuna cartella;
+    2. un `q` che contenga `contains` cerca nel Drive di una persona;
+    3. un `q` che contenga `or`, `not` o una parentesi *allarga* invece di restringere,
+       e la sola presenza della clausola `in parents` non lo impedisce:
+       `'<id>' in parents or mimeType='application/pdf'` la contiene e ciononostante
+       elenca ogni PDF del Drive. Questo terzo controllo e' cio' che rende vera la
+       frase "solo i figli di quella cartella"; senza di lui il docstring del modulo
+       promette una cosa che il codice non prova.
+
+    I punti 2 e 3 guardano lo *scheletro* (`_skeleton`), non il `q` grezzo: un valore
+    fra apici non contiene operatori per definizione, e ispezionarlo significherebbe
+    rifiutare la cartella di un cliente per come si chiama. Il punto 1 guarda il `q`
+    vero, perche' e' proprio il literal `'<id>'` che deve esserci.
 
     L'unica deroga e' `files_by_app_property_url`, ed e' un'altra funzione con un altro
     nome invece di un parametro `strict=False`, cosi' che chi la legge veda nel nome
     cosa filtra.
     """
-    if _FULL_TEXT_SEARCH.search(q):
+    structure = _skeleton(q)
+    if _FULL_TEXT_SEARCH.search(structure):
         raise ValidationFailed(
             "drive_query",
             "q",
             "l'operatore contains cerca nel Drive di una persona: l'import elenca una "
             "cartella indicata e decide dopo",
             expected="un elenco dei figli di una cartella, senza contains",
+        )
+    if _WIDENS_THE_FILTER.search(structure):
+        raise ValidationFailed(
+            "drive_query",
+            "q",
+            "or, not e le parentesi allargano il filtro oltre la cartella indicata: un "
+            "elenco può solo restringere",
+            expected="clausole unite da and, senza or, not o parentesi",
         )
     if not _SCOPED_TO_A_FOLDER.search(q):
         raise ValidationFailed(
