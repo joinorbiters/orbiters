@@ -50,9 +50,12 @@ const STATUS_LABEL: Record<string, string> = {
  * 3. **Configured, no account (or one deliberately disconnected).** One link to the
  *    consent flow.
  * 4. **Connected.** Email, status, the roots editor, and «Scollega Drive». When
- *    `banner_text` is set (a revoked or expiring consent, a missing scope), the banner
- *    is shown but the roots form is not: editing what Drive should read is not useful
- *    work to offer on top of a credential that cannot currently read anything.
+ *    `banner_text` is set (a revoked or expiring consent, a missing scope) the banner
+ *    is shown *above* the editor, never instead of it: `set_roots` admits a revoked or
+ *    expired credential on purpose -- the person on this screen is the one recovering
+ *    from exactly that state, and the folder list is the setting they came to fix --
+ *    and `expiring` is a working credential with a date attached, where hiding the
+ *    editor would remove a control over a warning about next week.
  */
 export function DrivePanel() {
   const health = useDriveHealth()
@@ -98,10 +101,10 @@ export function DrivePanel() {
         </p>
       ) : null}
 
-      {/* Editing what Drive reads is not useful work to offer on top of a credential
-          that currently cannot read anything -- the banner above already says what to
-          do instead (re-authorise). */}
-      {!data.banner_text ? <RootsEditor account={account} /> : null}
+      {/* In every connected state, banner or not: see the component docstring. The
+          server accepts this PATCH from a revoked or expired credential, so the panel
+          must not be the thing that refuses it. */}
+      <RootsEditor account={account} />
 
       <div className="space-y-2 border-t pt-4">
         <Button variant="destructive" onClick={() => setConfirmOpen(true)}>
