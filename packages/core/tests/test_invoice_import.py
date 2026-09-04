@@ -64,3 +64,50 @@ def test_a_register_gap_is_unique_per_year_and_number(db_session: Session) -> No
     with pytest.raises(IntegrityError):
         db_session.flush()
     db_session.rollback()
+
+
+def _issued(
+    session: Session, *, anno: int, numero: int, giorno: date, importata: bool = True
+) -> Invoice:
+    row = Invoice(
+        customer_id=_fiscal_customer_id(session),
+        tipo="fattura",
+        stato="emessa",
+        anno=anno,
+        numero=numero,
+        data_emissione=giorno,
+        importata_da="the previous system" if importata else None,
+        imponibile=Decimal("100.00"),
+        imposta=Decimal("0.00"),
+        bollo=Decimal("0.00"),
+        totale=Decimal("100.00"),
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+def test_neighbour_dates_look_both_ways(db_session: Session) -> None:
+    from pigrocrm.core.invoices.repository import InvoiceRepository
+
+    _issued(db_session, anno=2026, numero=7, giorno=date(2026, 5, 5))
+    _issued(db_session, anno=2026, numero=11, giorno=date(2026, 7, 13))
+    repo = InvoiceRepository(db_session)
+    assert repo.neighbour_dates(2026, 9) == (date(2026, 5, 5), date(2026, 7, 13))
+    assert repo.neighbour_dates(2026, 2) == (None, date(2026, 5, 5))
+    assert repo.neighbour_dates(2026, 12) == (date(2026, 7, 13), None)
+    assert repo.numbers_present(2026) == {7, 11}
+    assert repo.first_native_number(2026) is None
+    _issued(db_session, anno=2026, numero=18, giorno=date(2026, 9, 10), importata=False)
+    assert repo.first_native_number(2026) == 18
+
+
+def test_gaps_round_trip(db_session: Session) -> None:
+    from pigrocrm.core.invoices.repository import InvoiceRepository
+
+    repo = InvoiceRepository(db_session)
+    repo.add_gap(InvoiceRegisterGap(anno=2026, numero=6, motivo="test"))
+    repo.add_gap(InvoiceRegisterGap(anno=2026, numero=1, motivo="test"))
+    assert repo.declared_gaps(2026) == {1, 6}
+    assert [g.numero for g in repo.gaps(2026)] == [1, 6]
+    assert repo.declared_gaps(2025) == set()
