@@ -1031,3 +1031,68 @@ def test_set_roots_records_a_revocation_discovered_while_verifying_the_storage_f
     kinds = db_session.execute(select(Activity.kind)).scalars().all()
     assert "drive.credenziale_revocata" in kinds
     assert "drive.radici_impostate" not in kinds
+
+
+def test_set_roots_saves_a_new_storage_folder_unverified_on_a_revoked_or_expired_account(
+    db_session: Session, admin_user: User
+) -> None:
+    """The web panel resends the currently configured `storage_folder_id` on every
+    save, revoked or expired account included -- there is no "unchanged, skip it" on
+    the client. A broken credential has no bearer token behind it that could answer a
+    `files.get` truthfully, so verifying over one would not catch a bad id; it would
+    only turn every save on a broken account into `DriveCredentialRevoked`, discarding
+    the roots change and breaking the very recovery path
+    `test_set_roots_admits_a_revoked_or_expired_account` already covers for
+    `root_folder_ids` alone. The transport factory here fails the test outright if it
+    is ever built, which is the strongest way to show no Drive call is attempted."""
+
+    def fail_if_built(_account: GoogleDriveAccount) -> DriveTransport:
+        raise AssertionError("set_roots non deve chiamare Drive per un account non attivo")
+
+    for status in ("revoked", "expired"):
+        account = _connected_drive_account(
+            db_session, admin_user, email_address=f"{status}-verify@example.it", status=status
+        )
+        service = _drive_service_account(db_session, transport_factory=fail_if_built)
+
+        read = service.set_roots(
+            DriveRootsUpdate(
+                root_folder_ids=["1AbCdEfGhIjKlMnOpQ"], storage_folder_id="3AbCdEfGhIjKlMnOpQ"
+            ),
+            _drive_actor(admin_user),
+        )
+
+        assert read.storage_folder_id == "3AbCdEfGhIjKlMnOpQ"
+        db_session.refresh(account)
+        assert account.storage_folder_id == "3AbCdEfGhIjKlMnOpQ"
+        assert account.status == status, "set_roots must not itself change the credential's status"
+        db_session.delete(account)
+        db_session.flush()
+
+
+def test_set_roots_refuses_verification_missing_the_read_scope_without_calling_drive(
+    db_session: Session, admin_user: User
+) -> None:
+    """An `active` account missing `drive.readonly` cannot make the verification call
+    succeed no matter what `folder_id` names -- Drive would answer with the very same
+    404 a genuinely wrong id gets, which would misname the grant as a bad folder. The
+    same `Conflict` `usable` raises for this scope on this account is raised here
+    instead, and no Drive call is made to get there."""
+    account = _connected_drive_account(db_session, admin_user, scopes=(DRIVE_SCOPE_FILE,))
+    drive = FakeDrive()
+    drive.add_folder("Fatture", parent=drive.root_id, file_id="3AbCdEfGhIjKlMnOpQ")
+    service = _drive_service_account(db_session, transport_factory=_fake_transport_factory(drive))
+
+    with pytest.raises(Conflict) as caught:
+        service.set_roots(
+            DriveRootsUpdate(
+                root_folder_ids=["1AbCdEfGhIjKlMnOpQ"], storage_folder_id="3AbCdEfGhIjKlMnOpQ"
+            ),
+            _drive_actor(admin_user),
+        )
+
+    assert DRIVE_SCOPE_READONLY in caught.value.message
+    assert caught.value.details["scope"] == DRIVE_SCOPE_READONLY
+    assert drive.calls == []
+    db_session.refresh(account)
+    assert account.storage_folder_id is None

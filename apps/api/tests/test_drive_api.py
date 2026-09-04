@@ -242,6 +242,22 @@ def _stub_writable_folder(monkeypatch: pytest.MonkeyPatch, folder_id: str) -> No
     monkeypatch.setattr("pigrocrm.core.drive.account.user_transport_for", factory)
 
 
+def _fail_if_drive_is_called(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`set_roots` must never verify a `storage_folder_id` against a non-`active`
+    account (see its own docstring): a revoked or expired credential has no bearer
+    token behind it that could answer a `files.get` truthfully, and the settings page
+    resends the currently configured folder on *every* save regardless of status. This
+    replaces the default transport factory with one that fails the test the moment it
+    is built, so a regression that verifies anyway is caught here rather than showing
+    up as a 409 that silently discarded the roots change.
+    """
+
+    def factory(_account: GoogleDriveAccount, _settings: Settings) -> DriveTransport:
+        raise AssertionError("set_roots non deve chiamare Drive per un account non attivo")
+
+    monkeypatch.setattr("pigrocrm.core.drive.account.user_transport_for", factory)
+
+
 def test_setting_roots_without_a_connected_account_is_a_conflict(
     logged_in: TestClient, drive_ready: TestClient
 ) -> None:
@@ -274,16 +290,30 @@ def test_setting_roots_on_a_connected_account_updates_them(
 
 
 def test_a_revoked_account_may_still_have_its_roots_reconfigured(
-    logged_in: TestClient, drive_ready: TestClient, api_session: Session, admin_user: Any
+    logged_in: TestClient,
+    drive_ready: TestClient,
+    api_session: Session,
+    admin_user: Any,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No `gmail_configured`-style health gate on this route: the person most likely to
     be here is the one trying to recover from exactly this state (see
-    `GoogleDriveAccountService.set_roots`'s docstring)."""
-    _connected_account(api_session, admin_user.id, status="revoked")
+    `GoogleDriveAccountService.set_roots`'s docstring). The web panel always resends
+    the currently configured `storage_folder_id` -- this is the real payload it sends
+    even on a revoked account -- and `_fail_if_drive_is_called` proves the save does
+    not try to verify it against a credential that cannot answer."""
+    _connected_account(api_session, admin_user.id, status="revoked", storage_folder_id=STORAGE_ID)
+    _fail_if_drive_is_called(monkeypatch)
 
-    response = logged_in.patch("/api/drive/account/roots", json={"root_folder_ids": [ROOT_ID]})
+    response = logged_in.patch(
+        "/api/drive/account/roots",
+        json={"root_folder_ids": [ROOT_ID], "storage_folder_id": STORAGE_ID},
+    )
+
     assert response.status_code == 200, response.text
-    assert response.json()["root_folder_ids"] == [ROOT_ID]
+    body = response.json()
+    assert body["root_folder_ids"] == [ROOT_ID]
+    assert body["storage_folder_id"] == STORAGE_ID
 
 
 def test_a_patch_that_omits_storage_folder_id_keeps_the_configured_one(
