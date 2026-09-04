@@ -68,6 +68,10 @@ class ParsedMessage:
     body_truncated: bool
     body_html_scartato: bool
     attachments: list[ParsedAttachment] = field(default_factory=list)
+    # Address -> the display name the header gave it, for every participant that had
+    # one. Read by discovery, which has to suggest *who* an address is; the stored
+    # mirror never keeps it (spec 5.4 keeps addresses, not names).
+    display_names: dict[str, str] = field(default_factory=dict)
 
     def direction_is_inbound(self, mailbox_address: str) -> bool:
         """Compared against the *connected mailbox* and never against the roster: the
@@ -88,6 +92,28 @@ def header_addresses(raw: str) -> list[str]:
     `"Rossi, Bob" <bob@acme.it>` -- is exactly where naive splitting invents a
     recipient, and because only the addresses are stored."""
     return list(dict.fromkeys(match.group(0).lower() for match in _ADDRESS_IN_HEADER.finditer(raw)))
+
+
+# The text a header gives before an address: `Sarah Miller <sarah@…>`, `"Chen, Sarah"
+# <sarah@…>`, or nothing at all for a bare `sarah@…`. Lazy and bounded by the previous
+# match, so in `a@x.it, Sarah Miller <sarah@x.it>` the second name does not swallow the
+# first address.
+_PARTICIPANT_IN_HEADER = re.compile(
+    r'(?:"?([^"<>@,]*?)"?\s*<\s*)?([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,63})\s*>?'
+)
+
+
+def header_display_names(raw: str) -> dict[str, str]:
+    """`{address: display name}` for every participant of a `From`/`To`/`Cc` header
+    that carried a name. An address without one is simply absent, and the first name
+    seen for an address wins."""
+    names: dict[str, str] = {}
+    for match in _PARTICIPANT_IN_HEADER.finditer(raw):
+        name = (match.group(1) or "").strip().strip(",").strip().strip('"').strip()
+        address = match.group(2).lower()
+        if name and address not in names:
+            names[address] = name
+    return names
 
 
 def _decode_b64url(data: str) -> str:
@@ -184,6 +210,10 @@ def parse_message(
         internal_ms = 0
 
     from_addresses = header_addresses(headers.get("from", ""))
+    display_names: dict[str, str] = {}
+    for header_name in ("from", "to", "cc"):
+        for address, name in header_display_names(headers.get(header_name, "")).items():
+            display_names.setdefault(address, name)
     return ParsedMessage(
         gmail_message_id=str(payload.get("id") or ""),
         gmail_thread_id=str(payload.get("threadId") or ""),
@@ -198,6 +228,7 @@ def parse_message(
         cc_addresses=header_addresses(headers.get("cc", "")),
         subject=headers.get("subject", ""),
         snippet=str(payload.get("snippet") or ""),
+        display_names=display_names,
         internal_date=datetime.fromtimestamp(internal_ms / 1000, tz=UTC),
         body_text=body_text,
         body_truncated=body_truncated,

@@ -27,7 +27,7 @@ nothing to call.
 
 import re
 from collections.abc import Sequence
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from pigrocrm.core.errors import ValidationFailed
 
@@ -94,6 +94,101 @@ def build_address_clause(addresses: Sequence[str]) -> str:
     return "(" + " OR ".join(terms) + ")"
 
 
+# A registrable name with at least one dot, in the same restricted alphabet as
+# `_SAFE_ADDRESS`'s domain part and for the same reason: it is interpolated into a `q`.
+_SAFE_DOMAIN = re.compile(r"[a-z0-9][a-z0-9.\-]*\.[a-z]{2,63}")
+# Domains that are half the planet. `from:@gmail.com` names nobody in particular, so a
+# customer whose only address is a webmail one has no domain of its own to discover by.
+WEBMAIL_DOMAINS: frozenset[str] = frozenset(
+    {
+        "gmail.com",
+        "googlemail.com",
+        "outlook.com",
+        "outlook.it",
+        "hotmail.com",
+        "hotmail.it",
+        "live.com",
+        "live.it",
+        "yahoo.com",
+        "yahoo.it",
+        "icloud.com",
+        "me.com",
+        "libero.it",
+        "virgilio.it",
+        "tiscali.it",
+        "alice.it",
+        "tin.it",
+        "fastwebnet.it",
+        "protonmail.com",
+        "proton.me",
+        "pec.it",
+    }
+)
+
+
+def _checked_domain(domain: str) -> str:
+    normalised = domain.strip().lower()
+    if not _SAFE_DOMAIN.fullmatch(normalised):
+        raise ValidationFailed(
+            "gmail_query",
+            "domain",
+            "non è un dominio interpolabile in una query Gmail",
+            expected="dominio.tld, senza chiocciola, spazi, parentesi o virgolette",
+        )
+    return normalised
+
+
+def build_domain_clause(domain: str) -> str:
+    """`(from:@dominio OR to:@dominio)` -- every address at one customer's domain, in
+    both directions.
+
+    The `@` is the whole difference between this and the broad search spec 4 forbids:
+    `from:example.com` is a free-text match over display names and addresses alike,
+    while `from:@example.com` matches the address and nothing else. It is also what
+    lets `messages_list_url` accept the clause, whose guard looks for exactly that
+    character behind the operator.
+    """
+    safe = _checked_domain(domain)
+    return f"(from:@{safe} OR to:@{safe})"
+
+
+def discovery_query(domain: str) -> str:
+    """The one query discovery issues. No `after:`, deliberately: the question is "who
+    at this customer have I ever corresponded with", and a horizon would answer a
+    different one."""
+    return build_domain_clause(domain)
+
+
+def customer_domain(*, sito_web: str | None, email: str | None) -> str | None:
+    """The domain a customer's correspondents share, read from the record and never
+    typed by the caller: the website first, the customer's own email second.
+
+    `None` when there is nothing to derive from, or when what there is names a webmail
+    provider -- an answer of "nobody in particular" is worse than no answer, because it
+    looks like one.
+    """
+    for candidate in (_website_host(sito_web), _email_domain(email)):
+        if candidate and candidate not in WEBMAIL_DOMAINS and _SAFE_DOMAIN.fullmatch(candidate):
+            return candidate
+    return None
+
+
+def _website_host(sito_web: str | None) -> str | None:
+    value = (sito_web or "").strip().lower()
+    if not value:
+        return None
+    if "://" not in value:
+        value = f"http://{value}"
+    host = urlparse(value).hostname or ""
+    return host.removeprefix("www.") or None
+
+
+def _email_domain(email: str | None) -> str | None:
+    value = (email or "").strip().lower()
+    _, at, domain = value.rpartition("@")
+    return domain if at and domain else None
+
+
 def build_list_queries(
     addresses: Sequence[str], *, after_epoch: int, batch_size: int = ADDRESS_BATCH_DEFAULT
 ) -> tuple[str, ...]:
@@ -106,14 +201,20 @@ def build_list_queries(
 
     `after:` takes epoch seconds, not a date: a date loses the hours and forces
     re-reading an entire day on every cycle.
+
+    `after_epoch=0` means "no horizon", and it is spelled by leaving the clause out.
+    Gmail answers *nothing* to a literal `after:0` -- found in production, where a full
+    backfill came back empty against a mailbox whose threads discovery had just listed,
+    while the fake happily read it as "since the epoch" and every test passed.
     """
     if batch_size < 1:
         raise ValidationFailed("gmail_query", "batch_size", "deve essere almeno 1", expected=">= 1")
     if after_epoch < 0:
         raise ValidationFailed("gmail_query", "after_epoch", "non può essere negativo")
+    horizon = f" after:{after_epoch}" if after_epoch else ""
     unique = list(dict.fromkeys(_checked(address) for address in addresses))
     return tuple(
-        f"{build_address_clause(unique[start : start + batch_size])} after:{after_epoch}"
+        f"{build_address_clause(unique[start : start + batch_size])}{horizon}"
         for start in range(0, len(unique), batch_size)
     )
 

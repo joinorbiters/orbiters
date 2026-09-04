@@ -71,6 +71,10 @@ AGENT_FORBIDDEN_ACTIONS: frozenset[str] = frozenset(
         # The bridge from hours to an invoice line, and the annual estimate.
         "bind_time_to_invoice",
         "get_fiscal_estimate",
+        # Asking Gmail who at a customer's domain one has written to. It spends the
+        # owner's quota under the owner's consent, exactly as a backfill does, and the
+        # same switch says whether this installation wants its agent able to do that.
+        "discover_gmail_correspondents",
     }
 )
 

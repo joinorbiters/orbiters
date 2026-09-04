@@ -85,7 +85,20 @@ FORBIDDEN = (
     "reopen_period",
     "bind_time_to_invoice",
     "get_fiscal_estimate",
+    # The seventeenth, and the first that is not fiscal: asking Gmail who at a customer's
+    # domain the owner has corresponded with. Not irreversible -- it stores nothing --
+    # but it spends the owner's Gmail quota under the owner's OAuth consent, which is
+    # the exact reason `sync` and `backfill` are refused to agents outright. It is on
+    # this list rather than on `FORBIDDEN_GMAIL` because, unlike those two, the
+    # installation *can* opt in: the same switch that hands an agent the fiscal acts.
+    "discover_gmail_correspondents",
 )
+
+# The tools above that exist only on an installation where Gmail is configured as well:
+# on one without Google there is no mailbox to ask, so the switch alone does not make
+# them appear. `test_the_sixteen_are_registered_exactly_when_the_installation_opted_in`
+# accounts for them by building both kinds of installation.
+FORBIDDEN_NEEDING_GMAIL = frozenset({"discover_gmail_correspondents"})
 
 # The service methods behind them. Listed separately because a future tool could call one
 # under an innocuous name -- `finalise_invoice` registering a tool that calls `issue`
@@ -108,6 +121,7 @@ FORBIDDEN_SERVICE_CALLS = (
     "reopen_period",
     "bind_time_to_invoice",
     "get_fiscal_estimate",
+    "discover",
 )
 
 # The bans a bare method name cannot express, because the name is not the operation.
@@ -480,23 +494,45 @@ async def test_the_sixteen_are_registered_exactly_when_the_installation_opted_in
     """
     attore = Actor(id=None, type="mcp", role="admin")
 
-    async def tool_names(full_access: bool) -> set[str]:
+    async def tool_names(full_access: bool, *, gmail: bool) -> set[str]:
+        google = (
+            {
+                "google_client_id": "cid.apps.googleusercontent.com",
+                "google_client_secret": "the-secret",
+                "google_token_key": "a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s=",
+                "public_url": "https://crm.example.it",
+            }
+            if gmail
+            else {}
+        )
         server = build_server(
             lambda: mcp_session,
             lambda: attore,
             LocalFileStorage(str(tmp_path)),
-            Settings(_env_file=None, mcp_full_access=full_access),  # type: ignore[call-arg]
+            Settings(_env_file=None, mcp_full_access=full_access, **google),  # type: ignore[call-arg]
         )
         return {tool.name for tool in await server.list_tools()}
 
-    chiusa = await tool_names(False)
-    aperta = await tool_names(True)
+    # Without Google, the switch adds every forbidden tool except the ones that need a
+    # mailbox to exist at all: those stay absent, not broken, exactly as `tools/gmail.py`
+    # does on the same installation.
+    chiusa = await tool_names(False, gmail=False)
+    aperta = await tool_names(True, gmail=False)
 
-    assert not (chiusa & set(FORBIDDEN)), "un'installazione chiusa non registra nessuno dei sedici"
-    mancanti = set(FORBIDDEN) - aperta
+    assert not (chiusa & set(FORBIDDEN)), "un'installazione chiusa non registra nessuno dei divieti"
+    senza_google = set(FORBIDDEN) - FORBIDDEN_NEEDING_GMAIL
+    mancanti = senza_google - aperta
     assert not mancanti, f"interruttore aperto ma questi tool non esistono: {sorted(mancanti)}"
-    # And nothing else moved: opting in means sixteen more tools, not a different server.
-    assert aperta - chiusa == set(FORBIDDEN)
+    # And nothing else moved: opting in means exactly these more tools, not a different server.
+    assert aperta - chiusa == senza_google
+
+    # With Google configured as well, the switch adds all of them -- and still nothing
+    # else.
+    chiusa_google = await tool_names(False, gmail=True)
+    aperta_google = await tool_names(True, gmail=True)
+
+    assert not (chiusa_google & set(FORBIDDEN))
+    assert aperta_google - chiusa_google == set(FORBIDDEN)
 
 
 def test_the_privileged_module_is_the_only_place_they_appear() -> None:
