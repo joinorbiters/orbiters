@@ -18,11 +18,14 @@ from pigrocrm.core.invoices.schemas import (
     MAX_LINES,
     SNAPSHOT_VERSIONE,
     InvoiceCreate,
+    InvoiceImport,
+    InvoiceLineImport,
     InvoiceLineIn,
     InvoiceListQuery,
     InvoiceSnapshot,
     InvoiceUpdate,
     PartySnapshot,
+    RegisterGapsDeclare,
 )
 from pigrocrm.core.schema_registry import CREATE_MODELS, ENTITY_TYPES, native_fields
 
@@ -180,3 +183,61 @@ def test_an_issue_request_may_carry_a_date_and_nothing_else() -> None:
     assert set(InvoiceIssue.model_fields) == {"data_emissione"}
     assert InvoiceIssue(data_emissione=date(2026, 8, 20)).data_emissione == date(2026, 8, 20)
     assert InvoiceIssue().data_emissione is None
+
+
+def _line(**overrides: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "descrizione": "900142/0426/Consulenza AI CTO progetto Aurora",
+        "quantita": Decimal("9"),
+        "prezzo_unitario": Decimal("380"),
+        "prezzo_totale": Decimal("2700.00"),
+        "aliquota_iva": Decimal("0"),
+        "natura": "N2.2",
+    }
+    base.update(overrides)
+    return base
+
+
+def _import(**overrides: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "anno": 2026,
+        "numero": 7,
+        "data_emissione": date(2026, 5, 5),
+        "customer_id": uuid4(),
+        "righe": [_line()],
+        "imponibile": Decimal("2700.00"),
+        "imposta": Decimal("0.00"),
+        "bollo": Decimal("2.00"),
+        "totale": Decimal("3422.00"),
+    }
+    base.update(overrides)
+    return base
+
+
+def test_an_import_defaults_to_esterno_and_da_incassare() -> None:
+    data = InvoiceImport(**_import())
+    assert data.importata_da == "the previous system"
+    assert data.stato_pagamento == "da_incassare"
+    assert data.pdf_sorgente is None
+
+
+def test_an_import_refuses_unknown_fields_and_a_zero_number() -> None:
+    with pytest.raises(ValidationError):
+        InvoiceImport(**_import(numero=0))
+    with pytest.raises(ValidationError):
+        InvoiceImport(**_import(xml_hash_sha256="abc"))
+    with pytest.raises(ValidationError):
+        InvoiceImport(**_import(righe=[]))
+
+
+def test_an_imported_line_carries_its_own_natura_and_total() -> None:
+    line = InvoiceLineImport(**_line())
+    assert line.natura == "N2.2"
+    assert line.prezzo_totale == Decimal("2700.00")
+
+
+def test_gaps_need_a_reason_each() -> None:
+    with pytest.raises(ValidationError):
+        RegisterGapsDeclare(buchi=[{"numero": 4}])  # type: ignore[list-item]
+    with pytest.raises(ValidationError):
+        RegisterGapsDeclare(buchi=[])
