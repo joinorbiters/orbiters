@@ -273,6 +273,15 @@ def build_server(
 
         gmail_tools.register(mcp, context, _guard, resolved_settings)
 
+        # Same block, same reason: one Google OAuth client issues both the Gmail grant
+        # and the Drive one, so whether Drive diagnosis is available is the same fact as
+        # whether Gmail is. `describe_drive_account` costs no quota and exercises no
+        # consent -- it is not privileged for the same reason `describe_gmail_account`
+        # is not (see `tools/drive.py`'s docstring).
+        from pigrocrm_mcp.tools import drive as drive_tools
+
+        drive_tools.register(mcp, context, _guard, resolved_settings)
+
     if resolved_settings.mcp_full_access:
         # The other half of the switch. `Actor.full_access` (stamped in
         # `PatService.resolve`) decides whether the *service* says yes; this decides

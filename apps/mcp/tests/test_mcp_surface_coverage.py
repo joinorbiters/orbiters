@@ -448,19 +448,15 @@ _COPERTE_O_UMANE: dict[Method, str] = {
 # Vale la pena dirlo perche' una categoria vuota lasciata in piedi "per il prossimo che
 # serve" e' esattamente il posto dove una decisione non presa si nasconde: l'elenco qui
 # sopra contiene solo scelte definitive, e chi ne aggiunge una provvisoria deve riaprire
-# un blocco a se' con il proprio nome, non riempire uno gia' pronto. Questo e' quel blocco.
-_IN_ATTESA_DI_DRIVE_T7: dict[Method, str] = {
-    ("GoogleDriveAccountService", "health"): (
-        "gemella di `GoogleAccountService.health`, e come quella alimenta gia' il "
-        "banner della shell (spec 9 sec 5.5) -- ma il tool che la rende raggiungibile "
-        "da un agente, `describe_drive_account` (il gemello di `describe_gmail_account`), "
-        "e' il prossimo task di questa fetta (9B T7), non questo. Quando quel tool "
-        "esistera' questa riga va CANCELLATA, non aggiornata, per la stessa ragione per "
-        "cui A11 ha cancellato `_IN_ATTESA_DI_DECISIONE` invece di lasciarla al suo posto"
-    ),
-}
-
-
+# un blocco a se' con il proprio nome, non riempire uno gia' pronto.
+#
+# Il task 4 di questa stessa fetta (9B) aveva aperto un blocco cosi', `_IN_ATTESA_
+# DI_DRIVE_T7`, con una sola voce, `("GoogleDriveAccountService", "health")`: la
+# scrittura di `health` esisteva gia' ma il tool che la rende raggiungibile da un
+# agente, `describe_drive_account`, non ancora. Il task 7 (`tools/drive.py`) ha
+# registrato quel tool, quindi il metodo e' ora raggiungibile e la riga e' sparita
+# insieme alla sua categoria -- la stessa cancellazione, non aggiornamento, che A11
+# ha applicato a `_IN_ATTESA_DI_DECISIONE`.
 ESCLUSIONI: dict[Method, str] = {
     **_VIETATE,
     **_INTERNE,
@@ -468,7 +464,6 @@ ESCLUSIONI: dict[Method, str] = {
     **_CONFIGURAZIONE,
     **_BYTE,
     **_COPERTE_O_UMANE,
-    **_IN_ATTESA_DI_DRIVE_T7,
 }
 
 

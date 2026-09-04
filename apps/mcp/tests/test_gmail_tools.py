@@ -186,6 +186,13 @@ SLICE_5B_TOOLS = {
     "describe_gmail_account",
     "draft_email",
     "list_payment_reminder_candidates",
+    # `describe_drive_account` (`tools/drive.py`) is not a slice 5B tool -- it is 9B's
+    # Drive diagnosis, registered right after `gmail_tools.register` in the same
+    # `gmail_configured` block because one Google OAuth client serves both credentials
+    # (slice 9 §5.5). It belongs in this set anyway: the test right below computes the
+    # difference between the configured and the unconfigured server, and that
+    # difference is now six tools, not five.
+    "describe_drive_account",
 }
 
 
