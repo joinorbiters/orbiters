@@ -6,6 +6,7 @@ from alembic.autogenerate import compare_metadata
 from alembic.command import upgrade
 from alembic.config import Config
 from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, create_engine, text
 from testcontainers.community.postgres import PostgresContainer
 
@@ -327,7 +328,11 @@ def test_env_prefers_an_explicit_config_url_over_settings(monkeypatch: pytest.Mo
     finally:
         get_settings.cache_clear()
 
-    assert revision == "0024"
+    # A literal revision string here is a trap: it goes stale (silently, since nothing
+    # re-runs it) the moment a later migration lands, as it already had twice over
+    # (0025, then 0026) before this was changed to ask Alembic itself.
+    expected_head = ScriptDirectory.from_config(_alembic_config(url)).get_current_head()
+    assert revision == expected_head
 
 
 def test_env_falls_back_to_settings_when_config_has_no_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -349,7 +354,11 @@ def test_env_falls_back_to_settings_when_config_has_no_url(monkeypatch: pytest.M
         finally:
             get_settings.cache_clear()
 
-    assert revision == "0024"
+    # A literal revision string here is a trap: it goes stale (silently, since nothing
+    # re-runs it) the moment a later migration lands, as it already had twice over
+    # (0025, then 0026) before this was changed to ask Alembic itself.
+    expected_head = ScriptDirectory.from_config(config).get_current_head()
+    assert revision == expected_head
 
 
 def test_stato_dal_is_backfilled_from_the_timeline_and_chiuso_il_is_not() -> None:
