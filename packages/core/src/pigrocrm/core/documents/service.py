@@ -184,7 +184,16 @@ class DocumentService:
 
     # ---- documents ------------------------------------------------------------
 
-    def create(self, data: DocumentCreate, actor: Actor) -> DocumentRead:
+    def _create_row(self, data: DocumentCreate, actor: Actor) -> Document:
+        """Everything `create` does except the commit, so `import_bytes` can compose it
+        with `_add_version_row` inside one transaction.
+
+        Not named `*_in_transaction`: that suffix is reserved by spec §9.3 for methods
+        that skip authorisation and record nothing, callable only from
+        `core/automations/` (see `tests/test_in_transaction_callers.py`). This one
+        checks the actor and records exactly as before -- the only thing it leaves to
+        its caller is *when* the transaction ends.
+        """
         actor.require_write("create_document")
         payload = data.model_dump()
         self._check_owner(payload["customer_id"], payload["deal_id"])
@@ -203,6 +212,10 @@ class DocumentService:
             actor,
             {"titolo": document.titolo, "tipo": document.tipo},
         )
+        return document
+
+    def create(self, data: DocumentCreate, actor: Actor) -> DocumentRead:
+        document = self._create_row(data, actor)
         self.session.commit()
         return DocumentRead.model_validate(document)
 
@@ -306,6 +319,28 @@ class DocumentService:
         """
         actor.require_write("add_document_version")
         document = self._require(document_id)
+        version = self._add_version_row(
+            document,
+            data,
+            content_type,
+            actor,
+            sorgente_markdown=sorgente_markdown,
+            template_id=template_id,
+            variabili=variabili,
+            storage_prefix=storage_prefix,
+        )
+        self.session.commit()
+        return DocumentVersionRead.model_validate(version)
+
+    def _check_upload(self, data: bytes, content_type: str) -> None:
+        """The three facts about a candidate file that are true or false before anything
+        is written: an allowed type, at least one byte, not over the ceiling.
+
+        Split out of `_add_version_row` so `import_bytes` can run it *before* creating
+        the `documents` row. Cheap enough to run twice, and it is run twice on that
+        path deliberately: the version core keeps its own check so no future caller can
+        reach `storage.put` without it.
+        """
         if content_type not in ALLOWED_CONTENT_TYPES:
             raise ValidationFailed(
                 ENTITY,
@@ -322,6 +357,28 @@ class DocumentService:
                 f"il file supera {DIMENSIONE_MAX} byte",
                 expected=f"al massimo {DIMENSIONE_MAX} byte",
             )
+
+    def _add_version_row(
+        self,
+        document: Document,
+        data: bytes,
+        content_type: str,
+        actor: Actor,
+        *,
+        sorgente_markdown: str | None = None,
+        template_id: UUID | None = None,
+        variabili: dict[str, Any] | None = None,
+        storage_prefix: str | None = None,
+    ) -> DocumentVersion:
+        """`add_version` without the commit and on a `Document` already in hand -- see
+        that method's docstring for the ordering this preserves, which is the whole
+        substance of both.
+
+        Takes the row rather than its id because `import_bytes` has just created it: a
+        second `_require` would be a redundant read, and (on a row flushed but not
+        committed) a needlessly subtle one.
+        """
+        self._check_upload(data, content_type)
 
         numero = self._next_numero(document)
         version = DocumentVersion(
@@ -347,7 +404,7 @@ class DocumentService:
             raise Conflict(
                 "document_version",
                 "conflitto di concorrenza sul numero di versione, riprova",
-                document_id=str(document_id),
+                document_id=str(document.id),
             ) from exc
 
         try:
@@ -361,8 +418,70 @@ class DocumentService:
 
         document.versione_corrente = numero
         self.activities.record(ENTITY, document.id, "version_added", actor, {"numero": numero})
-        self.session.commit()
-        return DocumentVersionRead.model_validate(version)
+        return version
+
+    def import_bytes(
+        self,
+        *,
+        customer_id: UUID | None = None,
+        deal_id: UUID | None = None,
+        tipo: DocumentTipo,
+        titolo: str,
+        data: bytes,
+        content_type: str,
+        actor: Actor,
+        origine: dict[str, Any],
+        commit: bool = True,
+    ) -> DocumentRead:
+        """Bytes that arrived from somewhere else, filed as a document *and* its first
+        version in one unit of work (slice 9 §3.5).
+
+        The single entry point for imported bytes, and the reason it exists is the
+        commit boundary. `create` commits and `add_version` commits, which is right for
+        a person clicking upload -- the row they just made is theirs to see even if the
+        upload then fails. It is wrong for an import: `InvoiceService.import_issued`
+        fetches the original PDF from Drive during its *pure checks*, and every refusal
+        after that point (a duplicate number, a declared gap, a register that is no
+        longer chronological) must leave nothing behind. A document row committed on
+        its own would outlive that refusal as an orphan PDF filed against a customer,
+        with no invoice pointing at it and nothing to say why it is there.
+
+        So the two halves compose through their non-committing cores with no commit in
+        between, and `commit=False` hands the whole thing to the caller's transaction.
+        `_check_upload` runs *first*, before the `documents` row is flushed: a refusal
+        raised from inside the version core would leave a flushed, uncommitted document
+        in the caller's session for every later statement of that transaction to see --
+        the exact failure `import_issued` orders its own checks to avoid.
+
+        `origine` is recorded, sanitized, on `document.importato`: a PDF nobody in this
+        CRM produced has to be able to answer "where did this come from?" years later,
+        and "a file was uploaded" is not that answer. Its shape is the caller's --
+        `{"drive_file_id": ..., "mime": ...}` for the Drive path -- because the CRM will
+        learn other provenances and a fixed schema here would have to be migrated for
+        each of them.
+
+        Storage bytes written and then abandoned by a failed commit are an accepted
+        orphan, exactly as they already are in `add_version`: the alternative is a
+        two-phase delete that would itself have to be crash-safe, and an unreferenced
+        object in storage costs disk, not correctness.
+        """
+        actor.require_write("import_document")
+        self._check_upload(data, content_type)
+        document = self._create_row(
+            DocumentCreate(customer_id=customer_id, deal_id=deal_id, tipo=tipo, titolo=titolo),
+            actor,
+        )
+        self._add_version_row(document, data, content_type, actor)
+        self.activities.record(
+            ENTITY,
+            document.id,
+            "document.importato",
+            actor,
+            {"origine": origine, "titolo": document.titolo, "tipo": document.tipo},
+        )
+        if commit:
+            self.session.commit()
+        return DocumentRead.model_validate(document)
 
     def versions(self, document_id: UUID, actor: Actor) -> list[DocumentVersionRead]:
         self._require(document_id)

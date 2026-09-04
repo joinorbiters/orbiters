@@ -20,8 +20,15 @@ from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+# The strict check for an id that arrives *from outside*, imported rather than
+# re-typed: `drive/query.py` is the module that owns that shape, `drive/reader.py`
+# applies this very function to the `file_id` of every read, and a second copy of the
+# pattern here would be one edit away from disagreeing with the one the URL builder
+# actually enforces.
+from pigrocrm.core.drive.query import checked_outside_id
+from pigrocrm.core.errors import ValidationFailed
 from pigrocrm.core.fiscal.schemas import FiscalSnapshot
 from pigrocrm.core.validation import SafeStr
 
@@ -273,12 +280,43 @@ class InvoiceLineImport(BaseModel):
 
 
 class PdfSorgente(BaseModel):
-    """Where the original PDF already is. Slice 9A knows one place -- a `documents` row
-    with an uploaded version; 9C adds `drive_file_id`."""
+    """Where the original PDF already is: a `documents` row with an uploaded version
+    (9A), or a file on the titolare's Drive (9C).
+
+    Exactly one of the two, and the `model_validator` is what says so rather than a
+    check in the service: two sources would leave "which one is the original?" to be
+    answered by whichever branch the service happened to test first, and none would
+    make `pdf_sorgente: {}` mean "no PDF" -- which already has a spelling, omitting the
+    field entirely.
+
+    `drive_file_id` is held to `drive/query.py`'s strict pattern here, at the edge,
+    because the string reaches a Drive URL: `read_bytes` checks it again on the way past
+    (the same `checked_outside_id`), and both checks stay -- this one so the refusal names
+    `pdf_sorgente.drive_file_id` to the caller who typed it, that one so no future
+    caller of the reader can skip it.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    document_id: UUID
+    document_id: UUID | None = None
+    drive_file_id: SafeStr | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_source(self) -> "PdfSorgente":
+        if (self.document_id is None) == (self.drive_file_id is None):
+            raise ValueError(
+                "indica esattamente uno fra document_id e drive_file_id: "
+                "un PDF originale ha una sola provenienza"
+            )
+        if self.drive_file_id is not None:
+            # Translated into the `ValueError` pydantic understands rather than allowed
+            # to escape as a `ValidationFailed`: this is a schema, and a caller that
+            # builds a `PdfSorgente` gets one kind of error for every malformed field.
+            try:
+                checked_outside_id(self.drive_file_id, field="pdf_sorgente.drive_file_id")
+            except ValidationFailed as exc:
+                raise ValueError(exc.message) from exc
+        return self
 
 
 class InvoiceImport(BaseModel):

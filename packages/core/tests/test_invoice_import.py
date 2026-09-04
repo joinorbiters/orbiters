@@ -117,7 +117,7 @@ def test_gaps_round_trip(db_session: Session) -> None:
     assert repo.declared_gaps(2025) == set()
 
 
-def _svc(session: Session, tmp_path):  # noqa: ANN001
+def _svc(session: Session, tmp_path, *, settings=None, drive_reader_factory=None):  # noqa: ANN001
     """`InvoiceService` with the two profiles it reads already in place.
 
     Copied from `conftest._invoice_service` rather than imported, for the same
@@ -150,7 +150,12 @@ def _svc(session: Session, tmp_path):  # noqa: ANN001
             ),
             ADMIN,
         )
-    return InvoiceService(session, LocalFileStorage(tmp_path))
+    return InvoiceService(
+        session,
+        LocalFileStorage(tmp_path),
+        settings,
+        drive_reader_factory=drive_reader_factory,
+    )
 
 
 def _payload(
@@ -760,3 +765,326 @@ def test_a_pdf_of_another_customer_or_without_bytes_is_refused(
             ),
             ADMIN,
         )
+
+
+# --- the original PDF taken from Drive (slice 9C §3.5) -------------------------------
+
+ROOT_FOLDER = "1RadiceFattureAAA"
+SUB_FOLDER = "1SottocartellaACME"
+DRIVE_PDF = "1FatturaOriginale1"
+DRIVE_TXT = "1AppuntiTestoZZZZZ"
+OUTSIDE_FOLDER = "1CartellaPersonale"
+OUTSIDE_PDF = "1FatturaAltroLavor"
+
+ORIGINAL_PDF = b"%PDF-1.4 la fattura che il cliente ha ricevuto nel 2026"
+
+
+def _drive() -> "FakeDrive":  # noqa: F821
+    """One configured root holding the invoice's original PDF, and a second top-level
+    folder that is *not* configured -- so "inside the roots" is not accidentally true
+    of everything on the drive."""
+    from fakes.fake_drive import FakeDrive
+
+    drive = FakeDrive()
+    drive.add_folder("Fatture", parent=drive.root_id, file_id=ROOT_FOLDER)
+    drive.add_folder("ACME", parent=ROOT_FOLDER, file_id=SUB_FOLDER)
+    drive.add_file(
+        "Fattura 7-2026.pdf",
+        parent=SUB_FOLDER,
+        mime="application/pdf",
+        content=ORIGINAL_PDF,
+        file_id=DRIVE_PDF,
+    )
+    drive.add_file(
+        "Appunti.txt",
+        parent=SUB_FOLDER,
+        mime="text/plain",
+        content=b"non e' una fattura",
+        file_id=DRIVE_TXT,
+    )
+    drive.add_folder("Altro lavoro", parent=drive.root_id, file_id=OUTSIDE_FOLDER)
+    drive.add_file(
+        "fattura-di-un-altro.pdf",
+        parent=OUTSIDE_FOLDER,
+        mime="application/pdf",
+        content=b"%PDF-1.4 non e' roba di questo CRM",
+        file_id=OUTSIDE_PDF,
+    )
+    return drive
+
+
+def _reader_factory(drive: "FakeDrive", *, roots: tuple[str, ...] = (ROOT_FOLDER,)):  # noqa: F821, ANN202
+    """The `drive_reader_factory` seam `InvoiceService.__init__` takes for the tests
+    that are about the *import*, not about the credential: a reader pointed straight at
+    an in-memory Drive, with no account row and no token exchange in the way.
+
+    The wiring that does go through `drive_reader_for` -- the account row, the sealed
+    refresh token, the roots read from that row -- is exercised by
+    `test_the_original_pdf_can_come_straight_from_drive` below.
+    """
+    from pigrocrm.core.drive.reader import DriveReader
+    from pigrocrm.core.drive.transport import DriveTransport
+
+    class _Tokens:
+        def access_token(self) -> str:
+            return "at-1"
+
+        def forget(self) -> None:
+            pass
+
+    def build(actor: Actor) -> DriveReader:
+        return DriveReader(
+            DriveTransport(tokens=_Tokens(), http=drive, sleep=lambda _: None), roots=roots
+        )
+
+    return build
+
+
+def _drive_account(session: Session, *, roots: tuple[str, ...] = (ROOT_FOLDER,)) -> Actor:
+    """A titolare with Drive connected and the roots configured, and the `Actor` that
+    is them. The refresh token is really sealed with the key `gmail_settings`
+    publishes, so `drive_reader_for` runs its real `unseal`."""
+    from fakes.gmail_fixtures import TOKEN_KEY
+
+    from pigrocrm.core.auth.models import User
+    from pigrocrm.core.drive.models import GoogleDriveAccount
+    from pigrocrm.core.drive.schemas import DRIVE_SCOPE_FILE, DRIVE_SCOPE_READONLY
+    from pigrocrm.core.gmail.crypto import seal
+
+    user = User(
+        email=f"titolare-{uuid4().hex[:8]}@example.it",
+        nome="Titolare",
+        password_hash="x",
+        ruolo="admin",
+        attivo=True,
+    )
+    session.add(user)
+    session.flush()
+    ciphertext, nonce = seal("1//0gDriveRefreshToken", TOKEN_KEY)
+    session.add(
+        GoogleDriveAccount(
+            user_id=user.id,
+            google_sub=f"sub-{user.id}",
+            email_address="io@example.it",
+            refresh_token_ciphertext=ciphertext,
+            refresh_token_nonce=nonce,
+            scopes_granted=[DRIVE_SCOPE_READONLY, DRIVE_SCOPE_FILE],
+            status="active",
+            root_folder_ids=list(roots),
+        )
+    )
+    session.flush()
+    return Actor(id=user.id, type="user", role="admin")
+
+
+def _imported_documents(session: Session):  # noqa: ANN202
+    from pigrocrm.core.documents.models import Document
+
+    return list(session.execute(select(Document).where(Document.tipo == "fattura")).scalars())
+
+
+def test_the_original_pdf_can_come_straight_from_drive(
+    db_session: Session, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:  # noqa: ANN001
+    """§3.5 through the real credential path: the account row, the sealed refresh
+    token and the roots that row configures. Only the HTTP boundary is faked, which is
+    the seam slice 5 exists to have.
+
+    What is asserted is the whole point of the feature: the PDF the customer actually
+    received is what the CRM hands back, byte for byte, from a `documents` row of type
+    `fattura` whose title names the invoice -- not a PDF rendered today with today's
+    layout, which would not be that document.
+    """
+    from fakes.gmail_fixtures import gmail_settings
+
+    from pigrocrm.core.activities.models import Activity
+    from pigrocrm.core.drive import reader as reader_module
+    from pigrocrm.core.drive.transport import DriveTransport
+    from pigrocrm.core.invoices.schemas import PdfSorgente
+
+    drive = _drive()
+    providers: list[object] = []
+
+    class _Tokens:
+        def access_token(self) -> str:
+            return "at-1"
+
+        def forget(self) -> None:
+            pass
+
+    def capture(*, tokens, **_):  # noqa: ANN001, ANN202
+        """The transport seam pointed at the in-memory Drive, with the token provider
+        `drive_reader_for` built *captured* on the way past and replaced by a stub --
+        the same monkeypatch `test_drive_reader.py::_inject` uses, and for the same
+        reason: the composition can then be asserted without Google's token endpoint
+        being called at all (this suite opens no socket, see the root `conftest.py`).
+        """
+        providers.append(tokens)
+        return DriveTransport(tokens=_Tokens(), http=drive, sleep=lambda _: None)
+
+    monkeypatch.setattr(reader_module, "DriveTransport", capture)
+    actor = _drive_account(db_session)
+    service = _svc(db_session, tmp_path, settings=gmail_settings())
+    cid = _fiscal_customer_id(db_session)
+
+    read = service.import_issued(
+        _payload(
+            cid,
+            numero=7,
+            giorno=date(2026, 5, 5),
+            pdf_sorgente=PdfSorgente(drive_file_id=DRIVE_PDF),
+        ),
+        actor,
+    )
+
+    assert read.pdf_document_id is not None
+    # The credential really was this actor's, with the refresh token really unsealed.
+    assert len(providers) == 1
+    assert providers[0].refresh_token == "1//0gDriveRefreshToken"  # type: ignore[attr-defined]
+    data, content_type, filename = service.download(read.id, "pdf", actor)
+    assert (data, content_type) == (ORIGINAL_PDF, "application/pdf")
+    assert filename == "fattura-2026-7.pdf"
+    documents = _imported_documents(db_session)
+    assert len(documents) == 1
+    document = documents[0]
+    assert document.id == read.pdf_document_id
+    assert document.customer_id == cid
+    assert document.titolo == "Fattura 2026/7 (originale the previous system)"
+    assert document.versione_corrente == 1
+    # Provenance is recorded, so in three years the answer to "where did this PDF come
+    # from?" is the Drive id it was fetched from and not a shrug.
+    payloads = [
+        payload
+        for payload in db_session.execute(
+            select(Activity.payload).where(
+                Activity.entity_type == "document",
+                Activity.entity_id == document.id,
+                Activity.kind == "document.importato",
+            )
+        ).scalars()
+    ]
+    assert payloads and payloads[0]["origine"]["drive_file_id"] == DRIVE_PDF
+
+
+def test_a_drive_file_outside_the_configured_roots_is_a_conflict(
+    db_session: Session, tmp_path
+) -> None:  # noqa: ANN001
+    """The refusal `DriveReader` reports as `NotFound("drive_file")` -- deliberately
+    the same sentence for "does not exist", "is in a corner of the titolare's Drive
+    nobody configured" and "belongs to a stranger" -- reaches the caller of an import
+    as a `Conflict`: nothing about the *invoice* is missing, and the identifier in the
+    refusal is a Drive id, not an id of this CRM.
+    """
+    from pigrocrm.core.errors import Conflict
+    from pigrocrm.core.invoices.schemas import PdfSorgente
+
+    drive = _drive()
+    service = _svc(db_session, tmp_path, drive_reader_factory=_reader_factory(drive))
+    cid = _fiscal_customer_id(db_session)
+
+    with pytest.raises(Conflict) as caught:
+        service.import_issued(
+            _payload(
+                cid,
+                numero=7,
+                giorno=date(2026, 5, 5),
+                pdf_sorgente=PdfSorgente(drive_file_id=OUTSIDE_PDF),
+            ),
+            ADMIN,
+        )
+
+    assert caught.value.details["drive_file_id"] == OUTSIDE_PDF
+    assert db_session.execute(select(Invoice).where(Invoice.numero == 7)).first() is None
+    assert _imported_documents(db_session) == []
+
+
+def test_a_drive_file_that_is_not_a_pdf_is_refused(db_session: Session, tmp_path) -> None:  # noqa: ANN001
+    """Inside the roots, readable, and still not the original document: a text file is
+    not the PDF the customer holds. Refused on the field the caller typed, so the
+    message points at `pdf_sorgente.drive_file_id` rather than at "a document"."""
+    from pigrocrm.core.errors import ValidationFailed
+    from pigrocrm.core.invoices.schemas import PdfSorgente
+
+    drive = _drive()
+    service = _svc(db_session, tmp_path, drive_reader_factory=_reader_factory(drive))
+    cid = _fiscal_customer_id(db_session)
+
+    with pytest.raises(ValidationFailed) as caught:
+        service.import_issued(
+            _payload(
+                cid,
+                numero=7,
+                giorno=date(2026, 5, 5),
+                pdf_sorgente=PdfSorgente(drive_file_id=DRIVE_TXT),
+            ),
+            ADMIN,
+        )
+
+    assert caught.value.details["field"] == "pdf_sorgente.drive_file_id"
+    assert db_session.execute(select(Invoice).where(Invoice.numero == 7)).first() is None
+    assert _imported_documents(db_session) == []
+
+
+def test_a_register_refusal_after_the_drive_read_files_no_document(
+    db_session: Session, tmp_path
+) -> None:  # noqa: ANN001
+    """The Drive read happens among the *pure* checks, above the counter lock, so a
+    refusal that comes from the register itself -- here a number the register already
+    carries -- must leave no imported document behind. Bytes fetched and thrown away
+    cost one HTTP call; a `documents` row committed for an invoice that was refused
+    would be an orphan PDF filed against a customer forever.
+    """
+    from pigrocrm.core.errors import Conflict
+    from pigrocrm.core.invoices.schemas import PdfSorgente
+
+    drive = _drive()
+    service = _svc(db_session, tmp_path, drive_reader_factory=_reader_factory(drive))
+    cid = _fiscal_customer_id(db_session)
+    service.import_issued(_payload(cid, numero=7, giorno=date(2026, 5, 5)), ADMIN)
+
+    with pytest.raises(Conflict):
+        service.import_issued(
+            _payload(
+                cid,
+                numero=7,
+                giorno=date(2026, 5, 5),
+                pdf_sorgente=PdfSorgente(drive_file_id=DRIVE_PDF),
+            ),
+            ADMIN,
+        )
+
+    assert _imported_documents(db_session) == []
+
+
+def test_a_failed_commit_takes_the_imported_pdf_with_it(
+    db_session: Session, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:  # noqa: ANN001
+    """The import is one transaction, and this is the test that proves the `documents`
+    row is inside it. `import_bytes(commit=False)` is what makes that true: with the
+    ordinary committing `create`, the document would survive the rollback of the
+    invoice it was fetched for.
+    """
+    from pigrocrm.core.invoices.schemas import PdfSorgente
+
+    drive = _drive()
+    service = _svc(db_session, tmp_path, drive_reader_factory=_reader_factory(drive))
+    cid = _fiscal_customer_id(db_session)
+
+    def boom() -> None:
+        raise RuntimeError("la connessione e' caduta durante il commit")
+
+    monkeypatch.setattr(db_session, "commit", boom)
+    with pytest.raises(RuntimeError):
+        service.import_issued(
+            _payload(
+                cid,
+                numero=7,
+                giorno=date(2026, 5, 5),
+                pdf_sorgente=PdfSorgente(drive_file_id=DRIVE_PDF),
+            ),
+            ADMIN,
+        )
+    monkeypatch.undo()
+
+    assert db_session.execute(select(Invoice).where(Invoice.numero == 7)).first() is None
+    assert _imported_documents(db_session) == []

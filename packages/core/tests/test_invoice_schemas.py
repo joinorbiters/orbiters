@@ -26,6 +26,7 @@ from pigrocrm.core.invoices.schemas import (
     InvoiceSnapshot,
     InvoiceUpdate,
     PartySnapshot,
+    PdfSorgente,
     RegisterGapsDeclare,
 )
 from pigrocrm.core.schema_registry import CREATE_MODELS, ENTITY_TYPES, native_fields
@@ -282,3 +283,39 @@ def test_gaps_need_a_reason_each() -> None:
         RegisterGapsDeclare(buchi=[{"numero": 4}])  # type: ignore[list-item]
     with pytest.raises(ValidationError):
         RegisterGapsDeclare(buchi=[])
+
+
+# --- PdfSorgente (slice 9C task 4) ---------------------------------------------------
+
+
+def test_a_pdf_sorgente_names_exactly_one_place() -> None:
+    """Two places the original PDF can already be -- a `documents` row (9A) or a file
+    on Drive (9C) -- and never both: two sources would make "which one is the original"
+    a question the service would have to answer by guessing.
+    """
+    assert PdfSorgente(document_id=uuid4()).drive_file_id is None
+    assert PdfSorgente(drive_file_id="1PreventivoPdfXXXX").document_id is None
+    with pytest.raises(ValidationError):
+        PdfSorgente()
+    with pytest.raises(ValidationError):
+        PdfSorgente(document_id=uuid4(), drive_file_id="1PreventivoPdfXXXX")
+
+
+def test_a_drive_file_id_is_held_to_the_strict_drive_shape() -> None:
+    """The same pattern `drive/query.py` holds a caller-supplied id to, because this
+    string reaches a Drive URL: ten characters at least (real ids are 28 to 44), and
+    nothing outside `[A-Za-z0-9_-]` -- a space, a slash or a trailing newline is the
+    shape an injection attempt has, not the shape an id has.
+    """
+    for bad in ["", "corto", "1Con Spazio Dentro", "1DueBarre/Dentro00", "1TrailingNewline\n"]:
+        with pytest.raises(ValidationError):
+            PdfSorgente(drive_file_id=bad)
+    # A full-length real-world id passes untouched.
+    assert PdfSorgente(drive_file_id="1a2B3c4D5e6F7g8H9i0J1k2L3m4N5o6P").drive_file_id
+
+
+def test_an_import_can_declare_a_drive_file_as_its_original_pdf() -> None:
+    data = InvoiceImport(**_import(pdf_sorgente={"drive_file_id": "1PreventivoPdfXXXX"}))
+    assert data.pdf_sorgente is not None
+    assert data.pdf_sorgente.drive_file_id == "1PreventivoPdfXXXX"
+    assert data.pdf_sorgente.document_id is None
