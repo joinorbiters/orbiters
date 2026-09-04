@@ -3,8 +3,12 @@
 The HTTP layer and the credential are not here. They live in `drive/transport.py`
 (`DriveTransport` plus a `TokenProvider`), because slice 9 needs the same HTTP client
 driven by a *user* OAuth token as well as by today's service account, and only the
-credential differs between the two. This module is the part that does not change:
-placement, identity, and the four `DocumentStorage` methods.
+credential differs between the two. Neither are the URLs: every one of them is built by
+`drive/query.py`, which is the only module in the repository allowed to name a Drive
+host at all -- a guard slice 9C needs because reading a person's Drive must be
+impossible to construct, not merely discouraged, and a guard worth nothing if this
+module keeps its own two hosts in a corner. This module is the part that does not
+change: placement, identity, and the four `DocumentStorage` methods.
 
 **Operational requirement, not a detail** -- and one that applies to the service-account
 setup specifically: a service account has no Drive storage quota of its own.
@@ -36,8 +40,19 @@ forever) by re-querying after a create and adopting one candidate deterministica
 import json
 from datetime import timedelta
 from typing import Any
-from urllib.parse import urlencode
 
+from pigrocrm.core.drive.query import (
+    FOLDER_MIME,
+    file_media_url,
+    file_meta_url,
+    file_url,
+    files_by_app_property_url,
+    files_create_url,
+    files_list_url,
+    folder_by_name_query,
+    upload_create_url,
+    upload_media_url,
+)
 from pigrocrm.core.drive.transport import (
     DriveTransport,
     HttpCall,
@@ -48,9 +63,14 @@ from pigrocrm.core.drive.transport import (
 from pigrocrm.core.errors import Conflict, NotFound
 from pigrocrm.core.storage.base import validate_storage_key
 
-DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
-DRIVE_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files"
-FOLDER_MIME = "application/vnd.google-apps.folder"
+# Where a Drive URL comes from: `drive/query.py`, and nowhere else. This module used
+# to hold the two hosts and its own `q` escaper, which meant "only one place can build
+# a Drive URL" was a sentence rather than a fact -- and this was the one file anybody
+# would add the next Drive call to. `test_drive_query.py` walks the AST of every source
+# file and fails on a Drive host or a `/files` path in any literal outside that module,
+# with an empty exemption list, so the sentence is now checked. `FOLDER_MIME` came along
+# with the query that filters on it.
+
 # The custom property every file this class writes carries, holding the full storage
 # key. This -- not the folder it happens to sit in -- is what `get`/`delete` search
 # for; see the module docstring.
@@ -64,25 +84,6 @@ _MULTIPART_BOUNDARY = "pigrocrm-boundary-7f3c1a"
 _WHAT_API = "richiesta a Google Drive"
 _WHAT_DOWNLOAD = "download da Google Drive"
 _WHAT_VERIFY = "verifica della cartella radice"
-
-
-def _escape_drive_query(value: str) -> str:
-    """Escapes `\\` and `'` for a Drive `q` filter, backslash first.
-
-    Backslash first is load-bearing for the same reason it is in the template
-    escapers: escaping the quote first would then have its own backslash escaped by
-    the second pass, leaving a trailing backslash able to swallow the filter's closing
-    quote.
-
-    Every value this module puts through the filter -- folder names and the
-    `appProperties` key value -- is currently a segment of a `validate_storage_key`-
-    validated key, whose character class (`[a-z0-9._-]`) cannot contain either
-    character, so this function is unreachable through any call this class makes
-    today. Kept anyway, for the same reason `base.py` keeps its own already-redundant
-    checks: a future widening of that character class must not silently reopen query
-    injection just because nothing currently exercises the escaping.
-    """
-    return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
 class GDriveStorage:
@@ -122,10 +123,6 @@ class GDriveStorage:
             root_folder_id=root_folder_id,
         )
 
-    @staticmethod
-    def _url(base: str, **params: str) -> str:
-        return f"{base}?{urlencode({'supportsAllDrives': 'true', **params})}"
-
     def _api(
         self, method: str, url: str, *, body: bytes | None = None, content_type: str | None = None
     ) -> dict[str, Any]:
@@ -142,18 +139,7 @@ class GDriveStorage:
         convergence rule `_ensure_folder` needs for the race it documents -- rather
         than an arbitrary "first" result Drive's own ordering happens to return.
         """
-        clauses = [
-            "trashed=false",
-            f"name='{_escape_drive_query(name)}'",
-            f"'{parent_id}' in parents",
-            f"mimeType='{FOLDER_MIME}'",
-        ]
-        url = self._url(
-            DRIVE_FILES_URL,
-            q=" and ".join(clauses),
-            fields="files(id)",
-            includeItemsFromAllDrives="true",
-        )
+        url = files_list_url(folder_by_name_query(parent_id, name), fields="files(id)")
         files = self._api("GET", url).get("files") or []
         return str(min((f["id"] for f in files), key=str)) if files else None
 
@@ -174,7 +160,7 @@ class GDriveStorage:
             return existing
         self._api(
             "POST",
-            self._url(DRIVE_FILES_URL, fields="id"),
+            files_create_url(fields="id"),
             body=json.dumps(
                 {"name": name, "mimeType": FOLDER_MIME, "parents": [parent_id]}
             ).encode(),
@@ -209,18 +195,7 @@ class GDriveStorage:
         this returns, or a document the caller was told was deleted could still be
         read back through the survivor (see `delete`'s docstring).
         """
-        escaped_key = _escape_drive_query(key)
-        clauses = [
-            "trashed=false",
-            f"appProperties has {{ key='{APP_PROPERTY_KEY}' and value='{escaped_key}' }}",
-        ]
-        url = self._url(
-            DRIVE_FILES_URL,
-            q=" and ".join(clauses),
-            fields="files(id)",
-            includeItemsFromAllDrives="true",
-            corpora="allDrives",
-        )
+        url = files_by_app_property_url(APP_PROPERTY_KEY, key, fields="files(id)")
         files = self._api("GET", url).get("files") or []
         return sorted((str(f["id"]) for f in files), key=str)
 
@@ -254,12 +229,12 @@ class GDriveStorage:
             canonical, *duplicates = existing_ids
             self._api(
                 "PATCH",
-                self._url(f"{DRIVE_UPLOAD_URL}/{canonical}", uploadType="media"),
+                upload_media_url(canonical),
                 body=data,
                 content_type=content_type,
             )
             for duplicate_id in duplicates:
-                self._api("DELETE", self._url(f"{DRIVE_FILES_URL}/{duplicate_id}"))
+                self._api("DELETE", file_url(duplicate_id))
             return
         *folders, filename = validated.split("/")
         parent = self._ensure_folder_chain(folders)
@@ -279,7 +254,7 @@ class GDriveStorage:
         )
         self._api(
             "POST",
-            self._url(DRIVE_UPLOAD_URL, uploadType="multipart", fields="id"),
+            upload_create_url(fields="id"),
             body=body,
             content_type=f"multipart/related; boundary={_MULTIPART_BOUNDARY}",
         )
@@ -289,7 +264,7 @@ class GDriveStorage:
         file_id = self._find_file_by_key(validated)
         if file_id is None:
             raise NotFound("document_blob", key)
-        url = self._url(f"{DRIVE_FILES_URL}/{file_id}", alt="media")
+        url = file_media_url(file_id)
         try:
             return self._transport.bytes("GET", url, what=_WHAT_DOWNLOAD)
         except Conflict as failed:
@@ -319,7 +294,7 @@ class GDriveStorage:
         """
         validated = validate_storage_key(key)
         for file_id in self._find_all_file_ids_by_key(validated):
-            self._api("DELETE", self._url(f"{DRIVE_FILES_URL}/{file_id}"))
+            self._api("DELETE", file_url(file_id))
 
     def signed_url(self, key: str, ttl: timedelta) -> str | None:
         """Always `None`, exactly like `LocalFileStorage`.
@@ -349,11 +324,7 @@ class GDriveStorage:
         startup check rather than a per-request one. A script or a test that only
         needs the type is free to skip the network round trip entirely.
         """
-        url = self._url(
-            f"{DRIVE_FILES_URL}/{self._root_folder_id}",
-            fields="id,driveId",
-            includeItemsFromAllDrives="true",
-        )
+        url = file_meta_url(self._root_folder_id, fields="id,driveId")
         try:
             parsed = self._transport.json("GET", url, what=_WHAT_VERIFY)
         except Conflict as failed:
