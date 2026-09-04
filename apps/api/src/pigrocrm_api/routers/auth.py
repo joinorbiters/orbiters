@@ -142,7 +142,8 @@ def logout(
 ) -> None:
     # Logging out must kill the session server-side, not just empty the browser's
     # cookie jar -- otherwise a copy of the refresh token taken before logout stays
-    # valid for the rest of its 30-day life. An already-invalid or already-expired
+    # valid for the rest of its life, which `refresh_token_days` puts at six months by
+    # default (T1 raised it from thirty days). An already-invalid or already-expired
     # token has nothing left to invalidate, so that case is not an error here: the
     # goal state ("no usable session") is already true.
     token = request.cookies.get(REFRESH_COOKIE)

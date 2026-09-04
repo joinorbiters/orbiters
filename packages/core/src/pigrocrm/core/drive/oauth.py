@@ -19,10 +19,13 @@ share no foreign key.
 
 **The cross-identity check (spec 9 §5.2).** Two independent grants can still point at
 two different Google identities if someone picks a different account in Google's
-chooser -- deliberately or by mistake. That would build a CRM installation whose
-mailbox and whose Drive belong to two different people, with no way to notice short of
-comparing the two rows by hand. So each flow's `complete` reads the *other* table for
-the same CRM user and refuses when a connected row there names a different `sub`.
+chooser -- deliberately or by mistake. That would leave one CRM *user* whose mailbox
+and whose Drive belong to two different people, with no way to notice short of
+comparing the two rows by hand. The invariant is per CRM user and not per
+installation -- both tables are keyed by `user_id`, and two users of the same
+installation are meant to hold two different Google identities. So each flow's
+`complete` reads the *other* table for the same CRM user and refuses when a connected
+row there names a different `sub`.
 Only `sub` is compared here, not the address: unlike the mailbox-reconnection check in
 `GmailOAuthService`, nothing downstream is filed against a Drive address, so the
 narrower, stabler identifier is the whole check. The refusal happens after the token
@@ -43,11 +46,13 @@ from sqlalchemy.orm import Session
 from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.config import Settings, decode_google_token_key, require_gmail_configured
+from pigrocrm.core.drive.errors import DriveCredentialRevoked, drive_unavailable
 from pigrocrm.core.drive.models import GoogleDriveAccount
 from pigrocrm.core.drive.repository import DriveRepository
 from pigrocrm.core.drive.schemas import DRIVE_REQUESTED_SCOPES, GoogleDriveAccountRead
 from pigrocrm.core.errors import Conflict
 from pigrocrm.core.gmail.crypto import seal
+from pigrocrm.core.gmail.errors import CredentialRevoked, GmailUnavailable
 from pigrocrm.core.gmail.models import GoogleOAuthState
 from pigrocrm.core.gmail.repository import GmailRepository
 from pigrocrm.core.gmail.tokens import GOOGLE_AUTH_URL, GoogleTokenClient, TokenGrant
@@ -139,9 +144,25 @@ class GoogleDriveOAuthService:
         if row.user_id != actor.id:
             raise self._invalid_authorisation()
 
-        grant = self.tokens.exchange_code(
-            code=code, code_verifier=row.code_verifier, redirect_uri=self.redirect_uri
-        )
+        # `exchange_code` belongs to the `GoogleTokenClient` the Gmail side owns, and
+        # its two failure exits name Gmail: `CredentialRevoked` reads "ricollega la
+        # casella da Impostazioni → Gmail" under the entity `google_account`, and
+        # `GmailUnavailable` reads "Gmail non ha risposto correttamente". The router
+        # turns either into `?esito=errore`, so the browser flow is unchanged -- but the
+        # same `Conflict` is what a direct caller renders as a problem document or an
+        # MCP message, and there it would send somebody to reconnect a mailbox, or to
+        # wait for Gmail, over a *Drive* consent. Re-shaped for the same reason
+        # `UserTokens.access_token` re-shapes the refresh path's own two.
+        try:
+            grant = self.tokens.exchange_code(
+                code=code, code_verifier=row.code_verifier, redirect_uri=self.redirect_uri
+            )
+        except CredentialRevoked as revoked:
+            # No account id and no address to name: the row does not exist yet, and
+            # Google refused before saying which identity this was.
+            raise DriveCredentialRevoked() from revoked
+        except GmailUnavailable as unavailable:
+            raise drive_unavailable(int(unavailable.details.get("status", 0))) from unavailable
         if not grant.subject or not grant.email_address:
             raise Conflict(
                 "google_drive_account",

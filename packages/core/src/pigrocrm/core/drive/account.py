@@ -33,6 +33,7 @@ from sqlalchemy.orm import Session
 from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.config import Settings, gmail_configured
+from pigrocrm.core.drive.errors import DriveConsentExpired, DriveCredentialRevoked
 from pigrocrm.core.drive.models import GoogleDriveAccount
 from pigrocrm.core.drive.repository import DriveRepository
 from pigrocrm.core.drive.schemas import (
@@ -44,7 +45,6 @@ from pigrocrm.core.drive.schemas import (
     GoogleDriveAccountRead,
 )
 from pigrocrm.core.errors import Conflict
-from pigrocrm.core.gmail.errors import ConsentExpired, CredentialRevoked
 
 # The same 48-hour lead as Gmail's `CONSENT_WARNING_HOURS`: one Google OAuth client
 # grants both credentials, so Testing-mode's seven-day window and the moment a warning
@@ -172,9 +172,9 @@ class GoogleDriveAccountService:
         """
         account = self._present(actor)
         if account.status == "expired":
-            raise ConsentExpired(account.id, account.email_address)
+            raise DriveConsentExpired(account.id, account.email_address)
         if account.status != "active":
-            raise CredentialRevoked(account.id, account.email_address)
+            raise DriveCredentialRevoked(account.id, account.email_address)
         if scope not in account.scopes_granted:
             # Not a credential problem: `status` stays `active` and every other scope
             # keeps working. It is this feature that is unavailable.
@@ -222,11 +222,25 @@ class GoogleDriveAccountService:
         one trying to recover from exactly that state. Verifying that
         `storage_folder_id` is actually writable is 9D's job, at the first real call;
         this method only ever stores ids a person typed.
+
+        **PATCH semantics, and why `model_fields_set` is read here.** The route is a
+        `PATCH`: it changes the fields the request named and leaves the rest alone.
+        `root_folder_ids` is required, so it is always one of them. `storage_folder_id`
+        is not, and on a Pydantic model with a `None` default an omitted field and an
+        explicit `null` are *the same value* -- `data.storage_folder_id` cannot tell
+        them apart. Writing it unconditionally therefore made a request that only edits
+        the read roots erase the write folder, and record `storage_folder_id: None` in
+        the timeline as though somebody had asked for that. `model_fields_set` is the
+        one place the difference still exists, so it is what decides: named (with an id
+        or with `null`) means write it and record it, absent means neither.
         """
         actor.require_write(_ROOTS_ACTION)
         account = self._present(actor)
         account.root_folder_ids = list(data.root_folder_ids)
-        account.storage_folder_id = data.storage_folder_id
+        payload: dict[str, object] = {"root_folder_ids": list(data.root_folder_ids)}
+        if "storage_folder_id" in data.model_fields_set:
+            account.storage_folder_id = data.storage_folder_id
+            payload["storage_folder_id"] = data.storage_folder_id
         # Last thing before the commit: ActivityService.record flushes and joins this
         # transaction, so nothing may commit after it on this session.
         self.activities.record(
@@ -234,10 +248,7 @@ class GoogleDriveAccountService:
             account.id,
             "drive.radici_impostate",
             actor,
-            {
-                "root_folder_ids": list(data.root_folder_ids),
-                "storage_folder_id": data.storage_folder_id,
-            },
+            payload,
         )
         self.session.commit()
         return GoogleDriveAccountRead.model_validate(account)

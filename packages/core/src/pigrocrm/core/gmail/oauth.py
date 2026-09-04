@@ -180,8 +180,10 @@ class GmailOAuthService:
 
         # The mirror of `GoogleDriveOAuthService.complete`'s own cross-identity check
         # (spec 9 §5.2): two independent grants naming two different Google identities
-        # would leave this installation's mailbox and its Drive belonging to two
-        # different people, with nothing short of comparing the rows by hand to notice.
+        # would leave this *user's* mailbox and their Drive belonging to two different
+        # people, with nothing short of comparing the rows by hand to notice. Per CRM
+        # user, not per installation: both tables are keyed by `user_id`, and it is
+        # `account_for_user(actor.id)` that is read here.
         # Skipped once the Drive credential has been explicitly disconnected, for the
         # same reason the mailbox comparison above is.
         drive_account = self.drive.account_for_user(actor.id)

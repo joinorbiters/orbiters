@@ -17,8 +17,6 @@ through it is 9C/9D's surface, built on the `usable()` gate `drive/account.py` a
 exposes.
 """
 
-import threading
-
 from fastapi import APIRouter
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
@@ -28,10 +26,9 @@ from pigrocrm.core.drive.account import GoogleDriveAccountService
 from pigrocrm.core.drive.oauth import GoogleDriveOAuthService
 from pigrocrm.core.drive.schemas import DriveHealth, DriveRootsUpdate, GoogleDriveAccountRead
 from pigrocrm.core.errors import Conflict
-from pigrocrm.core.gmail.tokens import GoogleTokenClient
-from pigrocrm.core.gmail.transport import GmailTransport
 from pigrocrm_api.deps import ActorDep, SessionDep, SettingsDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
+from pigrocrm_api.routers.gmail import token_client
 
 router = APIRouter(prefix="/api/drive", tags=["drive"], responses=PROBLEM_RESPONSES)
 
@@ -43,31 +40,16 @@ _ESITO_COLLEGATO = "collegato"
 _ESITO_NEGATO = "negato"
 _ESITO_ERRORE = "errore"
 
-# One `GoogleTokenClient` per process, keyed by the OAuth client it authenticates as --
-# shared with `routers/gmail.py` for the identical reason its own module docstring
-# gives: one Google OAuth client authenticates both credentials, so the access-token
-# cache the client keeps is the same cache either flow should be reading from. A second,
-# Drive-only dict here would just be a second cache that a Gmail sync had already warmed
-# and a Drive one would cold-start against for no reason.
-_token_clients: dict[str, GoogleTokenClient] = {}
-_token_clients_lock = threading.Lock()
-
 _ACCOUNT_PATH = "/account"
 
-
-def token_client(settings: Settings) -> GoogleTokenClient:
-    client = _token_clients.get(settings.google_client_id)
-    if client is None:
-        with _token_clients_lock:
-            client = _token_clients.get(settings.google_client_id)
-            if client is None:
-                client = GoogleTokenClient(
-                    client_id=settings.google_client_id,
-                    client_secret=settings.google_client_secret,
-                    transport=GmailTransport(),
-                )
-                _token_clients[settings.google_client_id] = client
-    return client
+# `token_client` is imported, not redefined: it is `routers/gmail.py`'s per-process
+# `GoogleTokenClient` cache, and one Google OAuth client authenticates both credentials,
+# so the access-token cache that client keeps is one cache -- the same reuse
+# `routers/email_drafts.py` already makes of it. A second, Drive-only dict here would
+# cold-start against tokens a Gmail sync had already warmed, and, worse, `forget()` on
+# one instance would leave the other's copy of the same token live, which is exactly
+# what `disconnect` calls it to prevent. Kept re-exported under this module's name so a
+# reader of the Drive surface finds it where they expect it.
 
 
 def _oauth(session: Session, settings: Settings) -> GoogleDriveOAuthService:

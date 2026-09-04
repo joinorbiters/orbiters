@@ -36,6 +36,7 @@ from uuid import UUID
 
 import jwt
 
+from pigrocrm.core.drive.errors import DriveCredentialRevoked, drive_unavailable
 from pigrocrm.core.errors import Conflict
 from pigrocrm.core.gmail.errors import CredentialRevoked, GmailUnavailable
 from pigrocrm.core.gmail.tokens import GoogleTokenClient
@@ -309,6 +310,12 @@ class UserTokens:
         by re-consenting, versus transient and cured by waiting); only the credential
         it names changes. Neither message mentions the refresh token, and neither
         `details` dict carries it.
+
+        The terminal one is `DriveCredentialRevoked`, a *type* and not a re-worded
+        `Conflict`: a caller that reacts to a revocation -- 9C marks the row `revoked`
+        on it -- has to match on something, and flattening it here would throw away the
+        one fact it needs while keeping the sentence. `DriveTransport` never touches
+        this exception, so the class the caller sees is the class raised here.
         """
         try:
             return self.tokens.access_token(
@@ -317,19 +324,9 @@ class UserTokens:
                 refresh_token=self.refresh_token,
             )
         except CredentialRevoked as revoked:
-            raise Conflict(
-                "google_drive_account",
-                f"il consenso Google Drive per {self.email_address} è stato revocato: "
-                "ricollega Drive da Impostazioni → Drive",
-                account_id=str(self.account_id),
-            ) from revoked
+            raise DriveCredentialRevoked(self.account_id, self.email_address) from revoked
         except GmailUnavailable as unavailable:
-            status = int(unavailable.details.get("status", 0))
-            raise Conflict(
-                "google_drive",
-                f"Google Drive non ha risposto correttamente (codice {status}). Riprova più tardi",
-                status=status,
-            ) from unavailable
+            raise drive_unavailable(int(unavailable.details.get("status", 0))) from unavailable
 
     def forget(self) -> None:
         self.tokens.forget(self.account_id)

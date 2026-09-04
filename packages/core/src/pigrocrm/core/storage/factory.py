@@ -14,19 +14,23 @@ def storage_from_settings(settings: Settings) -> DocumentStorage:
     if settings.storage_backend == "gdrive":
         if not settings.gdrive_service_account_json or not settings.gdrive_root_folder_id:
             # Two ways to configure Drive, so the error names both: the service-account
-            # variables, and -- from slice 9D -- the connected Google account whose own
-            # credential writes into a folder the titolare picks. A message naming only
-            # the first sends the reader to the Google Cloud console for a setup they
-            # may have no reason to create, and this error is the only place they are
-            # looking.
+            # variables, and the connected Google account whose own credential writes
+            # into a folder the titolare picks. A message naming only the first sends
+            # the reader to the Google Cloud console for a setup they may have no reason
+            # to create, and this error is the only place they are looking.
+            #
+            # Neither half names a slice. This sentence is read by an operator watching
+            # an API fail to start, who has no map of this project's slices and no way
+            # to act on one -- and a slice number is a fact about when the code was
+            # written, which stops being true the moment it ships.
             raise ValidationFailed(
                 "settings",
                 "storage_backend",
                 "gdrive richiede PIGROCRM_GDRIVE_SERVICE_ACCOUNT_JSON e "
-                "PIGROCRM_GDRIVE_ROOT_FOLDER_ID, oppure, dallo slice 9D, collega "
+                "PIGROCRM_GDRIVE_ROOT_FOLDER_ID, oppure collega "
                 "Drive da Impostazioni e scegli la cartella di scrittura",
                 expected="le due variabili del service account, oppure un account "
-                "Drive collegato con cartella di scrittura (slice 9D)",
+                "Drive collegato con cartella di scrittura",
             )
         storage = GDriveStorage.from_service_account(
             service_account_json=settings.gdrive_service_account_json,

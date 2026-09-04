@@ -245,6 +245,59 @@ def test_a_revoked_account_may_still_have_its_roots_reconfigured(
     assert response.json()["root_folder_ids"] == [ROOT_ID]
 
 
+def test_a_patch_that_omits_storage_folder_id_keeps_the_configured_one(
+    logged_in: TestClient, drive_ready: TestClient, api_session: Session, admin_user: Any
+) -> None:
+    """`PATCH` means "change what I named". On a Pydantic model with a `None` default an
+    omitted field and an explicit `null` are the same value, so a request that only
+    edits the read roots would erase the write folder -- silently, and with a timeline
+    entry claiming somebody asked for it. `set_roots` reads
+    `model_fields_set` instead, which is the only place the difference still exists.
+    """
+    _connected_account(api_session, admin_user.id, storage_folder_id=STORAGE_ID)
+
+    response = logged_in.patch(
+        "/api/drive/account/roots", json={"root_folder_ids": [OTHER_ROOT_ID]}
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["root_folder_ids"] == [OTHER_ROOT_ID]
+    assert body["storage_folder_id"] == STORAGE_ID
+
+
+def test_an_explicit_null_storage_folder_id_clears_it(
+    logged_in: TestClient, drive_ready: TestClient, api_session: Session, admin_user: Any
+) -> None:
+    """The other half: `null` was named, so it is written. Clearing the write folder is
+    something a person is allowed to ask for -- "lasciala vuota per non scrivere alcun
+    documento" is what the settings page offers -- and it must stay reachable."""
+    _connected_account(api_session, admin_user.id, storage_folder_id=STORAGE_ID)
+
+    response = logged_in.patch(
+        "/api/drive/account/roots",
+        json={"root_folder_ids": [ROOT_ID], "storage_folder_id": None},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["storage_folder_id"] is None
+
+
+# --- one token-client cache for both Google credentials --------------------------------
+
+
+def test_the_drive_router_shares_gmail_s_token_client_cache() -> None:
+    """One Google OAuth client authenticates both credentials, so the access-token cache
+    it keeps is one cache. A second, Drive-only dict would cold-start against tokens a
+    Gmail sync had already warmed, and `forget()` on one would leave the other's copy
+    of the same token live -- which is exactly what `disconnect` calls it to prevent.
+    """
+    from pigrocrm_api.routers import drive, gmail  # noqa: PLC0415
+
+    settings = _configured()
+    assert drive.token_client(settings) is gmail.token_client(settings)
+
+
 # --- disconnecting -----------------------------------------------------------------------
 
 
