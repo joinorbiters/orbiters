@@ -454,3 +454,90 @@ def test_anno_out_of_range_is_refused_before_any_write(db_session: Session, tmp_
         )
     assert caught.value.details["field"] == "anno"
     assert db_session.execute(select(InvoiceRegisterGap)).first() is None
+
+
+def _pdf_document(session: Session, tmp_path, customer_id: UUID, *, storage=None) -> UUID:  # noqa: ANN001
+    """A document of type `fattura` with one PDF version already uploaded.
+
+    `storage` defaults to a fresh `LocalFileStorage(tmp_path)`; a caller that wants
+    the adopted PDF's bytes to actually download through the `InvoiceService` under
+    test must pass that service's own `storage`, since `download` reads through the
+    invoice service's storage, not a new one pointed at the same directory.
+    """
+    from pigrocrm.core.config import get_settings
+    from pigrocrm.core.documents.schemas import DocumentCreate
+    from pigrocrm.core.documents.service import DocumentService
+    from pigrocrm.core.storage.local import LocalFileStorage
+
+    docs = DocumentService(session, storage or LocalFileStorage(tmp_path), get_settings())
+    doc = docs.create(
+        DocumentCreate(customer_id=customer_id, tipo="fattura", titolo="Fattura 7/2026 (the previous system)"),
+        ADMIN,
+    )
+    docs.add_version(doc.id, b"%PDF-1.4 fake", "application/pdf", ADMIN)
+    return doc.id
+
+
+def test_the_original_pdf_is_adopted_not_rendered(db_session: Session, tmp_path) -> None:  # noqa: ANN001
+    from pigrocrm.core.errors import Conflict
+    from pigrocrm.core.invoices.schemas import PdfSorgente
+
+    service = _svc(db_session, tmp_path)
+    cid = _fiscal_customer_id(db_session)
+    doc_id = _pdf_document(db_session, tmp_path, cid, storage=service.storage)
+    read = service.import_issued(
+        _payload(
+            cid, numero=7, giorno=date(2026, 5, 5), pdf_sorgente=PdfSorgente(document_id=doc_id)
+        ),
+        ADMIN,
+    )
+    assert read.pdf_document_id == doc_id
+    data, content_type, _ = service.download(read.id, "pdf", ADMIN)
+    assert (data, content_type) == (b"%PDF-1.4 fake", "application/pdf")
+    with pytest.raises(Conflict):
+        service.export_xml(read.id, ADMIN)
+    with pytest.raises(Conflict):
+        service.produce_artifacts(read.id, ADMIN)
+
+
+def test_a_pdf_of_another_customer_or_without_bytes_is_refused(
+    db_session: Session, tmp_path
+) -> None:  # noqa: ANN001
+    from pigrocrm.core.config import get_settings
+    from pigrocrm.core.documents.schemas import DocumentCreate
+    from pigrocrm.core.documents.service import DocumentService
+    from pigrocrm.core.errors import ValidationFailed
+    from pigrocrm.core.invoices.schemas import PdfSorgente
+    from pigrocrm.core.storage.local import LocalFileStorage
+
+    service = _svc(db_session, tmp_path)
+    cid, other = _fiscal_customer_id(db_session), _fiscal_customer_id(db_session)
+    foreign = _pdf_document(db_session, tmp_path, other, storage=service.storage)
+    with pytest.raises(ValidationFailed):
+        service.import_issued(
+            _payload(
+                cid,
+                numero=7,
+                giorno=date(2026, 5, 5),
+                pdf_sorgente=PdfSorgente(document_id=foreign),
+            ),
+            ADMIN,
+        )
+    empty = DocumentService(db_session, LocalFileStorage(tmp_path), get_settings()).create(
+        DocumentCreate(customer_id=cid, tipo="fattura", titolo="vuoto"), ADMIN
+    )
+    # numero=8, not 7: the rejected call above already flushed (never committed, never
+    # rolled back -- `import_issued` has no rollback for a `ValidationFailed`, only for
+    # the `IntegrityError` of a genuine race) an `Invoice` numero=7 into this same
+    # session/transaction, so the register already carries it for any later query this
+    # test makes.
+    with pytest.raises(ValidationFailed):
+        service.import_issued(
+            _payload(
+                cid,
+                numero=8,
+                giorno=date(2026, 5, 5),
+                pdf_sorgente=PdfSorgente(document_id=empty.id),
+            ),
+            ADMIN,
+        )
