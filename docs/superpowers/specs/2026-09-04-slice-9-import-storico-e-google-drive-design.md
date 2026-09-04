@@ -99,14 +99,18 @@ Le stesse dello slice 3, applicate ai numeri dichiarati:
 
 ```
 anno, numero, data_emissione, data_scadenza?, customer_id, deal_id?,
-causale?, righe: [{descrizione, quantita, prezzo_unitario, aliquota_iva, natura?}],
+causale?,                                      # es. "900142/0426/Consulenza AI CTO progetto Aurora"
+righe: [{descrizione, quantita, prezzo_unitario, prezzo_totale, aliquota_iva, natura?}],
 imponibile, imposta, bollo, totale,           # dichiarati, non ricalcolati (vedi sotto)
 stato_pagamento, data_incasso?,
 trasmessa_esternamente_il?,                    # data di trasmissione SdI da the previous system
-riferimento?,                                  # es. "900142/0426/Consulenza AI CTO progetto Aurora"
 pdf_sorgente?: {drive_file_id} | {upload_key}, # §3.5
 note_interne?, importata_da: "the previous system"
 ```
+
+`riferimento` non c'è, di proposito: sulla tabella `invoices` è il riferimento di una **proforma**
+(vincolo `ck_invoices_riferimento_only_on_proforma`), e la descrizione che the previous system stampava
+(«900142/0426/…») è una causale, quindi va in `causale` e nella riga.
 
 **I totali sono dichiarati e verificati, non ricalcolati.** Il documento fiscale è quello
 emesso da the previous system: il CRM deve registrare *quel* totale. Ma verifica che `imponibile + imposta +
