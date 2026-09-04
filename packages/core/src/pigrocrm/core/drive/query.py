@@ -30,11 +30,13 @@ deliberatamente -- un costruttore che prenda una stringa di ricerca di Drive: no
 nessuna superficie di questa slice che ne offra una, e il modo piu' economico di
 tenerlo vero e' non avere niente da chiamare.
 
-**Due severita' per gli id, non una distrazione.** Un id che arriva da fuori (la
-cartella radice che il titolare ha incollato in `google_drive_accounts.root_folder_ids`)
-passa da `_checked_folder_id`, che
-pretende la forma di un id di Drive vero: 10-128 caratteri dell'alfabeto opaco di
-Google. Un id che Drive stesso ci ha appena restituito -- il figlio di un elenco, la
+**Due severita' per gli id, non una distrazione.** Un id che arriva da fuori -- la
+cartella radice che il titolare ha incollato in `google_drive_accounts.root_folder_ids`,
+o il file che qualcuno ha chiesto di leggere -- passa da `checked_outside_id`, che
+pretende la forma di un id di Drive vero (10-128 caratteri dell'alfabeto opaco di
+Google) e che riporta il *nome del parametro* che lo portava (`folder_id`, `file_id`),
+perche' quel nome e' quasi tutto il contenuto del messaggio. Un id che Drive stesso ci
+ha appena restituito -- il figlio di un elenco, la
 cartella che `files.create` ha creato -- passa da `_checked_id`, che ha lo stesso
 alfabeto senza minimo di lunghezza: qui la minaccia non e' un'espressione di ricerca
 scelta da qualcuno, e' il path traversal verso un altro endpoint, e a quello basta
@@ -125,15 +127,31 @@ def escape_query_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
-def _checked_folder_id(folder_id: str) -> str:
-    if not _SAFE_FOLDER_ID.fullmatch(folder_id):
+def checked_outside_id(value: str, *, field: str) -> str:
+    """La forma severa di un id che arriva **da fuori**, sotto il nome del parametro
+    che lo portava.
+
+    Un id esterno e' la cartella radice che il titolare ha incollato in
+    `google_drive_accounts.root_folder_ids` *oppure* il file che qualcuno -- una rotta,
+    un tool MCP -- ha chiesto di leggere: la severita' e' la stessa (vedi il docstring
+    del modulo), il nome del parametro no. `field` esiste perche' quel nome e' quasi
+    tutto il contenuto del messaggio: leggere «non e' un id di cartella Drive» dopo
+    aver passato l'id di un *file* manda a controllare la configurazione delle radici,
+    che e' giusta, invece del parametro che si e' scritto. Per lo stesso motivo la
+    frase non nomina nessuno dei due tipi: e' la *forma* dell'id a essere sbagliata.
+
+    Pubblica, e non un `_checked_folder_id` che ogni chiamante importa di straforo:
+    `drive/reader.py` deve applicare esattamente questo controllo ai suoi `file_id`, e
+    due regex per una sola regola sono una regola che prima o poi divergera'.
+    """
+    if not _SAFE_FOLDER_ID.fullmatch(value):
         raise ValidationFailed(
             "drive_query",
-            "folder_id",
-            "non è un id di cartella Drive interpolabile in una query",
+            field,
+            "non è un id di Drive interpolabile in una query",
             expected="10-128 caratteri fra lettere, cifre, - e _",
         )
-    return folder_id
+    return value
 
 
 def _checked_id(file_id: str) -> str:
@@ -152,7 +170,7 @@ def children_query(folder_id: str) -> str:
     ha deciso di buttare, e importarlo per poi filtrarlo dopo significa che e' passato
     comunque dal processo.
     """
-    return f"'{_checked_folder_id(folder_id)}' in parents and trashed = false"
+    return f"'{checked_outside_id(folder_id, field='folder_id')}' in parents and trashed = false"
 
 
 def folder_by_name_query(parent_id: str, name: str) -> str:

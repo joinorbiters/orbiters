@@ -52,19 +52,16 @@ from pigrocrm.core.drive.account import GoogleDriveAccountService
 from pigrocrm.core.drive.errors import DriveCredentialRevoked
 from pigrocrm.core.drive.query import (
     FOLDER_MIME,
+    # The strict shape of an id that arrives from outside, imported rather than
+    # rewritten: `query.py` is where that shape is defined, and a copy here would be a
+    # second pattern to keep in step with it. The `field=` is what makes it usable for
+    # a file as well as a folder -- see that function's docstring.
+    checked_outside_id,
     children_query,
     file_export_url,
     file_media_url,
     file_meta_url,
     files_list_url,
-)
-from pigrocrm.core.drive.query import (
-    # The strict id check of `query.py`, imported rather than rewritten: it is the one
-    # place the shape of an id that arrives *from outside* is defined, and a copy here
-    # would be a second pattern to keep in step with it. Private only because that
-    # module has no public alias for it and belongs to another task in this slice; the
-    # alternative -- a second regex -- is the thing worth avoiding.
-    _checked_folder_id as _checked_outside_id,
 )
 from pigrocrm.core.drive.schemas import DRIVE_SCOPE_READONLY
 from pigrocrm.core.drive.text import PLAIN_TEXT_MIME, DriveText, drive_text
@@ -86,6 +83,14 @@ ENTITY = "drive_file"
 # trust away) would spin against Google forever. Twenty is far past any real filing --
 # a folder nested twenty deep under a root is a folder nobody navigates by hand.
 MAX_ROOT_WALK_LEVELS = 20
+
+# And how many `files.get` calls that walk may spend in total. The level bound is not
+# enough on its own: a file may have many parents, so one level can be three hundred
+# folders wide, and twenty levels of that is a walk that spends somebody's Drive quota
+# to answer one question. A file whose ancestry fans out past this is reported outside
+# the roots -- the safe direction, and a filing with two hundred distinct ancestors is
+# not one anybody navigates.
+MAX_ROOT_WALK_REQUESTS = 200
 
 # The ceiling on the bytes of a single file, and the reason it is not the text ceiling:
 # a 4 MB PDF is an ordinary contract whose text is eight kilobytes, so sharing one
@@ -187,7 +192,7 @@ class DriveReader:
 
     def list_children(self, folder_id: str, *, page_token: str | None = None) -> DriveListing:
         """The children of a folder inside the roots, one Drive page at a time."""
-        checked = _checked_outside_id(folder_id)
+        checked = checked_outside_id(folder_id, field="folder_id")
         return self._guarded(lambda: self._list_children(checked, page_token))
 
     def is_within_roots(self, file_id: str) -> bool:
@@ -198,7 +203,9 @@ class DriveReader:
         parents, level by level, with a cache for the duration of this one call: a file
         with several parents whose paths meet again is otherwise walked once per path.
         """
-        checked = _checked_outside_id(file_id)
+        # `folder_id`, because this is the one entry point that answers about a
+        # *folder* as readily as about a file, and `list_children` is what calls it.
+        checked = checked_outside_id(file_id, field="folder_id")
         return self._guarded(lambda: self._within_roots(checked, {}))
 
     def read_bytes(self, file_id: str, *, max_bytes: int | None = None) -> tuple[bytes, str]:
@@ -208,9 +215,13 @@ class DriveReader:
         `text/plain` export and the mime says `text/plain` rather than repeating the
         native type -- the caller is being handed text, and telling it otherwise would
         make every extractor downstream guess.
+
+        `max_bytes` can only *tighten* the reader's own ceiling (see `_ceiling`): it is
+        a caller's budget, not a permission, and a tool that asked for 500 MB must not
+        thereby raise a limit it does not decide.
         """
-        checked = _checked_outside_id(file_id)
-        limit = self._download_max_bytes if max_bytes is None else max_bytes
+        checked = checked_outside_id(file_id, field="file_id")
+        limit = self._ceiling(max_bytes)
         return self._guarded(lambda: self._read_bytes(checked, limit))
 
     def read_text(self, file_id: str, *, max_bytes: int | None = None) -> DriveText:
@@ -220,16 +231,27 @@ class DriveReader:
         PDF is an ordinary contract) and the *text* is cut at `max_bytes`, which
         defaults to `settings.drive_text_max_bytes`. See `DOWNLOAD_MAX_BYTES`.
         """
-        checked = _checked_outside_id(file_id)
+        checked = checked_outside_id(file_id, field="file_id")
         limit = self._text_max_bytes if max_bytes is None else max_bytes
 
         def work() -> DriveText:
-            content, mime = self._read_bytes(checked, self._download_max_bytes)
+            content, mime = self._read_bytes(checked, self._ceiling(None))
             return drive_text(content, mime=mime, max_bytes=limit)
 
         return self._guarded(work)
 
     # ---- internals -------------------------------------------------------------------
+
+    def _ceiling(self, max_bytes: int | None) -> int:
+        """The smaller of the caller's budget and this reader's own ceiling.
+
+        `min`, not "the caller's if given": a `max_bytes` above the ceiling would let
+        whoever calls this decide how many bytes of somebody's Drive may be pulled into
+        this process, which is the one thing the ceiling exists to take away from them.
+        """
+        if max_bytes is None:
+            return self._download_max_bytes
+        return min(max_bytes, self._download_max_bytes)
 
     def _guarded(self, work: Callable[[], _T]) -> _T:
         """Every public operation, with the one exception that has a *reaction* attached.
@@ -292,6 +314,13 @@ class DriveReader:
         else:
             content = self._transport.bytes("GET", file_media_url(file_id), what=_WHAT_DOWNLOAD)
 
+        # Not a memory bound, and it would be dishonest to describe it as one: by the
+        # time this runs, `DriveTransport` has already buffered the whole response in
+        # memory (`urllib` reads it in one `response.read()`), so what this refuses is
+        # *returning* an oversized answer, not allocating it. The bound that actually
+        # limits allocation is the declared-size check above, and above that Google's
+        # own per-file limits. Kept regardless: an export declares no size at all, so
+        # without this a Google Doc of any length would come back whole.
         if len(content) > max_bytes:
             raise Conflict(
                 ENTITY, _TOO_BIG.format(max_bytes=max_bytes), file_id=file_id, size=len(content)
@@ -303,9 +332,13 @@ class DriveReader:
             return True
         seen = {file_id}
         frontier = [file_id]
+        spent = 0
         for _level in range(MAX_ROOT_WALK_LEVELS):
             above: list[str] = []
             for current in frontier:
+                if spent >= MAX_ROOT_WALK_REQUESTS and current not in cache:
+                    return False
+                spent += 1
                 for parent in self._parents_of(current, cache):
                     if parent in self._roots:
                         return True
@@ -327,6 +360,15 @@ class DriveReader:
         root above it. Turning it into a refusal here would also make the refusal
         *different* from the one an unconfigured folder gets, which is exactly the
         distinction this module withholds.
+
+        Only a 404, deliberately, and it is a trade rather than a free choice: a 403
+        ("you may not see this file") also means no root can be proven above it, and it
+        propagates as a `Conflict` instead. That is the right answer for the caller --
+        an outage or a permission change is worth reporting as itself, and swallowing
+        it would make an unshared parent look like an unconfigured one -- but it does
+        mean a 403 on a *parent* of a file the titolare can read surfaces as a Drive
+        error rather than as `NotFound`. It has not been seen, and inventing a
+        translation for it would be inventing which of the two it was.
         """
         cached = cache.get(file_id)
         if cached is not None:

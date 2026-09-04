@@ -66,10 +66,21 @@ _WORD_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _DOCX_DOCUMENT = "word/document.xml"
 # How large `word/document.xml` may be *uncompressed*. A `.docx` is a zip, and a zip
 # says how big its members expand to before anything is read -- so a 30 KB download
-# claiming a 4 GB member is refused for free, instead of being decompressed into
-# memory. 16 MiB is far past any real document: `word/document.xml` is markup around
-# text, and a 300-page contract is under one.
-_DOCX_XML_MAX_BYTES = 16 * 1024 * 1024
+# claiming a 4 GB member is refused for free. But that declared size is the
+# *attacker's* number: rewriting the size fields of a zip costs nothing, and a member
+# that claims 1 KB and expands to a gigabyte would sail past the cheap check and be
+# decompressed in full by `ZipFile.read` before the CRC finally failed. So the number
+# is enforced twice, and the second time is the one that binds: the member is read
+# through `read(_DOCX_XML_MAX_BYTES + 1)`, which allocates the ceiling and not the
+# payload. 16 MiB is far past any real document -- `word/document.xml` is markup
+# around text, and a 300-page contract is under one.
+DOCX_XML_MAX_BYTES = 16 * 1024 * 1024
+
+# How many pages of a PDF are worth parsing. The byte budget below stops a *long*
+# document; this stops a *wide* one -- five thousand faxed pages holding two kilobytes
+# of text between them, where the budget never bites and every page still costs a
+# parse. 500 is past any document somebody imports into a CRM by hand.
+MAX_PDF_PAGES = 500
 # A document type declaration is how the entity-expansion attacks on `xml.etree`
 # («billion laughs», quadratic blowup) are written, and Word does not emit one: the
 # `.docx` XML parts have no DTD at all. Refusing the whole file when one is present
@@ -97,6 +108,13 @@ def extract_text(content: bytes, *, mime: str, budget: int | None = None) -> str
     registry is not worth parsing in full to answer with its first 256 KB. It never
     changes *what* the answer is up to that point, and the actual cut is
     `drive_text`'s.
+
+    `text/*` is read by *prefix* and not from a list of the two subtypes spec 9C names
+    (`text/plain`, `text/markdown`): every `text/...` type is by definition a sequence
+    of characters, so `text/csv` or `text/html` decoding to their own source is a more
+    useful answer than the empty string, and a list would have to grow by one commit
+    per file type somebody actually has. What is *not* text is refused by having no
+    branch at all, which is the safe direction for the mistake to fall.
     """
     if mime == PDF_MIME:
         return _pdf_text(content, budget)
@@ -156,7 +174,7 @@ def _pdf_text(content: bytes, budget: int | None) -> str:
     held = 0
     try:
         reader = PdfReader(BytesIO(content))
-        for page in reader.pages:
+        for page in reader.pages[:MAX_PDF_PAGES]:
             text = page.extract_text() or ""
             pages.append(text)
             # Characters against a byte budget: a character is never fewer than one
@@ -179,7 +197,7 @@ def _docx_text(content: bytes) -> str:
 
     `xml.etree` and not `defusedxml` (which this repository does not declare), so the
     two attacks that parser is vulnerable to are closed *before* it runs instead:
-    `_DOCX_XML_MAX_BYTES` refuses a zip bomb on the size the archive itself declares,
+    `DOCX_XML_MAX_BYTES` refuses a zip bomb -- twice, see its comment --
     and `_DTD` refuses any document that carries a document type declaration, which is
     where an entity-expansion payload has to live. `xml.etree` resolves no external
     entity in any case, so no file read or network call can be provoked from here.
@@ -187,9 +205,20 @@ def _docx_text(content: bytes) -> str:
     try:
         with zipfile.ZipFile(BytesIO(content)) as archive:
             entry = archive.getinfo(_DOCX_DOCUMENT)
-            if entry.file_size > _DOCX_XML_MAX_BYTES:
+            if entry.file_size > DOCX_XML_MAX_BYTES:
+                # The cheap pass: an honest archive says so itself, for free.
                 return ""
-            document = archive.read(entry)
+            with archive.open(entry) as member:
+                # And the pass that binds, because the line above trusted a field the
+                # file's author wrote: reading one byte past the ceiling is how a
+                # decompressed size is *measured* rather than believed. `read(n)`
+                # decompresses only as far as it must, so a member claiming 1 KB and
+                # holding a gigabyte costs this ceiling and not that gigabyte -- and no
+                # CRC check happens on a stream that was never read to its end, which
+                # is why this returns "" rather than raising.
+                document = member.read(DOCX_XML_MAX_BYTES + 1)
+            if len(document) > DOCX_XML_MAX_BYTES:
+                return ""
     except (zipfile.BadZipFile, KeyError, OSError, ValueError):
         return ""
     if _DTD in document:
