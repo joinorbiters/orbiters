@@ -230,6 +230,15 @@ def test_an_import_refuses_unknown_fields_and_a_zero_number() -> None:
         InvoiceImport(**_import(righe=[]))
 
 
+def test_an_import_has_no_riferimento_field() -> None:
+    """`invoices.riferimento` is constrained to `NULL` on every `tipo = 'fattura'`
+    row (`ck_invoices_riferimento_only_on_proforma`), and an import always produces
+    a `fattura`: the field is absent from the schema, not merely optional, so a
+    caller supplying it is refused here rather than at the database's own CHECK."""
+    with pytest.raises(ValidationError):
+        InvoiceImport(**_import(riferimento="x"))
+
+
 def test_an_imported_line_carries_its_own_natura_and_total() -> None:
     line = InvoiceLineImport(**_line())
     assert line.natura == "N2.2"

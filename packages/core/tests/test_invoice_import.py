@@ -301,3 +301,49 @@ def test_the_import_writes_one_activity(db_session: Session, tmp_path) -> None: 
         .all()
     )
     assert kinds == ["imported"]
+
+
+def test_a_collection_date_without_a_collected_state_is_refused(
+    db_session: Session, tmp_path
+) -> None:  # noqa: ANN001
+    from pigrocrm.core.errors import ValidationFailed
+
+    service = _svc(db_session, tmp_path)
+    cid = _fiscal_customer_id(db_session)
+    with pytest.raises(ValidationFailed) as caught:
+        service.import_issued(
+            _payload(cid, numero=7, giorno=date(2026, 5, 5), stato_pagamento="da_incassare"),
+            ADMIN,
+        )
+    assert caught.value.details["field"] == "data_incasso"
+
+
+def test_anno_must_match_the_issue_dates_year(db_session: Session, tmp_path) -> None:  # noqa: ANN001
+    from pigrocrm.core.errors import ValidationFailed
+
+    service = _svc(db_session, tmp_path)
+    cid = _fiscal_customer_id(db_session)
+    with pytest.raises(ValidationFailed) as caught:
+        service.import_issued(_payload(cid, numero=7, giorno=date(2026, 5, 5), anno=2025), ADMIN)
+    assert caught.value.details["field"] == "anno"
+
+
+def test_a_declared_gap_refuses_the_import_of_that_number(db_session: Session, tmp_path) -> None:  # noqa: ANN001
+    from pigrocrm.core.errors import Conflict
+
+    service = _svc(db_session, tmp_path)
+    cid = _fiscal_customer_id(db_session)
+    service.repo.add_gap(InvoiceRegisterGap(anno=2026, numero=8, motivo="annullata in Acme"))
+    with pytest.raises(Conflict):
+        service.import_issued(_payload(cid, numero=8, giorno=date(2026, 5, 5)), ADMIN)
+
+
+def test_import_is_refused_above_the_first_native_number(db_session: Session, tmp_path) -> None:  # noqa: ANN001
+    from pigrocrm.core.errors import Conflict
+
+    service = _svc(db_session, tmp_path)
+    cid = _fiscal_customer_id(db_session)
+    _issued(db_session, anno=2026, numero=5, giorno=date(2026, 4, 1), importata=False)
+    with pytest.raises(Conflict):
+        service.import_issued(_payload(cid, numero=6, giorno=date(2026, 4, 2)), ADMIN)
+    service.import_issued(_payload(cid, numero=3, giorno=date(2026, 3, 1)), ADMIN)
