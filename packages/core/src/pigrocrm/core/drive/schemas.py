@@ -92,6 +92,14 @@ class DriveRootsUpdate(BaseModel):
     `extra="forbid"` is not needed here the way it is on the wider Create/Update schemas
     elsewhere: there are only the two fields a Drive configuration has, and nothing else
     to guard against.
+
+    The route is a `PATCH`, and `storage_folder_id`'s default is what makes it one:
+    omitting the field leaves the configured write folder alone, sending `null` clears
+    it. Those two are the same *value* on this model -- `None` either way -- so the
+    difference lives only in `model_fields_set`, which is what
+    `GoogleDriveAccountService.set_roots` reads rather than the attribute. Anything
+    added to this schema later with a `None` default inherits that obligation.
+    `root_folder_ids` has no default and is therefore always part of the change.
     """
 
     root_folder_ids: list[_DriveId] = Field(min_length=1, max_length=20)

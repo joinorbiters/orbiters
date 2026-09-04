@@ -17,6 +17,7 @@ from pigrocrm.core.activities.models import Activity
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.auth.models import User
 from pigrocrm.core.drive.account import CONSENT_WARNING_HOURS, GoogleDriveAccountService
+from pigrocrm.core.drive.errors import DriveConsentExpired, DriveCredentialRevoked
 from pigrocrm.core.drive.models import GoogleDriveAccount
 from pigrocrm.core.drive.oauth import GoogleDriveOAuthService
 from pigrocrm.core.drive.schemas import (
@@ -32,7 +33,7 @@ from pigrocrm.core.gmail.errors import ConsentExpired, CredentialRevoked
 from pigrocrm.core.gmail.models import GoogleAccount, GoogleOAuthState
 from pigrocrm.core.gmail.repository import GmailRepository
 from pigrocrm.core.gmail.tokens import GoogleTokenClient
-from pigrocrm.core.gmail.transport import GmailTransport
+from pigrocrm.core.gmail.transport import MAX_HTTP_ATTEMPTS, GmailTransport
 
 
 @pytest.fixture
@@ -229,6 +230,50 @@ def _drive_row(session: Session, user: User) -> GoogleDriveAccount:
     return session.execute(
         select(GoogleDriveAccount).where(GoogleDriveAccount.user_id == user.id)
     ).scalar_one()
+
+
+def test_a_failed_code_exchange_is_reported_as_a_drive_failure_not_a_gmail_one(
+    db_session: Session, admin_user: User
+) -> None:
+    """`exchange_code` belongs to the `GoogleTokenClient` the Gmail side owns, and its
+    two failure exits name Gmail: `CredentialRevoked` reads "ricollega la casella da
+    Impostazioni → Gmail" under the entity `google_account`, and `GmailUnavailable`
+    reads "Gmail non ha risposto correttamente". The router turns either into
+    `?esito=errore` and the settings page shows the true state, so the browser flow is
+    unharmed -- but the same `Conflict` reaches the problem document and the MCP
+    message verbatim for anybody who calls `complete` directly, and there it would send
+    a person to reconnect a mailbox, or to wait for Gmail, over a *Drive* consent.
+
+    Both halves are checked here because the distinction between them is the whole
+    point: terminal and cured by re-consenting, versus transient and cured by waiting.
+    """
+    revoked_fake = _drive_fake("sub-drive", "drive@example.it")
+    revoked_fake.revoked = True
+    with pytest.raises(DriveCredentialRevoked) as caught:
+        _complete_drive(_drive_service(db_session, revoked_fake), _actor(admin_user), "c1")
+
+    assert not isinstance(caught.value, CredentialRevoked)
+    assert "Impostazioni → Drive" in caught.value.details["reason"]
+    assert "Gmail" not in caught.value.message and "casella" not in caught.value.message
+
+    down_fake = _drive_fake("sub-drive", "drive@example.it")
+    down_fake.fail_with = [(503, b"{}", {})] * MAX_HTTP_ATTEMPTS
+    with pytest.raises(Conflict) as unavailable:
+        _complete_drive(_drive_service(db_session, down_fake), _actor(admin_user), "c2")
+
+    assert not isinstance(unavailable.value, DriveCredentialRevoked)
+    assert unavailable.value.details["entity"] == "google_drive"
+    assert "Google Drive" in unavailable.value.details["reason"]
+    assert "Gmail" not in unavailable.value.details["reason"]
+    # Neither failure may leave a half-built credential behind.
+    assert (
+        db_session.execute(
+            select(GoogleDriveAccount).where(GoogleDriveAccount.user_id == admin_user.id)
+        )
+        .scalars()
+        .all()
+        == []
+    )
 
 
 def test_reconnecting_a_different_identity_while_still_connected_is_refused(
@@ -506,24 +551,48 @@ def test_health_missing_readonly_raises_the_scope_missing_banner(
 def test_usable_on_a_revoked_account_raises_credential_revoked(
     db_session: Session, admin_user: User
 ) -> None:
-    _connected_drive_account(db_session, admin_user, status="revoked")
-    with pytest.raises(CredentialRevoked) as caught:
+    """`DriveCredentialRevoked`, not Gmail's `CredentialRevoked`: that one reads
+    "ricollega la casella da Impostazioni → Gmail" under the entity `google_account`,
+    and it reaches the problem document and the MCP message verbatim -- so a revoked
+    *Drive* grant would send somebody to reconnect their mailbox, which fixes nothing
+    and hides what actually broke. The distinction the exception carries (terminal,
+    cured by re-consenting) is unchanged; only the credential it names is."""
+    account = _connected_drive_account(db_session, admin_user, status="revoked")
+    with pytest.raises(DriveCredentialRevoked) as caught:
         _drive_service_account(db_session).usable(
             _drive_actor(admin_user), scope=DRIVE_SCOPE_READONLY, feature="la lettura dei documenti"
         )
     assert "revocato" in caught.value.message
+    assert not isinstance(caught.value, CredentialRevoked)
+    details = caught.value.details
+    assert details["entity"] == "google_drive_account"
+    assert "Impostazioni → Drive" in details["reason"]
+    assert "Gmail" not in details["reason"] and "casella" not in details["reason"]
+    assert details["account_id"] == str(account.id)
+    assert details["email_address"] == account.email_address
+    # The row's own token bytes are the one thing this exception may never carry.
+    assert "ciphertext" not in str(details) and "nonce" not in str(details)
 
 
 def test_usable_on_an_expired_account_raises_consent_expired(
     db_session: Session, admin_user: User
 ) -> None:
-    _connected_drive_account(db_session, admin_user, status="expired")
-    with pytest.raises(ConsentExpired) as caught:
+    """Same substitution, the predicted half: `DriveConsentExpired` rather than Gmail's
+    `ConsentExpired`, whose sentence names the mailbox."""
+    account = _connected_drive_account(db_session, admin_user, status="expired")
+    with pytest.raises(DriveConsentExpired) as caught:
         _drive_service_account(db_session).usable(
             _drive_actor(admin_user), scope=DRIVE_SCOPE_READONLY, feature="la lettura dei documenti"
         )
     assert "scaduto" in caught.value.message
     assert "revocato" not in caught.value.message
+    assert not isinstance(caught.value, ConsentExpired)
+    details = caught.value.details
+    assert details["entity"] == "google_drive_account"
+    assert "Impostazioni → Drive" in details["reason"]
+    assert "Gmail" not in details["reason"] and "casella" not in details["reason"]
+    assert details["account_id"] == str(account.id)
+    assert details["email_address"] == account.email_address
 
 
 def test_usable_without_a_drive_account_refuses_naming_impostazioni_drive(
@@ -533,7 +602,7 @@ def test_usable_without_a_drive_account_refuses_naming_impostazioni_drive(
         _drive_service_account(db_session).usable(
             _drive_actor(admin_user), scope=DRIVE_SCOPE_READONLY, feature="la lettura dei documenti"
         )
-    assert not isinstance(caught.value, CredentialRevoked)
+    assert not isinstance(caught.value, DriveCredentialRevoked)
 
 
 def test_usable_on_a_disconnected_account_refuses_the_same_way_as_no_account(
@@ -541,13 +610,13 @@ def test_usable_on_a_disconnected_account_refuses_the_same_way_as_no_account(
 ) -> None:
     """A Drive the user unhooked on purpose is folded into the same refusal as "no row
     at all" by `_present`: there is nothing left to gate a use of. It must not read as
-    `CredentialRevoked` -- that would be a lie about the user's own action."""
+    `DriveCredentialRevoked` -- that would be a lie about the user's own action."""
     _connected_drive_account(db_session, admin_user, status="disconnected")
     with pytest.raises(Conflict, match="Impostazioni → Drive") as caught:
         _drive_service_account(db_session).usable(
             _drive_actor(admin_user), scope=DRIVE_SCOPE_READONLY, feature="la lettura dei documenti"
         )
-    assert not isinstance(caught.value, CredentialRevoked)
+    assert not isinstance(caught.value, DriveCredentialRevoked)
 
 
 def test_usable_missing_the_requested_scope_names_it_and_leaves_the_account_active(
@@ -570,7 +639,7 @@ def test_usable_missing_the_requested_scope_names_it_and_leaves_the_account_acti
             _drive_actor(admin_user), scope=DRIVE_SCOPE_READONLY, feature="la lettura dei documenti"
         )
     assert DRIVE_SCOPE_READONLY in caught.value.message
-    assert not isinstance(caught.value, CredentialRevoked)
+    assert not isinstance(caught.value, DriveCredentialRevoked)
     db_session.refresh(account)
     assert account.status == "active"
 
@@ -627,6 +696,84 @@ def test_set_roots_persists_both_fields_and_records_the_activity(
     assert rows[0].payload["storage_folder_id"] == "3AbCdEfGhIjKlMnOpQ"
 
 
+def test_a_patch_that_omits_the_storage_folder_keeps_it_and_leaves_it_out_of_the_timeline(
+    db_session: Session, admin_user: User
+) -> None:
+    """`PATCH` semantics, and the reason `DriveRootsUpdate.storage_folder_id` has to be
+    read through `model_fields_set` rather than off the model: absent and explicit
+    `null` are the same value on a Pydantic model with a `None` default, so writing it
+    unconditionally makes a request that only changes the read roots erase the write
+    folder -- and record `storage_folder_id: None` in the timeline as though somebody
+    had asked for that.
+    """
+    account = _connected_drive_account(db_session, admin_user)
+    service = _drive_service_account(db_session)
+    service.set_roots(
+        DriveRootsUpdate(
+            root_folder_ids=["1AbCdEfGhIjKlMnOpQ"], storage_folder_id="3AbCdEfGhIjKlMnOpQ"
+        ),
+        _drive_actor(admin_user),
+    )
+
+    read = service.set_roots(
+        DriveRootsUpdate(root_folder_ids=["2AbCdEfGhIjKlMnOpQ"]), _drive_actor(admin_user)
+    )
+
+    assert read.storage_folder_id == "3AbCdEfGhIjKlMnOpQ"
+    db_session.refresh(account)
+    assert account.storage_folder_id == "3AbCdEfGhIjKlMnOpQ"
+    payloads = [
+        row.payload
+        for row in db_session.execute(
+            select(Activity).where(Activity.kind == "drive.radici_impostate")
+        )
+        .scalars()
+        .all()
+    ]
+    # Matched by their own `root_folder_ids`, not by row order: two activities recorded
+    # in one test can share an `occurred_at` to the microsecond.
+    assert len(payloads) == 2
+    first = [p for p in payloads if p["root_folder_ids"] == ["1AbCdEfGhIjKlMnOpQ"]]
+    second = [p for p in payloads if p["root_folder_ids"] == ["2AbCdEfGhIjKlMnOpQ"]]
+    assert len(first) == 1 and len(second) == 1
+    assert first[0]["storage_folder_id"] == "3AbCdEfGhIjKlMnOpQ"
+    assert "storage_folder_id" not in second[0]
+
+
+def test_an_explicit_null_storage_folder_clears_it(db_session: Session, admin_user: User) -> None:
+    """The other half of the same distinction: `null` was named, so it is written --
+    clearing the write folder is a thing a person is allowed to ask for, and the
+    timeline records that they did."""
+    account = _connected_drive_account(db_session, admin_user)
+    service = _drive_service_account(db_session)
+    service.set_roots(
+        DriveRootsUpdate(
+            root_folder_ids=["1AbCdEfGhIjKlMnOpQ"], storage_folder_id="3AbCdEfGhIjKlMnOpQ"
+        ),
+        _drive_actor(admin_user),
+    )
+
+    read = service.set_roots(
+        DriveRootsUpdate(root_folder_ids=["2AbCdEfGhIjKlMnOpQ"], storage_folder_id=None),
+        _drive_actor(admin_user),
+    )
+
+    assert read.storage_folder_id is None
+    db_session.refresh(account)
+    assert account.storage_folder_id is None
+    cleared = [
+        row.payload
+        for row in db_session.execute(
+            select(Activity).where(Activity.kind == "drive.radici_impostate")
+        )
+        .scalars()
+        .all()
+        if row.payload["root_folder_ids"] == ["2AbCdEfGhIjKlMnOpQ"]
+    ]
+    assert len(cleared) == 1
+    assert cleared[0]["storage_folder_id"] is None
+
+
 def test_set_roots_admits_a_revoked_or_expired_account(
     db_session: Session, admin_user: User
 ) -> None:
@@ -660,7 +807,7 @@ def test_set_roots_refuses_a_disconnected_account_the_same_way_as_no_account(
         _drive_service_account(db_session).set_roots(
             DriveRootsUpdate(root_folder_ids=["1AbCdEfGhIjKlMnOpQ"]), _drive_actor(admin_user)
         )
-    assert not isinstance(caught.value, CredentialRevoked)
+    assert not isinstance(caught.value, DriveCredentialRevoked)
 
 
 def test_set_roots_without_a_drive_account_is_a_conflict(

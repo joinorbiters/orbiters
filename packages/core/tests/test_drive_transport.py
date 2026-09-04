@@ -25,6 +25,7 @@ import pytest
 from fakes.fake_drive import FakeDrive, _File
 from fakes.fake_gmail import FakeGmail
 
+from pigrocrm.core.drive.errors import DriveCredentialRevoked
 from pigrocrm.core.drive.transport import (
     DriveTransport,
     ServiceAccountTokens,
@@ -293,7 +294,7 @@ def test_a_revoked_drive_grant_names_drive_and_not_the_mailbox() -> None:
         tokens=_token_client(FakeGmail(revoked=True)),
     )
 
-    with pytest.raises(Conflict) as excinfo:
+    with pytest.raises(DriveCredentialRevoked) as excinfo:
         provider.access_token()
 
     details = excinfo.value.details
@@ -304,6 +305,29 @@ def test_a_revoked_drive_grant_names_drive_and_not_the_mailbox() -> None:
     )
     assert "Gmail" not in details["reason"] and "casella" not in details["reason"]
     assert REFRESH not in str(details) and REFRESH not in str(excinfo.value)
+
+
+def test_the_typed_revocation_escapes_the_transport_unchanged_and_without_the_token() -> None:
+    """`UserTokens.access_token` is called from inside `DriveTransport._attempt`, before
+    any request is built, and `DriveTransport` has its own error path (`_decode`) that
+    turns Google's *response* bodies into a `Conflict`. A revoked grant never reaches a
+    response, so the typed refusal must come out of `transport.json(...)` as the very
+    class the provider raised -- not flattened into a bare `Conflict`, which is what a
+    caller wanting to react to a revocation (9C's `mark_revoked` call site) has to
+    match on. `_send` retries once on a 401 by dropping the token and asking again, so
+    the second refusal is the one that escapes; both must be the same class."""
+    provider = UserTokens(
+        account_id=uuid4(),
+        email_address=EMAIL,
+        refresh_token=REFRESH,
+        tokens=_token_client(FakeGmail(revoked=True)),
+    )
+    transport = DriveTransport(tokens=provider, http=FakeDrive(), sleep=lambda _: None)
+
+    with pytest.raises(DriveCredentialRevoked) as excinfo:
+        transport.json("GET", "https://www.googleapis.com/drive/v3/files", what="l'elenco")
+
+    assert REFRESH not in str(excinfo.value) and REFRESH not in str(excinfo.value.details)
 
 
 def test_a_drive_outage_is_not_reported_as_a_gmail_outage() -> None:

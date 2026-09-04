@@ -353,12 +353,18 @@ def test_reconnecting_a_different_mailbox_is_refused_and_names_both(db_session: 
     assert account.email_address == "ada@acme.it"
 
 
-def test_reconnecting_when_a_different_drive_identity_is_connected_is_refused(
+def test_reconnecting_when_the_same_crm_user_has_a_different_drive_identity_is_refused(
     db_session: Session,
 ) -> None:
     """The mirror of `GoogleDriveOAuthService.complete`'s own cross-identity check
-    (spec 9 §5.2): the mailbox and the Drive of one CRM installation must name the
-    same Google identity, or neither flow's grant may be stored over the other."""
+    (spec 9 §5.2): the mailbox and the Drive of one CRM *user* must name the same
+    Google identity, or neither flow's grant may be stored over the other.
+
+    Per user, not per installation: both tables are keyed by `user_id`, two users of
+    one installation are meant to hold two different Google identities, and the row
+    this refusal reads is `account_for_user(actor.id)`. The Drive row below therefore
+    belongs to the very user starting the Gmail flow -- that is what makes it a
+    conflict rather than somebody else's account."""
     user = _user(db_session)
     ciphertext, nonce = seal("1//0gDriveRefresh", KEY)
     db_session.add(

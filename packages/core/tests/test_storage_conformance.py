@@ -469,9 +469,14 @@ def test_storage_from_settings_gdrive_requires_credentials_and_root() -> None:
         storage_from_settings(settings)
 
     reason = excinfo.value.details["reason"]
+    expected = excinfo.value.details["expected"]
     assert "PIGROCRM_GDRIVE_SERVICE_ACCOUNT_JSON" in reason
     assert "collega Drive da Impostazioni e scegli la cartella di scrittura" in reason
-    assert "service account" in excinfo.value.details["expected"]
+    assert "service account" in expected
+    # No slice number in either half: an operator reading a startup failure has no map
+    # of this project's slices, and "dallo slice 9D" is a date in a sentence that has
+    # to be actionable today.
+    assert "slice" not in reason and "slice" not in expected
 
 
 def test_storage_from_settings_gdrive_fails_fast_when_root_is_unreachable(
