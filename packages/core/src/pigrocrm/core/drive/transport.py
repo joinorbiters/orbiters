@@ -12,15 +12,15 @@ lives on Drive. Slice 9 needs the middle job driven by a *user* OAuth token -- t
 refresh token on `google_drive_accounts`, renewed through the `GoogleTokenClient`
 slice 5 already has -- while the placement rules stay exactly as they are (spec 5.4).
 So the credential became a seam: `DriveTransport` asks a `TokenProvider` for a bearer
-token and knows nothing else about it, and `ServiceAccountTokens` -- what every
-existing installation is configured with -- is the first implementation. The fake in
-`tests/fakes/fake_drive.py` does not change, because what it fakes -- the network --
-did not move.
+token and knows nothing else about it, and there are two providers,
+`ServiceAccountTokens` (what every existing installation is configured with) and
+`UserTokens` (the connected-account credential). The fake in `tests/fakes/fake_drive.py`
+does not change, because what it fakes -- the network -- did not move.
 
-Nothing here logs. A private key and a bearer token both pass through this module, and
-neither may reach an exception message, a `repr` or a traceback: `_decode` reports
-Google's own `error.message` and never the request, and the provider keeps its
-credentials out of `repr`.
+Nothing here logs. A refresh token, a private key and a bearer token all pass through
+this module, and none of them may reach an exception message, a `repr` or a traceback:
+`_decode` reports Google's own `error.message` and never the request, and both
+providers keep their secret out of `repr`.
 """
 
 import json
@@ -28,12 +28,15 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 from urllib.parse import urlencode
+from uuid import UUID
 
 import jwt
 
 from pigrocrm.core.errors import Conflict
+from pigrocrm.core.gmail.tokens import GoogleTokenClient
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 # Not "drive.file". That narrower scope only grants visibility into files the app
@@ -51,7 +54,8 @@ DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
 # PigroCRM's own root. Keep the blast radius small at the Google Cloud console
 # instead: share only PIGROCRM_GDRIVE_ROOT_FOLDER_ID (and nothing else) with this
 # service account's address, and never reuse the same service account for any other
-# integration.
+# integration. A `UserTokens` installation has no such note to read: its scopes are
+# the ones the titolare granted on the consent screen (`DRIVE_REQUESTED_SCOPES`).
 TOKEN_LIFETIME_SECONDS = 3600
 # Refresh a minute early rather than discovering expiry mid-upload.
 TOKEN_REFRESH_MARGIN_SECONDS = 60
@@ -176,14 +180,16 @@ def _decode(status: int, payload: bytes, what: str) -> dict[str, Any]:
 
 
 class TokenProvider(Protocol):
-    """Where a bearer token for Drive comes from.
+    """Where a bearer token for Drive comes from, and how to say it is stale.
 
-    The whole reason this module exists: `DriveTransport` knows that a request needs a
-    bearer token and nothing at all about how one is obtained, so a second credential
-    is a second implementation of this and not a second transport.
+    `forget` is not a convenience: a provider caches, and a 401 from Drive is the one
+    failure a *fresh* token fixes rather than a retry with the same one (see
+    `DriveTransport.json`). Both implementations cache, so both need to be told.
     """
 
     def access_token(self) -> str: ...
+
+    def forget(self) -> None: ...
 
 
 class ServiceAccountTokens:
@@ -255,6 +261,45 @@ class ServiceAccountTokens:
         self._token_expires_at = time.time() + TOKEN_LIFETIME_SECONDS - TOKEN_REFRESH_MARGIN_SECONDS
         return self._token
 
+    def forget(self) -> None:
+        self._token = None
+        self._token_expires_at = 0.0
+
+
+@dataclass(frozen=True, kw_only=True)
+class UserTokens:
+    """The Drive credential of a connected Google account: a refresh token on
+    `google_drive_accounts`, exchanged for an access token by the same
+    `GoogleTokenClient` the Gmail side already uses.
+
+    No cache of its own, on purpose. `GoogleTokenClient` already caches per account id
+    on Google's own `expires_in`, and a second cache in front of it would be a second
+    place a token sits, a second clock to get wrong, and a second thing `forget` would
+    have to clear consistently. `forget` therefore just drops the client's entry --
+    which is also what `GoogleDriveOAuthService` does on disconnect and on
+    re-authorisation, for the same reason.
+
+    `refresh_token` is `repr=False`: a dataclass has a generated `repr`, and a
+    generated `repr` prints itself into every traceback that has one of these in a
+    frame, into `logger.debug("%s", provider)`, and into a pytest failure dump. Same
+    rule, and the same reason, as `gmail/tokens.py`'s own dataclasses.
+    """
+
+    account_id: UUID
+    email_address: str
+    refresh_token: str = field(repr=False)
+    tokens: GoogleTokenClient
+
+    def access_token(self) -> str:
+        return self.tokens.access_token(
+            account_id=self.account_id,
+            email_address=self.email_address,
+            refresh_token=self.refresh_token,
+        )
+
+    def forget(self) -> None:
+        self.tokens.forget(self.account_id)
+
 
 class DriveTransport:
     """The Drive HTTP surface: one bearer token per request, retry with backoff, and
@@ -283,6 +328,25 @@ class DriveTransport:
             headers["Content-Type"] = content_type
         return _call(self._http, self._sleep, method, url, headers, body)
 
+    def _send(
+        self, method: str, url: str, body: bytes | None, content_type: str | None
+    ) -> tuple[int, bytes]:
+        """One attempt, plus exactly one more if Drive answered 401.
+
+        A 401 is the one failure a *fresh* token fixes: the cached one was minted
+        before a revocation, a re-consent, or a scope change, and `_call`'s retry loop
+        deliberately does not touch it because repeating the same request with the same
+        stale token cannot succeed. So the provider is told to drop it and the request
+        is made once more -- once, not in a loop: a grant that is genuinely revoked
+        answers 401 to every attempt, and spinning against Google would replace a clear
+        `Conflict` with an outage.
+        """
+        status, payload = self._attempt(method, url, body, content_type)
+        if status == 401:
+            self._tokens.forget()
+            status, payload = self._attempt(method, url, body, content_type)
+        return status, payload
+
     def json(
         self,
         method: str,
@@ -292,7 +356,7 @@ class DriveTransport:
         content_type: str | None = None,
         what: str,
     ) -> dict[str, Any]:
-        status, payload = self._attempt(method, url, body, content_type)
+        status, payload = self._send(method, url, body, content_type)
         return _decode(status, payload, what)
 
     # `bytes` shadows the builtin inside this class body from here on, so this method
@@ -307,7 +371,7 @@ class DriveTransport:
         A failure is still reported through `_decode`, which raises before returning,
         so the success path here is only ever reached with real bytes in hand.
         """
-        status, payload = self._attempt(method, url, None, None)
+        status, payload = self._send(method, url, None, None)
         if status >= 400:
             _decode(status, payload, what)
         return payload

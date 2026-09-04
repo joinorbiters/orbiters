@@ -13,11 +13,18 @@ def storage_from_settings(settings: Settings) -> DocumentStorage:
     rather than a code change (spec 11 criterion 5)."""
     if settings.storage_backend == "gdrive":
         if not settings.gdrive_service_account_json or not settings.gdrive_root_folder_id:
+            # Two ways to configure Drive, so the error names both: the service-account
+            # variables, and -- from slice 9D -- the connected Google account whose own
+            # credential writes into a folder the titolare picks. A message naming only
+            # the first sends the reader to the Google Cloud console for a setup they
+            # may have no reason to create, and this error is the only place they are
+            # looking.
             raise ValidationFailed(
                 "settings",
                 "storage_backend",
                 "gdrive richiede PIGROCRM_GDRIVE_SERVICE_ACCOUNT_JSON e "
-                "PIGROCRM_GDRIVE_ROOT_FOLDER_ID",
+                "PIGROCRM_GDRIVE_ROOT_FOLDER_ID, oppure, dallo slice 9D, collega "
+                "Drive da Impostazioni e scegli la cartella di scrittura",
                 expected="entrambe le variabili valorizzate",
             )
         storage = GDriveStorage.from_service_account(
