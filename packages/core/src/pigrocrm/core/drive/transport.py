@@ -19,8 +19,9 @@ does not change, because what it fakes -- the network -- did not move.
 
 Nothing here logs. A refresh token, a private key and a bearer token all pass through
 this module, and none of them may reach an exception message, a `repr` or a traceback:
-`_decode` reports Google's own `error.message` and never the request, and both
-providers keep their secret out of `repr`.
+`_decode` reports Google's own `error.message` and never the request, and neither
+provider has a generated `repr` that would print its own credential (which is why
+`UserTokens`, being a dataclass, marks its refresh token `repr=False`).
 """
 
 import json
@@ -164,6 +165,13 @@ def _decode(status: int, payload: bytes, what: str) -> dict[str, Any]:
     tree and the service-account address, neither of which belongs in a problem
     document a browser will render. Never the request headers or body either, so no
     bearer token or key material can reach an exception message from here.
+
+    `what` travels in the details as well as in the sentence, and that is load-bearing
+    rather than decorative: obtaining the token is itself an HTTP call through this
+    same function, so a caller that inspects a failure -- `GDriveStorage.get` turning a
+    404 into `NotFound`, `verify_root_accessible` turning any failure into "share the
+    folder" -- would otherwise mistake a refused *credential* for a missing document or
+    an unshared folder, and send somebody to fix the wrong thing.
     """
     if status >= 400:
         detail = ""
@@ -175,6 +183,7 @@ def _decode(status: int, payload: bytes, what: str) -> dict[str, Any]:
             _ENTITY,
             f"{what} fallita ({status}){': ' + detail if detail else ''}",
             status=status,
+            what=what,
         )
     return json.loads(payload.decode()) if payload else {}
 
@@ -222,12 +231,6 @@ class ServiceAccountTokens:
         self._sleep: SleepFn = sleep or time.sleep
         self._token: str | None = None
         self._token_expires_at: float = 0.0
-
-    def __repr__(self) -> str:
-        # The default `repr` would print `self._credentials`, private key included,
-        # into every traceback that has this object in a frame. The client email is
-        # the one field worth seeing when diagnosing a misconfiguration.
-        return f"ServiceAccountTokens(client_email={self._credentials.get('client_email')!r})"
 
     def _sign_with_private_key(self, claims: dict[str, Any]) -> str:
         return jwt.encode(claims, self._credentials["private_key"], algorithm="RS256")

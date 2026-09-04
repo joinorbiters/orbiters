@@ -22,7 +22,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from fakes.fake_drive import FakeDrive
+from fakes.fake_drive import FakeDrive, _File
 from fakes.fake_gmail import FakeGmail
 
 from pigrocrm.core.config import Settings
@@ -36,6 +36,7 @@ from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 from pigrocrm.core.gmail.tokens import GoogleTokenClient
 from pigrocrm.core.gmail.transport import GmailTransport
 from pigrocrm.core.storage import GDriveStorage, storage_from_settings
+from pigrocrm.core.storage.gdrive import APP_PROPERTY_KEY
 
 PDF = b"%PDF-1.7\nfinto\n"
 KEY = "acme-01234567/0199abcd/v1.pdf"
@@ -379,6 +380,78 @@ def test_from_service_account_round_trips_a_document() -> None:
     storage.delete(KEY)
     with pytest.raises(NotFound):
         storage.get(KEY)
+
+
+# --- Attributing a failure before interpreting it -------------------------------------
+# Obtaining the token is itself a call through the same transport, so `GDriveStorage`
+# has to know *which* call failed before it turns a status into a domain answer. Both
+# tests below caught a real regression in the refactor that split this module out: the
+# storage caught a `Conflict` and read only its status.
+
+
+@dataclass
+class TokensRefusedMidOperation:
+    """A provider whose token serves the lookup and is refused for the download.
+
+    Not hypothetical: `get` acquires a token twice -- once to find the file by its
+    `appProperties`, once to download it -- and a cached token can reach its expiry
+    between the two, so the refresh in the middle is a refusal waiting to happen.
+    """
+
+    acquisitions: int = 0
+
+    def access_token(self) -> str:
+        self.acquisitions += 1
+        if self.acquisitions >= 2:
+            raise Conflict(
+                "document_blob",
+                "autenticazione Google fallita (404)",
+                status=404,
+                what="autenticazione Google",
+            )
+        return "tok"
+
+    def forget(self) -> None:
+        pass
+
+
+def test_a_404_from_the_token_endpoint_is_not_reported_as_a_missing_document() -> None:
+    """A refused credential is not an absent document. Reporting it as `NotFound` would
+    tell the caller the file is gone -- and a user that their document was deleted --
+    when nothing was ever asked about the file at all."""
+    drive = FakeDrive()
+    drive.files["id-a"] = _File(
+        "id-a", "v1.pdf", drive.root_id, "application/pdf", PDF, {APP_PROPERTY_KEY: KEY}
+    )
+    storage = GDriveStorage(
+        transport=DriveTransport(tokens=TokensRefusedMidOperation(), http=drive),
+        root_folder_id=drive.root_id,
+    )
+
+    with pytest.raises(Conflict) as excinfo:
+        storage.get(KEY)
+
+    assert "autenticazione Google" in excinfo.value.details["reason"]
+
+
+def test_a_refused_credential_during_the_root_check_is_not_reported_as_an_unshared_folder() -> None:
+    """`verify_root_accessible` exists to say what to fix at startup. Sending an
+    operator to re-share a folder because the private key was rejected is exactly the
+    wrong-thing-to-fix it is supposed to prevent."""
+    drive = FakeDrive()
+    drive.fail_with = [403]
+    storage = GDriveStorage.from_service_account(
+        service_account_json=SERVICE_ACCOUNT_JSON,
+        root_folder_id=drive.root_id,
+        http=drive,
+        sign_assertion=lambda claims: "assertion",
+        sleep=lambda _: None,
+    )
+
+    with pytest.raises(Conflict) as excinfo:
+        storage.verify_root_accessible()
+
+    assert "autenticazione Google" in excinfo.value.details["reason"]
 
 
 # --- The configuration error names both ways to configure Drive ----------------------
