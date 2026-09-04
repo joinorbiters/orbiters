@@ -92,6 +92,11 @@ FORBIDDEN = (
     # this list rather than on `FORBIDDEN_GMAIL` because, unlike those two, the
     # installation *can* opt in: the same switch that hands an agent the fiscal acts.
     "discover_gmail_correspondents",
+    # The eighteenth and nineteenth, and both fiscal again: writing a numbered, issued
+    # row straight into the register (slice 9 §3), and declaring the numbers it will
+    # never carry (slice 9 §3.2).
+    "import_issued_invoice",
+    "declare_invoice_register_gaps",
 )
 
 # The tools above that exist only on an installation where Gmail is configured as well:
@@ -122,6 +127,8 @@ FORBIDDEN_SERVICE_CALLS = (
     "bind_time_to_invoice",
     "get_fiscal_estimate",
     "discover",
+    "import_issued",
+    "declare_gaps",
 )
 
 # The bans a bare method name cannot express, because the name is not the operation.

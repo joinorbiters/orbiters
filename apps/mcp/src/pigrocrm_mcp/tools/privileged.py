@@ -51,7 +51,13 @@ from pigrocrm.core.fiscal.service import FiscalProfileService
 from pigrocrm.core.gmail.sync import GmailSyncService
 from pigrocrm.core.gmail.tokens import GoogleTokenClient
 from pigrocrm.core.gmail.transport import GmailTransport
-from pigrocrm.core.invoices.schemas import InvoiceAnnul, InvoiceIssue, InvoiceTransmitted
+from pigrocrm.core.invoices.schemas import (
+    InvoiceAnnul,
+    InvoiceImport,
+    InvoiceIssue,
+    InvoiceTransmitted,
+    RegisterGapsDeclare,
+)
 from pigrocrm.core.invoices.service import InvoiceService
 from pigrocrm.core.timetracking.categories import CostCategoryService
 from pigrocrm.core.timetracking.locks import PeriodLockService
@@ -181,6 +187,44 @@ def register(
             .upsert(FiscalProfileUpsert.model_validate(dati), context.actor)
             .model_dump(mode="json")
         )
+
+    @mcp.tool()
+    @guard
+    def import_issued_invoice(dati: dict[str, Any]) -> dict[str, Any]:
+        """Registra una fattura **gia' emessa dal gestionale precedente** (the previous system) con il
+        suo numero e la sua data: il contatore dell'anno sale fino a quel numero e non
+        viene prodotto nessun XML, perche' quello e' gia' stato trasmesso allo SdI.
+
+        `dati` ha la forma di `InvoiceImport`: anno, numero, data_emissione, customer_id,
+        righe (con prezzo_totale, aliquota_iva e natura come stampati sul documento),
+        imponibile, imposta, bollo, totale, stato_pagamento, data_incasso,
+        trasmessa_esternamente_il, pdf_sorgente {document_id}. I totali devono tornare al
+        centesimo. La risposta elenca in `buchi_non_dichiarati` i numeri che mancano fra
+        quelli importati: vanno dichiarati con `declare_invoice_register_gaps` prima che
+        PigroCRM possa emettere la fattura successiva.
+        """
+        service = InvoiceService(context.session, context.storage)
+        payload = InvoiceImport(**dati)
+        fattura = service.import_issued(payload, context.actor)
+        return {
+            "fattura": fattura.model_dump(mode="json"),
+            "buchi_non_dichiarati": service.undeclared_gaps(payload.anno),
+        }
+
+    @mcp.tool()
+    @guard
+    def declare_invoice_register_gaps(
+        anno: int, buchi: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Dichiara i numeri che il registro di `anno` **non** portera' mai, con il
+        motivo di ciascuno (es. annullata nel gestionale precedente prima della
+        trasmissione). Un buco dichiarato resta tale: non si inventa una fattura per
+        riempirlo. Finche' un numero mancante non e' dichiarato, l'emissione di nuove
+        fatture in quell'anno e' bloccata.
+        """
+        service = InvoiceService(context.session, context.storage)
+        result = service.declare_gaps(anno, RegisterGapsDeclare(buchi=buchi), context.actor)  # type: ignore[arg-type]
+        return [g.model_dump(mode="json") for g in result]
 
     # ---- rates, and rewriting what work was worth -----------------------------------
 
