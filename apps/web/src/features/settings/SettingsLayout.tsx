@@ -16,6 +16,7 @@ const TABS = [
   { value: 'tariffe', label: 'Tariffe' },
   { value: 'periodi', label: 'Periodi' },
   { value: 'gmail', label: 'Gmail' },
+  { value: 'drive', label: 'Google Drive' },
   { value: 'automazioni', label: 'Automazioni' },
 ] as const
 
