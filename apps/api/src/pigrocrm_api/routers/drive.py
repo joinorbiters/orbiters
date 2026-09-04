@@ -10,10 +10,11 @@ one of three outcome codes, never with Google's own `error` (English, and occasi
 the client id) and never with a `Conflict`'s problem document (which would strand the
 user outside the SPA at the end of a consent flow).
 
-One thing here is *not* a mirror of Gmail: there is no `/sync`, `/backfill` or
-`/messages`. Slice 9B is only the credential and its two configuration fields
-(`root_folder_ids`, `storage_folder_id`); reading and writing files through it is 9C/9D's
-surface, built on the `usable()` gate `drive/account.py` already exposes.
+One thing here is *not* a mirror of Gmail: there is no sync, no backfill, and no route
+that reads back stored correspondence. Slice 9B is only the credential and its two
+configuration fields (`root_folder_ids`, `storage_folder_id`); reading and writing files
+through it is 9C/9D's surface, built on the `usable()` gate `drive/account.py` already
+exposes.
 """
 
 import threading
