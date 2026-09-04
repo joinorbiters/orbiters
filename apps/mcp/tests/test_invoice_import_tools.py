@@ -120,36 +120,39 @@ async def test_import_registers_the_invoice_and_names_the_gaps(
             ],
             "imponibile": "7600.00",
             "imposta": "0.00",
+            # `bollo` is declared beside the total and never added to it: the identity is
+            # `imponibile + imposta == totale`, the same one `sum_totals` stores for a
+            # natively issued invoice.
             "bollo": "2.00",
-            "totale": "7602.00",
+            "totale": "7600.00",
         }
 
     async with Client(_server(mcp_session, tmp_path, full_access=True)) as client:
-        # Numero 7 alone leaves nothing undeclared: a single imported number has no
-        # neighbour to leave a hole against.
-        first = await client.call_tool("import_issued_invoice", {"dati": _dati(7, "2026-06-01")})
+        # Numero 1 leaves nothing undeclared: it is where a year's register starts, and
+        # the scan runs from 1 -- importing a 7 first would report the six holes below it.
+        first = await client.call_tool("import_issued_invoice", {"dati": _dati(1, "2026-06-01")})
         assert _payload(first)["buchi_non_dichiarati"] == []
 
-        result = await client.call_tool("import_issued_invoice", {"dati": _dati(9, "2026-06-05")})
+        result = await client.call_tool("import_issued_invoice", {"dati": _dati(3, "2026-06-05")})
         payload = _payload(result)
-        assert payload["fattura"]["numero"] == 9
+        assert payload["fattura"]["numero"] == 3
         assert payload["fattura"]["importata_da"] == "acme"
-        # 8 was never imported and never declared: it is a gap left by the previous
+        # 2 was never imported and never declared: it is a gap left by the previous
         # numbering until an operator accounts for it.
-        assert payload["buchi_non_dichiarati"] == [8]
+        assert payload["buchi_non_dichiarati"] == [2]
 
         gaps = await client.call_tool(
             "declare_invoice_register_gaps",
-            {"anno": 2026, "buchi": [{"numero": 8, "motivo": "annullata in Acme"}]},
+            {"anno": 2026, "buchi": [{"numero": 2, "motivo": "annullata in Acme"}]},
         )
         gap_rows = _payload(gaps)
         rows = (
             gap_rows["result"] if isinstance(gap_rows, dict) and "result" in gap_rows else gap_rows
         )
-        assert rows[0]["numero"] == 8
+        assert rows[0]["numero"] == 2
 
         # And the gap really is declared now: nothing left undeclared for the year.
-        after = await client.call_tool("import_issued_invoice", {"dati": _dati(10, "2026-06-06")})
+        after = await client.call_tool("import_issued_invoice", {"dati": _dati(4, "2026-06-06")})
         assert _payload(after)["buchi_non_dichiarati"] == []
 
 

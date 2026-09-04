@@ -288,6 +288,13 @@ class InvoiceImport(BaseModel):
     exists; the counter follows them (§3.2 rule 3). Totals are declared **and** verified,
     never recomputed: the document commands, the CRM checks the sums.
 
+    The identity checked is `imponibile + imposta == totale`, and `bollo` is **not** part
+    of it: the stamp duty is declared alongside, validated non-negative, and never added
+    to the total. `DatiBollo/BolloVirtuale` says the issuer settled it virtually (slice 3
+    §6.1 rule 4 and §7.2), which is why `sum_totals` stores the same identity for a
+    natively issued invoice -- and Acme's own register agrees: its «Totale» column always
+    equals «Imp. Reddito».
+
     No `riferimento`: `invoices.riferimento` is constrained by
     `ck_invoices_riferimento_only_on_proforma` to `NULL` on every `tipo = 'fattura'`
     row, and an import always produces a `fattura`. Acme's free-text description
@@ -297,7 +304,14 @@ class InvoiceImport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     anno: int = Field(ge=2000, le=2100)
-    numero: int = Field(ge=1)
+    # `le=MAX_NUMERO`, not merely `ge=1`. Here the number is *declared* by the caller and
+    # the counter follows it (§3.2 rule 3), so nothing downstream re-derives it: a slipped
+    # five-digit value -- Acme prints its own document ids as `207571`, one keystroke away
+    # from the register number -- would raise `ultimo_numero` to it irreversibly, make every
+    # later export refuse (`InvoiceForExport` bounds `numero` at `MAX_NUMERO`, because the
+    # SdI file name embeds `anno * 10000 + numero`), and turn `undeclared_gaps` into a
+    # two-hundred-thousand-element list. Refused at the schema, before any lock is taken.
+    numero: int = Field(ge=1, le=MAX_NUMERO)
     data_emissione: date
     data_scadenza: date | None = None
     customer_id: UUID
@@ -322,7 +336,9 @@ class RegisterGapIn(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    numero: int = Field(ge=1)
+    # The same bound as `InvoiceImport.numero`: a declared gap is a number *of this
+    # register*, so it lives in the range the register can carry and nowhere wider.
+    numero: int = Field(ge=1, le=MAX_NUMERO)
     motivo: SafeStr = Field(max_length=MOTIVO_ANNULLAMENTO_MAX_LENGTH)
 
 

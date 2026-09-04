@@ -91,6 +91,10 @@ ENTITY: EntityType = "invoice"
 ZERO = Decimal("0.00")
 IMPORT_ACTION = "import_issued_invoice"
 GAPS_ACTION = "declare_invoice_register_gaps"
+# How many undeclared numbers `issue`'s refusal spells out. The whole list always stays
+# in `details["numeri"]`, machine-readable; the *sentence* is read by a person, and a
+# register whose lowest imported number is high can leave hundreds of them.
+GAPS_SHOWN_IN_MESSAGE = 20
 
 # What stays writable once a `fattura` has left the `bozza` state (spec 4). Everything
 # else on the row is frozen, and an attempt raises `ImmutableField` naming the field.
@@ -529,11 +533,21 @@ class InvoiceService:
         )
 
     def _build_snapshot(
-        self, invoice: Invoice, profile: FiscalSnapshot, actor: Actor
+        self, customer_id: UUID, profile: FiscalSnapshot, actor: Actor
     ) -> InvoiceSnapshot:
-        customer = self.session.get(Customer, invoice.customer_id)
+        """The frozen identities, from an id rather than from a row.
+
+        `customer_id` and not an `Invoice` on purpose: `_party_from_emitter` raises
+        `NotFound("emitter_profile")` whenever the issuer's own profile is missing --
+        the exact state a fresh installation is in before §2.3 is done -- and
+        `import_issued` has to be able to hit that refusal *before* it flushes anything.
+        Taking the flushed row as the argument made that impossible by construction.
+        `issue` and `_for_export_proforma` pass `invoice.customer_id` and are unchanged
+        in behaviour.
+        """
+        customer = self.session.get(Customer, customer_id)
         if customer is None:  # pragma: no cover - the FK makes this unreachable
-            raise NotFound("customer", invoice.customer_id)
+            raise NotFound("customer", customer_id)
         return InvoiceSnapshot(
             versione=SNAPSHOT_VERSIONE,
             emittente=self._party_from_emitter(actor),
@@ -669,9 +683,16 @@ class InvoiceService:
         # and let this call through on a stale read.
         buchi = self.undeclared_gaps(anno)
         if buchi:
+            # Rendered short, reported whole: `details["numeri"]` carries every number,
+            # and the message names the first `GAPS_SHOWN_IN_MESSAGE` plus a count. An
+            # import that starts at a high number can leave hundreds of holes, and a
+            # refusal a person cannot read is a refusal that does not explain itself.
+            mostrati = ", ".join(str(n) for n in buchi[:GAPS_SHOWN_IN_MESSAGE])
+            if len(buchi) > GAPS_SHOWN_IN_MESSAGE:
+                mostrati += f", ... ({len(buchi)} in tutto)"
             raise Conflict(
                 ENTITY,
-                f"il registro importato ha buchi non dichiarati ai numeri {buchi}: "
+                f"il registro importato ha buchi non dichiarati ai numeri {mostrati}: "
                 "dichiarali (o importali) prima di riprendere a emettere",
                 anno=anno,
                 numeri=buchi,
@@ -689,7 +710,7 @@ class InvoiceService:
 
         # Step 3. Validations and totals, after the lock and before the increment.
         _, profile = self._regime()
-        snapshot = self._build_snapshot(source, profile, actor)
+        snapshot = self._build_snapshot(source.customer_id, profile, actor)
         check_party_exportable(snapshot.emittente, "emitter_profile")
         check_party_exportable(snapshot.cliente, "customer")
         check_recipient_routing(snapshot.cliente)
@@ -844,6 +865,17 @@ class InvoiceService:
         gaps, native numbers), then the write. Nothing is consumed on failure: the
         counter is only ever raised to a number that is being written in the same
         transaction.
+
+        **Nothing is flushed before every refusal has had its chance.** The snapshot is
+        built and the original PDF is validated *above* the lock, because both can fail
+        -- a missing `emitter_profile`, a PDF belonging to another customer -- and both
+        used to run after `repo.add`/`add_line` had already flushed an `Invoice` and its
+        lines into the caller's transaction. A `ValidationFailed` raised at that point
+        left the refused row sitting in the session for every later statement to see: the
+        next query in the same transaction found a fattura the caller had been told did
+        not exist. Only `IntegrityError` was rolled back, and a missing emitter profile is
+        not an `IntegrityError`. So the reads happen first, the writes happen last, and
+        the commit is wrapped in a rollback for anything that still escapes.
         """
         actor.require_admin(IMPORT_ACTION)
         self._check_owner(data.customer_id, data.deal_id)
@@ -870,6 +902,22 @@ class InvoiceService:
                 "una data di incasso senza incasso non ha senso",
                 expected="stato_pagamento = incassato, oppure nessuna data",
             )
+        # The same two facts `mark_transmitted_externally` checks, and it has to be here:
+        # the column is immutable once written and it is what `annul` reads to decide
+        # whether a correction is still possible. An import that wrote it unchecked could
+        # seed a delivery dated tomorrow, or before the invoice it delivers.
+        if data.trasmessa_esternamente_il is not None:
+            self._check_transmission_date(data.trasmessa_esternamente_il, data.data_emissione)
+        # Read-only, above the lock: the assignment happens after the row exists.
+        pdf_document_id = (
+            self._validate_original_pdf(data.customer_id, data.pdf_sorgente.document_id)
+            if data.pdf_sorgente is not None
+            else None
+        )
+        # Both of these can refuse -- `_regime` when no fiscal profile is configured,
+        # `_build_snapshot` when no emitter profile is -- and neither writes anything.
+        _, profile = self._regime()
+        snapshot = self._build_snapshot(data.customer_id, profile, actor)
         counter = self.repo.lock_counter(data.anno)
         if data.numero in self.repo.numbers_present(data.anno):
             raise Conflict(
@@ -913,7 +961,7 @@ class InvoiceService:
                 f"{after.isoformat()}",
                 expected=f"una data fino al {after.isoformat()}",
             )
-        _, profile = self._regime()
+        # From here on the transaction writes. Everything above was a read.
         invoice = self.repo.add(
             Invoice(
                 customer_id=data.customer_id,
@@ -937,6 +985,8 @@ class InvoiceService:
                 trasmessa_esternamente_il=data.trasmessa_esternamente_il,
                 note_interne=data.note_interne,
                 importata_da=data.importata_da,
+                snapshot=snapshot.model_dump(mode="json"),
+                snapshot_versione=SNAPSHOT_VERSIONE,
                 custom_fields={},
             )
         )
@@ -955,13 +1005,8 @@ class InvoiceService:
                     riferimento_normativo=riga.riferimento_normativo,
                 )
             )
-        snapshot = self._build_snapshot(invoice, profile, actor)
-        invoice.snapshot = snapshot.model_dump(mode="json")
-        invoice.snapshot_versione = SNAPSHOT_VERSIONE
-        if data.pdf_sorgente is not None:
-            invoice.pdf_document_id = self._adopt_original_pdf(
-                invoice, data.pdf_sorgente.document_id
-            )
+        if pdf_document_id is not None:
+            invoice.pdf_document_id = pdf_document_id
         counter.ultimo_numero = max(counter.ultimo_numero, data.numero)
         self.activities.record(
             ENTITY,
@@ -985,6 +1030,14 @@ class InvoiceService:
                 anno=data.anno,
                 numero=data.numero,
             ) from exc
+        except Exception:
+            # Belt and braces for everything that is not a duplicate number: a `DataError`
+            # from a value Postgres cannot store, a connection dropped mid-commit. The
+            # error is re-raised unchanged -- there is nothing useful to translate it into
+            # -- but the rollback is mandatory, or the caller's session raises on its next
+            # statement with the original failure nowhere in sight.
+            self.session.rollback()
+            raise
         return self.get(invoice.id, actor)
 
     def _check_import_date(self, data_emissione: date) -> None:
@@ -1000,6 +1053,19 @@ class InvoiceService:
             )
 
     def _check_declared_totals(self, data: InvoiceImport) -> None:
+        """`imponibile == Σ prezzo_totale` and `imponibile + imposta == totale`, to the
+        cent (§3.3).
+
+        **The stamp duty is not in the identity.** `sum_totals` (slice 3, `totals.py`)
+        stores `totale = imponibile + imposta` and keeps `bollo` alongside, because
+        `DatiBollo/BolloVirtuale` declares that the *issuer* settled the stamp virtually:
+        charging it to the customer would need a line of its own with `Natura N1`, which
+        is out of scope. So an imported invoice is checked against the same identity a
+        natively issued one satisfies -- anything else would make the two halves of the
+        same table disagree -- and Acme's register is the confirming fact: its «Totale»
+        column always equals «Imp. Reddito». `bollo` is still checked (non-negative) and
+        still stored; it is simply never added.
+        """
         somma_righe = round_money(sum((r.prezzo_totale for r in data.righe), Decimal("0")))
         if somma_righe != round_money(data.imponibile):
             raise ValidationFailed(
@@ -1009,14 +1075,21 @@ class InvoiceService:
                 f"({somma_righe})",
                 expected="imponibile uguale alla somma dei prezzi totali di riga",
             )
-        atteso = round_money(data.imponibile + data.imposta + data.bollo)
+        if data.bollo < ZERO:
+            raise ValidationFailed(
+                ENTITY,
+                "bollo",
+                f"il bollo dichiarato ({data.bollo}) e' negativo",
+                expected="un bollo maggiore o uguale a zero",
+            )
+        atteso = round_money(data.imponibile + data.imposta)
         if atteso != round_money(data.totale):
             raise ValidationFailed(
                 ENTITY,
                 "totale",
-                f"il totale dichiarato ({data.totale}) non e' imponibile + imposta + bollo "
-                f"({atteso})",
-                expected="totale uguale a imponibile + imposta + bollo",
+                f"il totale dichiarato ({data.totale}) non e' imponibile + imposta "
+                f"({atteso}): il bollo si dichiara a parte e non entra nel totale",
+                expected="totale uguale a imponibile + imposta",
             )
         if data.totale <= ZERO:
             raise ValidationFailed(
@@ -1026,9 +1099,20 @@ class InvoiceService:
                 expected="un totale maggiore di zero",
             )
 
-    def _adopt_original_pdf(self, invoice: Invoice, document_id: UUID) -> UUID:
-        """Link the PDF the customer actually received. Never rendered: a PDF produced
-        today with today's layout would not be that document (§3.5)."""
+    def _validate_original_pdf(self, customer_id: UUID, document_id: UUID) -> UUID:
+        """Check that this `documents` row may become the invoice's PDF, and return its
+        id. Reads only.
+
+        The PDF the customer actually received, never rendered: a PDF produced today
+        with today's layout would not be that document (§3.5).
+
+        Split from the assignment on purpose, and taking `customer_id` rather than an
+        `Invoice` for the same reason `_build_snapshot` does: four of the five refusals
+        below are facts about the caller's input, so they belong among `import_issued`'s
+        pure checks, above the counter lock and before a single row is flushed. The
+        assignment -- one line, `invoice.pdf_document_id = ...` -- happens after the row
+        exists.
+        """
         document = self.documents.repo.get(document_id)
         if document is None or document.deleted_at is not None:
             raise NotFound("document", document_id)
@@ -1039,12 +1123,12 @@ class InvoiceService:
                 "il documento non e' di tipo fattura",
                 expected="un documento con tipo 'fattura'",
             )
-        if document.customer_id != invoice.customer_id:
+        if document.customer_id != customer_id:
             raise ValidationFailed(
                 ENTITY,
                 "pdf_sorgente",
                 "il documento appartiene a un altro cliente",
-                expected=f"un documento del cliente {invoice.customer_id}",
+                expected=f"un documento del cliente {customer_id}",
             )
         if not document.versione_corrente:
             raise ValidationFailed(
@@ -1109,14 +1193,20 @@ class InvoiceService:
         an import of the same number could each read the register before the other's
         write, and both would go through.
 
-        `data.buchi` carries no uniqueness rule of its own, so `seen` refuses a
-        same-batch duplicate `numero` before it ever reaches `add_gap`'s flush -- and
-        the loop plus the final commit are wrapped together, because a *concurrent*
-        declaration of the same number can still reach the unique index underneath
+        **The whole batch is validated before the first `add_gap`.** `data.buchi` carries
+        no uniqueness rule of its own, so `seen` refuses a same-batch duplicate, and
+        `present`/`already` refuse a number that is an invoice or is already declared --
+        all of it in one pass over the list, with nothing written yet. Validating inside
+        the writing loop meant a refusal on the fourth element left the first three
+        flushed in the caller's transaction: rows the caller was told had not been
+        created, visible to every later statement of the same transaction and committed
+        by whatever committed next.
+        The writing loop and the commit are still wrapped, because a *concurrent*
+        declaration of the same number can reach the unique index underneath
         `uq_invoice_register_gaps_anno_numero` after this transaction's own read of
-        `already`. Either way the rollback is mandatory, or the caller's session is
-        unusable on its next statement (see `issue` and `import_issued`, which wrap
-        their own commits for exactly this reason).
+        `already`; and the rollback is mandatory either way, or the caller's session is
+        unusable on its next statement (see `issue` and `import_issued`, which wrap their
+        own commits for exactly this reason).
         """
         actor.require_admin(GAPS_ACTION)
         self._check_register_year(anno)
@@ -1124,18 +1214,19 @@ class InvoiceService:
         present = self.repo.numbers_present(anno)
         already = self.repo.declared_gaps(anno)
         seen: set[int] = set()
+        for buco in data.buchi:
+            if buco.numero in present:
+                raise Conflict(
+                    ENTITY,
+                    "questo numero e' una fattura del registro, non un buco",
+                    anno=anno,
+                    numero=buco.numero,
+                )
+            if buco.numero in already or buco.numero in seen:
+                raise Conflict(ENTITY, "buco gia' dichiarato", anno=anno, numero=buco.numero)
+            seen.add(buco.numero)
         try:
             for buco in data.buchi:
-                if buco.numero in present:
-                    raise Conflict(
-                        ENTITY,
-                        "questo numero e' una fattura del registro, non un buco",
-                        anno=anno,
-                        numero=buco.numero,
-                    )
-                if buco.numero in already or buco.numero in seen:
-                    raise Conflict(ENTITY, "buco gia' dichiarato", anno=anno, numero=buco.numero)
-                seen.add(buco.numero)
                 self.repo.add_gap(
                     InvoiceRegisterGap(
                         anno=anno,
@@ -1162,6 +1253,11 @@ class InvoiceService:
             raise Conflict(
                 ENTITY, "un altro processo ha dichiarato lo stesso buco: riprova", anno=anno
             ) from exc
+        except Exception:
+            # Same belt and braces as `import_issued`: whatever is not a duplicate gap is
+            # re-raised unchanged, but never with the transaction left aborted.
+            self.session.rollback()
+            raise
         return self.register_gaps(anno, actor)
 
     def register_gaps(self, anno: int, actor: Actor) -> list[RegisterGapRead]:
@@ -1169,11 +1265,19 @@ class InvoiceService:
         return [RegisterGapRead.model_validate(g) for g in self.repo.gaps(anno)]
 
     def undeclared_gaps(self, anno: int) -> list[int]:
-        """Numbers between the lowest imported one and the highest that are neither an
-        invoice nor a declared gap. Empty is the only state in which native issuing may
-        resume (spec 9 §3.2 rule 4): an import can arrive in any order, so a hole is
-        expected until the operator has looked at every one of them and either imported
-        or declared it.
+        """Numbers from 1 to the highest in the register that are neither an invoice nor
+        a declared gap. Empty is the only state in which native issuing may resume (spec
+        9 §3.2 rule 4): an import can arrive in any order, so a hole is expected until
+        the operator has looked at every one of them and either imported or declared it.
+
+        **From 1, not from the lowest number imported.** A year's register always starts
+        at 1 -- that is what makes it a register -- so a missing 1 is exactly as much a
+        hole as a missing 8, and bounding the scan below by `min(present)` made the one
+        hole an importer is most likely to leave the one hole nobody is told about. The
+        Acme register of 2026 is the case in point: its lowest existing invoice is the
+        2, and 1 has to be *declared* (it was never issued), not silently assumed away.
+        The upper bound stays exclusive at `max(present)`: numbers above the highest one
+        present are simply the future, and the counter hands them out next.
         """
         self._check_register_year(anno)
         present = self.repo.numbers_present(anno)
@@ -1181,7 +1285,7 @@ class InvoiceService:
             return []
         declared = self.repo.declared_gaps(anno)
         top = max(present)
-        return [n for n in range(min(present), top) if n not in present and n not in declared]
+        return [n for n in range(1, top) if n not in present and n not in declared]
 
     def annul(self, invoice_id: UUID, data: InvoiceAnnul, actor: Actor) -> InvoiceRead:
         """Strike the page through; keep the number.
@@ -1231,6 +1335,34 @@ class InvoiceService:
         self.session.commit()
         return InvoiceRead.model_validate(invoice)
 
+    def _check_transmission_date(self, quando: date, data_emissione: date | None) -> None:
+        """The two facts a delivery date has to satisfy: not in the future, not before the
+        invoice it delivers.
+
+        Shared by `mark_transmitted_externally` and `import_issued` because the column is
+        the same column and it means the same thing. `import_issued` used to write
+        `trasmessa_esternamente_il` exactly as given, which left a hole with real
+        consequences: the value is immutable once written (see
+        `mark_transmitted_externally`) and it is what `annul` reads to decide whether a
+        correction is still possible at all, so an import could permanently record a
+        delivery dated tomorrow, or dated before the emission, with no way to correct it.
+        """
+        oggi = oggi_in_italia()
+        if quando > oggi:
+            raise ValidationFailed(
+                ENTITY,
+                "trasmessa_esternamente_il",
+                "una consegna non si registra con data futura",
+                expected=f"una data non successiva a {oggi.isoformat()}",
+            )
+        if data_emissione is not None and quando < data_emissione:
+            raise ValidationFailed(
+                ENTITY,
+                "trasmessa_esternamente_il",
+                f"la consegna non puo' precedere l'emissione ({data_emissione.isoformat()})",
+                expected=f"una data dal {data_emissione.isoformat()} in poi",
+            )
+
     def mark_transmitted_externally(
         self, invoice_id: UUID, data: InvoiceTransmitted, actor: Actor
     ) -> InvoiceRead:
@@ -1257,22 +1389,7 @@ class InvoiceService:
                 "la consegna si registra una volta sola: e' il fatto su cui si decide "
                 "se un annullamento e' ancora possibile",
             )
-        oggi = oggi_in_italia()
-        if data.data > oggi:
-            raise ValidationFailed(
-                ENTITY,
-                "trasmessa_esternamente_il",
-                "una consegna non si registra con data futura",
-                expected=f"una data non successiva a {oggi.isoformat()}",
-            )
-        if invoice.data_emissione is not None and data.data < invoice.data_emissione:
-            raise ValidationFailed(
-                ENTITY,
-                "trasmessa_esternamente_il",
-                "la consegna non puo' precedere l'emissione "
-                f"({invoice.data_emissione.isoformat()})",
-                expected=f"una data dal {invoice.data_emissione.isoformat()} in poi",
-            )
+        self._check_transmission_date(data.data, invoice.data_emissione)
         invoice.trasmessa_esternamente_il = data.data
         self.activities.record(
             ENTITY, invoice.id, "transmitted_externally", actor, {"data": data.data.isoformat()}
@@ -1324,7 +1441,7 @@ class InvoiceService:
         `riferimento is not None` skips the `numero_completo` branch entirely.
         """
         _, profile = self._regime()
-        snapshot = self._build_snapshot(invoice, profile, actor)
+        snapshot = self._build_snapshot(invoice.customer_id, profile, actor)
         return InvoiceForExport(
             anno=invoice.created_at.year,
             numero=1,

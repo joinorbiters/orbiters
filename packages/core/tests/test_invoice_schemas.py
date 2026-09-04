@@ -16,6 +16,7 @@ from pigrocrm.core.invoices.schemas import (
     ALLOWED_STATI,
     DESCRIZIONE_MAX_LENGTH,
     MAX_LINES,
+    MAX_NUMERO,
     SNAPSHOT_VERSIONE,
     InvoiceCreate,
     InvoiceImport,
@@ -228,6 +229,37 @@ def test_an_import_refuses_unknown_fields_and_a_zero_number() -> None:
         InvoiceImport(**_import(xml_hash_sha256="abc"))
     with pytest.raises(ValidationError):
         InvoiceImport(**_import(righe=[]))
+
+
+def test_an_imported_number_stops_at_the_register_ceiling() -> None:
+    """`MAX_NUMERO` is enforced here, on the *declared* number, and not only on
+    `InvoiceForExport`.
+
+    Everywhere else the number is produced by the counter, so it cannot exceed the
+    ceiling by accident; an import is the one place a caller names it. Acme prints its
+    own document ids as `207571`, one column away from the register number on the same
+    screenshot: a slipped value would raise `ultimo_numero` to it -- irreversibly, since
+    the counter never moves backwards -- make every later SdI file name ambiguous (it
+    embeds `anno * 10000 + numero`), and turn `undeclared_gaps` into a
+    two-hundred-thousand-element list. The refusal belongs at the schema, before the
+    service takes the year's counter lock, which is why it is pinned here.
+    """
+    assert MAX_NUMERO == 9999
+    InvoiceImport(**_import(numero=MAX_NUMERO))
+    with pytest.raises(ValidationError):
+        InvoiceImport(**_import(numero=MAX_NUMERO + 1))
+    with pytest.raises(ValidationError):
+        InvoiceImport(**_import(numero=207571))
+
+
+def test_a_declared_gap_stops_at_the_same_ceiling() -> None:
+    """A gap is a number *of this register*: same range as an invoice's, so a batch
+    cannot declare holes at numbers the register could never have carried."""
+    RegisterGapsDeclare(buchi=[{"numero": MAX_NUMERO, "motivo": "mai emessa"}])  # type: ignore[list-item]
+    with pytest.raises(ValidationError):
+        RegisterGapsDeclare(buchi=[{"numero": MAX_NUMERO + 1, "motivo": "x"}])  # type: ignore[list-item]
+    with pytest.raises(ValidationError):
+        RegisterGapsDeclare(buchi=[{"numero": 0, "motivo": "x"}])  # type: ignore[list-item]
 
 
 def test_an_import_has_no_riferimento_field() -> None:
