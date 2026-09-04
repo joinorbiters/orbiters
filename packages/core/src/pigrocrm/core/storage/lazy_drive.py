@@ -84,6 +84,20 @@ class LazyUserDriveStorage:
     `session_factory` rather than a `Session`, and `settings` rather than pre-built
     credentials, because this object is constructed once per process while both the
     session and the credential are things it has to obtain again later.
+
+    **Not thread-safe yet, and that is a note for whoever wires it up.** `_resolution`
+    is read and written with no lock. Nothing here corrupts -- the field is replaced
+    wholesale by a single assignment, never mutated in place, so a concurrent reader
+    sees either the old resolution or the new one and both are coherent -- but two
+    threads meeting a cold or newly-invalidated cache will each resolve and each build a
+    transport, so one of the two `GoogleTokenClient`s is thrown away along with its
+    cached access token, and a revocation can be recorded twice. The instance that
+    reaches production is process-scoped and shared across requests (FastAPI runs sync
+    endpoints in a thread pool), so the task that wires it into `deps.py` should guard
+    the resolution with a lock -- the same shape, and the same reason, as `deps.py`'s
+    own `_engine_lock`. Deliberately not added here: a lock in this class with no
+    concurrent caller yet would be untested code protecting a scenario this task cannot
+    reach.
     """
 
     def __init__(
@@ -157,22 +171,62 @@ class LazyUserDriveStorage:
         The row may already be gone (a user deleted between the failed refresh and
         here), in which case there is nothing to record and the revocation still
         propagates: the caller's failure does not depend on the bookkeeping succeeding.
+
+        **And that sentence is enforced, not merely intended.** Everything about this
+        second session can fail on its own account -- a pool with no connection left,
+        a row somebody else is holding, a `commit` that loses a race -- and every one of
+        those failures would, unguarded, escape from inside `except
+        DriveCredentialRevoked` and *replace* the revocation. The caller would then read
+        a database error instead of "il consenso è stato revocato" (a 500 where a 409
+        belongs), and the row would be left `active` regardless, so the reader would
+        lose both the sentence and the record. So the whole body is guarded and nothing
+        is re-raised: the original refusal always wins.
+
+        Swallowing is the right trade here and not merely the convenient one. The state
+        this failed to write is re-derivable -- the next refresh meets the same
+        `invalid_grant` and tries again, which is exactly the retry a momentarily
+        unavailable database needs -- while the exception it would have replaced is not
+        re-derivable at all, because it is what the caller is being told.
         """
         resolution = self._resolution
         self._resolution = None
         if resolution is None:
             return
-        with self._session_factory() as session:
-            account = session.get(GoogleDriveAccount, resolution.account_id)
-            if account is None:
-                return
-            GoogleDriveAccountService(session, settings=self._settings).mark_revoked(
-                account,
-                # Google revoked this, nobody in this CRM did -- the actor every
-                # `mark_revoked` call site passes.
-                Actor.system(),
-                _REVOKED_REASON.format(email=account.email_address),
-            )
+        try:
+            session = self._session_factory()
+            try:
+                account = session.get(GoogleDriveAccount, resolution.account_id)
+                if account is not None:
+                    GoogleDriveAccountService(session, settings=self._settings).mark_revoked(
+                        account,
+                        # Google revoked this, nobody in this CRM did -- the actor every
+                        # `mark_revoked` call site passes.
+                        Actor.system(),
+                        _REVOKED_REASON.format(email=account.email_address),
+                    )
+            except Exception:
+                # A half-applied `mark_revoked` (status set, activity not yet recorded,
+                # commit not reached) must not be left pending on a session something
+                # later could flush, and a pooled connection must go back clean rather
+                # than mid-transaction. `close()` below would roll back anyway; saying
+                # so here is what makes it a decision instead of a side effect.
+                session.rollback()
+                raise
+            finally:
+                session.close()
+        except Exception:
+            # Deliberately swallowed -- see the docstring. The outer `try` wraps the
+            # factory call, the rollback and the close as well as the write, because a
+            # guard that only covered the write would still let a failing `rollback()`
+            # or a failing `close()` escape and do the exact harm this exists to
+            # prevent.
+            #
+            # `Exception` and not a list of SQLAlchemy classes: the point is that
+            # *nothing* raised in here may reach the caller in place of the revocation,
+            # and a list is a list somebody has to keep complete. `BaseException` still
+            # passes, so a `KeyboardInterrupt` or a task cancellation is not absorbed by
+            # bookkeeping.
+            pass
 
     def _run(self, operation: Callable[[GDriveStorage], _T]) -> _T:
         """Resolve, delegate, and turn a revoked grant into a recorded fact.

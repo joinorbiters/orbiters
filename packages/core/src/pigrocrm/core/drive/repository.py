@@ -47,6 +47,14 @@ class DriveRepository:
         raised `MultipleResultsFound` there would take every upload and every download
         down with it. The most recently updated row is the answer instead: it is the one
         somebody most recently chose.
+
+        `id` breaks the tie after `updated_at`, and it is not decoration: `updated_at`
+        is a timestamp two rows can genuinely share (two accounts configured inside the
+        same transaction, or inside the same clock tick), and with `LIMIT 1` over an
+        ambiguous ordering Postgres is free to return either one -- possibly a different
+        one on the next call, which would mean two consecutive uploads landing in two
+        different folders with nothing in the code to explain it. The ids here are
+        UUIDv7, so the tie-break is itself chronological rather than arbitrary.
         """
         return self.session.execute(
             select(GoogleDriveAccount)
@@ -54,7 +62,7 @@ class DriveRepository:
                 GoogleDriveAccount.status == "active",
                 GoogleDriveAccount.storage_folder_id.is_not(None),
             )
-            .order_by(GoogleDriveAccount.updated_at.desc())
+            .order_by(GoogleDriveAccount.updated_at.desc(), GoogleDriveAccount.id.desc())
             .limit(1)
         ).scalar_one_or_none()
 
