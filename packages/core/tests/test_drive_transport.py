@@ -5,29 +5,37 @@ JWT, HTTP mechanics (retry, backoff, error decoding), and Drive placement/identi
 Slice 9 needs the middle job driven by a *user* OAuth token instead, so the first two
 now live in `drive/transport.py` and this file covers them directly.
 
-What is faked is still only the network -- `fakes/fake_drive.py` -- so URL building,
-header injection, the retry schedule and the error decoding all run for real. Where a test
+What is faked is still only the network -- `fakes/fake_drive.py` for Drive,
+`fakes/fake_gmail.py` for Google's token endpoint -- so URL building, header
+injection, the retry schedule and the error decoding all run for real. Where a test
 has to see the *headers* of a request (the whole point of a bearer token), it wraps
 the fake rather than changing it: the fake records `(method, url)` only, and the spec
 is explicit that the fake does not change.
 """
 
 import io
+import json
 import urllib.error
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from fakes.fake_drive import FakeDrive
+from fakes.fake_gmail import FakeGmail
 
+from pigrocrm.core.config import Settings
 from pigrocrm.core.drive.transport import (
     DriveTransport,
     ServiceAccountTokens,
+    UserTokens,
     _urllib_call,
 )
-from pigrocrm.core.errors import Conflict, NotFound
-from pigrocrm.core.storage import GDriveStorage
+from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
+from pigrocrm.core.gmail.tokens import GoogleTokenClient
+from pigrocrm.core.gmail.transport import GmailTransport
+from pigrocrm.core.storage import GDriveStorage, storage_from_settings
 
 PDF = b"%PDF-1.7\nfinto\n"
 KEY = "acme-01234567/0199abcd/v1.pdf"
@@ -44,12 +52,23 @@ SERVICE_ACCOUNT_JSON = (
 
 @dataclass
 class StubTokens:
-    """A `TokenProvider` that hands out a token a test can recognise on the wire."""
+    """A `TokenProvider` that hands out `values[0]` and moves to the next on `forget`.
 
-    value: str = "tok"
+    Two things the real providers make hard to observe: which token reached the wire,
+    and whether `forget` was called at all. Both are exactly what `DriveTransport`'s
+    401 handling is judged on.
+    """
+
+    values: list[str] = field(default_factory=lambda: ["tok"])
+    forgotten: int = 0
 
     def access_token(self) -> str:
-        return self.value
+        return self.values[0]
+
+    def forget(self) -> None:
+        self.forgotten += 1
+        if len(self.values) > 1:
+            self.values.pop(0)
 
 
 @dataclass
@@ -70,6 +89,31 @@ class RecordingHttp:
     ) -> tuple[int, bytes]:
         self.headers.append(dict(headers))
         return self.inner(method, url, headers, body)
+
+
+@dataclass
+class ScriptedHttp:
+    """Answers with `statuses` in order, then 200s. Records what each attempt carried."""
+
+    statuses: list[int] = field(default_factory=list)
+    seen: list[dict[str, str]] = field(default_factory=list)
+
+    def __call__(
+        self, method: str, url: str, headers: dict[str, str], body: bytes | None
+    ) -> tuple[int, bytes]:
+        self.seen.append(dict(headers))
+        status = self.statuses.pop(0) if self.statuses else 200
+        if status >= 400:
+            return status, json.dumps({"error": {"message": "boom"}}).encode()
+        return 200, json.dumps({"id": "ok"}).encode()
+
+
+def _token_client(fake: FakeGmail) -> GoogleTokenClient:
+    return GoogleTokenClient(
+        client_id="cid.apps.googleusercontent.com",
+        client_secret="the-client-secret",
+        transport=GmailTransport(http=fake, sleep=lambda _: None),
+    )
 
 
 # --- The bearer token reaches every request ------------------------------------------
@@ -145,6 +189,119 @@ def test_a_non_transient_client_error_is_not_retried() -> None:
     assert excinfo.value.details["status"] == 403
 
 
+# --- 401: the one failure a fresh token fixes ----------------------------------------
+
+
+def test_a_401_forgets_the_cached_token_and_retries_with_the_next_one() -> None:
+    """A 401 from Drive means the token is stale -- revoked, or minted before a
+    re-consent -- and a cached one is the only reason a request that was authorised a
+    minute ago is not now. Retrying with the *same* token would be pointless, so the
+    provider is told to drop it first; that is why `TokenProvider` has `forget` at all.
+    """
+    tokens = StubTokens(values=["stale", "fresh"])
+    http = ScriptedHttp(statuses=[401])
+    transport = DriveTransport(tokens=tokens, http=http, sleep=lambda _: None)
+
+    parsed = transport.json("GET", "https://www.googleapis.com/drive/v3/files", what="richiesta")
+
+    assert parsed["id"] == "ok"
+    assert tokens.forgotten == 1
+    assert [h["Authorization"] for h in http.seen] == ["Bearer stale", "Bearer fresh"]
+
+
+def test_a_401_that_survives_a_fresh_token_is_reported_rather_than_retried_forever() -> None:
+    """Boundedness, the half that matters: a genuinely revoked grant answers 401 to
+    every attempt, and a transport that kept forgetting and retrying would spin
+    against Google instead of telling the caller. Exactly one extra attempt."""
+    tokens = StubTokens(values=["stale", "also-stale"])
+    http = ScriptedHttp(statuses=[401, 401])
+    transport = DriveTransport(tokens=tokens, http=http, sleep=lambda _: None)
+
+    with pytest.raises(Conflict) as excinfo:
+        transport.json("GET", "https://www.googleapis.com/drive/v3/files", what="richiesta")
+
+    assert excinfo.value.details["status"] == 401
+    assert tokens.forgotten == 1
+    assert len(http.seen) == 2
+
+
+# --- UserTokens: the slice 9 provider, over the slice 5 token client ------------------
+
+
+def test_user_tokens_refresh_through_the_token_client_and_reuse_the_result() -> None:
+    """`UserTokens` owns no cache of its own: `GoogleTokenClient` already caches per
+    account on Google's own `expires_in`, and a second cache in front of it would be a
+    second place a token sits and a second clock to get wrong."""
+    fake = FakeGmail()
+    account_id = uuid4()
+    provider = UserTokens(
+        account_id=account_id,
+        email_address="titolare@example.it",
+        refresh_token="1//0gRefreshTokenValue",
+        tokens=_token_client(fake),
+    )
+
+    assert provider.access_token() == fake.access_token
+    assert provider.access_token() == fake.access_token
+    assert fake.token_requests == 1
+
+
+def test_user_tokens_forget_makes_the_next_call_refresh_again() -> None:
+    fake = FakeGmail()
+    provider = UserTokens(
+        account_id=uuid4(),
+        email_address="titolare@example.it",
+        refresh_token="1//0gRefreshTokenValue",
+        tokens=_token_client(fake),
+    )
+    provider.access_token()
+
+    provider.forget()
+    provider.access_token()
+
+    assert fake.token_requests == 2
+
+
+def test_user_tokens_never_print_the_refresh_token() -> None:
+    """The refresh token is the long-lived half of the credential, and a generated
+    `repr` prints itself into every traceback, every `logger.debug("%s", provider)` and
+    every pytest failure dump -- the same rule `gmail/tokens.py` states for its own
+    dataclasses, applied to the one that now travels into the storage layer."""
+    provider = UserTokens(
+        account_id=uuid4(),
+        email_address="titolare@example.it",
+        refresh_token="1//0gRefreshTokenValue",
+        tokens=_token_client(FakeGmail()),
+    )
+
+    assert "1//0gRefreshTokenValue" not in repr(provider)
+
+
+def test_a_drive_call_with_a_user_token_carries_that_users_bearer_token() -> None:
+    """End to end over both fakes: the Drive transport driven by a real
+    `GoogleTokenClient` refresh, which is the whole point of the split."""
+    gmail = FakeGmail(access_token="ya29.user-token")
+    drive = FakeDrive()
+    http = RecordingHttp(drive)
+    storage = GDriveStorage(
+        transport=DriveTransport(
+            tokens=UserTokens(
+                account_id=uuid4(),
+                email_address="titolare@example.it",
+                refresh_token="1//0gRefreshTokenValue",
+                tokens=_token_client(gmail),
+            ),
+            http=http,
+        ),
+        root_folder_id=drive.root_id,
+    )
+
+    storage.put(KEY, PDF, "application/pdf")
+
+    assert storage.get(KEY) == PDF
+    assert all(h.get("Authorization") == "Bearer ya29.user-token" for h in http.headers)
+
+
 # --- ServiceAccountTokens: today's provider, unchanged behaviour ----------------------
 
 
@@ -179,6 +336,19 @@ def test_service_account_tokens_request_the_full_drive_scope() -> None:
     assert signed[0]["iss"] == "pigro@example.iam.gserviceaccount.com"
 
 
+def test_service_account_tokens_forget_makes_the_next_call_re_sign() -> None:
+    drive = FakeDrive()
+    provider = ServiceAccountTokens(
+        SERVICE_ACCOUNT_JSON, http=drive, sign_assertion=lambda claims: "assertion"
+    )
+    provider.access_token()
+
+    provider.forget()
+    provider.access_token()
+
+    assert drive.token_requests == 2
+
+
 def test_service_account_tokens_never_print_the_credentials() -> None:
     provider = ServiceAccountTokens(
         SERVICE_ACCOUNT_JSON, http=FakeDrive(), sign_assertion=lambda claims: "assertion"
@@ -209,6 +379,21 @@ def test_from_service_account_round_trips_a_document() -> None:
     storage.delete(KEY)
     with pytest.raises(NotFound):
         storage.get(KEY)
+
+
+# --- The configuration error names both ways to configure Drive ----------------------
+
+
+def test_the_gdrive_configuration_error_also_names_the_user_credential() -> None:
+    """A message that only names the two service-account variables sends the reader to
+    the Google Cloud console when, from slice 9D, connecting Drive from Impostazioni is
+    the other sanctioned answer. The error is the only place that reader is looking."""
+    with pytest.raises(ValidationFailed) as excinfo:
+        storage_from_settings(Settings(storage_backend="gdrive"))
+
+    reason = excinfo.value.details["reason"]
+    assert "PIGROCRM_GDRIVE_SERVICE_ACCOUNT_JSON" in reason
+    assert "collega Drive da Impostazioni e scegli la cartella di scrittura" in reason
 
 
 # --- The real transport: a failure that never produced an HTTP response at all -------
