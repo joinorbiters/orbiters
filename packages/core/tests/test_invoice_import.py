@@ -775,6 +775,7 @@ DRIVE_PDF = "1FatturaOriginale1"
 DRIVE_TXT = "1AppuntiTestoZZZZZ"
 OUTSIDE_FOLDER = "1CartellaPersonale"
 OUTSIDE_PDF = "1FatturaAltroLavor"
+EMPTY_PDF = "1FatturaVuotaZeroB"
 
 ORIGINAL_PDF = b"%PDF-1.4 la fattura che il cliente ha ricevuto nel 2026"
 
@@ -801,6 +802,15 @@ def _drive() -> "FakeDrive":  # noqa: F821
         mime="text/plain",
         content=b"non e' una fattura",
         file_id=DRIVE_TXT,
+    )
+    # Zero bytes, and Drive is perfectly happy to serve it: a sync that died half way,
+    # a placeholder somebody made and never filled.
+    drive.add_file(
+        "Fattura 8-2026.pdf",
+        parent=SUB_FOLDER,
+        mime="application/pdf",
+        content=b"",
+        file_id=EMPTY_PDF,
     )
     drive.add_folder("Altro lavoro", parent=drive.root_id, file_id=OUTSIDE_FOLDER)
     drive.add_file(
@@ -1088,3 +1098,99 @@ def test_a_failed_commit_takes_the_imported_pdf_with_it(
 
     assert db_session.execute(select(Invoice).where(Invoice.numero == 7)).first() is None
     assert _imported_documents(db_session) == []
+
+
+def test_an_empty_pdf_on_drive_is_refused_among_the_pure_checks(
+    db_session: Session, tmp_path
+) -> None:  # noqa: ANN001
+    """A zero-byte file inside the configured roots: readable, `application/pdf`, and
+    not a document. `DocumentService._check_upload` would refuse it too -- but only
+    from *inside* `import_bytes`, which runs after the `Invoice` has been flushed, and
+    the only rollback in `import_issued` wraps the final `commit`. So the refusal is
+    hoisted here, among the pure checks, where it belongs: it is a fact about the file
+    the caller named.
+
+    Three things must be absent afterwards, not one: the fattura, the imported
+    document, and the counter row -- `lock_counter` creates it, so a refusal that
+    escaped the transaction would leave a register year in existence because somebody
+    typed a bad Drive id.
+    """
+    from pigrocrm.core.documents.models import Document
+    from pigrocrm.core.errors import ValidationFailed
+    from pigrocrm.core.invoices.models import InvoiceCounter
+    from pigrocrm.core.invoices.schemas import PdfSorgente
+
+    drive = _drive()
+    service = _svc(db_session, tmp_path, drive_reader_factory=_reader_factory(drive))
+    cid = _fiscal_customer_id(db_session)
+
+    with pytest.raises(ValidationFailed) as caught:
+        service.import_issued(
+            _payload(
+                cid,
+                numero=7,
+                giorno=date(2026, 5, 5),
+                pdf_sorgente=PdfSorgente(drive_file_id=EMPTY_PDF),
+            ),
+            ADMIN,
+        )
+
+    assert caught.value.details["field"] == "pdf_sorgente.drive_file_id"
+    assert db_session.execute(select(Invoice).where(Invoice.numero == 7)).first() is None
+    assert db_session.execute(select(Document)).first() is None
+    assert db_session.get(InvoiceCounter, 2026) is None
+
+
+def test_a_refusal_from_inside_import_bytes_still_leaves_nothing_flushed(
+    db_session: Session, tmp_path
+) -> None:  # noqa: ANN001
+    """The guard on the window that cannot be closed by hoisting checks.
+
+    `import_bytes` runs *after* the `Invoice` and its lines have been flushed, and it
+    can refuse for reasons that are not facts about the Drive file at all: here a
+    required custom field defined on `document`, which every `documents` row must carry
+    and this one has no way to supply. Without a rollback at that call site the refused
+    fattura would sit flushed in the caller's session, and the next query in the same
+    transaction would find a fattura the caller had just been told did not exist --
+    the precise failure `import_issued`'s own docstring exists to describe.
+
+    The assertion after the refusal is therefore made *through the same session*: it is
+    the session's view, not the database's, that was corrupted before the fix.
+    """
+    from pigrocrm.core.documents.models import Document
+    from pigrocrm.core.errors import ValidationFailed
+    from pigrocrm.core.fields.schemas import FieldDefinitionCreate
+    from pigrocrm.core.fields.service import FieldDefinitionService
+    from pigrocrm.core.invoices.models import InvoiceCounter
+    from pigrocrm.core.invoices.schemas import PdfSorgente
+
+    drive = _drive()
+    service = _svc(db_session, tmp_path, drive_reader_factory=_reader_factory(drive))
+    cid = _fiscal_customer_id(db_session)
+    FieldDefinitionService(db_session).create(
+        FieldDefinitionCreate(
+            entity_type="document",
+            key="pratica",
+            label="Pratica",
+            field_type="text",
+            required=True,
+        ),
+        ADMIN,
+    )
+
+    with pytest.raises(ValidationFailed):
+        service.import_issued(
+            _payload(
+                cid,
+                numero=7,
+                giorno=date(2026, 5, 5),
+                pdf_sorgente=PdfSorgente(drive_file_id=DRIVE_PDF),
+            ),
+            ADMIN,
+        )
+
+    assert db_session.execute(select(Invoice).where(Invoice.numero == 7)).first() is None
+    assert db_session.execute(select(Document)).first() is None
+    assert db_session.get(InvoiceCounter, 2026) is None
+    # And the session is still usable: a later read does not raise on a pending failure.
+    assert service.repo.numbers_present(2026) == set()

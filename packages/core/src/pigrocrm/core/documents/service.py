@@ -460,8 +460,28 @@ class DocumentService:
         learn other provenances and a fixed schema here would have to be migrated for
         each of them.
 
-        Storage bytes written and then abandoned by a failed commit are an accepted
-        orphan, exactly as they already are in `add_version`: the alternative is a
+        **Exactly what `commit=False` promises, and what it does not.** It promises
+        that this method issues no `commit`: on return, the `documents` row, its
+        `document_versions` row and the three activity entries are *flushed* into the
+        caller's transaction and nothing more, so the caller's own `commit` is what
+        makes them exist and the caller's own `rollback` is what removes all of them
+        together.
+
+        It does **not** promise a clean session on failure, and the refusals split in
+        two. `_check_upload`, `_check_owner` and a required custom field all raise
+        *before this method has flushed anything of its own*, and none of them rolls
+        back -- harmless for what this method wrote (nothing), and silent about what the
+        caller wrote before calling. The two failures inside `_add_version_row` -- an
+        `IntegrityError` on the version's unique numero, a `storage.put` that raises --
+        do roll the whole transaction back, because they must: a flushed version row
+        must never be left pointing at bytes nobody wrote. So a caller that has already
+        flushed rows of its own needs a `try/except ...: rollback; raise` of its own
+        around this call to cover the first group -- which is exactly what
+        `InvoiceService.import_issued` has, and why.
+
+        And it promises nothing about storage: `storage.put` has already happened when
+        this returns. Bytes written and then abandoned by a rollback are an accepted
+        orphan, exactly as they already are in `add_version` -- the alternative is a
         two-phase delete that would itself have to be crash-safe, and an unreferenced
         object in storage costs disk, not correctness.
         """

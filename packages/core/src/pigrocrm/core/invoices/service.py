@@ -1063,22 +1063,41 @@ class InvoiceService:
             # `commit=False`: the `documents` row belongs to *this* transaction. With the
             # ordinary committing `create` it would survive a failure of the commit below
             # as an orphan PDF filed against a customer, with no invoice pointing at it.
-            invoice.pdf_document_id = self.documents.import_bytes(
-                customer_id=data.customer_id,
-                tipo="fattura",
-                titolo=f"Fattura {numero_completo(data.anno, data.numero)} (originale the previous system)",
-                data=pdf_sorgente.contenuto,
-                content_type=PDF_MIME,
-                actor=actor,
-                # `DriveReader.read_bytes` answers with the bytes and the mime and no
-                # name, so the id is the provenance -- which is the part that identifies
-                # the file on Drive anyway, a name being neither unique nor stable.
-                origine={
-                    "drive_file_id": pdf_sorgente.drive_file_id,
-                    "mime": pdf_sorgente.mime,
-                },
-                commit=False,
-            ).id
+            #
+            # And this is the one write in the method that can still *refuse*, which is
+            # why it carries its own rollback rather than relying on the one around the
+            # commit. The `Invoice` and its lines are already flushed here, so a refusal
+            # from inside `import_bytes` -- a required custom field on `document`, an
+            # `IntegrityError` on the version's unique numero, a storage backend that is
+            # down -- would otherwise leave the refused fattura sitting in the caller's
+            # session, and the next query in the same transaction would find a fattura
+            # the caller had just been told did not exist. Empty bytes and a wrong mime
+            # cannot reach here: they are refused among the pure checks above, before
+            # anything was flushed at all. This guard is for everything else.
+            try:
+                invoice.pdf_document_id = self.documents.import_bytes(
+                    customer_id=data.customer_id,
+                    tipo="fattura",
+                    titolo=f"Fattura {numero_completo(data.anno, data.numero)} (originale the previous system)",
+                    data=pdf_sorgente.contenuto,
+                    content_type=PDF_MIME,
+                    actor=actor,
+                    # `DriveReader.read_bytes` answers with the bytes and the mime and no
+                    # name, so the id is the provenance -- which is the part that
+                    # identifies the file on Drive anyway, a name being neither unique
+                    # nor stable.
+                    origine={
+                        "drive_file_id": pdf_sorgente.drive_file_id,
+                        "mime": pdf_sorgente.mime,
+                    },
+                    commit=False,
+                ).id
+            except Exception:
+                # Re-raised unchanged: there is nothing useful to translate a required
+                # custom field or a dead storage backend into. The rollback is the
+                # mandatory part -- without it the flushed `INSERT`s stay pending.
+                self.session.rollback()
+                raise
         counter.ultimo_numero = max(counter.ultimo_numero, data.numero)
         self.activities.record(
             ENTITY,
@@ -1208,6 +1227,19 @@ class InvoiceService:
         that does not exist, one in an unconfigured corner of the titolare's Drive and
         one in a stranger's Drive -- a distinction it refuses to draw, and that this
         method must not redraw by translating one of them differently.
+
+        **The reader's other refusals pass through untouched, deliberately.** A file over
+        the 20 MB download ceiling, a folder id where a file id was meant and a native
+        Google file with no bytes each already arrive as a `Conflict` under the entity
+        `drive_file`, carrying a sentence written for the person who typed the id ("il
+        file supera N byte: aprilo su Drive invece di importarlo"). Re-wrapping them
+        under `invoice` would either lose that sentence or repeat it, and it would claim
+        the problem is with the fattura when the problem is with the file: `drive_file`
+        is the truthful subject, and it is the same entity `drive_reader_for`'s own
+        refusals use for the account (`google_drive_account`). Only the `NotFound` above
+        is translated, and what makes it different is its *class*, not its entity -- a
+        `NotFound` reaching an import reads as "the thing you asked to import is not
+        there", which is exactly the existence answer the reader refuses to give.
         """
         if sorgente.drive_file_id is not None:
             return self._read_original_pdf_from_drive(sorgente.drive_file_id, actor)
@@ -1225,6 +1257,16 @@ class InvoiceService:
         return self._validate_original_pdf(customer_id, sorgente.document_id)
 
     def _read_original_pdf_from_drive(self, drive_file_id: str, actor: Actor) -> _FetchedPdf:
+        """The bytes of the original, with every refusal that is a fact about the file.
+
+        Empty bytes are checked *here* and not left to `DocumentService._check_upload`,
+        which would refuse them just as surely: that check runs inside `import_bytes`,
+        which `import_issued` calls after the `Invoice` has been flushed, whereas "the
+        file on Drive has no bytes" is a fact about the caller's `drive_file_id` and
+        belongs among the pure checks with the mime. A zero-byte PDF is not exotic --
+        a sync that died half way, a placeholder somebody made and never filled -- and
+        Drive serves it without complaint.
+        """
         reader = self._drive_reader(actor)
         try:
             contenuto, mime = reader.read_bytes(drive_file_id)
@@ -1242,6 +1284,13 @@ class InvoiceService:
                 f"il file su Drive non è un PDF ma un {mime}: l'originale di una fattura "
                 "è il PDF che il cliente ha ricevuto",
                 expected=PDF_MIME,
+            )
+        if not contenuto:
+            raise ValidationFailed(
+                ENTITY,
+                "pdf_sorgente.drive_file_id",
+                "il file su Drive è vuoto",
+                expected="almeno un byte",
             )
         return _FetchedPdf(contenuto=contenuto, drive_file_id=drive_file_id, mime=mime)
 
