@@ -149,9 +149,7 @@ def test_every_drive_endpoint_requires_authentication(client: TestClient) -> Non
         assert client.request(method, path).status_code == 401, path
 
 
-def test_a_readonly_actor_cannot_set_roots(
-    logged_in: TestClient, drive_ready: TestClient, api_session: Session, admin_user: Any
-) -> None:
+def test_a_readonly_actor_cannot_set_roots(logged_in: TestClient, drive_ready: TestClient) -> None:
     """403, not the 409 a missing account would give: `set_roots`'s `require_write`
     runs before `_present`'s presence check, so the role refusal has to be provable
     even with no row to refuse it over.
