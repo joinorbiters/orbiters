@@ -141,6 +141,44 @@ def test_the_list_url_refuses_a_full_text_search_even_inside_a_folder() -> None:
             files_list_url(bad, fields="files(id)")
 
 
+def test_the_list_url_refuses_a_query_that_widens_past_its_folder() -> None:
+    """Che una clausola `in parents` ci sia non basta: deve essere l'unica cosa che
+    decide *dove* si guarda. `'<id>' in parents or mimeType='application/pdf'` contiene
+    la clausola e ciononostante elenca ogni PDF del Drive, quindi un controllo di sola
+    presenza renderebbe falso il docstring di questo modulo. Un elenco puo' solo
+    restringere: `or`, `not` e le parentesi -- che servono a raggruppare un `or` -- sono
+    i tre modi di allargare, e sono rifiutati tutti e tre."""
+    for bad in [
+        children_query(FOLDER) + " or mimeType='application/pdf'",
+        f"not {children_query(FOLDER)}",
+        f"'{FOLDER}' in parents and not mimeType='application/pdf'",
+        f"'{FOLDER}' in parents OR '{FOLDER}' in parents",
+        f"('{FOLDER}' in parents)",
+        f"'{FOLDER}' in parents and (trashed = false or trashed = true)",
+    ]:
+        with pytest.raises(ValidationFailed, match="allarga"):
+            files_list_url(bad, fields="files(id)")
+
+
+def test_a_value_in_quotes_is_never_mistaken_for_an_operator() -> None:
+    """I controlli girano su uno scheletro in cui ogni literal fra apici e' stato
+    svuotato, e non sul `q` grezzo. Non e' una raffinatezza: la ragione sociale di un
+    cliente diventa un segmento di storage key, quindi un nome di cartella, quindi un
+    valore dentro `name='...'` -- e "Contains S.r.l." avrebbe fatto fallire *ogni* put e
+    ogni get di quel cliente con un `ValidationFailed` su un `q` che il CRM aveva
+    costruito lui. Il rifiuto vale per l'operatore, non per la parola."""
+    assert files_list_url(folder_by_name_query("id2", "contains-srl-01234567"), fields="files(id)")
+    assert files_list_url(folder_by_name_query("id2", "or-not-spa"), fields="files(id)")
+    # Apice compreso: lo scheletro deve saltare anche un apice escapato, altrimenti
+    # perderebbe il conto delle virgolette proprio sul valore piu' ostile.
+    assert files_list_url(
+        folder_by_name_query("id2", "bar's or fullText contains x"), fields="files(id)"
+    )
+    # E fuori dagli apici l'operatore resta vietato.
+    with pytest.raises(ValidationFailed, match="contains"):
+        files_list_url(f"'{FOLDER}' in parents and name contains 'x'", fields="files(id)")
+
+
 def test_the_list_url_accepts_a_query_that_is_scoped_and_says_where_it_is_going() -> None:
     url = files_list_url(children_query(FOLDER), page_token="tok", fields="files(id,name)")
     parsed = urlparse(url)
@@ -366,6 +404,10 @@ def test_no_other_module_can_build_a_drive_url() -> None:
     """
     offenders: list[str] = []
     for root in SOURCE_ROOTS:
+        # Una scansione che non guarda nessun file passa sempre. Se un giorno un
+        # package si sposta, questo test deve fallire per quello, non diventare verde
+        # per vuoto.
+        assert list(root.rglob("*.py")), root
         for path in sorted(root.rglob("*.py")):
             if path == QUERY_MODULE:
                 continue
