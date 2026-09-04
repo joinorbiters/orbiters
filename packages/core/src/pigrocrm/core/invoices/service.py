@@ -6,7 +6,8 @@ to `issue`, `annul` and the artefact methods added by the following tasks.
 """
 
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -25,6 +26,7 @@ from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.documents.models import Document
 from pigrocrm.core.documents.schemas import DocumentCreate
 from pigrocrm.core.documents.service import DocumentService
+from pigrocrm.core.drive.reader import DriveReader, drive_reader_for
 from pigrocrm.core.emitter.service import EmitterProfileService
 from pigrocrm.core.errors import Conflict, ImmutableField, NotFound, ValidationFailed
 from pigrocrm.core.fields.schemas import EntityType
@@ -72,6 +74,7 @@ from pigrocrm.core.invoices.schemas import (
     InvoiceUpdate,
     PartySnapshot,
     PaymentState,
+    PdfSorgente,
     RegisterGapRead,
     RegisterGapsDeclare,
 )
@@ -96,6 +99,15 @@ GAPS_ACTION = "declare_invoice_register_gaps"
 # register whose lowest imported number is high can leave hundreds of them.
 GAPS_SHOWN_IN_MESSAGE = 20
 
+# The mime the original of a fattura has to be, and the only one `_resolve_original_pdf`
+# accepts from Drive: the point of §3.5 is the document the customer received, and a
+# `.docx` or a scan-shaped `image/jpeg` is not that document even when it looks like it.
+PDF_MIME = "application/pdf"
+# The name a Drive refusal uses when the grant is missing a scope ("<feature> non è
+# disponibile: manca l'autorizzazione ..."), so it reads as a feature that is off rather
+# than as a broken credential.
+DRIVE_FEATURE = "import della fattura"
+
 # What stays writable once a `fattura` has left the `bozza` state (spec 4). Everything
 # else on the row is frozen, and an attempt raises `ImmutableField` naming the field.
 # `stato_pagamento`/`data_incasso` are absent because they have their own method, which
@@ -103,9 +115,30 @@ GAPS_SHOWN_IN_MESSAGE = 20
 MUTABLE_AFTER_ISSUE: frozenset[str] = frozenset({"note_interne", "custom_fields"})
 
 
+@dataclass(frozen=True)
+class _FetchedPdf:
+    """The original PDF already read from Drive, waiting for a row to belong to.
+
+    `import_issued` reads Drive among its *pure* checks -- a network read is not a
+    database write, and a file outside the roots or a `.txt` in place of the invoice
+    has to be refused before the counter is locked. But the `documents` row it becomes
+    cannot be written until the invoice exists, so what crosses that boundary is this:
+    the bytes, and the id they came from for the provenance record.
+    """
+
+    contenuto: bytes
+    drive_file_id: str
+    mime: str
+
+
 class InvoiceService:
     def __init__(
-        self, session: Session, storage: DocumentStorage, settings: Settings | None = None
+        self,
+        session: Session,
+        storage: DocumentStorage,
+        settings: Settings | None = None,
+        *,
+        drive_reader_factory: Callable[[Actor], DriveReader] | None = None,
     ) -> None:
         self.session = session
         self.storage = storage
@@ -116,6 +149,13 @@ class InvoiceService:
         self.fiscal = FiscalProfileService(session)
         self.emitter = EmitterProfileService(session)
         self.documents = DocumentService(session, storage, self.settings)
+        # The one seam of §3.5: `None` in production, where the reader is composed from
+        # the actor's own stored Drive account by `drive_reader_for`. A test that wants
+        # an in-memory Drive injects the factory instead of seeding an account row and a
+        # sealed refresh token -- and the tests that *are* about the credential path
+        # leave this `None` and monkeypatch the HTTP transport, so neither wiring is
+        # asserted only through the other.
+        self._drive_reader_factory = drive_reader_factory
 
     # ---- shared helpers -------------------------------------------------------
 
@@ -866,16 +906,25 @@ class InvoiceService:
         counter is only ever raised to a number that is being written in the same
         transaction.
 
+        **One transaction, Drive included.** With `pdf_sorgente.drive_file_id` the bytes
+        of the original PDF are read among the pure checks (see `_resolve_original_pdf`)
+        and become a `documents` row only after the invoice has been flushed, through
+        `DocumentService.import_bytes(commit=False)` -- so the single `commit` below is
+        still the only one, and a refusal at any point leaves neither an invoice nor an
+        orphan PDF. The bytes already written to storage by that call are an accepted
+        orphan if the commit then fails, exactly as they are in `add_version`.
+
         **Nothing is flushed before every refusal has had its chance.** The snapshot is
-        built and the original PDF is validated *above* the lock, because both can fail
-        -- a missing `emitter_profile`, a PDF belonging to another customer -- and both
-        used to run after `repo.add`/`add_line` had already flushed an `Invoice` and its
-        lines into the caller's transaction. A `ValidationFailed` raised at that point
-        left the refused row sitting in the session for every later statement to see: the
-        next query in the same transaction found a fattura the caller had been told did
-        not exist. Only `IntegrityError` was rolled back, and a missing emitter profile is
-        not an `IntegrityError`. So the reads happen first, the writes happen last, and
-        the commit is wrapped in a rollback for anything that still escapes.
+        built and the original PDF is resolved *above* the lock, because both can fail
+        -- a missing `emitter_profile`, a PDF belonging to another customer, a Drive file
+        outside the configured roots -- and both used to run after `repo.add`/`add_line`
+        had already flushed an `Invoice` and its lines into the caller's transaction. A
+        `ValidationFailed` raised at that point left the refused row sitting in the
+        session for every later statement to see: the next query in the same transaction
+        found a fattura the caller had been told did not exist. Only `IntegrityError` was
+        rolled back, and a missing emitter profile is not an `IntegrityError`. So the
+        reads happen first, the writes happen last, and the commit is wrapped in a
+        rollback for anything that still escapes.
         """
         actor.require_admin(IMPORT_ACTION)
         self._check_owner(data.customer_id, data.deal_id)
@@ -908,9 +957,12 @@ class InvoiceService:
         # seed a delivery dated tomorrow, or before the invoice it delivers.
         if data.trasmessa_esternamente_il is not None:
             self._check_transmission_date(data.trasmessa_esternamente_il, data.data_emissione)
-        # Read-only, above the lock: the assignment happens after the row exists.
-        pdf_document_id = (
-            self._validate_original_pdf(data.customer_id, data.pdf_sorgente.document_id)
+        # Read-only, above the lock: the assignment happens after the row exists. The
+        # Drive branch reads bytes over HTTP here too -- a network read is not a database
+        # write, and "the file is outside the configured roots" or "it is not a PDF" are
+        # facts about the caller's input, which is what this stretch of the method is for.
+        pdf_sorgente = (
+            self._resolve_original_pdf(data.customer_id, data.pdf_sorgente, actor)
             if data.pdf_sorgente is not None
             else None
         )
@@ -1005,8 +1057,28 @@ class InvoiceService:
                     riferimento_normativo=riga.riferimento_normativo,
                 )
             )
-        if pdf_document_id is not None:
-            invoice.pdf_document_id = pdf_document_id
+        if isinstance(pdf_sorgente, UUID):
+            invoice.pdf_document_id = pdf_sorgente
+        elif pdf_sorgente is not None:
+            # `commit=False`: the `documents` row belongs to *this* transaction. With the
+            # ordinary committing `create` it would survive a failure of the commit below
+            # as an orphan PDF filed against a customer, with no invoice pointing at it.
+            invoice.pdf_document_id = self.documents.import_bytes(
+                customer_id=data.customer_id,
+                tipo="fattura",
+                titolo=f"Fattura {numero_completo(data.anno, data.numero)} (originale Acme)",
+                data=pdf_sorgente.contenuto,
+                content_type=PDF_MIME,
+                actor=actor,
+                # `DriveReader.read_bytes` answers with the bytes and the mime and no
+                # name, so the id is the provenance -- which is the part that identifies
+                # the file on Drive anyway, a name being neither unique nor stable.
+                origine={
+                    "drive_file_id": pdf_sorgente.drive_file_id,
+                    "mime": pdf_sorgente.mime,
+                },
+                commit=False,
+            ).id
         counter.ultimo_numero = max(counter.ultimo_numero, data.numero)
         self.activities.record(
             ENTITY,
@@ -1099,6 +1171,80 @@ class InvoiceService:
                 expected="un totale maggiore di zero",
             )
 
+    def _drive_reader(self, actor: Actor) -> DriveReader:
+        """This actor's reader on their own connected Drive, or the injected one.
+
+        `drive_reader_for` is the gate as well as the constructor: it refuses before any
+        HTTP call when Drive is not connected, when the grant was revoked or when
+        `drive.readonly` was never granted, and it takes the roots from the account row
+        so a reader cannot be pointed at a folder the titolare did not configure.
+        """
+        if self._drive_reader_factory is not None:
+            return self._drive_reader_factory(actor)
+        return drive_reader_for(self.session, actor, self.settings, feature=DRIVE_FEATURE)
+
+    def _resolve_original_pdf(
+        self, customer_id: UUID, sorgente: PdfSorgente, actor: Actor
+    ) -> "UUID | _FetchedPdf":
+        """Where the original PDF is, resolved to something the write phase can use, and
+        every refusal that belongs to the caller's input spent here. Writes nothing.
+
+        Two answers, because there are two provenances. A `documents` row is already a
+        row: what comes back is its id, and `import_issued` assigns it in one line. A
+        Drive file is not a row yet and cannot become one before the invoice exists (the
+        title names the invoice's own number), so what comes back is `_FetchedPdf` -- the
+        bytes, read *here*, among the pure checks.
+
+        Reading Drive above the counter lock is deliberate. It is a network read, not a
+        database write, and the two things that can be wrong with a `drive_file_id` -- a
+        file outside the configured roots, a file that is not a PDF -- are facts about
+        the caller's input, exactly like the four refusals of the `document_id` branch
+        below. Doing it after the lock would hold a row lock for the duration of an HTTP
+        call to Google, and would refuse *after* an `Invoice` had been flushed into the
+        caller's transaction.
+
+        `NotFound("drive_file")` becomes `Conflict`, not `NotFound`: nothing about the
+        *invoice* is missing, and `DriveReader` answers in those same words for a file
+        that does not exist, one in an unconfigured corner of the titolare's Drive and
+        one in a stranger's Drive -- a distinction it refuses to draw, and that this
+        method must not redraw by translating one of them differently.
+        """
+        if sorgente.drive_file_id is not None:
+            return self._read_original_pdf_from_drive(sorgente.drive_file_id, actor)
+        if sorgente.document_id is None:  # pragma: no cover - the schema refuses this first
+            # `PdfSorgente`'s own validator already guarantees exactly one of the two,
+            # so this is the second line and not the first -- written as a refusal
+            # rather than an `assert`, which `python -O` deletes, and phrased for a
+            # caller that reached the service through some future path of its own.
+            raise ValidationFailed(
+                ENTITY,
+                "pdf_sorgente",
+                "indica da dove prendere il PDF originale",
+                expected="esattamente uno fra document_id e drive_file_id",
+            )
+        return self._validate_original_pdf(customer_id, sorgente.document_id)
+
+    def _read_original_pdf_from_drive(self, drive_file_id: str, actor: Actor) -> _FetchedPdf:
+        reader = self._drive_reader(actor)
+        try:
+            contenuto, mime = reader.read_bytes(drive_file_id)
+        except NotFound as exc:
+            raise Conflict(
+                ENTITY,
+                "il file non è leggibile dalle cartelle Drive configurate: controlla "
+                "l'id, oppure aggiungi la cartella che lo contiene in Impostazioni → Drive",
+                drive_file_id=drive_file_id,
+            ) from exc
+        if mime != PDF_MIME:
+            raise ValidationFailed(
+                ENTITY,
+                "pdf_sorgente.drive_file_id",
+                f"il file su Drive non è un PDF ma un {mime}: l'originale di una fattura "
+                "è il PDF che il cliente ha ricevuto",
+                expected=PDF_MIME,
+            )
+        return _FetchedPdf(contenuto=contenuto, drive_file_id=drive_file_id, mime=mime)
+
     def _validate_original_pdf(self, customer_id: UUID, document_id: UUID) -> UUID:
         """Check that this `documents` row may become the invoice's PDF, and return its
         id. Reads only.
@@ -1138,12 +1284,12 @@ class InvoiceService:
                 expected="un documento con almeno una versione PDF",
             )
         current = self.documents.repo.version(document.id, document.versione_corrente)
-        if current is None or current.content_type != "application/pdf":
+        if current is None or current.content_type != PDF_MIME:
             raise ValidationFailed(
                 ENTITY,
                 "pdf_sorgente",
                 "la versione corrente del documento non e' un PDF",
-                expected="application/pdf",
+                expected=PDF_MIME,
             )
         taken = (
             self.session.execute(select(Invoice.id).where(Invoice.pdf_document_id == document_id))
