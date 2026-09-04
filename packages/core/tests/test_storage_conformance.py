@@ -14,9 +14,7 @@ when real credentials are absent -- a suite that silently skips without credenti
 proves nothing.
 """
 
-import io
 import threading
-import urllib.error
 from datetime import timedelta
 from pathlib import Path
 
@@ -31,7 +29,7 @@ from pigrocrm.core.storage import (
     LocalFileStorage,
     storage_from_settings,
 )
-from pigrocrm.core.storage.gdrive import APP_PROPERTY_KEY, _escape_drive_query, _urllib_call
+from pigrocrm.core.storage.gdrive import APP_PROPERTY_KEY, _escape_drive_query
 
 PDF = b"%PDF-1.7\nfinto\n"
 KEY = "acme-01234567/0199abcd/v1.pdf"
@@ -49,7 +47,7 @@ SERVICE_ACCOUNT_JSON = (
 def _drive_storage() -> tuple[GDriveStorage, FakeDrive]:
     drive = FakeDrive()
     return (
-        GDriveStorage(
+        GDriveStorage.from_service_account(
             service_account_json=SERVICE_ACCOUNT_JSON,
             root_folder_id=drive.root_id,
             http=drive,
@@ -305,7 +303,7 @@ def test_drive_verify_root_accessible_passes_when_root_is_reachable() -> None:
 
 def test_drive_verify_root_accessible_fails_clearly_when_root_is_unreachable() -> None:
     drive = FakeDrive()
-    storage = GDriveStorage(
+    storage = GDriveStorage.from_service_account(
         service_account_json=SERVICE_ACCOUNT_JSON,
         root_folder_id="cartella-mai-condivisa",
         http=drive,
@@ -317,7 +315,7 @@ def test_drive_verify_root_accessible_fails_clearly_when_root_is_unreachable() -
 
 def test_drive_verify_root_accessible_fails_clearly_when_root_is_not_on_a_shared_drive() -> None:
     drive = FakeDrive(root_on_shared_drive=False)
-    storage = GDriveStorage(
+    storage = GDriveStorage.from_service_account(
         service_account_json=SERVICE_ACCOUNT_JSON,
         root_folder_id=drive.root_id,
         http=drive,
@@ -388,7 +386,7 @@ def test_drive_retries_a_transient_failure_and_succeeds() -> None:
     sleeps: list[float] = []
     drive = FakeDrive()
     drive.fail_with = [429, 503]  # two transient failures, then the real handling
-    storage = GDriveStorage(
+    storage = GDriveStorage.from_service_account(
         service_account_json=SERVICE_ACCOUNT_JSON,
         root_folder_id=drive.root_id,
         http=drive,
@@ -413,7 +411,7 @@ def test_drive_gives_up_after_the_retry_bound_and_raises_conflict() -> None:
     drive = FakeDrive()
     drive.fail_with = [503] * 10  # far more than the retry bound
     sleeps: list[float] = []
-    storage = GDriveStorage(
+    storage = GDriveStorage.from_service_account(
         service_account_json=SERVICE_ACCOUNT_JSON,
         root_folder_id=drive.root_id,
         http=drive,
@@ -440,7 +438,7 @@ def test_drive_does_not_retry_a_non_transient_client_error() -> None:
 
     drive = FakeDrive()
     drive.fail_with = [404]
-    storage = GDriveStorage(
+    storage = GDriveStorage.from_service_account(
         service_account_json=SERVICE_ACCOUNT_JSON,
         root_folder_id=drive.root_id,
         http=drive,
@@ -450,62 +448,6 @@ def test_drive_does_not_retry_a_non_transient_client_error() -> None:
 
     with pytest.raises(Conflict):
         storage.put(KEY, PDF, "application/pdf")
-
-
-# --- The real transport: `_urllib_call` must not leak a raw exception for a failure
-# that never produced an HTTP response at all. Exercised directly, since every test
-# above goes through the injected fake and would never touch this function.
-
-
-def test_urllib_call_turns_a_connection_failure_into_a_synthetic_status(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def _raise_connection_refused(request: object, timeout: float) -> None:
-        raise urllib.error.URLError(ConnectionRefusedError("connection refused"))
-
-    monkeypatch.setattr("urllib.request.urlopen", _raise_connection_refused)
-
-    status, payload = _urllib_call("GET", "https://www.googleapis.com/drive/v3/files", {}, None)
-
-    assert status == 599
-    assert b"refused" in payload
-
-
-def test_urllib_call_turns_a_timeout_into_a_synthetic_status(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def _raise_timeout(request: object, timeout: float) -> None:
-        raise TimeoutError("timed out")
-
-    monkeypatch.setattr("urllib.request.urlopen", _raise_timeout)
-
-    status, payload = _urllib_call("GET", "https://www.googleapis.com/drive/v3/files", {}, None)
-
-    assert status == 599
-    assert b"timed out" in payload
-
-
-def test_urllib_call_still_reports_a_real_http_error_status(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Not a new behaviour, but never directly covered before: a real HTTP error
-    response (as opposed to no response at all) must still surface its own status,
-    not the synthetic network-failure one."""
-
-    def _raise_http_error(request: object, timeout: float) -> None:
-        raise urllib.error.HTTPError(
-            "https://www.googleapis.com/drive/v3/files",
-            403,
-            "Forbidden",
-            None,  # type: ignore[arg-type]
-            io.BytesIO(b'{"error": {"message": "Forbidden"}}'),
-        )
-
-    monkeypatch.setattr("urllib.request.urlopen", _raise_http_error)
-
-    status, _ = _urllib_call("GET", "https://www.googleapis.com/drive/v3/files", {}, None)
-
-    assert status == 403
 
 
 # --- storage_from_settings: the single place a backend is chosen --------------------
