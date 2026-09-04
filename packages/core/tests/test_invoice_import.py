@@ -416,3 +416,41 @@ def test_undeclared_gaps_are_named_and_block_native_issuing(db_session: Session,
     assert service.undeclared_gaps(anno) == []
     issued = service.issue(draft.id, InvoiceIssue(), ADMIN)
     assert issued.numero == 6
+
+
+def test_a_same_batch_duplicate_number_is_a_conflict_and_leaves_the_session_usable(
+    db_session: Session, tmp_path
+) -> None:  # noqa: ANN001
+    from pigrocrm.core.errors import Conflict
+    from pigrocrm.core.invoices.schemas import RegisterGapsDeclare
+
+    service = _svc(db_session, tmp_path)
+    with pytest.raises(Conflict):
+        service.declare_gaps(
+            2026,
+            RegisterGapsDeclare(buchi=[{"numero": 3, "motivo": "a"}, {"numero": 3, "motivo": "b"}]),  # type: ignore[list-item]
+            ADMIN,
+        )
+    # The session must still answer a query after the Conflict: a poisoned
+    # transaction (an unrolled-back IntegrityError) would raise on this next
+    # statement instead of returning a result. This particular Conflict never
+    # touches Postgres -- it is refused in Python, from the batch-local `seen` set,
+    # before the duplicate's own `add_gap` flush -- so it does not poison the
+    # session the way an actual `IntegrityError` would; the point of this test is
+    # only that the call below does not raise.
+    service.register_gaps(2026, ADMIN)
+
+
+def test_anno_out_of_range_is_refused_before_any_write(db_session: Session, tmp_path) -> None:  # noqa: ANN001
+    from pigrocrm.core.errors import ValidationFailed
+    from pigrocrm.core.invoices.schemas import RegisterGapsDeclare
+
+    service = _svc(db_session, tmp_path)
+    with pytest.raises(ValidationFailed) as caught:
+        service.declare_gaps(
+            10**12,
+            RegisterGapsDeclare(buchi=[{"numero": 1, "motivo": "x"}]),  # type: ignore[list-item]
+            ADMIN,
+        )
+    assert caught.value.details["field"] == "anno"
+    assert db_session.execute(select(InvoiceRegisterGap)).first() is None
