@@ -117,7 +117,13 @@ describe('DrivePanel', () => {
     expect(screen.queryByRole('button', { name: 'Scollega Drive' })).not.toBeInTheDocument()
   })
 
-  it('shows the banner and hides the roots form when banner_text is set', async () => {
+  it('shows the banner above the roots form, not instead of it', async () => {
+    // Hiding the editor whenever `banner_text` is set was wrong on both counts. A
+    // revoked or expired consent is precisely the state `set_roots` admits on purpose
+    // -- the server lets that credential be reconfigured because the person on this
+    // screen is the one recovering from it -- and `expiring` is a *working* credential
+    // with a date attached, where removing the editor takes a control away over a
+    // warning about next week.
     vi.mocked(api.GET).mockResolvedValue(
       ok({
         ...CONNECTED,
@@ -129,10 +135,30 @@ describe('DrivePanel', () => {
     renderPanel()
 
     expect(await screen.findByText(/è stato revocato/)).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Aggiungi cartella' })).not.toBeInTheDocument()
-    expect(screen.queryByDisplayValue(ROOT_ID_1)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Aggiungi cartella' })).toBeInTheDocument()
+    expect(screen.getByDisplayValue(ROOT_ID_1)).toBeInTheDocument()
     // Disconnecting stays available even with a broken credential.
     expect(screen.getByRole('button', { name: 'Scollega Drive' })).toBeInTheDocument()
+    // The banner comes first in document order: it says what to do about the
+    // credential, and the editor below it is the recovery work it enables.
+    const banner = screen.getByRole('status')
+    const editor = screen.getByDisplayValue(ROOT_ID_1)
+    expect(banner.compareDocumentPosition(editor) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('keeps the roots form for an expiring consent, which is a working credential', async () => {
+    vi.mocked(api.GET).mockResolvedValue(
+      ok({
+        ...CONNECTED,
+        banner: 'expiring',
+        banner_text: 'Il consenso Google Drive per ada@acme.it va rinnovato entro il 10/09/2026.',
+      }),
+    )
+    renderPanel()
+
+    expect(await screen.findByText(/va rinnovato/)).toBeInTheDocument()
+    expect(screen.getByDisplayValue(ROOT_ID_1)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Salva' })).toBeEnabled()
   })
 
   it('asks for confirmation before disconnecting, and only calls DELETE once confirmed', async () => {
