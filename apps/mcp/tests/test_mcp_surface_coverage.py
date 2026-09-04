@@ -253,6 +253,23 @@ _CREDENZIALI: dict[Method, str] = {
         "stessa famiglia di `disconnect`, una scelta della persona sui propri dati e "
         "non un'operazione che l'agente compie al posto suo"
     ),
+    ("GoogleDriveAccountService", "usable"): (
+        "stessa ragione di `GoogleAccountService.usable` (spec 9 sec 5.5): non e' "
+        "un'operazione ma un cancello, chiamato prima di comporre qualsiasi lettura o "
+        "scrittura Drive. Un tool che lo esponesse offrirebbe all'agente di chiedere un "
+        "permesso invece di esercitarlo"
+    ),
+    ("GoogleDriveAccountService", "mark_revoked"): (
+        "stessa ragione di `GoogleAccountService.mark_revoked`: registra un fatto che "
+        "comunica Google, non una decisione di qualcuno, e lo chiama il solo punto che "
+        "puo' apprenderlo -- il rinnovo del token che riceve `invalid_grant`"
+    ),
+    ("GoogleDriveAccountService", "set_roots"): (
+        "quali cartelle il CRM legge e in quale scrive e' una scelta della persona sui "
+        "propri dati, stessa famiglia di `GoogleAccountService.set_store_bodies`: non "
+        "un'operazione che un agente compie al posto suo. Verificare che la cartella di "
+        "scrittura sia davvero scrivibile e' compito di 9D, alla prima chiamata vera"
+    ),
     ("EmailSendService", "send"): (
         "**l'invio non sara' mai un tool**, ed e' la decisione permanente di questa "
         "fetta: B2-10 l'ha confermata invece di riaprirla. Un'email che parte "
@@ -419,18 +436,29 @@ _COPERTE_O_UMANE: dict[Method, str] = {
 }
 
 
-# Nessuna settima categoria. Il task A8 ne aveva aperta una -- `_IN_ATTESA_DI_DECISIONE`,
-# una sola voce, `SearchService.search_everything` -- dichiarandola provvisoria e
-# scrivendo che A11 avrebbe dovuto **cancellarla**, non aggiornarla. A11 ha registrato il
-# tool `search_everything` (`tools/__init__.py`, sezione "shared"), quindi il metodo e'
-# ora raggiungibile e la riga e' sparita insieme alla sua categoria. Se fosse rimasta,
-# `test_no_declared_exclusion_is_actually_reachable` sarebbe diventato rosso: e' quel
-# test a rendere impossibile lasciare qui un'esclusione che non esclude piu' niente.
+# Nessuna settima categoria di esclusioni *definitive*. Il task A8 ne aveva aperta una --
+# `_IN_ATTESA_DI_DECISIONE`, una sola voce, `SearchService.search_everything` --
+# dichiarandola provvisoria e scrivendo che A11 avrebbe dovuto **cancellarla**, non
+# aggiornarla. A11 ha registrato il tool `search_everything` (`tools/__init__.py`, sezione
+# "shared"), quindi il metodo e' ora raggiungibile e la riga e' sparita insieme alla sua
+# categoria. Se fosse rimasta, `test_no_declared_exclusion_is_actually_reachable` sarebbe
+# diventato rosso: e' quel test a rendere impossibile lasciare qui un'esclusione che non
+# esclude piu' niente.
 #
 # Vale la pena dirlo perche' una categoria vuota lasciata in piedi "per il prossimo che
 # serve" e' esattamente il posto dove una decisione non presa si nasconde: l'elenco qui
 # sopra contiene solo scelte definitive, e chi ne aggiunge una provvisoria deve riaprire
-# un blocco a se' con il proprio nome, non riempire uno gia' pronto.
+# un blocco a se' con il proprio nome, non riempire uno gia' pronto. Questo e' quel blocco.
+_IN_ATTESA_DI_DRIVE_T7: dict[Method, str] = {
+    ("GoogleDriveAccountService", "health"): (
+        "gemella di `GoogleAccountService.health`, e come quella alimenta gia' il "
+        "banner della shell (spec 9 sec 5.5) -- ma il tool che la rende raggiungibile "
+        "da un agente, `describe_drive_account` (il gemello di `describe_gmail_account`), "
+        "e' il prossimo task di questa fetta (9B T7), non questo. Quando quel tool "
+        "esistera' questa riga va CANCELLATA, non aggiornata, per la stessa ragione per "
+        "cui A11 ha cancellato `_IN_ATTESA_DI_DECISIONE` invece di lasciarla al suo posto"
+    ),
+}
 
 
 ESCLUSIONI: dict[Method, str] = {
@@ -440,6 +468,7 @@ ESCLUSIONI: dict[Method, str] = {
     **_CONFIGURAZIONE,
     **_BYTE,
     **_COPERTE_O_UMANE,
+    **_IN_ATTESA_DI_DRIVE_T7,
 }
 
 

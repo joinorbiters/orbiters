@@ -16,15 +16,19 @@ from sqlalchemy.orm import Session
 from pigrocrm.core.activities.models import Activity
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.auth.models import User
+from pigrocrm.core.drive.account import CONSENT_WARNING_HOURS, GoogleDriveAccountService
 from pigrocrm.core.drive.models import GoogleDriveAccount
 from pigrocrm.core.drive.oauth import GoogleDriveOAuthService
 from pigrocrm.core.drive.schemas import (
     DRIVE_REQUESTED_SCOPES,
+    DRIVE_SCOPE_FILE,
+    DRIVE_SCOPE_READONLY,
     DriveRootsUpdate,
     GoogleDriveAccountRead,
 )
 from pigrocrm.core.errors import Conflict
 from pigrocrm.core.gmail.crypto import seal, unseal
+from pigrocrm.core.gmail.errors import ConsentExpired, CredentialRevoked
 from pigrocrm.core.gmail.models import GoogleAccount, GoogleOAuthState
 from pigrocrm.core.gmail.repository import GmailRepository
 from pigrocrm.core.gmail.tokens import GoogleTokenClient
@@ -354,3 +358,233 @@ def test_a_gmail_state_cannot_complete_the_drive_flow(
         select(GoogleOAuthState).where(GoogleOAuthState.jti == gmail_jti)
     ).scalar_one()
     assert row.consumed_at is None
+
+
+# --- GoogleDriveAccountService: health, the gate, and the configured roots -----------
+
+
+def _drive_service_account(session: Session) -> GoogleDriveAccountService:
+    return GoogleDriveAccountService(session, settings=gmail_settings())
+
+
+def _drive_actor(user: User) -> Actor:
+    return Actor(id=user.id, type="user", role="admin")  # type: ignore[arg-type]
+
+
+def _connected_drive_account(
+    session: Session,
+    user: User,
+    *,
+    email_address: str = "io@example.it",
+    scopes: tuple[str, ...] = DRIVE_REQUESTED_SCOPES,
+    status: str = "active",
+) -> GoogleDriveAccount:
+    """A Drive row built directly, the way `test_gmail_degradation.py`'s
+    `connected_account` builds a Gmail one -- these tests are about the service's own
+    logic, not the OAuth round trip `test_complete_stores_a_sealed_token...` above
+    already exercises."""
+    ciphertext, nonce = seal("1//0gDriveRefresh", TOKEN_KEY)
+    account = GoogleDriveAccount(
+        user_id=user.id,
+        google_sub="sub-1",
+        email_address=email_address,
+        refresh_token_ciphertext=ciphertext,
+        refresh_token_nonce=nonce,
+        scopes_granted=list(scopes),
+        status=status,
+        root_folder_ids=[],
+        storage_folder_id=None,
+    )
+    session.add(account)
+    session.flush()
+    return account
+
+
+def test_health_on_an_installation_with_no_drive_account_is_empty_not_an_error(
+    db_session: Session, admin_user: User
+) -> None:
+    """An installation that never connected Drive has nothing to say about it -- a
+    banner there would be an error message for a feature nobody switched on."""
+    health = _drive_service_account(db_session).health(_drive_actor(admin_user))
+    assert health.account is None
+    assert health.banner is None
+    assert health.missing_scopes == []
+    assert health.configured is True
+
+
+def test_health_on_a_revoked_drive_account_shows_the_revoked_banner(
+    db_session: Session, admin_user: User
+) -> None:
+    account = _connected_drive_account(db_session, admin_user, status="revoked")
+    health = _drive_service_account(db_session).health(_drive_actor(admin_user))
+    assert health.banner == "revoked"
+    assert "revocato" in (health.banner_text or "")
+    assert account.email_address in (health.banner_text or "")
+
+
+def test_health_within_the_warning_window_shows_the_expiring_banner_with_the_date(
+    db_session: Session, admin_user: User
+) -> None:
+    account = _connected_drive_account(db_session, admin_user)
+    when = datetime.now(UTC) + timedelta(hours=24)
+    account.consent_expires_at = when
+    db_session.flush()
+
+    health = _drive_service_account(db_session).health(_drive_actor(admin_user))
+
+    assert health.banner == "expiring"
+    assert when.strftime("%d/%m/%Y") in (health.banner_text or "")
+    assert CONSENT_WARNING_HOURS == 48
+
+
+def test_health_missing_readonly_raises_the_scope_missing_banner(
+    db_session: Session, admin_user: User
+) -> None:
+    """The read scope gates the banner; the write scope alone does not -- a Drive
+    grant missing only `drive.file` can still read every configured root."""
+    account = _connected_drive_account(
+        db_session, admin_user, scopes=("openid", "email", DRIVE_SCOPE_READONLY)
+    )
+    db_session.flush()
+    health = _drive_service_account(db_session).health(_drive_actor(admin_user))
+
+    assert health.banner is None
+    assert health.missing_scopes == [DRIVE_SCOPE_FILE]
+
+    account.scopes_granted = ["openid", "email", DRIVE_SCOPE_FILE]
+    db_session.flush()
+    health2 = _drive_service_account(db_session).health(_drive_actor(admin_user))
+
+    assert health2.banner == "scope_missing"
+    assert DRIVE_SCOPE_READONLY in (health2.banner_text or "")
+    assert health2.missing_scopes == [DRIVE_SCOPE_READONLY]
+
+
+def test_usable_on_a_revoked_account_raises_credential_revoked(
+    db_session: Session, admin_user: User
+) -> None:
+    _connected_drive_account(db_session, admin_user, status="revoked")
+    with pytest.raises(CredentialRevoked) as caught:
+        _drive_service_account(db_session).usable(
+            _drive_actor(admin_user), scope=DRIVE_SCOPE_READONLY, feature="la lettura dei documenti"
+        )
+    assert "revocato" in caught.value.message
+
+
+def test_usable_on_an_expired_account_raises_consent_expired(
+    db_session: Session, admin_user: User
+) -> None:
+    _connected_drive_account(db_session, admin_user, status="expired")
+    with pytest.raises(ConsentExpired) as caught:
+        _drive_service_account(db_session).usable(
+            _drive_actor(admin_user), scope=DRIVE_SCOPE_READONLY, feature="la lettura dei documenti"
+        )
+    assert "scaduto" in caught.value.message
+    assert "revocato" not in caught.value.message
+
+
+def test_usable_without_a_drive_account_refuses_naming_impostazioni_drive(
+    db_session: Session, admin_user: User
+) -> None:
+    with pytest.raises(Conflict, match="Impostazioni → Drive") as caught:
+        _drive_service_account(db_session).usable(
+            _drive_actor(admin_user), scope=DRIVE_SCOPE_READONLY, feature="la lettura dei documenti"
+        )
+    assert not isinstance(caught.value, CredentialRevoked)
+
+
+def test_usable_missing_the_requested_scope_names_it_and_leaves_the_account_active(
+    db_session: Session, admin_user: User
+) -> None:
+    account = _connected_drive_account(
+        db_session, admin_user, scopes=("openid", "email", DRIVE_SCOPE_FILE)
+    )
+    db_session.flush()
+    service = _drive_service_account(db_session)
+
+    assert (
+        service.usable(
+            _drive_actor(admin_user), scope=DRIVE_SCOPE_FILE, feature="la scrittura dei documenti"
+        ).id
+        == account.id
+    )
+    with pytest.raises(Conflict) as caught:
+        service.usable(
+            _drive_actor(admin_user), scope=DRIVE_SCOPE_READONLY, feature="la lettura dei documenti"
+        )
+    assert DRIVE_SCOPE_READONLY in caught.value.message
+    assert not isinstance(caught.value, CredentialRevoked)
+    db_session.refresh(account)
+    assert account.status == "active"
+
+
+def test_mark_revoked_sets_the_status_and_records_the_activity(
+    db_session: Session, admin_user: User
+) -> None:
+    account = _connected_drive_account(db_session, admin_user)
+    service = _drive_service_account(db_session)
+
+    service.mark_revoked(account, Actor.system(), "il consenso Google Drive è stato revocato")
+
+    db_session.refresh(account)
+    assert account.status == "revoked"
+    assert account.last_error is not None
+    assert account.last_error_at is not None
+    rows = (
+        db_session.execute(select(Activity).where(Activity.kind == "drive.credenziale_revocata"))
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].actor_type == "system"
+    assert rows[0].entity_type == "google_drive_account"
+    assert rows[0].entity_id == account.id
+
+
+def test_set_roots_persists_both_fields_and_records_the_activity(
+    db_session: Session, admin_user: User
+) -> None:
+    account = _connected_drive_account(db_session, admin_user)
+    service = _drive_service_account(db_session)
+
+    read = service.set_roots(
+        DriveRootsUpdate(
+            root_folder_ids=["1AbCdEfGhIjKlMnOpQ", "2AbCdEfGhIjKlMnOpQ"],
+            storage_folder_id="3AbCdEfGhIjKlMnOpQ",
+        ),
+        _drive_actor(admin_user),
+    )
+
+    assert read.root_folder_ids == ["1AbCdEfGhIjKlMnOpQ", "2AbCdEfGhIjKlMnOpQ"]
+    assert read.storage_folder_id == "3AbCdEfGhIjKlMnOpQ"
+    db_session.refresh(account)
+    assert account.root_folder_ids == ["1AbCdEfGhIjKlMnOpQ", "2AbCdEfGhIjKlMnOpQ"]
+    assert account.storage_folder_id == "3AbCdEfGhIjKlMnOpQ"
+    rows = (
+        db_session.execute(select(Activity).where(Activity.kind == "drive.radici_impostate"))
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].payload["root_folder_ids"] == ["1AbCdEfGhIjKlMnOpQ", "2AbCdEfGhIjKlMnOpQ"]
+    assert rows[0].payload["storage_folder_id"] == "3AbCdEfGhIjKlMnOpQ"
+
+
+def test_set_roots_without_a_drive_account_is_a_conflict(
+    db_session: Session, admin_user: User
+) -> None:
+    with pytest.raises(Conflict, match="Impostazioni → Drive"):
+        _drive_service_account(db_session).set_roots(
+            DriveRootsUpdate(root_folder_ids=["1AbCdEfGhIjKlMnOpQ"]), _drive_actor(admin_user)
+        )
+
+
+def test_set_roots_is_refused_for_a_readonly_actor(db_session: Session, admin_user: User) -> None:
+    from pigrocrm.core.errors import PermissionDenied  # noqa: PLC0415
+
+    _connected_drive_account(db_session, admin_user)
+    reader = Actor(id=admin_user.id, type="user", role="readonly")
+    with pytest.raises(PermissionDenied):
+        _drive_service_account(db_session).set_roots(
+            DriveRootsUpdate(root_folder_ids=["1AbCdEfGhIjKlMnOpQ"]), reader
+        )
