@@ -37,6 +37,7 @@ from uuid import UUID
 import jwt
 
 from pigrocrm.core.errors import Conflict
+from pigrocrm.core.gmail.errors import CredentialRevoked, GmailUnavailable
 from pigrocrm.core.gmail.tokens import GoogleTokenClient
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -294,11 +295,41 @@ class UserTokens:
     tokens: GoogleTokenClient
 
     def access_token(self) -> str:
-        return self.tokens.access_token(
-            account_id=self.account_id,
-            email_address=self.email_address,
-            refresh_token=self.refresh_token,
-        )
+        """The account's access token, with Google's refusals re-shaped as Drive ones.
+
+        `GoogleTokenClient` is shared with the Gmail side and says so in its failures:
+        `CredentialRevoked` reads "ricollega la casella da Impostazioni → Gmail" under
+        the entity `google_account`, and `GmailUnavailable` reads "Gmail non ha
+        risposto correttamente". Both reach the problem document and the MCP message
+        verbatim, so a revoked *Drive* grant would tell somebody to reconnect their
+        mailbox -- an instruction that fixes nothing and hides what actually broke --
+        and a Drive outage would be reported as a Gmail outage.
+
+        The distinction the failure carries is preserved exactly (terminal and cured
+        by re-consenting, versus transient and cured by waiting); only the credential
+        it names changes. Neither message mentions the refresh token, and neither
+        `details` dict carries it.
+        """
+        try:
+            return self.tokens.access_token(
+                account_id=self.account_id,
+                email_address=self.email_address,
+                refresh_token=self.refresh_token,
+            )
+        except CredentialRevoked as revoked:
+            raise Conflict(
+                "google_drive_account",
+                f"il consenso Google Drive per {self.email_address} è stato revocato: "
+                "ricollega Drive da Impostazioni → Drive",
+                account_id=str(self.account_id),
+            ) from revoked
+        except GmailUnavailable as unavailable:
+            status = int(unavailable.details.get("status", 0))
+            raise Conflict(
+                "google_drive",
+                f"Google Drive non ha risposto correttamente (codice {status}). Riprova più tardi",
+                status=status,
+            ) from unavailable
 
     def forget(self) -> None:
         self.tokens.forget(self.account_id)
@@ -362,12 +393,15 @@ class DriveTransport:
         status, payload = self._send(method, url, body, content_type)
         return _decode(status, payload, what)
 
-    # `bytes` shadows the builtin inside this class body from here on, so this method
-    # is defined last: an annotation is evaluated in the class namespace at `def` time,
-    # and a later `-> bytes` would resolve to this method instead of the type (the
-    # exact failure `tests/test_module_imports.py` exists to catch). The name is worth
-    # it -- `transport.bytes(...)` is what the call site means -- and nothing needs to
-    # be defined after it.
+    # Two builtins are shadowed in this class namespace, and both are shadowed from
+    # the `def` that names them onward: `json` above (so no annotation below it may say
+    # `json`, which is why `json`'s own `body: bytes | None` annotation is written
+    # before it and is still the builtin) and `bytes` here. An annotation is evaluated
+    # in the class namespace at `def` time, so a later `-> bytes` would resolve to this
+    # method instead of the type -- the exact failure `tests/test_module_imports.py`
+    # exists to catch. Hence the order: `json` first, `bytes` last, nothing after it.
+    # The names are worth it: `transport.json(...)` / `transport.bytes(...)` is what the
+    # call site means, and `gmail/transport.py` already reads that way.
     def bytes(self, method: str, url: str, *, what: str) -> bytes:
         """The response body itself, undecoded: a media download is a PDF, not JSON.
 
