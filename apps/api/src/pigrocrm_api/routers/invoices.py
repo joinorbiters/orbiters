@@ -14,6 +14,7 @@ from pigrocrm.core.invoices.schemas import (
     InvoiceAnnul,
     InvoiceArtifact,
     InvoiceCreate,
+    InvoiceImport,
     InvoiceIssue,
     InvoiceLineIn,
     InvoiceLineRead,
@@ -25,6 +26,8 @@ from pigrocrm.core.invoices.schemas import (
     InvoiceTransmitted,
     InvoiceUpdate,
     PaymentState,
+    RegisterGapRead,
+    RegisterGapsDeclare,
     StatoPagamento,
 )
 from pigrocrm.core.invoices.service import InvoiceService
@@ -94,6 +97,55 @@ def create(
     actor: ActorDep,
 ) -> InvoiceRead:
     return _service(session, storage, settings).create(data, actor)
+
+
+class InvoiceImportResult(BaseModel):
+    """The imported fattura alongside the gaps still waiting for a declaration -- the
+    operator sees both in one round trip instead of importing blind and querying the
+    register separately after every row."""
+
+    fattura: InvoiceRead
+    buchi_non_dichiarati: list[int]
+
+
+# The three routes below must stay ahead of every `/{invoice_id}` route in this file:
+# `import` and `register` are literal path segments, and FastAPI matches routes in
+# declaration order, so a `/{invoice_id}` route declared first would swallow them and
+# try (and fail) to parse `"import"`/`"register"` as a UUID.
+@router.post("/import", response_model=InvoiceImportResult, status_code=status.HTTP_201_CREATED)
+def import_issued(
+    data: InvoiceImport,
+    session: SessionDep,
+    storage: StorageDep,
+    settings: SettingsDep,
+    actor: ActorDep,
+) -> InvoiceImportResult:
+    """Slice 9 §3: a fattura issued by the previous system. Admin only, enforced by the
+    service. No artefacts are produced: the PDF, if any, is the original."""
+    service = _service(session, storage, settings)
+    fattura = service.import_issued(data, actor)
+    return InvoiceImportResult(
+        fattura=fattura, buchi_non_dichiarati=service.undeclared_gaps(data.anno)
+    )
+
+
+@router.get("/register/{anno}/gaps", response_model=list[RegisterGapRead])
+def register_gaps(
+    anno: int, session: SessionDep, storage: StorageDep, settings: SettingsDep, actor: ActorDep
+) -> list[RegisterGapRead]:
+    return _service(session, storage, settings).register_gaps(anno, actor)
+
+
+@router.post("/register/{anno}/gaps", response_model=list[RegisterGapRead])
+def declare_register_gaps(
+    anno: int,
+    data: RegisterGapsDeclare,
+    session: SessionDep,
+    storage: StorageDep,
+    settings: SettingsDep,
+    actor: ActorDep,
+) -> list[RegisterGapRead]:
+    return _service(session, storage, settings).declare_gaps(anno, data, actor)
 
 
 @router.get("/{invoice_id}", response_model=InvoiceRead)
