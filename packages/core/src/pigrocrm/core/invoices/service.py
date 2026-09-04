@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -39,7 +39,7 @@ from pigrocrm.core.invoices.fatturapa import (
     check_recipient_routing,
     normalise_fiscal_id,
 )
-from pigrocrm.core.invoices.models import Invoice, InvoiceLine
+from pigrocrm.core.invoices.models import Invoice, InvoiceLine, InvoiceRegisterGap
 from pigrocrm.core.invoices.naming import (
     invoice_storage_prefix,
     numero_completo,
@@ -69,6 +69,8 @@ from pigrocrm.core.invoices.schemas import (
     InvoiceUpdate,
     PartySnapshot,
     PaymentState,
+    RegisterGapRead,
+    RegisterGapsDeclare,
 )
 from pigrocrm.core.invoices.totals import (
     MONEY_MAX_EXCLUSIVE,
@@ -85,6 +87,7 @@ from pigrocrm.core.storage.base import DocumentStorage
 ENTITY: EntityType = "invoice"
 ZERO = Decimal("0.00")
 IMPORT_ACTION = "import_issued_invoice"
+GAPS_ACTION = "declare_invoice_register_gaps"
 
 # What stays writable once a `fattura` has left the `bozza` state (spec 4). Everything
 # else on the row is frozen, and an attempt raises `ImmutableField` naming the field.
@@ -653,6 +656,24 @@ class InvoiceService:
         # Step 2. From here on, every other emission for this year waits.
         counter = self.repo.lock_counter(anno)
 
+        # An imported register can arrive with numbers out of order -- the whole point
+        # of slice 9 is that the history is not imported number-by-number in sequence.
+        # A gap in it is *silent* until someone names it (`declare_gaps`), and native
+        # issuing must not resume on top of a silent gap: doing so would make the next
+        # native number look like it continues a register that in fact has an
+        # unexplained hole underneath it. Checked here, inside the same lock that
+        # protects the increment below, so a concurrent import cannot close the gap
+        # and let this call through on a stale read.
+        buchi = self.undeclared_gaps(anno)
+        if buchi:
+            raise Conflict(
+                ENTITY,
+                f"il registro importato ha buchi non dichiarati ai numeri {buchi}: "
+                "dichiarali (o importali) prima di riprendere a emettere",
+                anno=anno,
+                numeri=buchi,
+            )
+
         # And only now is the state answer trustworthy. The check above ran against a
         # read taken before any lock: a competing `issue()` on this same row could have
         # been between its own check and its own commit at that moment. Acquiring the
@@ -1004,6 +1025,72 @@ class InvoiceService:
 
     def _adopt_original_pdf(self, invoice: Invoice, document_id: UUID) -> UUID:
         raise NotImplementedError  # Task 6
+
+    def declare_gaps(
+        self, anno: int, data: RegisterGapsDeclare, actor: Actor
+    ) -> list[RegisterGapRead]:
+        """Name the numbers the register will never carry, and why (spec 9 §3.2 rule 4).
+
+        A declared gap is the honest alternative to two dishonest ones: inventing a row
+        to fill it, or leaving it silent so that it looks like a lost invoice. It is
+        refused for a number that *is* an invoice, and the import refuses a number that
+        is a declared gap: the two sets never overlap.
+
+        `lock_counter(anno)` first, for the same reason `import_issued` takes it before
+        reading `numbers_present`/`declared_gaps`: without it, a gap declared here and
+        an import of the same number could each read the register before the other's
+        write, and both would go through.
+        """
+        actor.require_admin(GAPS_ACTION)
+        self.repo.lock_counter(anno)
+        present = self.repo.numbers_present(anno)
+        already = self.repo.declared_gaps(anno)
+        for buco in data.buchi:
+            if buco.numero in present:
+                raise Conflict(
+                    ENTITY,
+                    "questo numero e' una fattura del registro, non un buco",
+                    anno=anno,
+                    numero=buco.numero,
+                )
+            if buco.numero in already:
+                raise Conflict(ENTITY, "buco gia' dichiarato", anno=anno, numero=buco.numero)
+            self.repo.add_gap(
+                InvoiceRegisterGap(
+                    anno=anno, numero=buco.numero, motivo=buco.motivo, dichiarato_da=actor.id
+                )
+            )
+            # The register has no row of its own to hang a timeline entry on, so the
+            # entity id is derived deterministically from the year rather than left
+            # unrecorded: `ActivityService.record` accepts any `entity_type` string (it
+            # is not constrained to `EntityType`), and `uuid5` gives the same id every
+            # time this year's register is touched again.
+            self.activities.record(
+                "invoice_register",
+                uuid5(NAMESPACE_URL, f"pigrocrm:invoice_register:{anno}"),
+                "gap_declared",
+                actor,
+                {"anno": anno, "numero": buco.numero, "motivo": buco.motivo},
+            )
+        self.session.commit()
+        return self.register_gaps(anno, actor)
+
+    def register_gaps(self, anno: int, actor: Actor) -> list[RegisterGapRead]:
+        return [RegisterGapRead.model_validate(g) for g in self.repo.gaps(anno)]
+
+    def undeclared_gaps(self, anno: int) -> list[int]:
+        """Numbers between the lowest imported one and the highest that are neither an
+        invoice nor a declared gap. Empty is the only state in which native issuing may
+        resume (spec 9 §3.2 rule 4): an import can arrive in any order, so a hole is
+        expected until the operator has looked at every one of them and either imported
+        or declared it.
+        """
+        present = self.repo.numbers_present(anno)
+        if not present:
+            return []
+        declared = self.repo.declared_gaps(anno)
+        top = max(present)
+        return [n for n in range(min(present), top) if n not in present and n not in declared]
 
     def annul(self, invoice_id: UUID, data: InvoiceAnnul, actor: Actor) -> InvoiceRead:
         """Strike the page through; keep the number.

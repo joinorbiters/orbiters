@@ -347,3 +347,72 @@ def test_import_is_refused_above_the_first_native_number(db_session: Session, tm
     with pytest.raises(Conflict):
         service.import_issued(_payload(cid, numero=6, giorno=date(2026, 4, 2)), ADMIN)
     service.import_issued(_payload(cid, numero=3, giorno=date(2026, 3, 1)), ADMIN)
+
+
+def test_gaps_are_declared_with_a_reason_and_listed(db_session: Session, tmp_path) -> None:  # noqa: ANN001
+    from pigrocrm.core.invoices.schemas import RegisterGapsDeclare
+
+    service = _svc(db_session, tmp_path)
+    out = service.declare_gaps(
+        2026,
+        RegisterGapsDeclare(
+            buchi=[
+                {"numero": 1, "motivo": "annullata in Acme"},
+                {"numero": 4, "motivo": "test di emissione"},
+            ]
+        ),  # type: ignore[list-item]
+        ADMIN,
+    )
+    assert [(g.numero, g.motivo) for g in out] == [
+        (1, "annullata in Acme"),
+        (4, "test di emissione"),
+    ]
+    assert [g.numero for g in service.register_gaps(2026, ADMIN)] == [1, 4]
+
+
+def test_declaring_a_number_that_is_an_invoice_is_a_conflict(db_session: Session, tmp_path) -> None:  # noqa: ANN001
+    from pigrocrm.core.errors import Conflict
+    from pigrocrm.core.invoices.schemas import RegisterGapsDeclare
+
+    service = _svc(db_session, tmp_path)
+    cid = _fiscal_customer_id(db_session)
+    service.import_issued(_payload(cid, numero=7, giorno=date(2026, 5, 5)), ADMIN)
+    with pytest.raises(Conflict):
+        service.declare_gaps(2026, RegisterGapsDeclare(buchi=[{"numero": 7, "motivo": "x"}]), ADMIN)  # type: ignore[list-item]
+
+
+def test_undeclared_gaps_are_named_and_block_native_issuing(db_session: Session, tmp_path) -> None:  # noqa: ANN001
+    from pigrocrm.core.clock import oggi_in_italia
+    from pigrocrm.core.errors import Conflict
+    from pigrocrm.core.invoices.schemas import (
+        InvoiceCreate,
+        InvoiceIssue,
+        InvoiceLineIn,
+        RegisterGapsDeclare,
+    )
+
+    anno = oggi_in_italia().year
+    service = _svc(db_session, tmp_path)
+    cid = _fiscal_customer_id(db_session)
+    service.import_issued(_payload(cid, numero=2, giorno=date(anno, 2, 4)), ADMIN)
+    service.import_issued(_payload(cid, numero=5, giorno=date(anno, 4, 7)), ADMIN)
+    assert service.undeclared_gaps(anno) == [3, 4]
+
+    draft = service.create(
+        InvoiceCreate(
+            customer_id=cid, righe=[InvoiceLineIn(descrizione="x", prezzo_unitario=Decimal("100"))]
+        ),
+        ADMIN,
+    )
+    with pytest.raises(Conflict) as caught:
+        service.issue(draft.id, InvoiceIssue(), ADMIN)
+    assert "3" in str(caught.value) and "4" in str(caught.value)
+
+    service.declare_gaps(
+        anno,
+        RegisterGapsDeclare(buchi=[{"numero": 3, "motivo": "a"}, {"numero": 4, "motivo": "b"}]),  # type: ignore[list-item]
+        ADMIN,
+    )
+    assert service.undeclared_gaps(anno) == []
+    issued = service.issue(draft.id, InvoiceIssue(), ADMIN)
+    assert issued.numero == 6
