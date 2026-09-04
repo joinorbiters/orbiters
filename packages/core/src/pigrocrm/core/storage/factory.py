@@ -25,7 +25,8 @@ def storage_from_settings(settings: Settings) -> DocumentStorage:
                 "gdrive richiede PIGROCRM_GDRIVE_SERVICE_ACCOUNT_JSON e "
                 "PIGROCRM_GDRIVE_ROOT_FOLDER_ID, oppure, dallo slice 9D, collega "
                 "Drive da Impostazioni e scegli la cartella di scrittura",
-                expected="entrambe le variabili valorizzate",
+                expected="le due variabili del service account, oppure un account "
+                "Drive collegato con cartella di scrittura (slice 9D)",
             )
         storage = GDriveStorage.from_service_account(
             service_account_json=settings.gdrive_service_account_json,

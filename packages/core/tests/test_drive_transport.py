@@ -25,21 +25,22 @@ import pytest
 from fakes.fake_drive import FakeDrive, _File
 from fakes.fake_gmail import FakeGmail
 
-from pigrocrm.core.config import Settings
 from pigrocrm.core.drive.transport import (
     DriveTransport,
     ServiceAccountTokens,
     UserTokens,
     _urllib_call,
 )
-from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
+from pigrocrm.core.errors import Conflict, NotFound
 from pigrocrm.core.gmail.tokens import GoogleTokenClient
-from pigrocrm.core.gmail.transport import GmailTransport
-from pigrocrm.core.storage import GDriveStorage, storage_from_settings
+from pigrocrm.core.gmail.transport import MAX_HTTP_ATTEMPTS, GmailTransport
+from pigrocrm.core.storage import GDriveStorage
 from pigrocrm.core.storage.gdrive import APP_PROPERTY_KEY
 
 PDF = b"%PDF-1.7\nfinto\n"
 KEY = "acme-01234567/0199abcd/v1.pdf"
+REFRESH = "1//0gRefreshTokenValue"
+EMAIL = "titolare@example.it"
 
 # No real RSA key is needed anywhere in this file: the signer is injected, and the
 # fake answers the token endpoint without verifying the assertion -- so no private key
@@ -237,8 +238,8 @@ def test_user_tokens_refresh_through_the_token_client_and_reuse_the_result() -> 
     account_id = uuid4()
     provider = UserTokens(
         account_id=account_id,
-        email_address="titolare@example.it",
-        refresh_token="1//0gRefreshTokenValue",
+        email_address=EMAIL,
+        refresh_token=REFRESH,
         tokens=_token_client(fake),
     )
 
@@ -251,8 +252,8 @@ def test_user_tokens_forget_makes_the_next_call_refresh_again() -> None:
     fake = FakeGmail()
     provider = UserTokens(
         account_id=uuid4(),
-        email_address="titolare@example.it",
-        refresh_token="1//0gRefreshTokenValue",
+        email_address=EMAIL,
+        refresh_token=REFRESH,
         tokens=_token_client(fake),
     )
     provider.access_token()
@@ -270,12 +271,65 @@ def test_user_tokens_never_print_the_refresh_token() -> None:
     dataclasses, applied to the one that now travels into the storage layer."""
     provider = UserTokens(
         account_id=uuid4(),
-        email_address="titolare@example.it",
-        refresh_token="1//0gRefreshTokenValue",
+        email_address=EMAIL,
+        refresh_token=REFRESH,
         tokens=_token_client(FakeGmail()),
     )
 
-    assert "1//0gRefreshTokenValue" not in repr(provider)
+    assert REFRESH not in repr(provider)
+
+
+def test_a_revoked_drive_grant_names_drive_and_not_the_mailbox() -> None:
+    """`GoogleTokenClient` is shared with the Gmail side and its `CredentialRevoked`
+    says "ricollega la casella da Impostazioni → Gmail" under the entity
+    `google_account`. That sentence reaches the problem document and the MCP message
+    verbatim, so left alone it would tell somebody whose *Drive* consent was revoked to
+    reconnect their mailbox -- an instruction that fixes nothing and hides what actually
+    broke. Driven by a real refusal from `FakeGmail`, not a hand-rolled one."""
+    provider = UserTokens(
+        account_id=uuid4(),
+        email_address=EMAIL,
+        refresh_token=REFRESH,
+        tokens=_token_client(FakeGmail(revoked=True)),
+    )
+
+    with pytest.raises(Conflict) as excinfo:
+        provider.access_token()
+
+    details = excinfo.value.details
+    assert details["entity"] == "google_drive_account"
+    assert details["reason"] == (
+        f"il consenso Google Drive per {EMAIL} è stato revocato: "
+        "ricollega Drive da Impostazioni → Drive"
+    )
+    assert "Gmail" not in details["reason"] and "casella" not in details["reason"]
+    assert REFRESH not in str(details) and REFRESH not in str(excinfo.value)
+
+
+def test_a_drive_outage_is_not_reported_as_a_gmail_outage() -> None:
+    """Same reason, the transient half: `GmailUnavailable` names Gmail, and waiting for
+    Gmail to recover is not what fixes Drive. The distinction the failure carries --
+    terminal and cured by re-consenting, versus transient and cured by waiting -- is
+    preserved exactly; only the credential it names changes."""
+    fake = FakeGmail(fail_with=[(503, b"{}", {})] * MAX_HTTP_ATTEMPTS)
+    provider = UserTokens(
+        account_id=uuid4(),
+        email_address=EMAIL,
+        refresh_token=REFRESH,
+        tokens=_token_client(fake),
+    )
+
+    with pytest.raises(Conflict) as excinfo:
+        provider.access_token()
+
+    details = excinfo.value.details
+    assert details["entity"] == "google_drive"
+    assert details["reason"] == (
+        "Google Drive non ha risposto correttamente (codice 503). Riprova più tardi"
+    )
+    assert details["status"] == 503
+    assert "Gmail" not in details["reason"]
+    assert REFRESH not in str(details) and REFRESH not in str(excinfo.value)
 
 
 def test_a_drive_call_with_a_user_token_carries_that_users_bearer_token() -> None:
@@ -288,8 +342,8 @@ def test_a_drive_call_with_a_user_token_carries_that_users_bearer_token() -> Non
         transport=DriveTransport(
             tokens=UserTokens(
                 account_id=uuid4(),
-                email_address="titolare@example.it",
-                refresh_token="1//0gRefreshTokenValue",
+                email_address=EMAIL,
+                refresh_token=REFRESH,
                 tokens=_token_client(gmail),
             ),
             http=http,
@@ -452,21 +506,6 @@ def test_a_refused_credential_during_the_root_check_is_not_reported_as_an_unshar
         storage.verify_root_accessible()
 
     assert "autenticazione Google" in excinfo.value.details["reason"]
-
-
-# --- The configuration error names both ways to configure Drive ----------------------
-
-
-def test_the_gdrive_configuration_error_also_names_the_user_credential() -> None:
-    """A message that only names the two service-account variables sends the reader to
-    the Google Cloud console when, from slice 9D, connecting Drive from Impostazioni is
-    the other sanctioned answer. The error is the only place that reader is looking."""
-    with pytest.raises(ValidationFailed) as excinfo:
-        storage_from_settings(Settings(storage_backend="gdrive"))
-
-    reason = excinfo.value.details["reason"]
-    assert "PIGROCRM_GDRIVE_SERVICE_ACCOUNT_JSON" in reason
-    assert "collega Drive da Impostazioni e scegli la cartella di scrittura" in reason
 
 
 # --- The real transport: a failure that never produced an HTTP response at all -------

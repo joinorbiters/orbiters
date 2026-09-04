@@ -459,9 +459,18 @@ def test_storage_from_settings_defaults_to_local(tmp_path: Path) -> None:
 
 
 def test_storage_from_settings_gdrive_requires_credentials_and_root() -> None:
+    """And the refusal names *both* ways to configure Drive. A message that mentions
+    only the two service-account variables sends the reader to the Google Cloud console
+    when, from slice 9D, connecting Drive from Impostazioni is the other sanctioned
+    answer -- and this error is the only place that reader is looking."""
     settings = Settings(storage_backend="gdrive")
-    with pytest.raises(ValidationFailed):
+    with pytest.raises(ValidationFailed) as excinfo:
         storage_from_settings(settings)
+
+    reason = excinfo.value.details["reason"]
+    assert "PIGROCRM_GDRIVE_SERVICE_ACCOUNT_JSON" in reason
+    assert "collega Drive da Impostazioni e scegli la cartella di scrittura" in reason
+    assert "service account" in excinfo.value.details["expected"]
 
 
 def test_storage_from_settings_gdrive_fails_fast_when_root_is_unreachable(
