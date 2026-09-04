@@ -24,7 +24,11 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://pigrocrm:pigrocrm@localhost:5432/pigrocrm"
     jwt_secret: str = "change-me-in-production-please-set-a-real-secret"
     access_token_minutes: int = 15
-    refresh_token_days: int = 30
+    # Six months, sliding: `/api/auth/refresh` consumes the old jti and issues a new row
+    # whose expiry is measured from now, so anyone who uses the CRM never sees the login
+    # again and anyone who leaves it for six months does (spec 9 §5.6). The access token
+    # stays at fifteen minutes: that is the revocation window, not the session length.
+    refresh_token_days: int = 180
     # Must stay True in production: it is what stops the auth cookies from ever being
     # sent over plain HTTP. It exists as a *setting* rather than a hardcoded True only
     # because of one browser: Chrome and Firefox treat "localhost" as a secure context
