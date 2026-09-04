@@ -57,6 +57,7 @@ from pigrocrm.core.invoices.schemas import (
     InvoiceArtifact,
     InvoiceCreate,
     InvoiceForExport,
+    InvoiceImport,
     InvoiceIssue,
     InvoiceLineIn,
     InvoiceLineRead,
@@ -75,6 +76,7 @@ from pigrocrm.core.invoices.totals import (
     build_riepilogo,
     line_total,
     overflows_money_column,
+    round_money,
     sum_totals,
 )
 from pigrocrm.core.schemas import reject_cleared_columns, supplied_changes
@@ -82,6 +84,7 @@ from pigrocrm.core.storage.base import DocumentStorage
 
 ENTITY: EntityType = "invoice"
 ZERO = Decimal("0.00")
+IMPORT_ACTION = "import_issued_invoice"
 
 # What stays writable once a `fattura` has left the `bozza` state (spec 4). Everything
 # else on the row is frozen, and an attempt raises `ImmutableField` naming the field.
@@ -802,6 +805,192 @@ class InvoiceService:
         # snapshot, so a crash between the two leaves an invoice that is fiscally
         # complete and merely unprinted.
         return InvoiceRead.model_validate(target)
+
+    def import_issued(self, data: InvoiceImport, actor: Actor) -> InvoiceRead:
+        """Register a fattura that another system issued (slice 9 §3).
+
+        Same lock, same snapshot, same lines as `issue`; the two differences are the
+        whole feature. The number is *declared*, so the counter follows it instead of
+        producing it (§3.2 rule 3). And the totals are *declared*, so they are checked
+        against the lines to the cent instead of recomputed (§3.3): the document the
+        customer holds is the fact, and this method refuses to record a different one.
+
+        Order: pure checks on the input, then `lock_counter(anno)` -- the first and only
+        row lock -- then every check that reads the register (duplicates, neighbours,
+        gaps, native numbers), then the write. Nothing is consumed on failure: the
+        counter is only ever raised to a number that is being written in the same
+        transaction.
+        """
+        actor.require_admin(IMPORT_ACTION)
+        self._check_owner(data.customer_id, data.deal_id)
+        self._check_import_date(data.data_emissione)
+        self._check_declared_totals(data)
+        if data.stato_pagamento == "incassato" and data.data_incasso is None:
+            raise ValidationFailed(
+                ENTITY,
+                "data_incasso",
+                "un incasso senza data non e' un incasso",
+                expected="la data in cui il pagamento e' arrivato",
+            )
+        counter = self.repo.lock_counter(data.anno)
+        if data.numero in self.repo.numbers_present(data.anno):
+            raise Conflict(
+                ENTITY,
+                "il registro porta gia' questo numero",
+                anno=data.anno,
+                numero=data.numero,
+            )
+        if data.numero in self.repo.declared_gaps(data.anno):
+            raise Conflict(
+                ENTITY,
+                "questo numero e' dichiarato come buco del registro: togli la dichiarazione "
+                "prima di importarlo",
+                anno=data.anno,
+                numero=data.numero,
+            )
+        first_native = self.repo.first_native_number(data.anno)
+        if first_native is not None and data.numero > first_native:
+            raise Conflict(
+                ENTITY,
+                "PigroCRM ha gia' emesso fatture in questo anno: si importa solo lo storico "
+                "precedente alla prima emessa qui",
+                anno=data.anno,
+                numero=data.numero,
+                prima_nativa=first_native,
+            )
+        before, after = self.repo.neighbour_dates(data.anno, data.numero)
+        if before is not None and data.data_emissione < before:
+            raise ValidationFailed(
+                ENTITY,
+                "data_emissione",
+                "il registro deve restare cronologico: il numero precedente porta la data "
+                f"{before.isoformat()}",
+                expected=f"una data dal {before.isoformat()} in poi",
+            )
+        if after is not None and data.data_emissione > after:
+            raise ValidationFailed(
+                ENTITY,
+                "data_emissione",
+                "il registro deve restare cronologico: il numero successivo porta la data "
+                f"{after.isoformat()}",
+                expected=f"una data fino al {after.isoformat()}",
+            )
+        _, profile = self._regime()
+        invoice = self.repo.add(
+            Invoice(
+                customer_id=data.customer_id,
+                deal_id=data.deal_id,
+                tipo="fattura",
+                stato="emessa",
+                anno=data.anno,
+                numero=data.numero,
+                riferimento=data.riferimento,
+                data_emissione=data.data_emissione,
+                data_scadenza=data.data_scadenza
+                or data.data_emissione + timedelta(days=profile.giorni_scadenza),
+                tipo_documento=TIPO_DOCUMENTO,
+                divisa=DIVISA,
+                causale=data.causale,
+                imponibile=data.imponibile,
+                imposta=data.imposta,
+                bollo=data.bollo,
+                totale=data.totale,
+                stato_pagamento=data.stato_pagamento,
+                data_incasso=data.data_incasso,
+                trasmessa_esternamente_il=data.trasmessa_esternamente_il,
+                note_interne=data.note_interne,
+                importata_da=data.importata_da,
+                custom_fields={},
+            )
+        )
+        for index, riga in enumerate(data.righe, start=1):
+            self.repo.add_line(
+                InvoiceLine(
+                    invoice_id=invoice.id,
+                    numero_linea=index,
+                    descrizione=riga.descrizione,
+                    quantita=riga.quantita,
+                    unita_misura=riga.unita_misura,
+                    prezzo_unitario=riga.prezzo_unitario,
+                    prezzo_totale=riga.prezzo_totale,
+                    aliquota_iva=riga.aliquota_iva,
+                    natura=riga.natura,
+                    riferimento_normativo=riga.riferimento_normativo,
+                )
+            )
+        snapshot = self._build_snapshot(invoice, profile, actor)
+        invoice.snapshot = snapshot.model_dump(mode="json")
+        invoice.snapshot_versione = SNAPSHOT_VERSIONE
+        if data.pdf_sorgente is not None:
+            invoice.pdf_document_id = self._adopt_original_pdf(
+                invoice, data.pdf_sorgente.document_id
+            )
+        counter.ultimo_numero = max(counter.ultimo_numero, data.numero)
+        self.activities.record(
+            ENTITY,
+            invoice.id,
+            "imported",
+            actor,
+            {
+                "anno": data.anno,
+                "numero": data.numero,
+                "totale": str(data.totale),
+                "importata_da": data.importata_da,
+            },
+        )
+        try:
+            self.session.commit()
+        except IntegrityError as exc:
+            self.session.rollback()
+            raise Conflict(
+                ENTITY,
+                "un altro processo ha scritto lo stesso numero: riprova e verifica il registro",
+                anno=data.anno,
+                numero=data.numero,
+            ) from exc
+        return self.get(invoice.id, actor)
+
+    def _check_import_date(self, data_emissione: date) -> None:
+        """Only "not in the future" (§3.2 rule 5). `_check_issue_date` also refuses a
+        closed year, and a closed year is exactly what an import fills."""
+        oggi = oggi_in_italia()
+        if data_emissione > oggi:
+            raise ValidationFailed(
+                ENTITY,
+                "data_emissione",
+                "una fattura non si importa con data futura",
+                expected=f"una data non successiva a {oggi.isoformat()}",
+            )
+
+    def _check_declared_totals(self, data: InvoiceImport) -> None:
+        somma_righe = round_money(sum((r.prezzo_totale for r in data.righe), Decimal("0")))
+        if somma_righe != round_money(data.imponibile):
+            raise ValidationFailed(
+                ENTITY,
+                "imponibile",
+                f"l'imponibile dichiarato ({data.imponibile}) non e' la somma delle righe "
+                f"({somma_righe})",
+                expected="imponibile uguale alla somma dei prezzi totali di riga",
+            )
+        atteso = round_money(data.imponibile + data.imposta + data.bollo)
+        if atteso != round_money(data.totale):
+            raise ValidationFailed(
+                ENTITY,
+                "totale",
+                f"il totale dichiarato ({data.totale}) non e' imponibile + imposta + bollo "
+                f"({atteso})",
+                expected="totale uguale a imponibile + imposta + bollo",
+            )
+        if data.totale <= ZERO:
+            raise ValidationFailed(
+                ENTITY,
+                "totale",
+                "una TD01 a zero o negativa non e' una fattura",
+                expected="un totale maggiore di zero",
+            )
+
+    def _adopt_original_pdf(self, invoice: Invoice, document_id: UUID) -> UUID:
+        raise NotImplementedError  # Task 6
 
     def annul(self, invoice_id: UUID, data: InvoiceAnnul, actor: Actor) -> InvoiceRead:
         """Strike the page through; keep the number.
