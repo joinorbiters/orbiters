@@ -213,6 +213,112 @@ def test_complete_stores_a_sealed_token_and_refuses_a_foreign_sub(
     assert "drive.account_collegato" in kinds
 
 
+def _complete_drive(
+    service: GoogleDriveOAuthService, actor: Actor, code: str
+) -> GoogleDriveAccountRead:
+    url = service.start(actor)
+    jti = parse_qs(urlparse(url).query)["state"][0]
+    return service.complete(code=code, state=jti, actor=actor)
+
+
+def _drive_row(session: Session, user: User) -> GoogleDriveAccount:
+    return session.execute(
+        select(GoogleDriveAccount).where(GoogleDriveAccount.user_id == user.id)
+    ).scalar_one()
+
+
+def test_reconnecting_a_different_identity_while_still_connected_is_refused(
+    db_session: Session, admin_user: User
+) -> None:
+    """The Drive twin of `test_reconnecting_a_different_mailbox_is_refused_and_names_both`
+    in `test_gmail_oauth.py`: a *connected* row must not be silently overwritten by a
+    different Google identity, or a folder configuration built for one account would
+    start being read from (and written into) under somebody else's."""
+    fake = _drive_fake("sub-a", "a@identity.it")
+    service = _drive_service(db_session, fake)
+    _complete_drive(service, _actor(admin_user), code="c1")
+
+    fake.id_token = _id_token("sub-b", "b@identity.it")
+    with pytest.raises(Conflict) as caught:
+        _complete_drive(service, _actor(admin_user), code="c2")
+
+    assert "a@identity.it" in caught.value.message
+    assert _drive_row(db_session, admin_user).email_address == "a@identity.it"
+
+
+def test_reconnecting_a_different_identity_after_disconnect_clears_the_folders(
+    db_session: Session, admin_user: User
+) -> None:
+    """Once the row is disconnected the identity is free to change (the refusal above
+    tells the user to disconnect first), but the folders configured for the identity
+    that just left have no meaning for the one that replaces it."""
+    fake = _drive_fake("sub-a", "a@identity.it")
+    service = _drive_service(db_session, fake)
+    _complete_drive(service, _actor(admin_user), code="c1")
+    row = _drive_row(db_session, admin_user)
+    row.root_folder_ids = ["1AbCdEfGhIjKlMnOpQ"]
+    row.storage_folder_id = "1AbCdEfGhIjKlMnOpQ"
+    db_session.flush()
+    service.disconnect(_actor(admin_user))
+
+    fake.id_token = _id_token("sub-b", "b@identity.it")
+    read = _complete_drive(service, _actor(admin_user), code="c2")
+
+    assert read.email_address == "b@identity.it"
+    assert read.root_folder_ids == []
+    assert read.storage_folder_id is None
+
+
+def test_reconnecting_the_same_identity_after_disconnect_keeps_the_folders(
+    db_session: Session, admin_user: User
+) -> None:
+    """The other half of the rule above: the same identity reconnecting is the
+    documented cure for a revoked or expired consent, and it must not throw away a
+    folder configuration that still describes the right Drive."""
+    fake = _drive_fake("sub-a", "a@identity.it")
+    service = _drive_service(db_session, fake)
+    _complete_drive(service, _actor(admin_user), code="c1")
+    row = _drive_row(db_session, admin_user)
+    row.root_folder_ids = ["1AbCdEfGhIjKlMnOpQ"]
+    row.storage_folder_id = "1AbCdEfGhIjKlMnOpQ"
+    db_session.flush()
+    service.disconnect(_actor(admin_user))
+
+    fake.refresh_token = "1//0gDriveRenewedRefresh"
+    read = _complete_drive(service, _actor(admin_user), code="c2")
+
+    assert read.root_folder_ids == ["1AbCdEfGhIjKlMnOpQ"]
+    assert read.storage_folder_id == "1AbCdEfGhIjKlMnOpQ"
+
+
+def test_disconnect_forgets_the_cached_token_and_erases_the_credential(
+    db_session: Session, admin_user: User
+) -> None:
+    fake = _drive_fake("sub-a", "a@identity.it")
+    service = _drive_service(db_session, fake)
+    read = _complete_drive(service, _actor(admin_user), code="c1")
+    # Primed the way a real read of the Drive API would, so `disconnect` actually has
+    # a cached access token to forget.
+    service.tokens.access_token(
+        account_id=read.id, email_address=read.email_address, refresh_token=fake.refresh_token
+    )
+    assert read.id in service.tokens._cache
+
+    service.disconnect(_actor(admin_user))
+
+    assert read.id not in service.tokens._cache
+    row = _drive_row(db_session, admin_user)
+    assert row.status == "disconnected"
+    assert row.disconnected_at is not None
+    # Overwritten, not merely dereferenced -- the same rule `GoogleAccount`'s own
+    # disconnect follows, and for the same reason: leaving the ciphertext behind
+    # means the credential is still in every backup taken after the disconnect.
+    assert row.refresh_token_ciphertext == b""
+    assert row.refresh_token_nonce == b""
+    kinds = db_session.execute(select(Activity.kind)).scalars().all()
+    assert "drive.account_scollegato" in kinds
+
+
 def test_a_gmail_state_cannot_complete_the_drive_flow(
     db_session: Session, admin_user: User
 ) -> None:

@@ -165,6 +165,24 @@ class GoogleDriveOAuthService:
             )
 
         existing = self.repo.account_for_user(actor.id)
+        # The mirror of `GmailOAuthService.complete`'s own mailbox-reconnection check:
+        # a *connected* Drive row that names a different identity must not be silently
+        # overwritten, or a folder configuration built for one Google account would
+        # start being read (and written into) under somebody else's. Skipped once the
+        # row has been explicitly disconnected, for the same reason that check's is.
+        if (
+            existing is not None
+            and existing.disconnected_at is None
+            and not self._same_identity(existing, grant)
+        ):
+            raise Conflict(
+                "google_drive_account",
+                f"questa installazione ha già un Drive collegato a {existing.email_address}: "
+                "scollega prima l'account attuale",
+                connected=existing.email_address,
+                offered=grant.email_address,
+            )
+
         account = self._store(existing, grant, actor.id, now)
         # The cached access token belongs to a grant that no longer applies.
         self.tokens.forget(account.id)
@@ -220,6 +238,17 @@ class GoogleDriveOAuthService:
             "questa autorizzazione non è più valida: ricomincia da Impostazioni → Drive",
         )
 
+    @staticmethod
+    def _same_identity(existing: GoogleDriveAccount, grant: TokenGrant) -> bool:
+        """Both halves of the identity, not just the stable one -- the Drive twin of
+        `GmailOAuthService._same_mailbox`. `root_folder_ids`/`storage_folder_id` are
+        filed against whichever identity connected them, so an address that moved
+        under an unchanged `sub` (or the reverse) is still a different identity as far
+        as that configuration is concerned."""
+        return existing.google_sub == grant.subject and (
+            existing.email_address.casefold() == grant.email_address.casefold()
+        )
+
     def _store(
         self, existing: GoogleDriveAccount | None, grant: TokenGrant, user_id: UUID, now: datetime
     ) -> GoogleDriveAccount:
@@ -235,7 +264,17 @@ class GoogleDriveOAuthService:
         if existing is None:
             self.session.add(account)
         elif existing.disconnected_at is not None:
+            # A genuine re-connection, possibly of a different identity -- `complete`
+            # only refuses that while the row is still *connected*.
             account.connected_at = now
+            if not self._same_identity(existing, grant):
+                # The folders belonged to the identity that just left. Carrying them
+                # forward would let the new identity's grant read from, and write
+                # into, folders it was never asked about and may not even have access
+                # to -- so a changed identity starts from an unconfigured Drive again,
+                # exactly like a first connection.
+                account.root_folder_ids = []
+                account.storage_folder_id = None
         account.google_sub = grant.subject
         account.email_address = grant.email_address
         account.refresh_token_ciphertext = ciphertext
@@ -245,8 +284,7 @@ class GoogleDriveOAuthService:
         account.consent_expires_at = consent_expires_at
         # A fresh grant answers whatever the last one failed at; leaving the old error
         # visible would show the user a warning about a credential that no longer
-        # exists. `root_folder_ids`/`storage_folder_id` are untouched -- they are
-        # Drive's own configuration, not part of this grant.
+        # exists.
         account.last_error = None
         account.last_error_at = None
         account.disconnected_at = None
