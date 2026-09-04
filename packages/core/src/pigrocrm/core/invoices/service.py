@@ -49,6 +49,8 @@ from pigrocrm.core.invoices.naming import (
 )
 from pigrocrm.core.invoices.repository import InvoiceRepository
 from pigrocrm.core.invoices.schemas import (
+    ANNO_MAX,
+    ANNO_MIN,
     DIVISA,
     SNAPSHOT_VERSIONE,
     TIPO_DOCUMENTO,
@@ -1026,6 +1028,26 @@ class InvoiceService:
     def _adopt_original_pdf(self, invoice: Invoice, document_id: UUID) -> UUID:
         raise NotImplementedError  # Task 6
 
+    def _check_register_year(self, anno: int) -> None:
+        """Bound `anno` before it reaches a lock or a query.
+
+        Every other `anno` in this domain is bounded the same way
+        (`InvoiceImport.anno`, `InvoiceListQuery.anno`, both `Field(ge=ANNO_MIN,
+        le=ANNO_MAX)`), and these three methods are the one place a bare `int` from a
+        caller reaches `lock_counter`'s raw `INSERT INTO invoice_counters` or a
+        register query directly. An out-of-range value would otherwise surface as a
+        Postgres `integer out of range` `DataError` -- not something a caller can act
+        on -- or, for a smaller-but-still-nonsense year, silently create junk
+        counter/gap rows for a year nothing else in the system will ever ask about.
+        """
+        if not ANNO_MIN <= anno <= ANNO_MAX:
+            raise ValidationFailed(
+                ENTITY,
+                "anno",
+                "anno fuori dal registro",
+                expected=f"un anno fra {ANNO_MIN} e {ANNO_MAX}",
+            )
+
     def declare_gaps(
         self, anno: int, data: RegisterGapsDeclare, actor: Actor
     ) -> list[RegisterGapRead]:
@@ -1040,42 +1062,64 @@ class InvoiceService:
         reading `numbers_present`/`declared_gaps`: without it, a gap declared here and
         an import of the same number could each read the register before the other's
         write, and both would go through.
+
+        `data.buchi` carries no uniqueness rule of its own, so `seen` refuses a
+        same-batch duplicate `numero` before it ever reaches `add_gap`'s flush -- and
+        the loop plus the final commit are wrapped together, because a *concurrent*
+        declaration of the same number can still reach the unique index underneath
+        `uq_invoice_register_gaps_anno_numero` after this transaction's own read of
+        `already`. Either way the rollback is mandatory, or the caller's session is
+        unusable on its next statement (see `issue` and `import_issued`, which wrap
+        their own commits for exactly this reason).
         """
         actor.require_admin(GAPS_ACTION)
+        self._check_register_year(anno)
         self.repo.lock_counter(anno)
         present = self.repo.numbers_present(anno)
         already = self.repo.declared_gaps(anno)
-        for buco in data.buchi:
-            if buco.numero in present:
-                raise Conflict(
-                    ENTITY,
-                    "questo numero e' una fattura del registro, non un buco",
-                    anno=anno,
-                    numero=buco.numero,
+        seen: set[int] = set()
+        try:
+            for buco in data.buchi:
+                if buco.numero in present:
+                    raise Conflict(
+                        ENTITY,
+                        "questo numero e' una fattura del registro, non un buco",
+                        anno=anno,
+                        numero=buco.numero,
+                    )
+                if buco.numero in already or buco.numero in seen:
+                    raise Conflict(ENTITY, "buco gia' dichiarato", anno=anno, numero=buco.numero)
+                seen.add(buco.numero)
+                self.repo.add_gap(
+                    InvoiceRegisterGap(
+                        anno=anno,
+                        numero=buco.numero,
+                        motivo=buco.motivo,
+                        dichiarato_da=actor.id,
+                    )
                 )
-            if buco.numero in already:
-                raise Conflict(ENTITY, "buco gia' dichiarato", anno=anno, numero=buco.numero)
-            self.repo.add_gap(
-                InvoiceRegisterGap(
-                    anno=anno, numero=buco.numero, motivo=buco.motivo, dichiarato_da=actor.id
+                # The register has no row of its own to hang a timeline entry on, so
+                # the entity id is derived deterministically from the year rather than
+                # left unrecorded: `ActivityService.record` accepts any `entity_type`
+                # string (it is not constrained to `EntityType`), and `uuid5` gives the
+                # same id every time this year's register is touched again.
+                self.activities.record(
+                    "invoice_register",
+                    uuid5(NAMESPACE_URL, f"pigrocrm:invoice_register:{anno}"),
+                    "gap_declared",
+                    actor,
+                    {"anno": anno, "numero": buco.numero, "motivo": buco.motivo},
                 )
-            )
-            # The register has no row of its own to hang a timeline entry on, so the
-            # entity id is derived deterministically from the year rather than left
-            # unrecorded: `ActivityService.record` accepts any `entity_type` string (it
-            # is not constrained to `EntityType`), and `uuid5` gives the same id every
-            # time this year's register is touched again.
-            self.activities.record(
-                "invoice_register",
-                uuid5(NAMESPACE_URL, f"pigrocrm:invoice_register:{anno}"),
-                "gap_declared",
-                actor,
-                {"anno": anno, "numero": buco.numero, "motivo": buco.motivo},
-            )
-        self.session.commit()
+            self.session.commit()
+        except IntegrityError as exc:
+            self.session.rollback()
+            raise Conflict(
+                ENTITY, "un altro processo ha dichiarato lo stesso buco: riprova", anno=anno
+            ) from exc
         return self.register_gaps(anno, actor)
 
     def register_gaps(self, anno: int, actor: Actor) -> list[RegisterGapRead]:
+        self._check_register_year(anno)
         return [RegisterGapRead.model_validate(g) for g in self.repo.gaps(anno)]
 
     def undeclared_gaps(self, anno: int) -> list[int]:
@@ -1085,6 +1129,7 @@ class InvoiceService:
         expected until the operator has looked at every one of them and either imported
         or declared it.
         """
+        self._check_register_year(anno)
         present = self.repo.numbers_present(anno)
         if not present:
             return []
