@@ -22,6 +22,7 @@ import pytest
 from fakes.fake_drive import FakeDrive, _File
 
 from pigrocrm.core.config import Settings
+from pigrocrm.core.drive.query import escape_query_value
 from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 from pigrocrm.core.storage import (
     DocumentStorage,
@@ -29,7 +30,7 @@ from pigrocrm.core.storage import (
     LocalFileStorage,
     storage_from_settings,
 )
-from pigrocrm.core.storage.gdrive import APP_PROPERTY_KEY, _escape_drive_query
+from pigrocrm.core.storage.gdrive import APP_PROPERTY_KEY
 
 PDF = b"%PDF-1.7\nfinto\n"
 KEY = "acme-01234567/0199abcd/v1.pdf"
@@ -283,7 +284,7 @@ def test_drive_signed_url_is_none_so_downloads_stay_behind_the_api() -> None:
     assert storage.signed_url(KEY, timedelta(minutes=5)) is None
 
 
-def test_escape_drive_query_escapes_backslash_before_quote() -> None:
+def test_escape_query_value_escapes_backslash_before_quote() -> None:
     """Direct test of the escaper itself: no storage key can actually contain a quote
     or backslash (`validate_storage_key`'s character class forbids both), so a test
     that only calls `put`/`get` with a "quoted" key would never exercise this function
@@ -291,9 +292,9 @@ def test_escape_drive_query_escapes_backslash_before_quote() -> None:
     ever in doubt about. Escaping the backslash first is load-bearing: escaping the
     quote first would leave a lone trailing backslash in a name like `a\\` able to
     escape the filter's own closing quote instead of the name's."""
-    assert _escape_drive_query("bar's") == "bar\\'s"
-    assert _escape_drive_query("a\\b") == "a\\\\b"
-    assert _escape_drive_query("a\\'b") == "a\\\\\\'b"
+    assert escape_query_value("bar's") == "bar\\'s"
+    assert escape_query_value("a\\b") == "a\\\\b"
+    assert escape_query_value("a\\'b") == "a\\\\\\'b"
 
 
 def test_drive_verify_root_accessible_passes_when_root_is_reachable() -> None:
