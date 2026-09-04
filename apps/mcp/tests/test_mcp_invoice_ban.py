@@ -33,17 +33,24 @@ from pigrocrm_mcp.server import build_server
 
 TOOLS_DIR = Path(__file__).resolve().parents[1] / "src" / "pigrocrm_mcp" / "tools"
 
-# The one module the scans below skip, and the only one allowed to reach a forbidden
-# operation. Its whole existence is conditional: `server.py` imports and registers it only
-# when `Settings.mcp_full_access` is true, so on a default installation its calls are as
-# unreachable as if the file were not there. The scans therefore ask a narrower and truer
-# question than "does this call appear anywhere" -- they ask whether it appears anywhere
-# that runs unconditionally.
+# The modules the scans below skip, and the only ones allowed to reach a forbidden
+# operation. Their whole existence is conditional: `server.py` imports and registers each
+# only when `Settings.mcp_full_access` is true, so on a default installation their calls
+# are as unreachable as if the files were not there. The scans therefore ask a narrower
+# and truer question than "does this call appear anywhere" -- they ask whether it appears
+# anywhere that runs unconditionally.
+#
+# Two files and not one since slice 9C. `drive_privileged.py` holds the three Drive reads
+# and needs a *second* condition on top of the switch -- a configured Google client, since
+# there is no credential to read Drive with otherwise -- and expressing that as a separate
+# module makes the condition visible in `server.py`'s import instead of as an `if` nested
+# inside a `register` that anybody could widen. The exemption stays enumerated here, in
+# one tuple, rather than becoming "any file whose name contains privileged".
 #
 # `test_the_privileged_module_is_the_only_place_they_appear` closes the obvious hole in
-# that exemption: a second file quietly added to the skip list, or `privileged` imported
-# outside the guard, both fail there.
-PRIVILEGED = TOOLS_DIR / "privileged.py"
+# that exemption: a third file quietly added to the skip list, or either of these two
+# imported outside the guard, all fail there.
+PRIVILEGED_MODULES = (TOOLS_DIR / "privileged.py", TOOLS_DIR / "drive_privileged.py")
 
 # Sixteen operations: the five fiscal ones that turn a draft into a fiscal fact or
 # change what one says after the fact, and the eleven that are closer to configuration
@@ -97,13 +104,32 @@ FORBIDDEN = (
     # never carry (slice 9 §3.2).
     "import_issued_invoice",
     "declare_invoice_register_gaps",
+    # The twentieth, twenty-first and twenty-second, and none of them fiscal: reading
+    # the titolare's Google Drive (slice 9 §4.2). Like `discover_gmail_correspondents`
+    # they spend the titolare's quota under the titolare's OAuth consent, and unlike
+    # every other entry here what they *return* is the content of a personal Drive --
+    # where the folder of another job, the rent contract and the photos of somebody's
+    # children live next to the client's contract. The confinement to
+    # `root_folder_ids` (see `core/drive/reader.py`) is what makes them offerable at
+    # all; this list is what says the installation has to ask for them.
+    "list_drive_files",
+    "read_drive_file",
+    "import_drive_file",
 )
 
-# The tools above that exist only on an installation where Gmail is configured as well:
-# on one without Google there is no mailbox to ask, so the switch alone does not make
-# them appear. `test_the_sixteen_are_registered_exactly_when_the_installation_opted_in`
-# accounts for them by building both kinds of installation.
-FORBIDDEN_NEEDING_GMAIL = frozenset({"discover_gmail_correspondents"})
+# The tools above that exist only on an installation where Google is configured as well:
+# on one without it there is no mailbox to ask and no credential to read Drive with, so
+# the switch alone does not make them appear.
+# `test_the_sixteen_are_registered_exactly_when_the_installation_opted_in` accounts for
+# them by building both kinds of installation.
+FORBIDDEN_NEEDING_GMAIL = frozenset(
+    {
+        "discover_gmail_correspondents",
+        "list_drive_files",
+        "read_drive_file",
+        "import_drive_file",
+    }
+)
 
 # The service methods behind them. Listed separately because a future tool could call one
 # under an innocuous name -- `finalise_invoice` registering a tool that calls `issue`
@@ -129,6 +155,29 @@ FORBIDDEN_SERVICE_CALLS = (
     "discover",
     "import_issued",
     "declare_gaps",
+    # `DriveReader`'s three reads and the two calls the Drive tools make around them
+    # (slice 9 §4.2). Not a `*Service` receiver, which is why they are here as bare
+    # names and why `test_mcp_surface_coverage.py` cannot carry them in `_VIETATE`
+    # (its taxonomy sweeps classes whose name ends in `Service`, and `DriveReader` is
+    # not one) -- see `_FUORI_DAL_SETACCIO` there, which records the reason for each.
+    #
+    # Each name is unique in this codebase, which is what makes the substring scan the
+    # right instrument: no service has a `list_children`, a `read_text` or a
+    # `describe_roots`, and `import_bytes` belongs to `DocumentService` alone.
+    #
+    # `DriveReader.describe` is deliberately **absent**, and its absence is the `upsert`
+    # problem in a form this file's two instruments cannot solve: `TemplateService.
+    # describe` and `FiscalProfileService.describe` are both on the MCP surface, so a
+    # bare-name ban would fail the build with a message about Drive, and the qualified
+    # scan cannot help either -- `_receivers_of` recognises a service by the `Service`
+    # suffix, and `DriveReader` has none. What covers it instead is stronger than a name:
+    # `test_no_unconditional_module_can_even_obtain_a_drive_reader` bans the only
+    # constructor, so an unconditional module has nothing to call `describe` *on*.
+    "list_children",
+    "read_text",
+    "read_bytes",
+    "describe_roots",
+    "import_bytes",
 )
 
 # The bans a bare method name cannot express, because the name is not the operation.
@@ -206,7 +255,7 @@ def _modules(base: Path = TOOLS_DIR) -> list[ast.Module]:
     return [
         ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for path in sorted(base.rglob("*.py"))
-        if path != PRIVILEGED
+        if path not in PRIVILEGED_MODULES
     ]
 
 
@@ -250,7 +299,9 @@ def _tools_source(base: Path = TOOLS_DIR) -> str:
     file the call physically sits in.
     """
     return "\n".join(
-        path.read_text(encoding="utf-8") for path in base.rglob("*.py") if path != PRIVILEGED
+        path.read_text(encoding="utf-8")
+        for path in base.rglob("*.py")
+        if path not in PRIVILEGED_MODULES
     )
 
 
@@ -274,7 +325,7 @@ def _receivers_of(method: str, base: Path = TOOLS_DIR) -> list[str | None]:
     """
     receivers: list[str | None] = []
     for path in sorted(base.rglob("*.py")):
-        if path == PRIVILEGED:
+        if path in PRIVILEGED_MODULES:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
@@ -545,33 +596,72 @@ async def test_the_sixteen_are_registered_exactly_when_the_installation_opted_in
 def test_the_privileged_module_is_the_only_place_they_appear() -> None:
     """Guards the exemption.
 
-    The three scans above skip `privileged.py`, which is sound only while that file is
-    genuinely the sole exemption and its calls are genuinely conditional. Both halves are
-    checked here: every forbidden service call that appears anywhere under `tools/` must
-    appear in that one file, and `server.py` must reach it only behind
-    `mcp_full_access`.
+    The three scans above skip `PRIVILEGED_MODULES`, which is sound only while those
+    files are genuinely the whole exemption and their calls are genuinely conditional.
+    Both halves are checked here: every forbidden service call that appears anywhere
+    under `tools/` must appear in one of them, and `server.py` must reach **each** of
+    them only behind `mcp_full_access`.
 
-    Without this, the exemption is a hole with a comment on it: a second file added to
-    the skip list, or `privileged` imported unconditionally, would leave every test above
-    green while the sixteen became reachable on an installation that never opted in.
+    Without this, the exemption is a hole with a comment on it: a third file added to
+    the skip list, or either module imported unconditionally, would leave every test
+    above green while the forbidden operations became reachable on an installation that
+    never opted in.
+
+    Note what the second half does *not* claim. It proves each privileged import sits
+    after the guard in the source text, which is what an AST-free check can prove about
+    a nested import; that the three Drive tools additionally need Google is proved at
+    runtime instead, by `test_drive_privileged_tools.py`'s four-way sweep over built
+    servers -- the only place a *runtime* condition can be observed at all.
     """
     unconditional = _tools_source()
-    privileged = PRIVILEGED.read_text(encoding="utf-8")
+    privileged = "\n".join(path.read_text(encoding="utf-8") for path in PRIVILEGED_MODULES)
 
     for method in FORBIDDEN_SERVICE_CALLS:
         assert f".{method}(" not in unconditional, (
             f"'.{method}(' compare in un modulo che viene registrato sempre"
         )
         assert f".{method}(" in privileged, (
-            f"'.{method}(' non compare in privileged.py: o il tool non esiste, o e' "
-            "altrove, e in entrambi i casi l'esenzione qui sopra sta coprendo la cosa "
-            "sbagliata"
+            f"'.{method}(' non compare in nessun modulo privilegiato: o il tool non "
+            "esiste, o e' altrove, e in entrambi i casi l'esenzione qui sopra sta "
+            "coprendo la cosa sbagliata"
         )
 
     server_source = (TOOLS_DIR.parent / "server.py").read_text(encoding="utf-8")
     assert "mcp_full_access" in server_source
     guardia = server_source.index("if resolved_settings.mcp_full_access:")
-    assert server_source.index("import privileged") > guardia, (
-        "privileged e' importato fuori dalla guardia: il modulo verrebbe registrato "
-        "sempre e l'esenzione delle scansioni diventerebbe un buco"
+    for module in PRIVILEGED_MODULES:
+        nome = module.stem
+        assert server_source.index(f"import {nome}") > guardia, (
+            f"{nome} e' importato fuori dalla guardia: il modulo verrebbe registrato "
+            "sempre e l'esenzione delle scansioni diventerebbe un buco"
+        )
+
+
+def test_no_unconditional_module_can_even_obtain_a_drive_reader() -> None:
+    """The complete form of the Drive half of the ban, and the reason
+    `DriveReader.describe` needs no entry in `FORBIDDEN_SERVICE_CALLS`.
+
+    A bare-name ban covers the methods whose names happen to be unique. This covers the
+    *class*: `drive_reader_for` is the only way to obtain a `DriveReader` at all -- it
+    is what runs `GoogleDriveAccountService.usable`, unseals the refresh token and reads
+    `root_folder_ids` off the row, and a reader built any other way would be one whose
+    roots nobody had checked. So a module that cannot name it has nothing to call
+    `list_children`, `read_text` or `describe` *on*, whatever those methods are called
+    next year.
+
+    Stated as its own test rather than folded into the loop above because it is a
+    different kind of statement: the ban list forbids calls, this forbids a capability.
+    """
+    unconditional = _tools_source()
+    privileged = "\n".join(path.read_text(encoding="utf-8") for path in PRIVILEGED_MODULES)
+
+    assert "drive_reader_for" not in unconditional, (
+        "un modulo registrato sempre puo' costruire un DriveReader: da li' ogni "
+        "metodo di lettura di Drive e' raggiungibile, anche quelli il cui nome non "
+        "compare in FORBIDDEN_SERVICE_CALLS"
+    )
+    assert "drive_reader_for" in privileged, (
+        "nessun modulo privilegiato costruisce un DriveReader: o i tool di Drive non "
+        "esistono piu', o sono altrove, e in entrambi i casi questo divieto sta "
+        "coprendo la cosa sbagliata"
     )

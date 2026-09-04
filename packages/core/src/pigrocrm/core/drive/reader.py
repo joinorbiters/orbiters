@@ -51,6 +51,14 @@ from pigrocrm.core.config import DRIVE_TEXT_MAX_BYTES_DEFAULT, Settings, decode_
 from pigrocrm.core.drive.account import GoogleDriveAccountService
 from pigrocrm.core.drive.errors import DriveCredentialRevoked
 from pigrocrm.core.drive.query import (
+    # The compiled pattern behind `checked_outside_id`, and the one private name this
+    # module reaches for. It is here so that `OUTSIDE_ID_PATTERN` below can be *derived*
+    # rather than re-typed: an adapter that has to publish the rule as a JSON Schema
+    # must publish this rule, and a second spelling of it is the drift the whole
+    # one-pattern discipline of `query.py` exists to prevent. Private because nobody
+    # should match against it directly -- use `checked_outside_id`, which also produces
+    # the refusal.
+    _SAFE_FOLDER_ID,
     FOLDER_MIME,
     # The strict shape of an id that arrives from outside, imported rather than
     # rewritten: `query.py` is where that shape is defined, and a copy here would be a
@@ -70,6 +78,22 @@ from pigrocrm.core.errors import Conflict, NotFound
 from pigrocrm.core.gmail.crypto import unseal
 from pigrocrm.core.gmail.tokens import GoogleTokenClient
 from pigrocrm.core.gmail.transport import GmailTransport
+
+# `checked_outside_id`'s rule, spelled as a JSON Schema `pattern` for the one kind of
+# caller that has to *publish* it instead of merely applying it: `apps/mcp`'s Drive
+# tools declare it on their `cartella_id`/`file_id` parameters, so an agent handing over
+# a Drive search expression is refused by the tool schema before any body runs, and the
+# refusal names the parameter it typed rather than surfacing from three layers down.
+#
+# Derived from `query.py`'s own compiled pattern and never written out again, for the
+# reason `checked_outside_id`'s docstring gives about itself: two spellings of one rule
+# are one rule that will drift, and the drift is silent in both directions -- a laxer
+# schema turns a readable refusal into a `ValidationFailed` from the depths, a stricter
+# one refuses ids the titolare legitimately configured. The anchors are explicit because
+# JSON Schema `pattern` is a *search*, not a full match, so an unanchored pattern would
+# accept `'x' in parents and 1RadiceClientiAAAA` -- exactly the string it exists to
+# refuse. `re.fullmatch` is what makes the Python side equivalent; see `query.py`.
+OUTSIDE_ID_PATTERN = f"^{_SAFE_FOLDER_ID.pattern}$"
 
 # The entity every refusal of this module is reported under. One name for a folder and
 # a file alike, deliberately: the entity is part of what a caller reads, and saying
@@ -195,6 +219,52 @@ class DriveReader:
         checked = checked_outside_id(folder_id, field="folder_id")
         return self._guarded(lambda: self._list_children(checked, page_token))
 
+    def describe(self, file_id: str) -> DriveEntry:
+        """The metadata of one file or folder inside the roots, as a listing would show
+        it.
+
+        Not a fourth capability over Drive: it is the `files.get` `list_children` and
+        `read_bytes` already make, answered to the caller instead of consumed
+        internally, and it is confined by the same `is_within_roots` check they are --
+        including the same single sentence for a file that does not exist, a file in an
+        unconfigured corner of the titolare's Drive and a file in a stranger's Drive
+        (see the module docstring: telling those apart is an existence oracle over all
+        of Google Drive).
+
+        It exists because two callers need a *name* and there was no way to ask for
+        one. An import records where a document came from -- `{"drive_file_id": ...,
+        "mime": ..., "nome": ...}` -- and "a file was uploaded" is not an answer to
+        "where did this come from?" years later; and `describe_roots` below needs the
+        name of a folder that has no listable parent to have appeared in.
+        """
+        checked = checked_outside_id(file_id, field="file_id")
+        return self._guarded(lambda: self._describe(checked))
+
+    def describe_roots(self) -> list[DriveEntry]:
+        """The configured roots themselves, as entries.
+
+        Spec 9C §4.1's entry point: an agent that must name a folder before it can see
+        one has no way in, and the roots are the only folders it may be told about
+        without being told about everything above them. So this is one `files.get` per
+        root -- deliberately *not* a listing, because the folder above a root is the
+        titolare's Drive and enumerating it is the failure this module exists to
+        prevent.
+
+        A root the titolare has since deleted, or that Drive answers 404 for, raises
+        `NotFound` naming that id rather than being skipped: an entry point silently
+        missing one of its folders would read as "this root is empty".
+        """
+
+        def work() -> list[DriveEntry]:
+            # `folder_id`, because a root is a folder and that is the parameter whose
+            # name a refusal has to send the reader to -- `google_drive_accounts.
+            # root_folder_ids`, i.e. the settings screen, not a `file_id` they typed.
+            return [
+                self._describe(checked_outside_id(root, field="folder_id")) for root in self._roots
+            ]
+
+        return self._guarded(work)
+
     def is_within_roots(self, file_id: str) -> bool:
         """Whether a configured root is this file's ancestor -- or is this file.
 
@@ -283,6 +353,15 @@ class DriveReader:
             items=[_entry(item) for item in files if isinstance(item, dict)],
             next_page_token=str(token) if token else None,
         )
+
+    def _describe(self, file_id: str) -> DriveEntry:
+        """`files.get` plus the roots check, with the metadata call's own `parents`
+        seeding the walk -- so describing a file costs one request and not two, the
+        same saving `_read_bytes` already takes."""
+        meta = self._metadata(file_id)
+        if not self._within_roots(file_id, {file_id: _parents(meta)}):
+            raise NotFound(ENTITY, file_id)
+        return _entry(meta)
 
     def _read_bytes(self, file_id: str, max_bytes: int) -> tuple[bytes, str]:
         meta = self._metadata(file_id)

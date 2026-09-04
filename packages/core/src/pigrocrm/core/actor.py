@@ -11,10 +11,12 @@ Role = Literal["admin", "collaboratore", "readonly"]
 WRITE_ROLES: tuple[str, ...] = ("admin", "collaboratore")
 ADMIN_ROLES: tuple[str, ...] = ("admin",)
 
-# The sixteen operations an agent may perform only on an installation that has opted
-# in. Named by the string each service already passes to `require_write`/`require_admin`,
-# so the rule attaches to the operation itself rather than to a route or a tool
-# registration.
+# The operations an agent may perform only on an installation that has opted in. Named
+# by the string each service already passes to `require_write`/`require_admin`, so the
+# rule attaches to the operation itself rather than to a route or a tool registration.
+# (It began as slice 3's sixteen and has grown twice since -- the count is deliberately
+# not written down here any more, because a number in a comment is the first thing to
+# stop being true when a slice adds a line.)
 #
 # **Why the list exists.** These are not merely privileged: they are irreversible in a
 # way the rest of the product is not. Issuing consumes a number from a gap-free fiscal
@@ -80,6 +82,18 @@ AGENT_FORBIDDEN_ACTIONS: frozenset[str] = frozenset(
         # says about the past, which is the property every other entry here protects.
         "import_issued_invoice",
         "declare_invoice_register_gaps",
+        # Slice 9 §4.2: reading the titolare's Google Drive, and copying a file from it
+        # into the CRM. Not irreversible -- nothing on Drive changes, and an imported
+        # document can be deleted -- but on this list for the reason
+        # `discover_gmail_correspondents` is: they spend the titolare's Drive quota
+        # under the titolare's OAuth consent, and what they return is the *content* of
+        # a personal Drive, where the folder of another job and the rent contract live
+        # next to the client's. The confinement to `root_folder_ids` is what makes them
+        # offerable at all; the switch is what says this installation wants its agent
+        # inside those folders.
+        "list_drive_files",
+        "read_drive_file",
+        "import_drive_file",
     }
 )
 

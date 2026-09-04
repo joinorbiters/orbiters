@@ -299,4 +299,21 @@ def build_server(
         from pigrocrm_mcp.tools import privileged as privileged_tools
 
         privileged_tools.register(mcp, context, _guard, resolved_settings)
+
+        if gmail_configured(resolved_settings):
+            # Slice 9C §4.2's three Drive reads, and the only privileged module whose
+            # *whole* content needs Google as well as the switch: reading a folder or a
+            # file spends the titolare's Drive quota under their OAuth consent, and
+            # without a Google client there is no credential to spend it with. So the
+            # second condition is expressed here, in the import, rather than as an `if`
+            # inside `register` -- unlike `privileged.py`, which is registered by the
+            # switch alone and re-reads the settings for its one Gmail tool.
+            #
+            # Both privileged modules are named in `test_mcp_invoice_ban.py`'s
+            # `PRIVILEGED_MODULES`, and that file fails if either is reachable outside
+            # this block: the exemption its source scans grant is enumerated in one
+            # place and checked, not left to a comment.
+            from pigrocrm_mcp.tools import drive_privileged as drive_privileged_tools
+
+            drive_privileged_tools.register(mcp, context, _guard, resolved_settings)
     return mcp
