@@ -37,6 +37,7 @@ from pigrocrm.core.drive import reader as reader_module
 from pigrocrm.core.drive.errors import DriveCredentialRevoked
 from pigrocrm.core.drive.models import GoogleDriveAccount
 from pigrocrm.core.drive.reader import (
+    ALREADY_AUTHORIZED,
     MAX_ROOT_WALK_LEVELS,
     MAX_ROOT_WALK_REQUESTS,
     DriveReader,
@@ -357,6 +358,63 @@ def test_the_walk_asks_drive_about_each_folder_at_most_once_per_call() -> None:
     assert OUTSIDE_FOLDER in asked
 
 
+def _refusing(drive: FakeDrive, file_id: str, status: int) -> Any:
+    """`drive`'s own transport, except that `files.get` on one id answers `status`.
+
+    `FakeDrive.fail_with` is a FIFO queue over *every* call, so it cannot express "the
+    second request fails": the case below needs the file itself to be readable and one of
+    its ancestors not to be, which is the only shape in which the branch under test can
+    be reached at all.
+    """
+
+    def call(
+        method: str, url: str, headers: dict[str, str], body: bytes | None
+    ) -> tuple[int, bytes]:
+        if f"/files/{file_id}" in url:
+            return status, b'{"error": {"message": "insufficientFilePermissions"}}'
+        return drive(method, url, headers, body)
+
+    return call
+
+
+def test_a_403_on_an_ancestor_is_reported_and_not_read_as_outside_the_roots() -> None:
+    """The trade `_parents_of` documents, pinned so that it stays a decision.
+
+    Only a **404** is read as "no parents": an id that does not exist has no configured
+    root above it, and answering `NotFound` there is what keeps a file outside the roots
+    indistinguishable from one that was never there. A 403 is not that. It also means no
+    root can be *proven* above the file, so swallowing it would be easy and would look
+    right -- and it would report an ancestor somebody un-shared, or a permission change
+    mid-walk, as «non trovato»: the titolare would be told their own file is outside the
+    folders they configured, and would go looking for it in the wrong place.
+
+    So it propagates as itself, with the status intact for whoever has to diagnose it.
+    The cost of the trade, equally deliberate: a 403 on a parent of a file the titolare
+    *can* read surfaces as a Drive error rather than as `NotFound`. That has not been
+    seen, and inventing a translation for it would be inventing which of the two it was.
+    """
+    drive = _tree()
+
+    reader = _reader(drive, http=_refusing(drive, SUB_FOLDER, 403))
+    with pytest.raises(Conflict) as excinfo:
+        reader.is_within_roots(PDF_FILE)
+
+    assert excinfo.value.details["status"] == 403
+    # Re-stamped by `_guarded`, like every other transport failure out of this module.
+    assert excinfo.value.details["entity"] == "drive_file"
+
+
+def test_a_404_on_an_ancestor_is_the_end_of_the_walk_and_not_an_error() -> None:
+    """The branch the one above is a trade against, so the pair reads as one decision:
+    a parent Drive no longer has is «this file has no root above it», answered `False`
+    rather than raised."""
+    drive = _tree()
+
+    reader = _reader(drive, http=_refusing(drive, SUB_FOLDER, 404))
+
+    assert reader.is_within_roots(PDF_FILE) is False
+
+
 # --- bytes ---------------------------------------------------------------------------
 
 
@@ -567,6 +625,74 @@ def test_a_bad_file_id_is_refused_as_a_file_id_and_a_folder_id_as_a_folder_id() 
         assert caught.value.details["field"] == "folder_id"
 
 
+# --- what a failure is about ------------------------------------------------------------
+
+
+def test_a_google_failure_mid_read_is_about_the_drive_file_and_not_a_crm_document() -> None:
+    """`DriveTransport` reports its own failures under `document_blob`, which is the
+    truth for the caller it was written for -- `GDriveStorage` reaches Drive for the
+    bytes of a CRM document -- and false for every caller of this class.
+
+    A Google 500 while listing a folder the titolare named used to arrive as
+    «document_blob: elenco fallito (500)». There is no CRM document anywhere in that
+    operation: `InvoiceService._resolve_original_pdf`'s docstring documents the
+    opposite ("each already arrive as a `Conflict` under the entity `drive_file`"), and
+    an adapter routing on the entity -- which is what `details["entity"]` is *for* --
+    would send somebody to the documents screen to look for a row that was never
+    involved. So `_guarded` re-stamps it.
+
+    `status` and `what` are asserted alongside because they are load-bearing details
+    that the re-stamp must carry through, not decoration: `storage/gdrive.py` matches on
+    `what` and `_metadata` matches on `status`.
+    """
+    drive = _tree()
+    drive.fail_with = [500, 500, 500, 500]
+
+    with pytest.raises(Conflict) as excinfo:
+        _reader(drive).list_children(ROOT_FOLDER)
+
+    assert excinfo.value.details["entity"] == "drive_file"
+    assert "document_blob" not in excinfo.value.message
+    assert excinfo.value.details["status"] == 500
+    assert excinfo.value.details["what"]
+
+
+def test_every_public_read_reports_a_google_failure_under_the_same_entity() -> None:
+    """The re-stamp is on `_guarded`, so it holds for each operation rather than for the
+    one a test happened to pick -- which is the whole reason it is there and not at a
+    call site."""
+    for operation in (
+        lambda reader: reader.list_children(ROOT_FOLDER),
+        lambda reader: reader.describe(PDF_FILE),
+        lambda reader: reader.read_bytes(PDF_FILE),
+        lambda reader: reader.read_text(PDF_FILE),
+        lambda reader: reader.describe_roots(),
+    ):
+        drive = _tree()
+        drive.fail_with = [500] * 8
+
+        with pytest.raises(Conflict) as excinfo:
+            operation(_reader(drive))
+
+        assert excinfo.value.details["entity"] == "drive_file", operation
+
+
+def test_a_refusal_about_the_credential_keeps_its_own_entity() -> None:
+    """The re-stamp names one entity and only one. `DriveCredentialRevoked` and the
+    outage `Conflict` are `google_drive_account` and `google_drive` respectively, and
+    both are already the truthful subject of their own sentence: flattening them into
+    `drive_file` would claim a file was the problem when the account was, and send
+    somebody to check an id instead of to Impostazioni → Drive.
+    """
+    drive = _tree()
+
+    with pytest.raises(Conflict) as excinfo:
+        _reader(drive, tokens=RevokedTokens()).list_children(ROOT_FOLDER)
+
+    assert isinstance(excinfo.value, DriveCredentialRevoked)
+    assert excinfo.value.details["entity"] == "google_drive_account"
+
+
 # --- the credential -------------------------------------------------------------------
 
 
@@ -667,7 +793,11 @@ def test_drive_reader_for_composes_the_reader_from_the_stored_account(
     _inject(monkeypatch, drive, providers)
 
     reader = drive_reader_for(
-        db_session, _actor(account), gmail_settings(), feature="la lettura da Drive"
+        db_session,
+        _actor(account),
+        gmail_settings(),
+        feature="la lettura da Drive",
+        action=ALREADY_AUTHORIZED,
     )
     listing = reader.list_children(ROOT_FOLDER)
 
@@ -692,9 +822,86 @@ def test_drive_reader_for_refuses_a_revoked_account_before_composing_anything(
     _inject(monkeypatch, drive, [])
 
     with pytest.raises(DriveCredentialRevoked):
-        drive_reader_for(db_session, _actor(account), gmail_settings(), feature="la lettura")
+        drive_reader_for(
+            db_session,
+            _actor(account),
+            gmail_settings(),
+            feature="la lettura",
+            action=ALREADY_AUTHORIZED,
+        )
 
     assert drive.requests == []
+
+
+def test_a_named_action_applies_the_agent_ban_before_the_row_is_read(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first of the four gates, and the only one that must not learn anything about
+    the installation before it refuses. An agent credential on an installation that has
+    not opted in is told the operation is closed to agents, full stop -- not "there is no
+    Drive connected", not "the grant is missing a scope", both of which are facts about
+    the titolare's account that a refused caller has no business finding out.
+
+    The account here is perfectly healthy, so any refusal other than `AgentForbidden`
+    would mean the gate ran in the wrong order.
+    """
+    from pigrocrm.core.errors import AgentForbidden
+
+    account = _account(db_session)
+    drive = _tree()
+    _inject(monkeypatch, drive, [])
+    agente = Actor(id=account.user_id, type="mcp", role="admin")
+
+    with pytest.raises(AgentForbidden) as excinfo:
+        drive_reader_for(
+            db_session, agente, gmail_settings(), feature="la lettura", action="read_drive_file"
+        )
+
+    assert excinfo.value.details["action"] == "read_drive_file"
+    assert drive.requests == []
+
+
+def test_already_authorized_is_the_only_way_past_that_gate(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`ALREADY_AUTHORIZED` replaced an `action=None` default, and the difference is the
+    point of it: the exemption now has to be *written* at the call site.
+
+    Its one legitimate user is `InvoiceService._drive_reader`, whose operation
+    (`import_issued_invoice`) is itself on the ban list and was checked by `import_issued`
+    under that name before this is reached -- so the same agent credential that is
+    refused above composes a reader here, having already been refused, or allowed, once.
+    Checking the ban twice under one name is harmless; checking it under the *wrong* name
+    is what a required-and-explicit `action` prevents.
+    """
+    account = _account(db_session)
+    drive = _tree()
+    _inject(monkeypatch, drive, [])
+    agente = Actor(id=account.user_id, type="mcp", role="admin")
+
+    reader = drive_reader_for(
+        db_session, agente, gmail_settings(), feature="la lettura", action=ALREADY_AUTHORIZED
+    )
+
+    assert reader.list_children(ROOT_FOLDER).items
+
+
+def test_an_opted_in_installation_lets_a_named_action_through(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of the switch, here as much as anywhere: the ban is a setting the
+    titolare can open, not a wall, and a test that only proved the refusal would be
+    satisfied by a gate that refuses every agent for ever."""
+    account = _account(db_session)
+    drive = _tree()
+    _inject(monkeypatch, drive, [])
+    aperto = Actor(id=account.user_id, type="mcp", role="admin", full_access=True)
+
+    reader = drive_reader_for(
+        db_session, aperto, gmail_settings(), feature="la lettura", action="read_drive_file"
+    )
+
+    assert reader.list_children(ROOT_FOLDER).items
 
 
 def test_drive_reader_for_refuses_a_grant_without_the_read_scope(
@@ -705,7 +912,13 @@ def test_drive_reader_for_refuses_a_grant_without_the_read_scope(
     _inject(monkeypatch, drive, [])
 
     with pytest.raises(Conflict) as excinfo:
-        drive_reader_for(db_session, _actor(account), gmail_settings(), feature="la lettura")
+        drive_reader_for(
+            db_session,
+            _actor(account),
+            gmail_settings(),
+            feature="la lettura",
+            action=ALREADY_AUTHORIZED,
+        )
 
     assert excinfo.value.details["feature"] == "la lettura"
     assert excinfo.value.details["scope"] == DRIVE_SCOPE_READONLY
@@ -728,7 +941,13 @@ def test_a_revocation_discovered_mid_read_marks_the_account_and_re_raises(
         ),
     )
 
-    reader = drive_reader_for(db_session, _actor(account), gmail_settings(), feature="la lettura")
+    reader = drive_reader_for(
+        db_session,
+        _actor(account),
+        gmail_settings(),
+        feature="la lettura",
+        action=ALREADY_AUTHORIZED,
+    )
     with pytest.raises(DriveCredentialRevoked):
         reader.list_children(ROOT_FOLDER)
 
@@ -755,6 +974,7 @@ def test_drive_reader_for_uses_the_configured_text_ceiling(
         _actor(account),
         gmail_settings(drive_text_max_bytes=10),
         feature="la lettura",
+        action=ALREADY_AUTHORIZED,
     )
 
     assert reader.read_text(TXT_FILE).troncato is True

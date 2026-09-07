@@ -94,6 +94,26 @@ AGENT_FORBIDDEN_ACTIONS: frozenset[str] = frozenset(
         "list_drive_files",
         "read_drive_file",
         "import_drive_file",
+        # Slice 9 §5.2: *configuring* the Drive grant, as opposed to reading through it.
+        # These three have no MCP tool and never will -- they are settings-panel
+        # operations -- so they are the first entries here that the ban list holds on
+        # their own, with nothing in `test_mcp_invoice_ban.py`'s `FORBIDDEN` to mirror
+        # them (that file's `REST_ONLY_FORBIDDEN` enumerates them for exactly that
+        # reason). The credential is what makes them reachable anyway: a PAT is accepted
+        # on every REST route, so without these an agent token could PATCH
+        # `/api/drive/account/roots` and point the reader -- and the document storage --
+        # at any folder of the titolare's Drive it liked, or disconnect the account and
+        # take the CRM's own document store offline. Naming the folders the CRM may read
+        # and write is the decision every Drive guarantee above rests on; it belongs to
+        # the person whose Drive it is.
+        #
+        # Spelled as the action strings the services already pass -- `account.py`'s
+        # `_ROOTS_ACTION` and `oauth.py`'s `_CONNECT_ACTION`/`_DISCONNECT_ACTION` -- and
+        # they are Italian sentences rather than tool names because that is what a
+        # settings operation's `require_write` was already audited under.
+        "impostare le cartelle Drive",
+        "collegare Google Drive",
+        "scollegare Google Drive",
     }
 )
 

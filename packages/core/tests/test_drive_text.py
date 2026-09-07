@@ -357,6 +357,35 @@ def test_a_pdf_is_read_for_at_most_the_page_cap() -> None:
     assert "Pagina 0" in result.testo
     assert f"Pagina {MAX_PDF_PAGES + 4}" not in result.testo
     assert result.testo.count("Pagina") == MAX_PDF_PAGES
+    # And the cut is *reported*. This is the whole point of the field: the answer is
+    # comfortably under `max_bytes`, so nothing about the text itself says five pages
+    # were never read, and `troncato: false` here would be "here is the document" about
+    # a document that was cut. `troncato` is the only place a caller can learn otherwise.
+    assert result.troncato is True
+
+
+def test_a_pdf_that_fits_within_the_page_cap_is_not_reported_as_truncated() -> None:
+    """The other direction, because a flag that is always true is not a flag: a document
+    read to its last page and answered whole is `troncato: false`, and the boundary case
+    -- exactly `MAX_PDF_PAGES` pages, the largest document there is nothing to report
+    about -- is the one an off-by-one would get wrong."""
+    pdf = minimal_pdf_pages([[f"Pagina {n}"] for n in range(MAX_PDF_PAGES)])
+
+    result = drive_text(pdf, mime=PDF_MIME, max_bytes=262_144)
+
+    assert result.testo.count("Pagina") == MAX_PDF_PAGES
+    assert result.troncato is False
+
+
+def test_an_unreadable_pdf_is_empty_rather_than_truncated() -> None:
+    """`troncato` says "there is more of this than you are seeing", so an encrypted or
+    malformed PDF must not set it: there is no more of it to be had, and telling a caller
+    to ask for the rest would send them after something that does not exist. Same
+    distinction as an un-OCRed scan, which this file already pins one test up."""
+    result = drive_text(b"%PDF-1.4\nnon e' davvero un pdf", mime=PDF_MIME, max_bytes=262_144)
+
+    assert result.testo == ""
+    assert result.troncato is False
 
 
 def test_max_bytes_must_be_positive() -> None:

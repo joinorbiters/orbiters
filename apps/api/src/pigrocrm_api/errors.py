@@ -14,6 +14,15 @@ STATUS_BY_CODE: dict[str, int] = {
     "validation_failed": 422,
     "conflict": 409,
     "permission_denied": 403,
+    # 403, the same status as `permission_denied` and for the same reason a browser or an
+    # agent client cares about: the request was understood and authenticated, and the
+    # credential may not do this. Mapped explicitly rather than left to fall through to
+    # the 400 default, which would render a policy refusal as "Errore di dominio" -- a
+    # generic bad-request an agent has every reason to retry, and a status no client can
+    # tell apart from a malformed body. The *sentence* is what distinguishes it from
+    # `permission_denied` ("richiede una persona", not "richiede un ruolo migliore"), and
+    # `code` carries the distinction machine-readably.
+    "agent_forbidden": 403,
     "immutable_field": 409,
     "domain_error": 400,
 }
@@ -23,6 +32,7 @@ TITLE_BY_CODE: dict[str, str] = {
     "validation_failed": "Dati non validi",
     "conflict": "Conflitto con lo stato attuale",
     "permission_denied": "Permesso negato",
+    "agent_forbidden": "Operazione riservata a una persona",
     "immutable_field": "Campo non modificabile",
     "domain_error": "Errore di dominio",
 }

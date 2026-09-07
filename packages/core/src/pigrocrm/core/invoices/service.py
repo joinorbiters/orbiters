@@ -26,7 +26,7 @@ from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.documents.models import Document
 from pigrocrm.core.documents.schemas import DocumentCreate
 from pigrocrm.core.documents.service import DocumentService
-from pigrocrm.core.drive.reader import DriveReader, drive_reader_for
+from pigrocrm.core.drive.reader import ALREADY_AUTHORIZED, DriveReader, drive_reader_for
 from pigrocrm.core.emitter.service import EmitterProfileService
 from pigrocrm.core.errors import Conflict, ImmutableField, NotFound, ValidationFailed
 from pigrocrm.core.fields.schemas import EntityType
@@ -1200,7 +1200,19 @@ class InvoiceService:
         """
         if self._drive_reader_factory is not None:
             return self._drive_reader_factory(actor)
-        return drive_reader_for(self.session, actor, self.settings, feature=DRIVE_FEATURE)
+        return drive_reader_for(
+            self.session,
+            actor,
+            self.settings,
+            feature=DRIVE_FEATURE,
+            # The agent ban for this read is `import_issued_invoice`, and `import_issued`
+            # has already applied it under that name -- before this method is reached and
+            # before the counter is touched. Naming it again here would check the same
+            # ban twice; naming anything else would check the wrong one. Spelled rather
+            # than left to a default, so the exemption is visible where it is taken (see
+            # `ALREADY_AUTHORIZED`).
+            action=ALREADY_AUTHORIZED,
+        )
 
     def _resolve_original_pdf(
         self, customer_id: UUID, sorgente: PdfSorgente, actor: Actor
@@ -1229,10 +1241,14 @@ class InvoiceService:
         method must not redraw by translating one of them differently.
 
         **The reader's other refusals pass through untouched, deliberately.** A file over
-        the 20 MB download ceiling, a folder id where a file id was meant and a native
-        Google file with no bytes each already arrive as a `Conflict` under the entity
-        `drive_file`, carrying a sentence written for the person who typed the id ("il
-        file supera N byte: aprilo su Drive invece di importarlo"). Re-wrapping them
+        the 20 MB download ceiling, a folder id where a file id was meant, a native
+        Google file with no bytes and a Google failure mid-read each already arrive as a
+        `Conflict` under the entity `drive_file`, carrying a sentence written for the
+        person who typed the id ("il file supera N byte: aprilo su Drive invece di
+        importarlo"). The last of the four is true because `DriveReader._guarded`
+        re-stamps it: the transport's own entity is `document_blob`, the storage's
+        subject, and this sentence was false for that case until the reader took the
+        entity over (9C final review, F3). Re-wrapping them
         under `invoice` would either lose that sentence or repeat it, and it would claim
         the problem is with the fattura when the problem is with the file: `drive_file`
         is the truthful subject, and it is the same entity `drive_reader_for`'s own
@@ -1266,9 +1282,36 @@ class InvoiceService:
         belongs among the pure checks with the mime. A zero-byte PDF is not exotic --
         a sync that died half way, a placeholder somebody made and never filled -- and
         Drive serves it without complaint.
+
+        **The mime is decided on the metadata, before a byte is downloaded**, which is
+        the same ordering `import_drive_file` uses and for the same reason. The check
+        used to run on what came *back*: a 20 MB spreadsheet somebody named by mistake
+        was pulled through this process and buffered whole in memory (`DriveTransport`
+        reads a response in one `read()`) only to be refused on a fact one `files.get`
+        already knew -- the titolare's bandwidth and Drive quota spent to reach a
+        decidable "no". The reader's declared-size ceiling bounds that; it does not
+        remove it, and every file under the ceiling paid in full.
+
+        Not re-checked after the download, because it would be the same value: for
+        anything that is not a native Google file `read_bytes` reports the metadata's own
+        mime, and a native Google file is refused by this check before its export runs.
+
+        A *folder* is deliberately not refused here and left to `read_bytes`, again as
+        `import_drive_file` does: the reader has the better sentence for it («una cartella
+        non ha byte da leggere: elencane i figli»), refuses it before any download too,
+        and answering it here would replace advice with a content type.
         """
         reader = self._drive_reader(actor)
         try:
+            entry = reader.describe(drive_file_id)
+            if not entry.cartella and entry.mime != PDF_MIME:
+                raise ValidationFailed(
+                    ENTITY,
+                    "pdf_sorgente.drive_file_id",
+                    f"il file su Drive non è un PDF ma un {entry.mime}: l'originale di "
+                    "una fattura è il PDF che il cliente ha ricevuto",
+                    expected=PDF_MIME,
+                )
             contenuto, mime = reader.read_bytes(drive_file_id)
         except NotFound as exc:
             raise Conflict(
@@ -1277,14 +1320,6 @@ class InvoiceService:
                 "l'id, oppure aggiungi la cartella che lo contiene in Impostazioni → Drive",
                 drive_file_id=drive_file_id,
             ) from exc
-        if mime != PDF_MIME:
-            raise ValidationFailed(
-                ENTITY,
-                "pdf_sorgente.drive_file_id",
-                f"il file su Drive non è un PDF ma un {mime}: l'originale di una fattura "
-                "è il PDF che il cliente ha ricevuto",
-                expected=PDF_MIME,
-            )
         if not contenuto:
             raise ValidationFailed(
                 ENTITY,

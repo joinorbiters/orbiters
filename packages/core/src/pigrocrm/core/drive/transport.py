@@ -81,11 +81,19 @@ _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504, NETWORK_ERROR_STATUS})
 # First attempt plus up to three retries. Exponential: 0.5s, 1s, 2s between them.
 _MAX_HTTP_ATTEMPTS = 4
 _RETRY_BASE_DELAY_SECONDS = 0.5
-# The entity name every failure of this transport is reported under. Drive is reached
-# for exactly one reason in this system -- the bytes of a document -- and the API and
-# the MCP adapter both render `Conflict.details["entity"]`, so changing it would change
-# what a user reads for a Google outage.
-_ENTITY = "document_blob"
+# The entity name a failure of this transport is reported under *by default*, which is
+# the storage's subject: `GDriveStorage` reaches Drive for the bytes of a document, and
+# the API and the MCP adapter both render `Conflict.details["entity"]`, so changing this
+# would change what a user reads for a Google outage during an upload or a download.
+#
+# It is no longer the only subject. Slice 9C reaches the same transport for a file the
+# titolare *named*, where "document_blob" is wrong twice over -- there is no CRM document
+# involved, and an adapter routing on the entity would point at the wrong thing. The
+# reader owns that correction rather than this module: it re-stamps exactly this entity
+# on its way out (`reader.py::_guarded`), so the rule holds for any transport it was
+# handed, including the doubles its tests compose. Hence public: that re-stamp names the
+# constant instead of repeating the string.
+TRANSPORT_ENTITY = "document_blob"
 
 
 def _retry_delay_seconds(attempt: int) -> float:
@@ -186,7 +194,7 @@ def _decode(status: int, payload: bytes, what: str) -> dict[str, Any]:
         except (ValueError, AttributeError):
             detail = ""
         raise Conflict(
-            _ENTITY,
+            TRANSPORT_ENTITY,
             f"{what} fallita ({status}){': ' + detail if detail else ''}",
             status=status,
             what=what,
