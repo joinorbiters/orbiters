@@ -190,6 +190,12 @@ restano fuori finché non vengono indicate.
 Il testo di un file, come il corpo di un'email, è **testo scritto da qualcun altro**:
 `read_drive_file` lo etichetta come non attendibile nello stesso modo di `get_gmail_message`.
 
+Divergenza registrata in implementazione (9C): l'attività scritta da `import_drive_file` è
+`document.importato`, non `document.importato_da_drive` come dice la tabella qui sopra — un
+solo `kind` per «byte importati dentro il CRM», con `origine.drive_file_id` a dire da dove
+vengono, così che una seconda provenienza (una casella, un upload) non richieda un terzo
+`kind` per la stessa cosa.
+
 ### 4.3 Scrittura: il CRM, non l'agente
 
 Non esiste un `write_drive_file`. Ciò che il CRM produce — offerte da template, proforma, PDF e
