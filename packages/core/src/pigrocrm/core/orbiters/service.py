@@ -2,8 +2,12 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.actor import Actor
 from pigrocrm.core.orbiters.models import Signup
-from pigrocrm.core.orbiters.schemas import SignupCreate, SignupRead
+from pigrocrm.core.orbiters.schemas import SignupCreate, SignupList, SignupListItem, SignupRead
+
+LIST_LIMIT_DEFAULT = 100
+LIST_LIMIT_MAX = 1000
 
 
 class SignupService:
@@ -35,6 +39,20 @@ class SignupService:
             assert winner is not None
             return _read(winner, nuova=False)
         return _read(row, nuova=True)
+
+    def list_recent(self, actor: Actor, limit: int = LIST_LIMIT_DEFAULT) -> SignupList:
+        """Who is on the list, newest first. Admin only: these are other people's
+        addresses, and the only thing anyone does with them is decide when to write."""
+        actor.require_admin("list_orbiters_signups")
+        limit = max(1, min(limit, LIST_LIMIT_MAX))
+        rows = self.session.scalars(
+            select(Signup).order_by(Signup.created_at.desc(), Signup.id.desc()).limit(limit)
+        ).all()
+        totale = self.session.scalar(select(func.count()).select_from(Signup)) or 0
+        return SignupList(
+            totale=totale,
+            iscrizioni=[SignupListItem.model_validate(row) for row in rows],
+        )
 
     def _find(self, email: str) -> Signup | None:
         return self.session.scalar(select(Signup).where(func.lower(Signup.email) == email))
