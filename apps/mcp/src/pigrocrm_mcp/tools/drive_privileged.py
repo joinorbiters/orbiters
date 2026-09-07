@@ -49,8 +49,11 @@ from mcp.server import MCPServer
 from pydantic import Field
 
 from pigrocrm.core.config import Settings
+from pigrocrm.core.documents.schemas import ALLOWED_CONTENT_TYPES, TITOLO_MAX_LENGTH
 from pigrocrm.core.documents.service import DocumentService
-from pigrocrm.core.drive.reader import OUTSIDE_ID_PATTERN, DriveEntry, drive_reader_for
+from pigrocrm.core.drive.query import OUTSIDE_ID_PATTERN
+from pigrocrm.core.drive.reader import GOOGLE_DOC_MIME, DriveEntry, drive_reader_for
+from pigrocrm.core.errors import Conflict, ValidationFailed
 from pigrocrm_mcp.context import McpContext
 
 # What a refusal calls the thing being attempted, so a missing scope reads as a feature
@@ -59,9 +62,17 @@ from pigrocrm_mcp.context import McpContext
 FEATURE = "la lettura dei documenti da Drive"
 
 # An id that arrives from outside, refused by the schema before it reaches a tool body.
-# The pattern is `drive/query.py`'s own, published by `drive/reader.py`: see
-# `OUTSIDE_ID_PATTERN`'s comment for why it is derived and never re-typed.
+# The pattern is `drive/query.py`'s own, imported from beside the check it spells: see
+# `OUTSIDE_ID_PATTERN`'s comment there for why it is derived and never re-typed.
 DriveId = Annotated[str, Field(pattern=OUTSIDE_ID_PATTERN)]
+
+# The one free-text string on this surface, and it carries its bound in the schema so an
+# agent is told the limit instead of discovering it as a refusal. The number is
+# `documents`' own -- imported, not repeated, because a tool publishing a different
+# ceiling from the column would be advertising a title the CRM will not store. `SafeStr`
+# (which rejects NUL) is applied a second time by `DocumentCreate`, where it belongs: a
+# JSON Schema cannot express it, and the service must hold regardless of who calls it.
+Titolo = Annotated[str, Field(max_length=TITOLO_MAX_LENGTH)]
 
 # Drive's own `nextPageToken`, handed straight back. Opaque by contract -- Google
 # documents no format for it -- so the bound is on what it may *not* contain rather than
@@ -78,6 +89,33 @@ Cursor = Annotated[str, Field(pattern=r"^[^\s'\"\\]{1,2048}$")]
 # of the CRM's own output. `verbale` is left out for the narrower reason that nothing in
 # the product reads it yet.
 DriveDocumentTipo = Literal["offerta", "contratto", "fattura", "documento"]
+
+# What `import_drive_file` is willing to *download*: the content types `documents`
+# actually stores, plus the Google Doc mime, which has no bytes of its own on Drive and
+# reaches `import_bytes` as the `text/plain` its export produces.
+#
+# Checked on the metadata, before `read_bytes`, and that ordering is the whole point.
+# `_check_upload` would refuse the same file a moment later, but only after a 900 MB
+# `.mov` had been pulled through this process and buffered whole in memory
+# (`DriveTransport` reads a response in one `read()`) -- the titolare's bandwidth and
+# Drive quota spent to reach a refusal that was decidable from one `files.get`. The
+# reader's own declared-size ceiling bounds the damage; it does not remove it, and a 4 MB
+# video is under every ceiling there is.
+#
+# Derived from `ALLOWED_CONTENT_TYPES` rather than listed: a type added to what the CRM
+# stores becomes importable in the same commit, and one removed stops being downloaded
+# rather than being fetched and then refused.
+IMPORTABLE_MIMES = frozenset(ALLOWED_CONTENT_TYPES) | {GOOGLE_DOC_MIME}
+
+_NOT_IMPORTABLE = (
+    "un file {mime} non è fra i tipi che il CRM archivia: leggilo con `read_drive_file` "
+    "o aprilo su Drive invece di importarlo"
+)
+
+_CURSOR_WITHOUT_FOLDER = (
+    "un cursore è la continuazione dell'elenco di una cartella: ripassa lo stesso "
+    "`cartella_id` insieme al `cursor`"
+)
 
 
 def _entry_payload(entry: DriveEntry) -> dict[str, Any]:
@@ -120,7 +158,19 @@ def register(
         dell'elenco. Interroga Google, quindi spende la quota Drive del titolare sotto
         il suo consenso OAuth.
         """
-        reader = drive_reader_for(context.session, context.actor, settings, feature=FEATURE)
+        if cursor is not None and cartella_id is None:
+            # Refused rather than ignored. Drive's page token is meaningful only for the
+            # query it came from, so "the next page of the roots" is not a thing that
+            # exists -- and silently answering the first page again would make an agent
+            # loop over it forever believing it was advancing.
+            raise ValidationFailed("drive_file", "cursor", _CURSOR_WITHOUT_FOLDER)
+        reader = drive_reader_for(
+            context.session,
+            context.actor,
+            settings,
+            feature=FEATURE,
+            action="list_drive_files",
+        )
         if cartella_id is None:
             # No `next_cursor`: the roots are a configuration this CRM holds, not a
             # Drive listing, so there is no page after them.
@@ -150,7 +200,13 @@ def register(
         è potuto leggere. Non archivia niente: per portare il file nel CRM usa
         `import_drive_file`.
         """
-        reader = drive_reader_for(context.session, context.actor, settings, feature=FEATURE)
+        reader = drive_reader_for(
+            context.session,
+            context.actor,
+            settings,
+            feature=FEATURE,
+            action="read_drive_file",
+        )
         return asdict(reader.read_text(file_id))
 
     @mcp.tool()
@@ -158,7 +214,7 @@ def register(
     def import_drive_file(
         file_id: DriveId,
         tipo: DriveDocumentTipo,
-        titolo: str,
+        titolo: Titolo,
         customer_id: UUID | None = None,
         deal_id: UUID | None = None,
     ) -> dict[str, Any]:
@@ -183,11 +239,28 @@ def register(
         `.xlsx`, testo, PNG/JPEG, XML): leggi prima con `read_drive_file` se non sei
         sicuro di cosa sia il file.
         """
-        reader = drive_reader_for(context.session, context.actor, settings, feature=FEATURE)
-        # Metadata first, and not only for the name: `describe` applies the same
-        # roots check the read does, so a file outside them is refused before any
-        # bytes are downloaded.
+        reader = drive_reader_for(
+            context.session,
+            context.actor,
+            settings,
+            feature=FEATURE,
+            action="import_drive_file",
+        )
+        # Metadata first, and for three things rather than one: `describe` applies the
+        # same roots check the read does, it carries the name the provenance records,
+        # and it carries the mime this refuses on -- all before a byte is downloaded.
         entry = reader.describe(file_id)
+        # A folder is left to the reader, which has the better sentence for it («una
+        # cartella non ha byte da leggere: elencane i figli») and refuses it before any
+        # download too. Answering it here would replace advice an agent can act on with
+        # a list of content types.
+        if not entry.cartella and entry.mime not in IMPORTABLE_MIMES:
+            raise Conflict(
+                "drive_file",
+                _NOT_IMPORTABLE.format(mime=entry.mime),
+                file_id=file_id,
+                mime=entry.mime,
+            )
         content, mime = reader.read_bytes(file_id)
         # The mime of the *bytes*, never the metadata's: a Google Doc has none of its
         # own and arrives as `text/plain`, and recording the native type here would
