@@ -675,16 +675,16 @@ def test_a_revocation_is_never_recorded_against_a_resolution_that_moved(
     and reconnect, or a concurrent operation that met a newer row can all replace the
     resolution between the failed refresh and the bookkeeping. What was then written was
     a revocation stamped on a credential that had never been asked for anything --
-    a healthy Drive shown as revoked in the shell banner, and the failing one left
+    a healthy Drive shown as revoked on the Drive settings page, and the failing one left
     `active`.
 
     So `_run` hands `_record_revocation` the resolution it actually used, and the record
     happens only if that is still the current one (identity, not equality: two
     resolutions of the same row are still two different attempts). The accepted
-    consequence is asserted too -- when the resolution moved, *nothing* is recorded:
-    the next operation resolves again and meets the same `invalid_grant`, which is the
-    retry this bookkeeping is best-effort for, and that is a far better outcome than a
-    fact recorded about the wrong account.
+    consequence is asserted too -- when the resolution moved, nothing is recorded about
+    either account: the next operation resolves again and meets the same
+    `invalid_grant`, which is the retry this bookkeeping is best-effort for, and that is
+    a far better outcome than a fact recorded about the wrong account.
 
     The swap is made from inside the token exchange that is about to answer
     `invalid_grant`, which is the one moment production's own race has: the failure
@@ -737,10 +737,24 @@ def test_a_revocation_is_never_recorded_against_a_resolution_that_moved(
     assert swapped_in is not None
     assert swapped_in.status == "active"
     assert swapped_in.last_error is None
-    # And nothing at all was recorded, which is the accepted cost of not guessing.
+    # And no revocation was recorded against *either* account, which is the accepted
+    # cost of not guessing. Asserted per account rather than as an empty `Activity`
+    # table: this session is shared with whatever else the run has already written, so
+    # "nothing anywhere" is a claim about the suite and not about this behaviour.
     still_failing = db_session.get(GoogleDriveAccount, failing.id)
     assert still_failing is not None and still_failing.status == "active"
-    assert db_session.execute(select(Activity.kind)).scalars().all() == []
+    revocations = (
+        db_session.execute(
+            select(Activity.entity_id).where(
+                Activity.entity_type == "google_drive_account",
+                Activity.kind == "drive.credenziale_revocata",
+                Activity.entity_id.in_([failing.id, other.id]),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert revocations == []
 
 
 def test_a_grant_without_the_write_scope_refuses_the_upload_with_guidance(
@@ -779,6 +793,43 @@ def test_a_grant_without_the_write_scope_refuses_the_upload_with_guidance(
     # in worse words.
     assert drive.requests == []
     assert gmail.token_requests == 0
+
+
+def test_a_read_refused_over_the_missing_scope_is_not_worded_as_a_write(
+    db_session: Session,
+) -> None:
+    """The same gate, met by `get` and by `signed_url`, must not name writing.
+
+    `drive.file` is the scope this backend needs for every operation -- it is what
+    scopes the credential to the files the CRM itself created, so without it a download
+    is refused for the same reason an upload is. But the refusal is read by a person on
+    the settings page, and "la scrittura dei documenti su Drive non è disponibile" in
+    answer to *opening* a document names an operation nobody asked for: it invites the
+    reader to conclude that reading is fine and something else is broken, which is the
+    opposite of true.
+
+    So the sentence names the archive rather than the direction of travel, and the
+    guidance -- reconnect from Impostazioni → Drive -- is unchanged, because the fix is.
+    `put` and `delete` keep the write wording: those really are writes, and naming them
+    is more precise than naming the archive.
+    """
+    _account(db_session, scopes=(DRIVE_SCOPE_READONLY,))
+    storage = _lazy(db_session, drive=FakeDrive(root_id=STORAGE_FOLDER), gmail=FakeGmail())
+
+    for operation in (
+        lambda: storage.get(KEY),
+        lambda: storage.signed_url(KEY, TTL),
+    ):
+        with pytest.raises(Conflict) as caught:
+            operation()
+        assert caught.value.details["scope"] == DRIVE_SCOPE_FILE
+        assert "Impostazioni → Drive" in caught.value.message
+        assert "scrittura" not in caught.value.message, caught.value.message
+        assert "l'archivio documenti su Drive" in caught.value.message
+
+    with pytest.raises(Conflict) as writing:
+        storage.delete(KEY)
+    assert "la scrittura dei documenti su Drive" in writing.value.message
 
 
 def test_the_write_scope_is_re_read_when_the_row_changes(db_session: Session) -> None:

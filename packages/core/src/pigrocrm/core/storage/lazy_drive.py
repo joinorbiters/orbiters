@@ -23,7 +23,7 @@ per call would turn one upload into one OAuth round-trip per Drive request.
 
 **What it does not do.** No placement, no keys, no HTTP: it holds a `GDriveStorage` and
 delegates. The only behaviour of its own is resolution, and reacting to the one failure
-that invalidates it -- a revoked grant, recorded on the row so the shell banner can say
+that invalidates it -- a revoked grant, recorded on the row so the Drive settings page can say
 so, then re-raised unchanged.
 """
 
@@ -65,12 +65,20 @@ _REVOKED_REASON = (
     "è sospesa finché non ricolleghi Drive da Impostazioni → Drive."
 )
 
-# The name the missing-scope refusal gives what it is refusing. A *feature*, not a call:
-# `missing_scope_conflict` writes "<feature> non è disponibile: manca l'autorizzazione
-# ...", and what is unavailable here is putting documents on Drive at all -- every
-# `put`, `get` and `delete` of this backend -- rather than the one request that happened
-# to notice.
+# The names the missing-scope refusal gives what it is refusing. A *feature*, not a
+# call: `missing_scope_conflict` writes "<feature> non è disponibile: manca
+# l'autorizzazione ...", so the noun has to be one the person reading it recognises as
+# the thing they were trying to do.
+#
+# Two of them, because `drive.file` gates every operation of this backend while the
+# operations are not the same thing to whoever met the refusal. On a `put` or a `delete`
+# "la scrittura dei documenti" is exactly right and more precise than any generality. On
+# a `get` -- somebody opening a proforma -- it names an operation nobody asked for, and
+# invites the reader to conclude that reading is fine and something else is broken. So a
+# read is refused over the archive as a whole, which is what is actually unavailable;
+# the guidance is identical either way, because the fix is.
 _FEATURE_WRITE = "la scrittura dei documenti su Drive"
+_FEATURE_READ = "l'archivio documenti su Drive"
 
 
 @dataclass(frozen=True)
@@ -156,8 +164,13 @@ class LazyUserDriveStorage:
 
     # ---- resolution -------------------------------------------------------------
 
-    def _resolve(self) -> _Resolution:
+    def _resolve(self, feature: str) -> _Resolution:
         """The account that may be written into, right now.
+
+        `feature` is what the one refusal raised from here -- the missing-scope
+        `Conflict` -- calls the operation it is refusing, passed down from `_run` so that
+        a download is not turned away in the words of an upload. It reaches nothing else:
+        every other answer this method gives is the same for all four operations.
 
         Raises `StorageNotConfigured` when there is none -- which is the same answer for
         "Drive was never connected", "no folder was chosen yet", "the person
@@ -201,7 +214,7 @@ class LazyUserDriveStorage:
                     # lives on the row this re-reads, so a re-authorisation takes effect
                     # at the next operation rather than at the next restart.
                     self._resolution = None
-                    raise missing_scope_conflict(DRIVE_SCOPE_FILE, _FEATURE_WRITE)
+                    raise missing_scope_conflict(DRIVE_SCOPE_FILE, feature)
                 current = self._resolution
                 if current is not None and (
                     current.account_id == account.id and current.updated_at == account.updated_at
@@ -235,7 +248,7 @@ class LazyUserDriveStorage:
         reconnect, or a concurrent operation that met a newer row can all replace it
         between the failed refresh and this call, and what got written then was a
         revocation stamped on a credential that had never been asked for anything: a
-        healthy Drive painted red in the shell banner, and the one that actually failed
+        healthy Drive painted red on the Drive settings page, and the one that actually failed
         left `active`.
 
         Its own session because `mark_revoked` commits: the operation that discovered
@@ -320,8 +333,14 @@ class LazyUserDriveStorage:
             # bookkeeping.
             pass
 
-    def _run(self, operation: Callable[[GDriveStorage], _T]) -> _T:
+    def _run(self, operation: Callable[[GDriveStorage], _T], feature: str) -> _T:
         """Resolve, delegate, and turn a revoked grant into a recorded fact.
+
+        `feature` names, in Italian, what the caller was doing, and is used by exactly
+        one thing: the sentence `_resolve` refuses a scope-short grant with. It is a
+        parameter rather than a constant because reading and writing are not the same
+        operation to the person reading that sentence -- see `_FEATURE_WRITE` and
+        `_FEATURE_READ`.
 
         One place, four methods: a revocation can surface from any Drive call (the token
         refresh happens inside each of them), so a per-method `try` would be four
@@ -329,7 +348,7 @@ class LazyUserDriveStorage:
         `UserTokens` raised, not flattened -- a caller that reacts to a revocation has
         to be able to match on it, which is why `drive/errors.py` made it a type.
         """
-        resolution = self._resolve()
+        resolution = self._resolve(feature)
         try:
             return operation(resolution.storage)
         except DriveCredentialRevoked:
@@ -341,13 +360,15 @@ class LazyUserDriveStorage:
     # ---- DocumentStorage --------------------------------------------------------
 
     def put(self, key: str, data: bytes, content_type: str) -> None:
-        self._run(lambda storage: storage.put(key, data, content_type))
+        self._run(lambda storage: storage.put(key, data, content_type), _FEATURE_WRITE)
 
     def get(self, key: str) -> bytes:
-        return self._run(lambda storage: storage.get(key))
+        return self._run(lambda storage: storage.get(key), _FEATURE_READ)
 
     def delete(self, key: str) -> None:
-        self._run(lambda storage: storage.delete(key))
+        # A write, and named as one: removing a document from Drive is the operation a
+        # missing `drive.file` most obviously stops.
+        self._run(lambda storage: storage.delete(key), _FEATURE_WRITE)
 
     def signed_url(self, key: str, ttl: timedelta) -> str | None:
         """`None`, like both other backends -- but only after resolving.
@@ -358,4 +379,4 @@ class LazyUserDriveStorage:
         checking whether a direct link exists would learn nothing and the
         misconfiguration would surface somewhere else entirely.
         """
-        return self._run(lambda storage: storage.signed_url(key, ttl))
+        return self._run(lambda storage: storage.signed_url(key, ttl), _FEATURE_READ)
