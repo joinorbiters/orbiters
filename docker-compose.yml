@@ -43,6 +43,24 @@ services:
     environment:
       PIGROCRM_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-pigrocrm}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-pigrocrm}
       PIGROCRM_JWT_SECRET: ${PIGROCRM_JWT_SECRET:?serve un secret}
+      # The installation's own choices, forwarded by name with the code's own defaults
+      # (packages/core/src/pigrocrm/core/config.py) so an `.env` that leaves them out
+      # gets exactly what a bare `Settings()` would. Booleans and the enum default to a
+      # literal, never to an empty string, which pydantic would refuse at start-up.
+      PIGROCRM_TIMEZONE: ${PIGROCRM_TIMEZONE:-Europe/Rome}
+      PIGROCRM_MCP_FULL_ACCESS: ${PIGROCRM_MCP_FULL_ACCESS:-false}
+      PIGROCRM_STORAGE_BACKEND: ${PIGROCRM_STORAGE_BACKEND:-local}
+      PIGROCRM_GDRIVE_SERVICE_ACCOUNT_JSON: ${PIGROCRM_GDRIVE_SERVICE_ACCOUNT_JSON:-}
+      PIGROCRM_GDRIVE_ROOT_FOLDER_ID: ${PIGROCRM_GDRIVE_ROOT_FOLDER_ID:-}
+      # Gmail and Drive (slice 5, 9): all four or none, as .env.example says. With
+      # `google_accounts` rows in the database and no PIGROCRM_GOOGLE_TOKEN_KEY, the API
+      # refuses to boot rather than hold tokens it cannot decrypt.
+      PIGROCRM_GOOGLE_CLIENT_ID: ${PIGROCRM_GOOGLE_CLIENT_ID:-}
+      PIGROCRM_GOOGLE_CLIENT_SECRET: ${PIGROCRM_GOOGLE_CLIENT_SECRET:-}
+      PIGROCRM_GOOGLE_TOKEN_KEY: ${PIGROCRM_GOOGLE_TOKEN_KEY:-}
+      PIGROCRM_PUBLIC_URL: ${PIGROCRM_PUBLIC_URL:-}
+      PIGROCRM_GOOGLE_APP_UNVERIFIED: ${PIGROCRM_GOOGLE_APP_UNVERIFIED:-false}
+      PIGROCRM_ORBITERS_DATABASE_URL: ${PIGROCRM_ORBITERS_DATABASE_URL:-}
       # PIGROCRM_COOKIE_SECURE is deliberately NOT set here -- do not add it.
       # .env (this same file, shared with the plain `uv run uvicorn`/`uv run pytest`
       # local-dev flow) carries PIGROCRM_COOKIE_SECURE=false for that flow's own
@@ -56,6 +74,11 @@ services:
       # to this service, it re-opens that hole: `docker compose up` with an
       # unmodified `.env.example`-derived `.env` would then silently serve cookies
       # without `Secure`.
+    # Where `PIGROCRM_STORAGE_BACKEND=local` writes documents (config.py's
+    # `storage_local_root`, ./var/documents under the image's WORKDIR /app). On the
+    # host, like the database above, so a rebuilt container keeps every PDF.
+    volumes:
+      - ${PIGROCRM_DOCUMENTS_DIR:-./var/documents}:/app/var/documents
 
   web:
     build:
