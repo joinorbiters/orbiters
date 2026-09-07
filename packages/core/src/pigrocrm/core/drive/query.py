@@ -127,6 +127,28 @@ def escape_query_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
+# La regola di `checked_outside_id` scritta come `pattern` di JSON Schema, per l'unico
+# tipo di chiamante che deve *pubblicarla* invece di limitarsi ad applicarla: i tool
+# Drive di `apps/mcp` la dichiarano sui parametri `cartella_id`/`file_id`, cosi' che
+# un'espressione di ricerca passata da un agente venga rifiutata dallo schema dello
+# strumento prima che un corpo giri, e il rifiuto nomini il parametro che ha scritto lui
+# invece di risalire da tre livelli piu' sotto.
+#
+# Sta qui, accanto alla funzione, e non nel modulo che la pubblica: e' la stessa regola,
+# e la ragione per cui `checked_outside_id` e' pubblica invece di essere riscritta da
+# ogni chiamante vale identica per la sua grafia in JSON Schema. Derivata dal regex
+# compilato, mai ribattuta a mano: due grafie di una regola sono una regola che
+# divergera', e la divergenza e' silenziosa in entrambe le direzioni -- uno schema piu'
+# lasco trasforma un rifiuto leggibile in un `ValidationFailed` dal profondo, uno piu'
+# severo rifiuta id che il titolare ha configurato legittimamente.
+#
+# Gli anchor sono espliciti perche' `pattern` in JSON Schema e' una *ricerca*, non un
+# full match: senza `^…$` accetterebbe `'x' in parents and 1RadiceClientiAAAA`, cioe'
+# esattamente la stringa che esiste per rifiutare. `re.fullmatch` qui sotto e' cio' che
+# rende equivalente il lato Python.
+OUTSIDE_ID_PATTERN = f"^{_SAFE_FOLDER_ID.pattern}$"
+
+
 def checked_outside_id(value: str, *, field: str) -> str:
     """La forma severa di un id che arriva **da fuori**, sotto il nome del parametro
     che lo portava.

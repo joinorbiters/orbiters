@@ -607,11 +607,12 @@ def test_the_privileged_module_is_the_only_place_they_appear() -> None:
     above green while the forbidden operations became reachable on an installation that
     never opted in.
 
-    Note what the second half does *not* claim. It proves each privileged import sits
-    after the guard in the source text, which is what an AST-free check can prove about
-    a nested import; that the three Drive tools additionally need Google is proved at
-    runtime instead, by `test_drive_privileged_tools.py`'s four-way sweep over built
-    servers -- the only place a *runtime* condition can be observed at all.
+    Note what the second half does *not* claim. It proves each privileged import is
+    *nested inside* the `if resolved_settings.mcp_full_access:` statement, which is what
+    a structural check can prove about a nested import; that the three Drive tools
+    additionally need Google is proved at runtime instead, by
+    `test_drive_privileged_tools.py`'s four-way sweep over built servers -- the only
+    place a *runtime* condition can be observed at all.
     """
     unconditional = _tools_source()
     privileged = "\n".join(path.read_text(encoding="utf-8") for path in PRIVILEGED_MODULES)
@@ -626,15 +627,98 @@ def test_the_privileged_module_is_the_only_place_they_appear() -> None:
             "coprendo la cosa sbagliata"
         )
 
-    server_source = (TOOLS_DIR.parent / "server.py").read_text(encoding="utf-8")
-    assert "mcp_full_access" in server_source
-    guardia = server_source.index("if resolved_settings.mcp_full_access:")
-    for module in PRIVILEGED_MODULES:
-        nome = module.stem
-        assert server_source.index(f"import {nome}") > guardia, (
-            f"{nome} e' importato fuori dalla guardia: il modulo verrebbe registrato "
-            "sempre e l'esenzione delle scansioni diventerebbe un buco"
+    dentro, fuori = _privileged_imports_of_server()
+    assert dentro == {module.stem for module in PRIVILEGED_MODULES}, (
+        "un modulo privilegiato non e' importato dentro `if resolved_settings."
+        f"mcp_full_access:`: dentro la guardia ci sono {sorted(dentro)}"
+    )
+    assert not fuori, (
+        f"{sorted(fuori)} sono importati fuori dalla guardia: verrebbero registrati "
+        "sempre e l'esenzione delle scansioni diventerebbe un buco"
+    )
+
+
+def _privileged_imports_of_server() -> tuple[set[str], set[str]]:
+    """The privileged modules `server.py` imports, split into those nested inside the
+    `mcp_full_access` guard and those outside it.
+
+    Structural rather than textual, because the textual version answered a weaker
+    question than it looked like it did: "the import appears later in the file than the
+    guard does" is also true of an import in a *sibling* block below the guard, or after
+    it at module level -- both of which run unconditionally. This walks
+    `build_server`'s body for the `ast.If` whose test is `resolved_settings.
+    mcp_full_access` and asks whether each `ImportFrom` is a descendant of it.
+
+    Two sets and not a boolean so the failure can say which module is on the wrong side;
+    a module imported both inside and outside appears in both, and `fuori` being
+    non-empty is what fails.
+    """
+    tree = ast.parse((TOOLS_DIR.parent / "server.py").read_text(encoding="utf-8"))
+
+    def is_the_guard(node: ast.AST) -> bool:
+        if not isinstance(node, ast.If):
+            return False
+        test = node.test
+        return (
+            isinstance(test, ast.Attribute)
+            and test.attr == "mcp_full_access"
+            and isinstance(test.value, ast.Name)
+            and test.value.id == "resolved_settings"
         )
+
+    guards = [node for node in ast.walk(tree) if is_the_guard(node)]
+    assert guards, (
+        "`if resolved_settings.mcp_full_access:` non esiste piu' in server.py: questo "
+        "controllo non sta piu' guardando niente"
+    )
+
+    def imported_names(nodes: list[ast.AST]) -> set[str]:
+        found: set[str] = set()
+        for root in nodes:
+            for node in ast.walk(root):
+                if isinstance(node, ast.ImportFrom):
+                    found |= {alias.name for alias in node.names}
+        return found
+
+    nomi = {module.stem for module in PRIVILEGED_MODULES}
+    dentro = imported_names(list(guards)) & nomi
+    tutti = imported_names([tree]) & nomi
+    return dentro, tutti - dentro
+
+
+def _agent_reachable_source() -> str:
+    """Every line of `apps/mcp` an agent can reach on a default installation.
+
+    Wider than `_tools_source()` on purpose, and the width is the point: agent-reachable
+    code is not only `tools/`. `resources/entities.py` renders the `customer://`,
+    `person://` and `deal://` templates, and `server.py` itself carries three inline
+    `@mcp.resource` bodies plus `describe_schema`/`refresh_schema` -- all registered
+    unconditionally, none of them scanned by the tools-only sweep. A `drive_reader_for`
+    built inside a resource render would be exactly as reachable as one built in a tool,
+    while leaving no trace under `tools/` at all.
+
+    `PRIVILEGED_MODULES` are subtracted, as everywhere else in this file: their whole
+    existence is conditional.
+    """
+    paths = [
+        path
+        for base in (TOOLS_DIR, TOOLS_DIR.parent / "resources")
+        for path in sorted(base.rglob("*.py"))
+        if path not in PRIVILEGED_MODULES
+    ]
+    paths.append(TOOLS_DIR.parent / "server.py")
+    return "\n".join(path.read_text(encoding="utf-8") for path in paths)
+
+
+def test_the_wide_scan_really_reads_the_resources_and_the_server() -> None:
+    """Guards the widening, the way this file guards every other scan. An
+    `_agent_reachable_source` that silently collapsed back to `tools/` would leave the
+    Drive-reader ban below green while no longer looking at the two places it was
+    widened for."""
+    source = _agent_reachable_source()
+    assert "def render_customer(" in source  # resources/entities.py
+    assert "def customer_resource(" in source  # server.py's inline @mcp.resource
+    assert "def search_everything(" in source  # tools/__init__.py, i.e. the old width
 
 
 def test_no_unconditional_module_can_even_obtain_a_drive_reader() -> None:
@@ -652,7 +736,7 @@ def test_no_unconditional_module_can_even_obtain_a_drive_reader() -> None:
     Stated as its own test rather than folded into the loop above because it is a
     different kind of statement: the ban list forbids calls, this forbids a capability.
     """
-    unconditional = _tools_source()
+    unconditional = _agent_reachable_source()
     privileged = "\n".join(path.read_text(encoding="utf-8") for path in PRIVILEGED_MODULES)
 
     assert "drive_reader_for" not in unconditional, (

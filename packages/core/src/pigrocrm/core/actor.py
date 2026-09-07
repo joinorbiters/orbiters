@@ -138,6 +138,25 @@ class Actor(BaseModel):
         if self.type == "mcp" and not self.full_access and action in AGENT_FORBIDDEN_ACTIONS:
             raise AgentForbidden(action)
 
+    def require_agent_allowed(self, action: str) -> None:
+        """The agent half of the check, on its own, for an operation whose *role* half
+        is somebody else's business.
+
+        `require_write`/`require_admin` answer two questions at once, and that is right
+        for a service method: the operation both writes and is closed to agents. Reading
+        a Drive folder is neither -- it writes nothing, and whether this credential may
+        use the connected Drive at all is decided by `GoogleDriveAccountService.usable`,
+        which is about the *grant* rather than the role. Calling `require_write` there
+        would refuse a `readonly` person a read, which is the wrong answer to the
+        question actually being asked.
+
+        So this exists to let `drive_reader_for` apply the ban and nothing else, at the
+        one point every reader of Drive has to pass through -- an MCP tool today, a REST
+        route tomorrow. Public for exactly that reason: `_refuse_if_agent` is private
+        because a caller reaching past `require_*` was, until this, always a mistake.
+        """
+        self._refuse_if_agent(action)
+
     def require_write(self, action: str) -> None:
         self._refuse_if_agent(action)
         if not self.can_write:

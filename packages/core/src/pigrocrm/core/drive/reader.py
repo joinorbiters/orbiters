@@ -51,15 +51,12 @@ from pigrocrm.core.config import DRIVE_TEXT_MAX_BYTES_DEFAULT, Settings, decode_
 from pigrocrm.core.drive.account import GoogleDriveAccountService
 from pigrocrm.core.drive.errors import DriveCredentialRevoked
 from pigrocrm.core.drive.query import (
-    # The compiled pattern behind `checked_outside_id`, and the one private name this
-    # module reaches for. It is here so that `OUTSIDE_ID_PATTERN` below can be *derived*
-    # rather than re-typed: an adapter that has to publish the rule as a JSON Schema
-    # must publish this rule, and a second spelling of it is the drift the whole
-    # one-pattern discipline of `query.py` exists to prevent. Private because nobody
-    # should match against it directly -- use `checked_outside_id`, which also produces
-    # the refusal.
-    _SAFE_FOLDER_ID,
     FOLDER_MIME,
+    # Re-exported, not used here: `checked_outside_id`'s rule as a JSON Schema
+    # `pattern`. It lives in `query.py`, beside the check it spells (one rule, one
+    # place), and is visible from this module too because the Drive reads an adapter
+    # publishes are reached through the reader rather than through the query builder.
+    OUTSIDE_ID_PATTERN,  # noqa: F401
     # The strict shape of an id that arrives from outside, imported rather than
     # rewritten: `query.py` is where that shape is defined, and a copy here would be a
     # second pattern to keep in step with it. The `field=` is what makes it usable for
@@ -78,22 +75,6 @@ from pigrocrm.core.errors import Conflict, NotFound
 from pigrocrm.core.gmail.crypto import unseal
 from pigrocrm.core.gmail.tokens import GoogleTokenClient
 from pigrocrm.core.gmail.transport import GmailTransport
-
-# `checked_outside_id`'s rule, spelled as a JSON Schema `pattern` for the one kind of
-# caller that has to *publish* it instead of merely applying it: `apps/mcp`'s Drive
-# tools declare it on their `cartella_id`/`file_id` parameters, so an agent handing over
-# a Drive search expression is refused by the tool schema before any body runs, and the
-# refusal names the parameter it typed rather than surfacing from three layers down.
-#
-# Derived from `query.py`'s own compiled pattern and never written out again, for the
-# reason `checked_outside_id`'s docstring gives about itself: two spellings of one rule
-# are one rule that will drift, and the drift is silent in both directions -- a laxer
-# schema turns a readable refusal into a `ValidationFailed` from the depths, a stricter
-# one refuses ids the titolare legitimately configured. The anchors are explicit because
-# JSON Schema `pattern` is a *search*, not a full match, so an unanchored pattern would
-# accept `'x' in parents and 1RadiceClientiAAAA` -- exactly the string it exists to
-# refuse. `re.fullmatch` is what makes the Python side equivalent; see `query.py`.
-OUTSIDE_ID_PATTERN = f"^{_SAFE_FOLDER_ID.pattern}$"
 
 # The entity every refusal of this module is reported under. One name for a folder and
 # a file alike, deliberately: the entity is part of what a caller reads, and saying
@@ -147,6 +128,20 @@ _PARENT_FIELDS = "id, parents"
 _NOT_A_FOLDER = "una cartella non ha byte da leggere: elencane i figli"
 _NO_BYTES = "un file {mime} non ha byte da scaricare né un export in testo"
 _TOO_BIG = "il file supera {max_bytes} byte: aprilo su Drive invece di importarlo"
+
+# The entity a refusal *about the account* is reported under, as opposed to `ENTITY`,
+# which is the file or folder being read. Same string `GoogleDriveAccountService` uses
+# for its own gates, so an adapter that routes on the entity sends a person to the same
+# settings screen whichever of the refusals they met.
+_ACCOUNT_ENTITY = "google_drive_account"
+
+# Connected, but pointed at nothing. Named as a configuration step and not as an error,
+# because that is what it is -- and it says which folders, because "configure Drive" is
+# advice somebody who already connected Drive has no way to act on.
+_NO_ROOTS = (
+    "{feature} non è disponibile: non c'è nessuna cartella radice configurata. "
+    "Indica da Impostazioni → Drive le cartelle che il CRM può leggere."
+)
 
 _REVOKED_REASON = (
     "Il consenso Google Drive per {email} è stato revocato: la lettura dei documenti "
@@ -477,19 +472,51 @@ class DriveReader:
 
 
 def drive_reader_for(
-    session: Session, actor: Actor, settings: Settings, *, feature: str
+    session: Session, actor: Actor, settings: Settings, *, feature: str, action: str | None = None
 ) -> DriveReader:
     """A reader on this actor's connected Drive account, or the refusal that says why not.
 
-    The order is the point. The gate comes first (`usable`, which holds no transport and
-    therefore *cannot* have called Google), so somebody whose grant is revoked, whose
-    consent expired or who never granted `drive.readonly` learns it at the ask rather
-    than from a failed Drive call. Only then is the refresh token unsealed, wrapped in
-    `UserTokens` and handed to a `DriveTransport`; and the roots come from the row, so
-    a reader cannot be pointed at a folder the titolare did not configure.
+    The order is the point, and there are now four gates in it, each of which must come
+    before the next has anything to say:
+
+    1. `action`, when given: the operation the caller is about, checked against
+       `AGENT_FORBIDDEN_ACTIONS` before this function touches the database at all. An
+       agent credential on an installation that has not opted in is refused here, so it
+       never learns whether a Drive is even connected;
+    2. `usable`, which holds no transport and therefore *cannot* have called Google, so
+       a revoked grant, an expired consent or a missing `drive.readonly` is learnt at
+       the ask rather than from a failed Drive call;
+    3. the roots, which must not be empty -- see below;
+    4. only then the refresh token, unsealed and wrapped in `UserTokens` for a
+       `DriveTransport`. The roots come from the row, so a reader cannot be pointed at a
+       folder the titolare did not configure.
 
     `feature` is the name the refusal uses ("la lettura dei documenti da Drive"), so a
     missing scope reads as a feature that is off rather than as a broken credential.
+
+    `action` is the name `AGENT_FORBIDDEN_ACTIONS` lists the operation under -- the MCP
+    tool's own name, which is also what a REST route would pass. It is here, at the one
+    point every reader of Drive is built from, rather than in each caller: the tool being
+    unregistered protects the MCP transport only, and a personal access token is not
+    confined to it (see `core/actor.py`, and the commit its comment names). A route that
+    composes a reader inherits the ban by passing its action.
+
+    It is *optional* because one existing caller must not pass one:
+    `InvoiceService._drive_reader`, whose operation is `import_issued_invoice` -- already
+    on the list, and already checked by `import_issued` under that name. Passing it here
+    too would check the same ban twice, and passing anything else would check the wrong
+    one. `None` therefore means "the caller's own authorization has already run", which
+    is a statement a caller makes deliberately rather than a default it inherits by
+    forgetting; nothing here can tell those two apart, which is why the three MCP tools
+    are tested against a closed agent credential one by one.
+
+    **Empty roots are guidance, not an empty answer.** A connected credential with no
+    `root_folder_ids` is a real state -- `DriveRootsUpdate` requires at least one, so
+    the only way to have none is never to have configured them -- and it is a
+    configuration step, not a fault. Without this the reader would compose happily and
+    every operation would answer "not found", or list nothing: an agent would report
+    that the titolare's Drive is empty, and the person would go looking for a bug
+    instead of opening the settings screen.
 
     `on_revoked` closes the last gap: a revocation can only be *learned* by a refresh
     that answers `invalid_grant`, which happens deep inside a read. `mark_revoked`
@@ -501,8 +528,18 @@ def drive_reader_for(
     rather than one per hour per process -- the price of `packages/core` not owning a
     process-wide cache, and the same choice `apps/mcp`'s privileged tools already make.
     """
+    if action is not None:
+        # Before the session is touched: a refusal here must not double as "there is a
+        # Drive account for this user".
+        actor.require_agent_allowed(action)
     accounts = GoogleDriveAccountService(session, settings=settings)
     account = accounts.usable(actor, scope=DRIVE_SCOPE_READONLY, feature=feature)
+    if not account.root_folder_ids:
+        raise Conflict(
+            _ACCOUNT_ENTITY,
+            _NO_ROOTS.format(feature=feature),
+            email_address=account.email_address,
+        )
     refresh_token = unseal(
         account.refresh_token_ciphertext,
         account.refresh_token_nonce,

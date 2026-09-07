@@ -56,10 +56,10 @@ from pigrocrm.core.auth.models import User
 from pigrocrm.core.config import Settings
 from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.documents.models import Document, DocumentVersion
+from pigrocrm.core.documents.schemas import TITOLO_MAX_LENGTH
 from pigrocrm.core.drive import reader as reader_module
 from pigrocrm.core.drive.models import GoogleDriveAccount
-from pigrocrm.core.drive.query import checked_outside_id
-from pigrocrm.core.drive.reader import OUTSIDE_ID_PATTERN
+from pigrocrm.core.drive.query import OUTSIDE_ID_PATTERN, checked_outside_id
 from pigrocrm.core.drive.schemas import DRIVE_SCOPE_FILE, DRIVE_SCOPE_READONLY
 from pigrocrm.core.drive.text import PROVENIENZA
 from pigrocrm.core.drive.transport import DriveTransport
@@ -89,6 +89,7 @@ SUB_FOLDER = "1SottocartellaACME"
 TXT_FILE = "1AppuntiTestoZZZZZ"
 OUTSIDE_FOLDER = "1CartellaPersonale"
 OUTSIDE_FILE = "1FotoDeiFigliJpeg1"
+MOV_FILE = "1FilmatoQuickTime1"
 
 TXT_TEXT = "Appunti: rivedere il preventivo, poi mandarlo."
 
@@ -171,6 +172,16 @@ def fake_drive(monkeypatch: pytest.MonkeyPatch) -> FakeDrive:
         content=TXT_TEXT.encode(),
         file_id=TXT_FILE,
     )
+    # A type the CRM does not store, inside a configured folder: the mistake
+    # `import_drive_file` must refuse *before* downloading it. Under the root rather
+    # than the subfolder so the listing assertions above keep naming one child.
+    drive.add_file(
+        "Riunione.mov",
+        parent=ROOT_FOLDER,
+        mime="video/quicktime",
+        content=b"\x00" * 64,
+        file_id=MOV_FILE,
+    )
     drive.add_folder("Personale", parent=drive.root_id, file_id=OUTSIDE_FOLDER)
     drive.add_file(
         "figli.jpg",
@@ -195,6 +206,16 @@ def open_server(mcp_session: Session, owner: Actor, tmp_path: Path) -> Any:
         LocalFileStorage(tmp_path),
         settings=_settings(full_access=True, gmail=True),
     )
+
+
+# One valid call per tool, for the tests that ask the same question of all three (the
+# agent ban, the missing account, the unconfigured roots). Valid on purpose: a refusal
+# that arrives before the arguments are even looked at is the only kind these prove.
+CALLS: dict[str, dict[str, Any]] = {
+    "list_drive_files": {},
+    "read_drive_file": {"file_id": TXT_FILE},
+    "import_drive_file": {"file_id": TXT_FILE, "tipo": "documento", "titolo": "X"},
+}
 
 
 def _listings(drive: FakeDrive) -> list[Any]:
@@ -246,12 +267,21 @@ async def test_no_drive_tool_takes_a_free_text_string_except_the_title(
     the only strings reaching Drive being folder and file ids.
 
     So every string parameter must carry a `pattern`, a closed `enum` or a `format`,
-    and `titolo` is the single declared exception -- `SafeStr`-bounded by
-    `DocumentCreate` and written to `documents.titolo`, never to a query. Named one by
-    one and never widened to "the tool's own parameters", so the next free-text
+    and `import_drive_file.titolo` is the single declared exception -- `SafeStr`-bounded
+    by `DocumentCreate` and written to `documents.titolo`, never to a query.
+
+    The allowlist is keyed by `(tool, parameter)` and not by the bare name, which is the
+    same lesson `FORBIDDEN_QUALIFIED_CALLS` records about `upsert`: a bare `"titolo"`
+    would also permit a `titolo` on `list_drive_files`, and "list the folder whose title
+    is..." is precisely the search this whole surface refuses. It stays enumerated pair
+    by pair, never widened to "the tool's own parameters", so the next free-text
     parameter has to argue for itself.
+
+    It also insists the exception is *bounded*: an unconstrained string must at least
+    publish a `maxLength`, so an agent is told the ceiling instead of discovering it as
+    a refusal after fetching the file.
     """
-    allowed_free_text = {"titolo"}
+    allowed_free_text = {("import_drive_file", "titolo")}
     async with Client(open_server) as client:
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
@@ -269,9 +299,18 @@ async def test_no_drive_tool_takes_a_free_text_string_except_the_title(
                     continue
                 if inner.get("pattern") or inner.get("enum") or inner.get("format"):
                     continue
-                assert field in allowed_free_text, f"{name}.{field} accetta testo libero"
+                assert (name, field) in allowed_free_text, f"{name}.{field} accetta testo libero"
+                assert inner.get("maxLength"), (
+                    f"{name}.{field} e' testo libero senza un tetto dichiarato nello "
+                    "schema: l'agente scopre il limite come rifiuto invece di leggerlo"
+                )
     # A sweep over zero properties is a sweep that cannot fail.
     assert checked >= 8, checked
+    # And the one exception really was exercised, rather than the loop having skipped
+    # every string because a `pattern` quietly appeared on `titolo` too.
+    titolo = (tools["import_drive_file"].input_schema or {})["properties"]["titolo"]
+    assert titolo["maxLength"] == TITOLO_MAX_LENGTH
+    assert "pattern" not in titolo and "enum" not in titolo
 
 
 async def test_the_id_pattern_published_in_the_schema_is_the_readers_own(
@@ -531,14 +570,8 @@ async def test_without_a_connected_drive_every_tool_says_where_to_connect_it(
     No account row is created by this test, and no request reaches the fake: `usable`
     holds no transport, so the refusal *cannot* have asked Google anything.
     """
-    arguments: dict[str, Any] = {
-        "list_drive_files": {},
-        "read_drive_file": {"file_id": TXT_FILE},
-        "import_drive_file": {"file_id": TXT_FILE, "tipo": "documento", "titolo": "X"},
-    }[tool]
-
     async with Client(open_server) as client:
-        result = await client.call_tool(tool, arguments)
+        result = await client.call_tool(tool, CALLS[tool])
 
     assert result.is_error
     text = result.content[0].text
@@ -557,3 +590,217 @@ async def test_no_drive_tool_answer_carries_a_credential(
     rendered = json.dumps([_payload(listing), _payload(text)], default=str)
     for forbidden in ("ciphertext", "nonce", "refresh_token", REFRESH_TOKEN, "at-1"):
         assert forbidden not in rendered
+
+
+# --- the ban on the credential itself ---------------------------------------------------
+
+
+@pytest.fixture
+def closed_agent_server(mcp_session: Session, owner: Actor, tmp_path: Path) -> Any:
+    """The divergent installation: the switch is on in `Settings` -- so the three tools
+    are registered -- and the credential presenting itself is an agent token that was
+    *not* opened.
+
+    Not a hypothetical. `Settings.mcp_full_access` decides whether there is a door;
+    `Actor.full_access`, stamped in `PatService.resolve`, decides whether this
+    credential may walk through it. They read the same setting, so they normally agree,
+    but the guarantee the product makes does not rest on that: the same
+    `Bearer pgc_...` reaches every REST route, where no tool registration protects
+    anything at all. This fixture is the shape of that gap.
+    """
+    return build_server(
+        lambda: mcp_session,
+        lambda: Actor(id=owner.id, type="mcp", role="admin", full_access=False),
+        LocalFileStorage(tmp_path),
+        settings=_settings(full_access=True, gmail=True),
+    )
+
+
+@pytest.mark.parametrize("tool", TOOLS)
+async def test_an_agent_credential_that_was_not_opened_is_refused(
+    closed_agent_server: Any,
+    connected_drive: GoogleDriveAccount,
+    fake_drive: FakeDrive,
+    tool: str,
+) -> None:
+    """`AGENT_FORBIDDEN_ACTIONS` has to *bind*, not merely list.
+
+    Until `drive_reader_for` took an `action`, the three names sat on that frozenset
+    while nothing ever passed them to a check -- the list said the operations were
+    closed to agents and no code asked. The tool being unregistered covered the MCP
+    transport and only it, which is exactly the asymmetry that once let a `curl` issue
+    an invoice while the tool did not exist (see `core/actor.py`).
+
+    So the refusal is `AgentForbidden`, it names the operation, and it arrives with the
+    connected Drive untouched: the check runs before the session is even read, so a
+    closed credential does not get to learn whether this user has a Drive at all.
+    """
+    async with Client(closed_agent_server) as client:
+        result = await client.call_tool(tool, CALLS[tool])
+
+    assert result.is_error
+    text = result.content[0].text
+    assert tool in text
+    assert "non è eseguibile da un agente" in text
+    assert "Traceback" not in text
+    assert fake_drive.requests == []
+
+
+async def test_the_same_credential_is_not_refused_the_unprivileged_drive_tool(
+    closed_agent_server: Any, connected_drive: GoogleDriveAccount, fake_drive: FakeDrive
+) -> None:
+    """The other side of the ban, and what keeps it from being a blanket. Diagnosing the
+    credential costs no quota and reads no folder, so `describe_drive_account` answers a
+    closed agent exactly as it answers anybody -- otherwise an installation would refuse
+    an agent the one tool that could explain why the other three refuse it."""
+    async with Client(closed_agent_server) as client:
+        result = await client.call_tool("describe_drive_account", {})
+
+    assert not result.is_error
+    assert _payload(result)["account"]["email_address"] == MAILBOX
+    assert fake_drive.requests == []
+
+
+# --- connected, but pointed at nothing --------------------------------------------------
+
+
+@pytest.fixture
+def drive_without_roots(mcp_session: Session, owner: Actor) -> GoogleDriveAccount:
+    """A healthy credential with no `root_folder_ids`: connected, never configured.
+
+    A real state and the only way to reach it -- `DriveRootsUpdate` requires at least
+    one root, so an empty list is a row nobody has configured yet, not one somebody
+    emptied.
+    """
+    ciphertext, nonce = seal(REFRESH_TOKEN, base64.b64decode(TOKEN_KEY_B64))
+    account = GoogleDriveAccount(
+        user_id=owner.id,
+        google_sub="sub-drive-9c-noroots",
+        email_address=MAILBOX,
+        refresh_token_ciphertext=ciphertext,
+        refresh_token_nonce=nonce,
+        scopes_granted=[DRIVE_SCOPE_READONLY, DRIVE_SCOPE_FILE],
+        status="active",
+        root_folder_ids=[],
+    )
+    mcp_session.add(account)
+    mcp_session.flush()
+    return account
+
+
+@pytest.mark.parametrize("tool", TOOLS)
+async def test_a_drive_with_no_configured_roots_says_where_to_configure_them(
+    open_server: Any, drive_without_roots: GoogleDriveAccount, fake_drive: FakeDrive, tool: str
+) -> None:
+    """The failure worth naming: without this, all three answered *emptily*.
+
+    `list_drive_files` would return `{"items": []}` and the other two `NotFound`, so an
+    agent would report that the titolare's Drive holds nothing -- a true-sounding
+    sentence about a Drive that is full, whose real problem is one settings screen away.
+    An empty answer is the most expensive kind of wrong, because nobody goes looking for
+    a bug in it.
+
+    Named as a configuration step, and it says *which* folders: «collega Drive» is
+    advice somebody who has already connected Drive cannot act on.
+    """
+    async with Client(open_server) as client:
+        result = await client.call_tool(tool, CALLS[tool])
+
+    assert result.is_error
+    text = result.content[0].text
+    assert "cartella radice" in text
+    assert "Impostazioni → Drive" in text
+    assert "Traceback" not in text
+    # Refused before Google was asked anything: the roots come off the row.
+    assert fake_drive.requests == []
+
+
+# --- what import will not even download -------------------------------------------------
+
+
+async def test_import_drive_file_refuses_a_type_the_crm_does_not_store_before_downloading(
+    open_server: Any,
+    mcp_session: Session,
+    connected_drive: GoogleDriveAccount,
+    fake_drive: FakeDrive,
+) -> None:
+    """`DocumentService._check_upload` would refuse the same file a moment later, and
+    that is not good enough: by then a video has been pulled through this process and
+    buffered whole in memory, spending the titolare's Drive quota and bandwidth to reach
+    a refusal that one `files.get` had already decided.
+
+    So the mime is checked on the metadata, and the assertion that matters is the
+    absence of any `alt=media` request. The set is derived from `ALLOWED_CONTENT_TYPES`,
+    so a type the CRM starts storing becomes importable in the same commit rather than
+    being fetched and then rejected.
+    """
+    customer = Customer(ragione_sociale="ACME S.r.l.")
+    mcp_session.add(customer)
+    mcp_session.flush()
+
+    async with Client(open_server) as client:
+        result = await client.call_tool(
+            "import_drive_file",
+            {
+                "file_id": MOV_FILE,
+                "tipo": "documento",
+                "titolo": "Riunione",
+                "customer_id": str(customer.id),
+            },
+        )
+
+    assert result.is_error
+    text = result.content[0].text
+    assert "video/quicktime" in text
+    assert "Traceback" not in text
+    assert not [r for r in fake_drive.requests if r.params.get("alt") == ["media"]]
+    assert mcp_session.execute(select(Document)).scalars().all() == []
+
+
+async def test_import_drive_file_leaves_a_folder_to_the_readers_own_sentence(
+    open_server: Any,
+    mcp_session: Session,
+    connected_drive: GoogleDriveAccount,
+    fake_drive: FakeDrive,
+) -> None:
+    """A folder is not an unsupported content type, and answering it with a list of
+    content types would replace advice an agent can act on -- «elencane i figli» -- with
+    a dead end. The reader owns that sentence, and refuses before any download too."""
+    customer = Customer(ragione_sociale="ACME S.r.l.")
+    mcp_session.add(customer)
+    mcp_session.flush()
+
+    async with Client(open_server) as client:
+        result = await client.call_tool(
+            "import_drive_file",
+            {
+                "file_id": SUB_FOLDER,
+                "tipo": "documento",
+                "titolo": "ACME",
+                "customer_id": str(customer.id),
+            },
+        )
+
+    assert result.is_error
+    assert "elencane i figli" in result.content[0].text
+    assert not [r for r in fake_drive.requests if r.params.get("alt") == ["media"]]
+
+
+# --- a cursor is the continuation of a folder -------------------------------------------
+
+
+async def test_a_cursor_without_a_folder_is_refused_rather_than_ignored(
+    open_server: Any, connected_drive: GoogleDriveAccount, fake_drive: FakeDrive
+) -> None:
+    """There is no "next page of the roots": Drive's page token belongs to the query it
+    came from, and the roots are not a Drive query at all. Silently answering the first
+    page again would let an agent loop over it forever believing it was advancing, which
+    is worse than a refusal naming the parameter to add."""
+    async with Client(open_server) as client:
+        result = await client.call_tool("list_drive_files", {"cursor": "0"})
+
+    assert result.is_error
+    text = result.content[0].text
+    assert "cartella_id" in text
+    assert "Traceback" not in text
+    assert fake_drive.requests == []
