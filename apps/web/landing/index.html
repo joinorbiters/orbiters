@@ -15,57 +15,59 @@
       content="Clienti, deal, offerte e fatture su un server che è tuo. Pensato per il regime forfettario, e progettato perché un assistente AI possa usarlo quanto te."
     />
     <meta property="og:locale" content="it_IT" />
+    <link rel="icon" type="image/svg+xml" href="./orbiters-logo.svg" />
     <link rel="stylesheet" href="./landing.css" />
   </head>
-  <body class="grain">
-    <header class="wrap section" style="padding-block: 1.5rem">
-      <nav style="display: flex; align-items: center; justify-content: space-between">
-        <span style="font-size: 1.25rem; font-weight: 500">PigroCRM</span>
-        <a class="quiet-link" href="/app/">Accedi</a>
-      </nav>
+  <body>
+    <header class="wrap top">
+      <a class="brand" href="/"><span class="glyph" aria-hidden="true"></span>PigroCRM</a>
+      <a class="quiet-link" href="/app/">Accedi</a>
     </header>
 
     <main>
-      <section class="wrap section">
-        <p class="overline rise">CRM self-hosted · AI-first</p>
-        <h1 class="measure rise">Il CRM che lavora al posto tuo.</h1>
-        <p class="lead measure rise" style="margin-top: 1.5rem">
-          Clienti, persone, deal, offerte in PDF e fatture — su un server che è tuo, con i tuoi dati
-          nel tuo database. E un server MCP, perché il lavoro noioso lo faccia il tuo assistente AI
-          invece di te.
-        </p>
-        <p class="rise" style="margin-top: 2.5rem">
-          <a class="cta" href="https://github.com/pigrocrm/pigrocrm#installazione"
-            >Installala sul tuo server</a
-          >
-        </p>
-        <p class="measure rise" style="margin-top: 1rem; font-size: 0.9375rem">
-          Non c'è una registrazione: non è un servizio, è un programma che installi. Docker Compose,
-          un dominio, dieci minuti.
-        </p>
+      <section class="hero">
+        <canvas id="hero-field" aria-hidden="true"></canvas>
+        <div class="wrap">
+          <div class="box">
+            <p class="kicker">CRM self-hosted, pensato per lavorare con un assistente AI</p>
+            <h1>Il CRM che lavora al posto tuo.</h1>
+            <p class="lead">
+              Clienti, persone, deal, offerte in PDF e fatture, su un server che è tuo, con i tuoi
+              dati nel tuo database. E un server MCP, perché il lavoro noioso lo faccia il tuo
+              assistente AI invece di te.
+            </p>
+            <p>
+              <a class="cta" href="https://github.com/pigrocrm/pigrocrm#installazione"
+                >Installala sul tuo server</a
+              >
+            </p>
+            <p class="fine">
+              Non c'è una registrazione: non è un servizio, è un programma che installi. Docker
+              Compose, un dominio, dieci minuti.
+            </p>
+          </div>
+        </div>
       </section>
 
       <section class="wrap section">
-        <p class="overline">Per chi è</p>
-        <div
-          style="display: grid; gap: 1.5rem; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr))"
-        >
-          <article class="card rise">
-            <h2>Freelance e piccole società di consulenza</h2>
+        <h2 class="kicker">Per chi è</h2>
+        <div class="grid-3">
+          <article class="card">
+            <h3>Freelance e piccole società di consulenza</h3>
             <p>
               In Italia, spesso in regime forfettario. Pochi clienti, pochi deal, molte offerte da
               scrivere e fatture da farsi pagare.
             </p>
           </article>
-          <article class="card rise">
-            <h2>Chi vuole i suoi dati sul suo server</h2>
+          <article class="card">
+            <h3>Chi vuole i suoi dati sul suo server</h3>
             <p>
               Self-hosted per davvero: nessun account da creare presso di noi, nessun piano da
               scegliere, nessun dato che esce dalla tua macchina se non lo mandi tu.
             </p>
           </article>
-          <article class="card rise">
-            <h2>Chi lavora già con un assistente AI</h2>
+          <article class="card">
+            <h3>Chi lavora già con un assistente AI</h3>
             <p>
               Ogni cosa che fa l'interfaccia la fa anche il server MCP, sugli stessi servizi. Non è
               un'integrazione aggiunta dopo: è metà del progetto.
@@ -74,25 +76,27 @@
         </div>
       </section>
 
-      <section class="wrap section">
-        <p class="overline">Cosa fa</p>
-        <ul class="measure" style="display: grid; gap: 0.75rem; list-style: none; padding: 0">
-          <li class="rise">Clienti, persone e deal, con i campi che decidi tu a runtime.</li>
-          <li class="rise">Offerte e contratti da template Markdown, in PDF, con i tuoi dati fiscali.</li>
-          <li class="rise">Fatture e solleciti, con la lista di chi va sollecitato già pronta.</li>
-          <li class="rise">Gmail: le conversazioni con i tuoi contatti, sulla scheda del cliente.</li>
-          <li class="rise">Un server MCP su tutto quanto sopra.</li>
+      <section class="wrap section" style="padding-top: 0">
+        <h2 class="kicker">Cosa fa</h2>
+        <ul class="tiles measure">
+          <li>Clienti, persone e deal, con i campi che decidi tu a runtime.</li>
+          <li>Offerte e contratti da template Markdown, in PDF, con i tuoi dati fiscali.</li>
+          <li>Fatture e solleciti, con la lista di chi va sollecitato già pronta.</li>
+          <li>Gmail: le conversazioni con i tuoi contatti, sulla scheda del cliente.</li>
+          <li>Un server MCP su tutto quanto sopra.</li>
         </ul>
       </section>
 
-      <footer class="wrap section hairline" style="padding-block: 2.5rem">
-        <p style="font-size: 0.9375rem">
-          <a class="quiet-link" href="/privacy" style="padding-left: 0">Privacy</a>
+      <footer class="wrap rule" style="padding-block: 2rem">
+        <p class="fine" style="display: flex; gap: 1.5rem">
+          <a class="quiet-link" href="/privacy">Privacy</a>
           <a class="quiet-link" href="/termini">Termini</a>
+          <a class="quiet-link" href="/orbiters">Orbiters</a>
         </p>
       </footer>
     </main>
 
-    <script type="module" src="./reveal.js"></script>
+    <script type="module" src="./field.js"></script>
+    <script type="module" src="./landing.js"></script>
   </body>
 </html>

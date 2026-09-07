@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { AppHeader } from '@/components/AppHeader'
+import { BrandMark } from '@/components/BrandMark'
 import { CommandPalette } from '@/features/search/CommandPalette'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
@@ -83,8 +84,12 @@ export function AppShell({ children }: { children: ReactNode }) {
           )}
         >
           <span
-            className={cn('truncate text-xl font-semibold tracking-tight', collapsed && 'sr-only')}
+            className={cn(
+              'inline-flex items-center truncate text-xl font-medium tracking-tight',
+              collapsed && 'sr-only',
+            )}
           >
+            <BrandMark className="mr-2.5" />
             {/* Brand accent, not body text: --color-watermelon (not the AA-adjusted
                 -strong variant) is exactly what the design tokens reserve for this. */}
             Pigro<span className="text-[var(--color-watermelon)]">CRM</span>
