@@ -3,42 +3,33 @@
    src/styles/tokens.css at build time, so the five colours, the font stack and the
    radius scale are literally the same values the app renders.
 
+   Since Orbiters (2026-09-07) the whole product shares one visual system: a faint
+   grid the page sits on, tiles painted on it, boxes with hard edges and a stepped
+   shadow the colour of the ink, and no radius, blur or soft shadow anywhere. The
+   landing draws it in the same words as orbiters.css and the app's tokens.css.
+
    Every token below is a var() or a color-mix() of one of those. #ffffff is the
    only literal, and only ever as the neutral a tint is mixed toward. */
 :root {
-  /* Surfaces */
-  --landing-surface: color-mix(in oklab, var(--color-mint-cream) 92%, #ffffff);
-  --landing-veil-warm: color-mix(in oklab, var(--color-watermelon) 32%, #ffffff);
-  --landing-veil-gold: color-mix(in oklab, var(--color-royal-gold) 28%, #ffffff);
-
-  /* Text. 17.263:1 and 7.705:1 on --landing-surface respectively. */
+  --landing-surface: var(--color-mint-cream);
+  /* Text. 17.3:1 and 7.7:1 on --landing-surface respectively. */
   --landing-ink: var(--color-prussian-blue);
   --landing-ink-quiet: var(--color-charcoal-blue);
-
   /* The one saturated thing on the page, and precisely what
      --color-watermelon-strong exists for: white on it is 4.673:1, white on raw
      Watermelon is 4.221:1 and fails the body-text floor. */
   --landing-cta: var(--color-watermelon-strong);
   --landing-cta-ink: #ffffff;
   /* Raw Watermelon is correct here: a focus ring is a component (3:1), not text,
-     and it measures 4.141:1 against --landing-surface. */
+     and it measures 4.14:1 against --landing-surface. */
   --landing-focus: var(--color-watermelon);
-
-  /* Separation comes from surface tint and from space. Where a line is
-     unavoidable it is a hairline in transparent Prussian Blue, never --border. */
-  --landing-hairline: color-mix(in oklab, var(--color-prussian-blue) 8%, transparent);
-  /* Spec 9.3 writes this as rgba(1, 25, 54, .04). That is Prussian Blue spelled as
-     a literal, which the no-raw-hex rule in the same section forbids -- so it is
-     spelled as the mix instead. Identical result, one source of colour. */
-  --landing-grain-line: color-mix(in oklab, var(--color-prussian-blue) 4%, transparent);
-
-  /* Relief without borders: large, soft, low opacity, plus a light edge on top.
-     Carried from Acme's .invoice-chart / .offer-group recipe (App.css:537-542,
-     824-830), re-tinted from its greens to Prussian Blue. */
-  --landing-shadow: 0 24px 60px -24px color-mix(in oklab, var(--color-prussian-blue) 22%, transparent);
-  --landing-lightline: inset 0 1px 0 rgba(255, 255, 255, 0.8);
-
-  --landing-radius-pill: 999px;
+  /* The grid the tiles snap to. Prussian Blue at 7%, the same line as the app's
+     body and as Orbiters. */
+  --landing-grid: color-mix(in oklab, var(--color-prussian-blue) 7%, transparent);
+  /* The tile, read by landing.js so the canvas and the page share one grid. */
+  --landing-cell: 16px;
+  /* The shadow is an offset, never a blur: the same colour as the border, moved. */
+  --landing-step: 8px;
 }
 
 /* Same woff2 as the app, same origin, one file in the repository. Never a CDN: a
@@ -54,11 +45,9 @@
 
 * {
   box-sizing: border-box;
-  /* The app draws --border on everything (tokens.css @layer base). The landing
-     draws nothing: relief comes from --landing-shadow plus --landing-lightline,
-     separation from surface tint and from space. */
   border-width: 0;
   border-style: solid;
+  border-color: var(--landing-ink);
   margin: 0;
 }
 
@@ -67,8 +56,11 @@ html {
 }
 
 body {
-  --rise-stagger: 60ms;
   background-color: var(--landing-surface);
+  background-image:
+    linear-gradient(to right, var(--landing-grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--landing-grid) 1px, transparent 1px);
+  background-size: var(--landing-cell) var(--landing-cell);
   color: var(--landing-ink);
   font-family: var(--font-sans);
   font-weight: 300;
@@ -76,81 +68,115 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* --- Grain: two stacked layers, zero bytes, zero requests, no binary asset. That
-   is why this beats an feTurbulence in a data: URI. Carried from Acme
-   (App.css:52-77), re-tinted: the blooms take the landing veils instead of its
-   burnt orange and sage, and the hatching is Prussian Blue rather than black. */
-.grain {
-  position: relative;
-  isolation: isolate;
-  overflow-x: clip;
-}
-
-.grain::before {
-  content: '';
-  position: absolute;
-  inset: -20% 0 0;
-  background:
-    radial-gradient(circle at 8% 4%, var(--landing-veil-warm), transparent 55%),
-    radial-gradient(circle at 82% 18%, var(--landing-veil-gold), transparent 55%),
-    radial-gradient(circle at 24% 72%, var(--landing-surface), transparent 55%);
-  pointer-events: none;
-  z-index: -2;
-}
-
-.grain::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: repeating-linear-gradient(
-    120deg,
-    var(--landing-grain-line) 0,
-    var(--landing-grain-line) 1px,
-    transparent 1px,
-    transparent 10px
-  );
-  opacity: 0.12;
-  pointer-events: none;
-  z-index: -1;
-}
-
-/* The hatching lies above the background and below the text. A reader who asked
-   for more contrast is asking for less of exactly this. */
+/* A reader who asked for more contrast is asking for less of exactly this. */
 @media (prefers-contrast: more) {
-  .grain::before,
-  .grain::after {
+  body {
+    background-image: none;
+  }
+  #hero-field {
     display: none;
   }
 }
 
-/* --- Rhythm, wider than the app's: the calm comes from the space, and space is
-   the cheapest thing on the page to get right. */
 .wrap {
   max-width: 72rem;
   margin-inline: auto;
+  padding-inline: clamp(1.25rem, 5vw, 3rem);
 }
 
 .section {
-  padding-block: clamp(4rem, 10vw, 9rem);
-  padding-inline: clamp(1.25rem, 5vw, 3rem);
+  padding-block: clamp(3rem, 8vw, 7rem);
 }
 
 .measure {
   max-width: 62ch;
 }
 
+/* --- Header: the brand and one link, on a rule the colour of the ink. */
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-block: 1.25rem;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 1.125rem;
+  font-weight: 500;
+  color: var(--landing-ink);
+  text-decoration: none;
+}
+
+/* Four tiles, one of them the accent: the wordmark is the field, at glyph scale.
+   Identical to Orbiters' and to the app's BrandMark. */
+.glyph {
+  width: 6px;
+  height: 6px;
+  background-color: var(--landing-ink);
+  box-shadow:
+    6px 0 0 var(--color-royal-gold),
+    0 6px 0 var(--color-watermelon),
+    6px 6px 0 var(--landing-ink);
+  margin: 0 0.6rem 0.4rem 0;
+}
+
+/* --- Hero: the field behind, one box in front. */
+.hero {
+  position: relative;
+  padding-block: clamp(3rem, 9vw, 8rem);
+  overflow: hidden;
+}
+
+#hero-field {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+  pointer-events: none;
+}
+
+/* --- Boxes: opaque, hard-edged, one stepped shadow the same colour as the ink. */
+.box {
+  position: relative;
+  background-color: #ffffff;
+  border-width: 2px;
+  box-shadow: var(--landing-step) var(--landing-step) 0 var(--landing-ink);
+  padding: clamp(1.5rem, 4vw, 2.75rem);
+  max-width: 38rem;
+  display: grid;
+  gap: 1.25rem;
+}
+
+.card {
+  background-color: #ffffff;
+  border-width: 2px;
+  box-shadow: 6px 6px 0 var(--landing-ink);
+  padding: clamp(1.25rem, 3vw, 2rem);
+}
+
 /* --- Type: fluid, one family. */
 h1 {
-  font-size: clamp(2.4rem, 3vw + 1.6rem, 4rem);
-  font-weight: 300;
-  line-height: 1.1;
+  font-size: clamp(2.2rem, 2.6vw + 1.5rem, 3.5rem);
+  font-weight: 500;
+  line-height: 1.08;
   letter-spacing: -0.02em;
 }
 
 h2 {
-  font-size: clamp(1.6rem, 1.5vw + 1.1rem, 2.4rem);
-  font-weight: 400;
+  font-size: clamp(1.5rem, 1.3vw + 1.05rem, 2.1rem);
+  font-weight: 500;
   line-height: 1.2;
+}
+
+h3 {
+  font-size: 1.125rem;
+  font-weight: 500;
+  line-height: 1.3;
+  margin-bottom: 0.5rem;
 }
 
 p,
@@ -160,30 +186,66 @@ li {
 }
 
 .lead {
-  font-size: clamp(1.15rem, 0.6vw + 1rem, 1.4rem);
+  font-size: clamp(1.1rem, 0.5vw + 1rem, 1.3rem);
   color: var(--landing-ink);
 }
 
-.overline {
-  text-transform: uppercase;
-  letter-spacing: 0.24em;
-  font-size: 0.75rem;
+.fine {
+  font-size: 0.9375rem;
+}
+
+/* A sentence, not a label: one tile and a few words in sentence case, where the
+   old design put a tracked-out capital line. */
+.kicker {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 1rem;
   font-weight: 500;
   color: var(--landing-ink-quiet);
-  margin-bottom: 0.6rem;
+  margin-bottom: 1rem;
 }
 
-/* --- Surfaces: translucent white, relief from shadow plus a light edge, no blur. */
-.card {
-  background-color: rgba(255, 255, 255, 0.85);
-  border-radius: var(--radius-4xl);
-  box-shadow: var(--landing-shadow), var(--landing-lightline);
-  padding: clamp(1.5rem, 3vw, 2.5rem);
+.kicker::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  background-color: var(--landing-cta);
+  flex: none;
 }
 
-.hairline {
-  border-top-width: 1px;
-  border-top-color: var(--landing-hairline);
+/* Square bullets the size of a tile. */
+.tiles {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.tiles li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.8rem;
+}
+
+.tiles li::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  flex: none;
+  background-color: var(--landing-ink);
+  transform: translateY(-0.1em);
+}
+
+.grid-3 {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+}
+
+/* Where a line is unavoidable it is the ink, two pixels of it: a rule, not a hint. */
+.rule {
+  border-top-width: 2px;
 }
 
 /* --- The one saturated element on the page. */
@@ -196,53 +258,27 @@ li {
   font-size: 1.0625rem;
   font-weight: 500;
   text-decoration: none;
-  padding: 0.9rem 1.75rem;
-  border-radius: var(--landing-radius-pill);
-  box-shadow: var(--landing-shadow);
+  padding: 0.9rem 1.5rem;
+  border-width: 2px;
+  border-color: var(--landing-cta);
+}
+
+.cta:hover {
+  background-color: var(--landing-ink);
+  border-color: var(--landing-ink);
 }
 
 .quiet-link {
   color: var(--landing-ink-quiet);
-  text-decoration: none;
-  border-radius: var(--radius-md);
-  padding: 0.4rem 0.75rem;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
 }
 
-.quiet-link:hover,
-.cta:hover {
-  text-decoration: underline;
+.quiet-link:hover {
+  color: var(--landing-ink);
 }
 
 :where(a, button):focus-visible {
   outline: 3px solid var(--landing-focus);
   outline-offset: 3px;
-}
-
-/* --- Motion: Acme's rise (App.css:1233-1242), shortened from 0.6s -- on a page
-   that scrolls, 0.6s per element accumulates. No parallax and nothing tied to
-   scroll position.
-
-   The initial state is VISIBLE. reveal.js adds [data-hidden] and then removes it;
-   CSS that hides and JS that reveals is a blank page whenever the script fails. */
-.rise {
-  transition:
-    opacity 320ms cubic-bezier(0.2, 0.7, 0.2, 1),
-    transform 320ms cubic-bezier(0.2, 0.7, 0.2, 1);
-  transition-delay: calc(var(--rise-index, 0) * var(--rise-stagger));
-}
-
-.rise[data-hidden] {
-  opacity: 0;
-  transform: translateY(12px);
-}
-
-/* Acme's guard covered only .panel and .button (App.css:1289-1297). This one
-   covers everything that moves, because everything that moves is .rise. */
-@media (prefers-reduced-motion: reduce) {
-  .rise,
-  .rise[data-hidden] {
-    transition: none;
-    transform: none;
-    opacity: 1;
-  }
 }

@@ -51,8 +51,12 @@ describe.each(PAGES)('%s', (name) => {
     expect(page).toContain('Accedi')
   })
 
-  it('lays the grain under the content', () => {
-    expect(page).toMatch(/<body class="grain">/)
+  it('signs itself with the four-tile glyph before the name', () => {
+    expect(page).toMatch(/<a class="brand" href="\/"><span class="glyph" aria-hidden="true"><\/span>PigroCRM<\/a>/)
+  })
+
+  it('has no entrance animation to fail', () => {
+    expect(page).not.toMatch(/class="[^"]*\brise\b|reveal\.js|class="grain"/)
   })
 })
 
@@ -75,6 +79,11 @@ describe('index.html', () => {
   it('links the two pages Google reads during verification', () => {
     expect(page).toMatch(/href="\/privacy"/)
     expect(page).toMatch(/href="\/termini"/)
+  })
+
+  it('mounts the field behind the hero, from the shared script', () => {
+    expect(page).toMatch(/<canvas id="hero-field" aria-hidden="true">/)
+    expect(page).toMatch(/<script type="module" src="\.\/field\.js"><\/script>\s*<script type="module" src="\.\/landing\.js">/)
   })
 
   it('collects nothing and measures nothing', () => {

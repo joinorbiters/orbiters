@@ -65,15 +65,9 @@ function contrastRatio(hexA: string, hexB: string): number {
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
 }
 
-/** Euclidean distance in OKLab. Perceptually uniform by construction, which is what
- *  makes a single threshold defensible across hues. */
-function deltaEOk(hexA: string, hexB: string): number {
-  const a = rgbToOklab(hexToRgb(hexA))
-  const b = rgbToOklab(hexToRgb(hexB))
-  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])
-}
-
 const LANDING_DECLARATION = /--landing-[\w-]+\s*:\s*[^;]+;/g
+// `--landing-cell` and `--landing-step` are lengths, `--landing-grid` a line mixed toward
+// transparent: none is a text colour, and the resolver below is only for those.
 const MIX = /^color-mix\(in oklab,\s*var\((--color-[\w-]+)\)\s*(\d+)%,\s*#ffffff\)$/
 const VAR = /^var\((--color-[\w-]+)\)$/
 
@@ -113,9 +107,7 @@ function resolveLandingColour(token: string): string {
 
 describe('landing tokens', () => {
   it('resolves every --landing-* colour out of the shared palette', () => {
-    expect(resolveLandingColour('--landing-surface')).toBe('#f5fffd')
-    expect(resolveLandingColour('--landing-veil-warm')).toBe('#ffc3c4')
-    expect(resolveLandingColour('--landing-veil-gold')).toBe('#fdf6d7')
+    expect(resolveLandingColour('--landing-surface')).toBe('#f4fffd')
     expect(resolveLandingColour('--landing-ink')).toBe('#011936')
     expect(resolveLandingColour('--landing-ink-quiet')).toBe('#465362')
     expect(resolveLandingColour('--landing-cta')).toBe('#e5133e')
@@ -135,17 +127,14 @@ describe('landing tokens', () => {
 
   it('reaches 4.5:1 on every text pair', () => {
     const surface = resolveLandingColour('--landing-surface')
-    const warm = resolveLandingColour('--landing-veil-warm')
-    const gold = resolveLandingColour('--landing-veil-gold')
     const ink = resolveLandingColour('--landing-ink')
     const quiet = resolveLandingColour('--landing-ink-quiet')
+    // Boxes and cards are opaque white, so every text colour is also read on white.
     for (const [text, background] of [
       [ink, surface],
       [quiet, surface],
-      [ink, warm],
-      [quiet, warm],
-      [ink, gold],
-      [quiet, gold],
+      [ink, '#ffffff'],
+      [quiet, '#ffffff'],
       ['#ffffff', resolveLandingColour('--landing-cta')],
     ] as const) {
       expect(contrastRatio(text, background), `${text} on ${background}`).toBeGreaterThanOrEqual(4.5)
@@ -174,15 +163,6 @@ describe('landing tokens', () => {
       )
       expect(value, `${property} fills with #ed254e`).not.toMatch(/#ed254e/i)
     }
-  })
-
-  it('lands --landing-veil-warm within the declared ΔE of Coral #FFB7B2', () => {
-    // Spec 9.3 makes Coral a target to hit, not a sixth token to add. 32% measures
-    // 0.0313 in OKLab; the declared tolerance is 0.05. 39% would be the exact
-    // centre (0.0093), but the spec fixes 32% and 32% is inside tolerance, so the
-    // declared recipe stands and this test says what "in the neighbourhood" means
-    // as a number.
-    expect(deltaEOk(resolveLandingColour('--landing-veil-warm'), '#ffb7b2')).toBeLessThanOrEqual(0.05)
   })
 
   it('loads no webfont other than Outfit, and none from a CDN', () => {

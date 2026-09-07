@@ -1,3 +1,4 @@
+import { BrandMark } from '@/components/BrandMark'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useState, type FormEvent } from 'react'
 import { toast } from 'sonner'
@@ -60,10 +61,11 @@ function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-4">
+    <div className="flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle className="text-2xl">
+          <CardTitle className="inline-flex items-center text-2xl">
+            <BrandMark className="mr-2.5 size-3.5" />
             Pigro<span className="text-[var(--color-watermelon)]">CRM</span>
           </CardTitle>
           <CardDescription>Il CRM che lavora al posto tuo.</CardDescription>

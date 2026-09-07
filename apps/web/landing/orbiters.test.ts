@@ -101,9 +101,8 @@ describe('orbiters.js', () => {
     expect(Buffer.byteLength(js, 'utf-8')).toBeLessThan(6 * 1024)
   })
 
-  it('reads its colours from the stylesheet rather than carrying a copy', () => {
+  it('carries no colour of its own', () => {
     expect(js).not.toMatch(/#[0-9a-fA-F]{6}\b/)
-    expect(js).toMatch(/--color-prussian-blue/)
   })
 
   it('posts to the one endpoint, as JSON', () => {
@@ -111,28 +110,15 @@ describe('orbiters.js', () => {
     expect(js).toMatch(/'Content-Type':\s*'application\/json'/)
   })
 
-  it('never starts the loop when the reader asked for less motion', () => {
-    expect(js).toMatch(/prefers-reduced-motion: reduce/)
-    expect(js).toMatch(/if \(reduced\) return/)
+  it('asks the field to drift; the field decides about reduced motion', () => {
+    expect(js).toMatch(/animate:\s*true/)
   })
 
-  it('noise is deterministic and stays in [0, 1)', () => {
-    document.body.innerHTML = ''
-    delete (window as unknown as { __orbiters?: unknown }).__orbiters
-    new Function(js)()
-    const api = (window as unknown as { __orbiters: { noise: (x: number, y: number) => number } })
-      .__orbiters
-    const samples = [
-      [0.2, 0.7],
-      [3.4, 9.1],
-      [100.5, 0.25],
-      [-4.2, 7.9],
-    ]
-    for (const [x, y] of samples) {
-      const a = api.noise(x!, y!)
-      expect(a).toBe(api.noise(x!, y!))
-      expect(a).toBeGreaterThanOrEqual(0)
-      expect(a).toBeLessThan(1)
-    }
+  it('paints its field through the shared field.js, loaded first', () => {
+    expect(js).toMatch(/window\.__pigroField/)
+    expect(js).not.toMatch(/function noise|fillRect/)
+    expect(html).toMatch(
+      /<script type="module" src="\.\/field\.js"><\/script>\s*<script type="module" src="\.\/orbiters\.js">/,
+    )
   })
 })

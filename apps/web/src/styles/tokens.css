@@ -61,7 +61,10 @@
   --color-charcoal-blue: #465362;
 
   --font-sans: 'Outfit', ui-sans-serif, system-ui, sans-serif;
-  --radius: 0.625rem;
+  /* Zero, since Orbiters (2026-09-07): the whole product sits on a grid of square
+     tiles, and a rounded corner is the one shape that grid cannot draw. Every
+     --radius-* below derives from this, so the shadcn components go square with it. */
+  --radius: 0px;
 }
 
 :root {
@@ -81,9 +84,14 @@
   --accent-foreground: var(--color-prussian-blue);
   --destructive: var(--color-watermelon-strong);
   --destructive-foreground: #ffffff;
-  --border: #d8e2df;
-  --input: #d8e2df;
+  /* Lines are the ink, faded: Prussian Blue toward white, never a grey of its own. */
+  --border: color-mix(in oklab, var(--color-prussian-blue) 24%, #ffffff);
+  --input: color-mix(in oklab, var(--color-prussian-blue) 32%, #ffffff);
   --ring: var(--color-watermelon);
+  /* The grid the page sits on, and the step every raised surface casts. Same 7% line
+     as landing.css and orbiters.css. */
+  --grid-line: color-mix(in oklab, var(--color-prussian-blue) 7%, transparent);
+  --step: var(--color-prussian-blue);
 
   /* Five chart hues, every one derived from the five existing tints -- no sixth colour
      enters the product. #ffffff is the one literal permitted inside a color-mix(): it is
@@ -140,9 +148,11 @@
   --accent-foreground: var(--color-prussian-blue);
   --destructive: var(--color-watermelon-strong);
   --destructive-foreground: #ffffff;
-  --border: #1d3d61;
-  --input: #1d3d61;
+  --border: color-mix(in oklab, var(--color-mint-cream) 22%, var(--color-prussian-blue));
+  --input: color-mix(in oklab, var(--color-mint-cream) 30%, var(--color-prussian-blue));
   --ring: var(--color-royal-gold);
+  --grid-line: color-mix(in oklab, var(--color-mint-cream) 7%, transparent);
+  --step: var(--color-mint-cream);
 
   --sidebar: var(--card);
   --sidebar-foreground: var(--card-foreground);
@@ -162,9 +172,21 @@
   }
   body {
     background-color: var(--background);
+    /* The grid, drawn under everything and hidden by every opaque surface: cards,
+       the sidebar and the header are bg-card, so it shows only where the page is
+       bare. 16px is the tile the landing and Orbiters paint on. */
+    background-image:
+      linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+    background-size: 16px 16px;
     color: var(--foreground);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
+  }
+  @media (prefers-contrast: more) {
+    body {
+      background-image: none;
+    }
   }
 }
 
@@ -173,6 +195,16 @@
    the single --radius above, so every ui/*.tsx component the CLI generated
    resolves to this palette instead of its own defaults. */
 @theme inline {
+  /* Shadows are offsets, never blurs: the surface is lifted off the grid by a whole
+     number of pixels and casts a step the colour of the ink (`--step`, mint in dark
+     mode). `shadow-sm/md/lg` in the generated components -- popovers, dialogs,
+     dropdowns -- all resolve here. */
+  --shadow-xs: 1px 1px 0 0 var(--step);
+  --shadow-sm: 2px 2px 0 0 var(--step);
+  --shadow-md: 4px 4px 0 0 var(--step);
+  --shadow-lg: 6px 6px 0 0 var(--step);
+  --shadow-xl: 8px 8px 0 0 var(--step);
+  --shadow-2xl: 10px 10px 0 0 var(--step);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);

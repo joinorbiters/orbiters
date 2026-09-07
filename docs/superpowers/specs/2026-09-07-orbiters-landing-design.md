@@ -76,3 +76,20 @@ raggiungibili da quel nome. TLS via `certbot --nginx`, che riscrive il vhost sul
 
 Aggiornare: `ssh orbiters 'cd /opt/pigrocrm && git pull --ff-only && docker compose up -d --build'`.
 Leggere la lista: `docker compose exec db psql -U pigrocrm -d orbiters -c "select email, created_at from signups"`.
+
+## 7. Un sistema solo
+
+Sempre il 7 settembre 2026 il sistema visivo nato per Orbiters è diventato quello di tutto il
+prodotto. La landing di PigroCRM (`landing.css`) e l'app (`src/styles/tokens.css`) usano gli
+stessi tre elementi: la griglia da 16px sotto la pagina (blu di Prussia al 7%), superfici
+opache con bordo netto e ombra a gradino del colore dell'inchiostro, nessun raggio, nessuna
+sfumatura, nessuna animazione d'ingresso. Il campo di tessere è disegnato da `landing/field.js`,
+condiviso fra la landing (fermo, dietro l'hero) e Orbiters (in deriva, su tutta la pagina). Il
+marchio è lo stesso glifo a quattro tessere: `.glyph` nei fogli della landing, `BrandMark` nell'app,
+`orbiters-logo.svg` come favicon di tutte le pagine.
+
+Nell'app il cambiamento passa quasi tutto dai token: `--radius: 0px` mette in squadra ogni
+componente shadcn, `--border` e `--input` sono l'inchiostro sbiadito verso il bianco, i sei
+`--shadow-*` di Tailwind sono spostamenti interi senza sfocatura, la griglia sta sul `body` e la
+coprono le superfici opache. La grana, i veli e la classe `.rise` della landing precedente non
+esistono più, e con loro `reveal.js`.
