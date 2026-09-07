@@ -1,25 +1,23 @@
-/* Orbiters. The palette is the shared one -- palette-plugin.ts prepends the fifteen
-   tokens out of src/styles/tokens.css, exactly as for landing.css -- but nothing else
-   is: no grain, no soft shadows, no radii. A field of square tiles and one box with
-   hard edges is a different idea from the landing's, and it gets its own sheet rather
-   than a pile of overrides on the other one. */
+/* Orbiters. palette-plugin.ts prepends the fifteen shared tokens and landing/system.css
+   (grid line, tile, glyph, contrast guard), exactly as for landing.css. What is left
+   here is this page's own layout: the field over the whole viewport and one box. */
 :root {
   --orb-ground: var(--color-mint-cream);
   --orb-ink: var(--color-prussian-blue);
   --orb-ink-quiet: var(--color-charcoal-blue);
-  --orb-grid: color-mix(in oklab, var(--color-prussian-blue) 7%, transparent);
+  --orb-grid: var(--system-grid);
   --orb-cta: var(--color-watermelon-strong);
   --orb-cta-ink: #ffffff;
   --orb-focus: var(--color-watermelon);
   /* The tile size, read by orbiters.js so the grid on the canvas and the grid on the
-     page are the same grid. 14px on a phone is the limit at which the tiles are still
-     visibly tiles rather than noise. */
+     page are the same grid. The system's 16px from a tablet up; 14px on a phone,
+     where the field is the whole page and 16px tiles read as noise. */
   --orb-cell: 14px;
 }
 
 @media (min-width: 48rem) {
   :root {
-    --orb-cell: 16px;
+    --orb-cell: var(--system-cell);
   }
 }
 
@@ -91,18 +89,6 @@ body {
   font-weight: 500;
   letter-spacing: 0.02em;
   color: var(--orb-ink-quiet);
-}
-
-/* Four tiles, one of them the accent: the wordmark is the field, at glyph scale. */
-.glyph {
-  width: 6px;
-  height: 6px;
-  background-color: var(--orb-ink);
-  box-shadow:
-    6px 0 0 var(--color-royal-gold),
-    0 6px 0 var(--color-watermelon),
-    6px 6px 0 var(--orb-ink);
-  margin: 0 0.6rem 0.4rem 0;
 }
 
 h1 {
@@ -224,21 +210,4 @@ h1 {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
-}
-
-/* The field drifts; a reader who asked for less motion gets it still. orbiters.js
-   checks the same query and never starts the loop; this covers the frame it draws. */
-@media (prefers-reduced-motion: reduce) {
-  #field {
-    animation: none;
-  }
-}
-
-@media (prefers-contrast: more) {
-  body {
-    background-image: none;
-  }
-  #field {
-    display: none;
-  }
 }

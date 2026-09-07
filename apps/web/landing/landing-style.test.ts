@@ -4,6 +4,9 @@ import { describe, expect, it } from 'vitest'
 
 const css = readFileSync(join(__dirname, 'landing.css'), 'utf-8')
 const orbiters = readFileSync(join(__dirname, 'orbiters.css'), 'utf-8')
+const system = readFileSync(join(__dirname, 'system.css'), 'utf-8')
+const appTokens = readFileSync(join(__dirname, '../src/styles/tokens.css'), 'utf-8')
+const brandMark = readFileSync(join(__dirname, '../src/components/BrandMark.tsx'), 'utf-8')
 
 /** The declarations of one rule, by exact selector. */
 function rule(selector: string, source = css): string {
@@ -14,14 +17,24 @@ function rule(selector: string, source = css): string {
 }
 
 describe('the landing shares the product system', () => {
-  it('sits on the same grid as Orbiters and the app', () => {
+  it('sits on the grid system.css declares, as Orbiters does', () => {
     expect(rule('body')).toMatch(/linear-gradient\(to right, var\(--landing-grid\) 1px, transparent 1px\)/)
     expect(rule('body')).toMatch(/linear-gradient\(to bottom, var\(--landing-grid\) 1px, transparent 1px\)/)
     expect(rule('body')).toMatch(/background-size:\s*var\(--landing-cell\) var\(--landing-cell\)/)
-    expect(css).toMatch(/--landing-cell:\s*16px/)
-    // The same 7% Prussian Blue line, in all three sheets.
-    expect(css).toMatch(/--landing-grid:\s*color-mix\(in oklab, var\(--color-prussian-blue\) 7%, transparent\)/)
-    expect(orbiters).toMatch(/--orb-grid:\s*color-mix\(in oklab, var\(--color-prussian-blue\) 7%, transparent\)/)
+    // Both sheets point at the shared line and tile rather than restating them.
+    expect(css).toMatch(/--landing-grid:\s*var\(--system-grid\)/)
+    expect(css).toMatch(/--landing-cell:\s*var\(--system-cell\)/)
+    expect(orbiters).toMatch(/--orb-grid:\s*var\(--system-grid\)/)
+    expect(orbiters).toMatch(/--orb-cell:\s*var\(--system-cell\)/)
+    expect(system).toMatch(/--system-grid:\s*color-mix\(in oklab, var\(--color-prussian-blue\) 7%, transparent\)/)
+    expect(system).toMatch(/--system-cell:\s*16px/)
+    expect(css).not.toMatch(/color-mix\([^)]*7%/)
+    expect(orbiters).not.toMatch(/color-mix\([^)]*7%/)
+  })
+
+  it('the app restates the same line and tile, because Tailwind cannot import system.css', () => {
+    expect(appTokens).toMatch(/--grid-line:\s*color-mix\(in oklab, var\(--color-prussian-blue\) 7%, transparent\)/)
+    expect(appTokens).toMatch(/background-size:\s*16px 16px/)
   })
 
   it('has hard edges: no radius, no blur, no soft shadow, no grain', () => {
@@ -41,6 +54,7 @@ describe('the landing shares the product system', () => {
     expect(rule('.card')).toMatch(/border-width:\s*2px/)
     expect(rule('.rule')).toMatch(/border-top-width:\s*2px/)
     expect(css).not.toMatch(/hairline|--border\b/)
+    expect(system).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
   })
 
   it('lifts the box off the grid by a whole step the colour of the ink', () => {
@@ -48,9 +62,20 @@ describe('the landing shares the product system', () => {
     expect(rule('.card')).toMatch(/box-shadow:\s*6px 6px 0 var\(--landing-ink\)/)
   })
 
-  it('signs itself with the same four tiles as Orbiters', () => {
-    // The glyph is the field at 6px scale; the two sheets must agree to the pixel.
-    expect(rule('.glyph').replace(/--landing-ink/g, '--orb-ink')).toBe(rule('.glyph', orbiters))
+  it('signs itself with the four tiles system.css draws once, and BrandMark repeats', () => {
+    expect(css).not.toMatch(/\.glyph/)
+    expect(orbiters).not.toMatch(/\.glyph/)
+    const glyph = rule('.glyph', system)
+    expect(glyph).toMatch(/6px 0 0 var\(--color-royal-gold\)/)
+    expect(glyph).toMatch(/0 6px 0 var\(--color-watermelon\)/)
+    // The app's copy: ink, gold, watermelon, ink, in that reading order.
+    const tiles = [...brandMark.matchAll(/<span className="([^"]+)" \/>/g)].map((m) => m[1])
+    expect(tiles).toEqual([
+      'bg-foreground',
+      'bg-[var(--color-royal-gold)]',
+      'bg-[var(--color-watermelon)]',
+      'bg-foreground',
+    ])
   })
 
   it('has no entrance animation and nothing tied to scroll', () => {
@@ -66,10 +91,21 @@ describe('the landing shares the product system', () => {
     expect(rule('.kicker::before')).toMatch(/background-color:\s*var\(--landing-cta\)/)
   })
 
-  it('turns the field and the grid off when the reader asked for more contrast', () => {
-    const block = css.match(/@media \(prefers-contrast: more\)\s*\{([\s\S]*?)\n\}/)?.[1] ?? ''
+  it('turns the field and the grid off when the reader asked for more contrast, once', () => {
+    const block = system.match(/@media \(prefers-contrast: more\)\s*\{([\s\S]*?)\n\}/)?.[1] ?? ''
     expect(block).toMatch(/body\s*\{\s*background-image:\s*none/)
-    expect(block).toMatch(/#hero-field\s*\{\s*display:\s*none/)
+    expect(block).toMatch(/canvas\s*\{\s*display:\s*none/)
+    expect(css).not.toMatch(/prefers-contrast/)
+    expect(orbiters).not.toMatch(/prefers-contrast/)
+  })
+
+  it('keeps the kicker inline, so a sentence with a <time> in it still flows', () => {
+    expect(rule('.kicker')).not.toMatch(/display:\s*flex/)
+    expect(rule('.kicker::before')).toMatch(/display:\s*inline-block/)
+  })
+
+  it('gives the hero its own stacking context for the field behind it', () => {
+    expect(rule('.hero')).toMatch(/isolation:\s*isolate/)
   })
 
   it('keeps the field inert and behind the text', () => {

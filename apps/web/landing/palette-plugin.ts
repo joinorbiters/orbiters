@@ -3,6 +3,9 @@ import { resolve } from 'node:path'
 import type { Plugin } from 'vite'
 
 const TOKENS_CSS = resolve(__dirname, '../src/styles/tokens.css')
+/** The rules the two landing sheets share (grid line, tile, glyph, contrast guard),
+ *  prepended after the tokens so neither sheet restates them. */
+const SYSTEM_CSS = resolve(__dirname, 'system.css')
 
 /** The palette, the font stack and the radius scale, and nothing else. Fifteen
  *  today; the count is asserted so that a token added to or removed from
@@ -60,12 +63,12 @@ export function extractSharedTokens(css: string): Record<string, string> {
   return shared
 }
 
-/** The stylesheets that receive the tokens: the landing's own, and Orbiters', which
- *  shares the palette but none of the soft layer (see orbiters.css). */
+/** The stylesheets that receive the tokens and the shared system: the landing's own
+ *  and Orbiters'. */
 const TOKEN_CONSUMERS = ['landing/landing.css', 'landing/orbiters.css']
 
-/** Prepends the shared tokens to each stylesheet in TOKEN_CONSUMERS, at build and at
- *  dev time. */
+/** Prepends the shared tokens, then system.css, to each stylesheet in TOKEN_CONSUMERS,
+ *  at build and at dev time. */
 export function palettePlugin(): Plugin {
   return {
     name: 'pigrocrm-landing-palette',
@@ -77,7 +80,11 @@ export function palettePlugin(): Plugin {
       const block = Object.entries(tokens)
         .map(([name, value]) => `  ${name}: ${value};`)
         .join('\n')
-      return `/* injected from src/styles/tokens.css by palette-plugin.ts */\n:root {\n${block}\n}\n\n${code}`
+      const system = readFileSync(SYSTEM_CSS, 'utf-8')
+      return (
+        `/* injected from src/styles/tokens.css by palette-plugin.ts */\n:root {\n${block}\n}\n\n` +
+        `/* injected from landing/system.css by palette-plugin.ts */\n${system}\n${code}`
+      )
     },
   }
 }

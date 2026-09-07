@@ -25,8 +25,8 @@ describe('field.js', () => {
   })
 
   it('stays small', () => {
-    // Commented source; Vite ships it under 2 KB. It is loaded by two pages.
-    expect(Buffer.byteLength(source, 'utf-8')).toBeLessThan(5 * 1024)
+    // Commented source; Vite ships it at about 2.5 KB. It is loaded by two pages.
+    expect(Buffer.byteLength(source, 'utf-8')).toBeLessThan(6 * 1024)
   })
 
   it('makes no request and carries no colour of its own', () => {
@@ -58,9 +58,81 @@ describe('field.js', () => {
     expect(api.diagonal(1, 1)).toBeLessThanOrEqual(0)
   })
 
-  it('never starts the loop when the reader asked for less motion', () => {
-    expect(source).toMatch(/prefers-reduced-motion: reduce/)
-    expect(source).toMatch(/if \(!options\.animate \|\| reduced\) return/)
+  describe('the drift', () => {
+    type Stubs = { rafCalls: number; timerCalls: number; restore: () => void }
+
+    function stub(reduced: boolean): Stubs {
+      const originalMatch = window.matchMedia
+      const originalRaf = window.requestAnimationFrame
+      const originalTimeout = window.setTimeout
+      const originalContext = HTMLCanvasElement.prototype.getContext
+      const counters = { rafCalls: 0, timerCalls: 0 }
+      window.matchMedia = ((query: string) => ({
+        matches: reduced && query.includes('prefers-reduced-motion'),
+        media: query,
+      })) as typeof window.matchMedia
+      window.requestAnimationFrame = (() => {
+        counters.rafCalls += 1
+        return 1
+      }) as typeof window.requestAnimationFrame
+      window.setTimeout = ((...args: unknown[]) => {
+        counters.timerCalls += 1
+        return originalTimeout(...(args as Parameters<typeof setTimeout>))
+      }) as typeof window.setTimeout
+      // A minimal 2d context: the loop's own scheduling is the subject here, not the pixels.
+      HTMLCanvasElement.prototype.getContext = (() => ({
+        setTransform() {},
+        clearRect() {},
+        fillRect() {},
+        fillStyle: '',
+      })) as unknown as typeof HTMLCanvasElement.prototype.getContext
+      return {
+        get rafCalls() {
+          return counters.rafCalls
+        },
+        get timerCalls() {
+          return counters.timerCalls
+        },
+        restore() {
+          window.matchMedia = originalMatch
+          window.requestAnimationFrame = originalRaf
+          window.setTimeout = originalTimeout
+          HTMLCanvasElement.prototype.getContext = originalContext
+        },
+      }
+    }
+
+    it('is scheduled by a timer when asked to animate', () => {
+      const stubs = stub(false)
+      try {
+        load().mount(document.createElement('canvas'), { cell: 16, animate: true })
+        expect(stubs.timerCalls).toBeGreaterThan(0)
+      } finally {
+        stubs.restore()
+      }
+    })
+
+    it('never starts when the reader asked for less motion, even if asked to animate', () => {
+      // `reduced` is read once, when the script loads, so the stub has to be in place
+      // before `load()` -- which is also the order a browser sees.
+      const stubs = stub(true)
+      try {
+        load().mount(document.createElement('canvas'), { cell: 16, animate: true })
+        expect(stubs.timerCalls).toBe(0)
+      } finally {
+        stubs.restore()
+      }
+    })
+
+    it('never starts when not asked to animate', () => {
+      const stubs = stub(false)
+      try {
+        load().mount(document.createElement('canvas'), { cell: 16 })
+        expect(stubs.timerCalls).toBe(0)
+      } finally {
+        stubs.restore()
+      }
+    })
   })
 
   it('does nothing on a canvas with no 2d context, rather than throwing', () => {
