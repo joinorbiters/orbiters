@@ -1,7 +1,15 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, LargeBinary, String, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    LargeBinary,
+    String,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -31,7 +39,8 @@ class GoogleDriveAccount(Base, PrimaryKeyMixin, TimestampMixin):
     `revoked` there: a view is not the place to reconstruct which of two events happened
     from a nullable timestamp.
 
-    `root_folder_ids` and `storage_folder_id` have no equivalent on `GoogleAccount`: they
+    `root_folder_ids`, `storage_folder_id` and `storage_folder_verified` have no
+    equivalent on `GoogleAccount`: they
     are Drive's own configuration, not the credential's. `root_folder_ids` is the set of
     folders the CRM is allowed to read from; `storage_folder_id` is the one folder it may
     write generated documents into. Both are Drive file ids, never a query nor free text,
@@ -82,6 +91,16 @@ class GoogleDriveAccount(Base, PrimaryKeyMixin, TimestampMixin):
     # it, and distinct from `root_folder_ids` because reading and writing are different
     # permissions granted by different scopes (`drive.readonly` vs `drive.file`).
     storage_folder_id: Mapped[str | None] = mapped_column(String(128), default=None)
+    # Whether anybody has ever proven `storage_folder_id` is reachable with *this*
+    # credential and is actually a folder. Not derivable from the id itself, which is
+    # why it is a column: `set_roots` can only verify a folder while the credential is
+    # `active` and holds both Drive scopes, so a folder chosen from a revoked or expired
+    # account is saved unverified -- and the panel resends the same id on every save, so
+    # without this flag "unchanged, skip it" would mean that folder is never proven at
+    # all and the first generated document discovers the mistake as a failed upload.
+    # `False` is the only honest default for a row that predates the column, and for a
+    # cleared folder: there is no verified `None`.
+    storage_folder_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # The sentence the user reads, in Italian. Never a stack trace, never an upstream
     # body, never a token -- same rule as `GoogleAccount.last_error`.
     last_error: Mapped[str | None] = mapped_column(String(500), default=None)

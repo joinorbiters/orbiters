@@ -65,6 +65,13 @@ class GoogleDriveAccountRead(BaseModel):
     consent_expires_at: datetime | None
     root_folder_ids: list[str]
     storage_folder_id: str | None
+    # Exposed, not derived: whether the configured write folder was ever proven
+    # reachable with this credential is a thing only the row knows (see
+    # `GoogleDriveAccount.storage_folder_verified`), and the Drive panel is where a
+    # «cartella di scrittura non ancora verificata» note belongs. It deliberately does
+    # *not* raise a banner: `DriveBannerReason` is a closed enum about the health of the
+    # credential, and an unproven folder is a configuration the next save will prove.
+    storage_folder_verified: bool
     last_error: str | None
     last_error_at: datetime | None
     connected_at: datetime
