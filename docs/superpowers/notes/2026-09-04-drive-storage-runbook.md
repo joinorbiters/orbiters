@@ -48,15 +48,18 @@ PIGROCRM_STORAGE_BACKEND=gdrive
 (`packages/core/src/pigrocrm/core/config.py`, campi `storage_backend`,
 `gdrive_service_account_json`, `gdrive_root_folder_id`; il primo di default è `local`, gli
 altri due sono vuoti). Valorizzare uno solo dei due obbligherebbe l'altro e farebbe
-fallire l'avvio (`storage_from_settings`, `packages/core/src/pigrocrm/core/storage/factory.py`):
-qui l'obiettivo è l'altra strada, quella che usa la credenziale già collegata dal
-titolare invece di un service account. Con `storage_backend=gdrive` e nessuna delle due
-variabili, `storage_from_settings` costruisce un `LazyUserDriveStorage`
+fallire la costruzione del backend (`storage_from_settings`,
+`packages/core/src/pigrocrm/core/storage/factory.py`) — sull'API alla prima operazione
+su un documento, perché è lì che la dipendenza `get_storage` viene risolta, e all'avvio
+sull'adapter MCP, che costruisce il backend dentro `build_server`. Qui l'obiettivo è
+l'altra strada, quella che usa la credenziale già collegata dal titolare invece di un
+service account. Con `storage_backend=gdrive` e nessuna delle due variabili,
+`storage_from_settings` costruisce un `LazyUserDriveStorage`
 (`packages/core/src/pigrocrm/core/storage/lazy_drive.py`): a differenza del service
-account non c'è niente da verificare all'avvio (la riga da cui dipende — l'account Drive
-e la sua cartella di scrittura — può ancora non esistere), quindi l'API parte comunque e
-la prima operazione di storage (`put`/`get`/`delete`) è il punto in cui la
-configurazione viene letta e, se manca, rifiutata.
+account non c'è niente da verificare quando il backend viene costruito (la riga da cui
+dipende — l'account Drive e la sua cartella di scrittura — può ancora non esistere),
+quindi l'API parte comunque e la prima operazione di storage (`put`/`get`/`delete`) è il
+punto in cui la configurazione viene letta e, se manca, rifiutata.
 
 ### 3. Riavviare l'API
 
@@ -223,8 +226,9 @@ credenziale del titolare — quella già collegata per il §5 dello slice 9 — 
 richiedere una seconda configurazione Google Cloud (un service account, una Shared
 Drive) che questa installazione non ha e non le serve: un solo utente, un solo Drive,
 la stessa credenziale che già legge le tre radici del §4.2. La cartella di scrittura è
-verificata al salvataggio e non all'avvio (a differenza del service account, che è
-verificato da `storage_from_settings` all'avvio) perché la riga da cui dipende — quale
-account, quale cartella — non è una variabile d'ambiente ma un dato che il titolare
-sceglie da un'interfaccia dopo che l'API è già in esecuzione: non c'è nessun momento di
-avvio in cui quella scelta esista già da verificare.
+verificata al salvataggio (a differenza della radice del service account, verificata da
+`storage_from_settings` nel momento in cui costruisce il backend: all'avvio sull'adapter
+MCP, alla prima operazione su un documento sull'API) perché la riga da cui dipende —
+quale account, quale cartella — non è una variabile d'ambiente ma un dato che il
+titolare sceglie da un'interfaccia dopo che l'API è già in esecuzione: non c'è nessun
+momento anteriore in cui quella scelta esista già da verificare.

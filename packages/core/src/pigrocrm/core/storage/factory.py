@@ -15,10 +15,11 @@ def _gdrive_not_configured() -> ValidationFailed:
     Google Cloud console for a setup they may have no reason to create, and this error
     is the only place they are looking.
 
-    Neither half names a slice. This sentence is read by an operator watching an API
-    fail to start, who has no map of this project's slices and no way to act on one --
-    and a slice number is a fact about when the code was written, which stops being
-    true the moment it ships.
+    Neither half names a slice. This sentence is read by an operator whose MCP adapter
+    refused to come up, or whose first document operation over the API answered 500 --
+    somebody who has no map of this project's slices and no way to act on one, and a
+    slice number is a fact about when the code was written, which stops being true the
+    moment it ships.
 
     Built here rather than raised in two branches below: the half-configured service
     account and the missing session factory are the same problem to the reader (Drive
@@ -53,8 +54,18 @@ def storage_from_settings(
     Which of the two Drive routes is chosen is settled by the environment alone, never
     by which one happens to work: naming *either* service-account variable selects the
     service account and makes the other one required, so a half-finished service-account
-    setup fails loudly at startup instead of silently falling through to somebody's
-    personal Drive credential.
+    setup fails loudly instead of silently falling through to somebody's personal Drive
+    credential.
+
+    **When "loudly" is.** This function runs when an adapter builds its storage, and the
+    two adapters do that at different moments. `apps/mcp` calls it in `build_server`, at
+    start-up, so a misconfiguration there is a process that does not come up. `apps/api`
+    calls it from the `get_storage` dependency, which FastAPI resolves at the first
+    request that touches a document -- so there the same misconfiguration is a 500 on
+    the first upload, generation or download, and the API itself starts fine. Deliberate,
+    and not an oversight to be fixed by building it at import time: an installation whose
+    Drive is not connected *yet* must be able to reach the screen that connects it (see
+    `LazyUserDriveStorage`), and a process that refuses to boot cannot serve that screen.
     """
     if settings.storage_backend == "gdrive":
         if settings.gdrive_service_account_json or settings.gdrive_root_folder_id:
@@ -64,9 +75,11 @@ def storage_from_settings(
                 service_account_json=settings.gdrive_service_account_json,
                 root_folder_id=settings.gdrive_root_folder_id,
             )
-            # Fails here, at startup, with a message that says what to fix -- rather
-            # than at the first customer's upload as a bare 404 or a
-            # storageQuotaExceeded three requests deep (decision 4, task-5 brief).
+            # Fails here, while the backend is being built, with a message that says
+            # what to fix -- rather than deeper into a customer's upload as a bare 404
+            # or a storageQuotaExceeded three requests in (decision 4, task-5 brief).
+            # "Here" is start-up on the MCP adapter and the first document operation on
+            # the API, for the reason the docstring above gives.
             storage.verify_root_accessible()
             return storage
         if session_factory is None:
@@ -74,7 +87,8 @@ def storage_from_settings(
         # No verification here, and none is possible: the folder this will write into is
         # a row that may not exist yet, which is the entire reason this storage resolves
         # at its first operation instead of now (see `LazyUserDriveStorage`). The
-        # equivalent of `verify_root_accessible` for this route is the write that
-        # happens when somebody chooses the folder, not a check at startup.
+        # equivalent of `verify_root_accessible` for this route is the `files.get`
+        # `GoogleDriveAccountService.set_roots` makes when somebody chooses the folder,
+        # not a check made while the backend is being built.
         return LazyUserDriveStorage(session_factory, settings)
     return LocalFileStorage(Path(settings.storage_local_root))

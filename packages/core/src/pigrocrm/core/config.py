@@ -100,17 +100,20 @@ class Settings(BaseSettings):
     # the Google account the titolare connects from Impostazioni → Drive, writing into
     # the folder they pick there. The second route has nothing to configure here: it
     # lives in a row, so `storage_from_settings` returns a storage that resolves it at
-    # the first upload rather than at startup, and the API boots before Drive is
-    # connected. Naming either service-account variable selects the first route and
-    # makes the other one required, so a half-finished setup fails at startup instead
-    # of quietly using somebody's personal credential.
+    # the first upload, and the API boots before Drive is connected. Naming either
+    # service-account variable selects the first route and makes the other one required,
+    # so a half-finished setup is refused by name instead of quietly using somebody's
+    # personal credential -- when the MCP adapter starts, or at the API's first document
+    # operation, which is when each of them builds its backend.
     storage_backend: Literal["local", "gdrive"] = "local"
     storage_local_root: str = "./var/documents"
     # The service account's JSON key, inline. `PIGROCRM_GDRIVE_ROOT_FOLDER_ID` must
     # name a folder on a Shared Drive (or one shared with the service account): a
     # service account has no Drive quota of its own and `files.create` otherwise
-    # fails with storageQuotaExceeded. `storage_from_settings` checks this at startup
-    # (`GDriveStorage.verify_root_accessible`) rather than at the first upload.
+    # fails with storageQuotaExceeded. `storage_from_settings` checks it
+    # (`GDriveStorage.verify_root_accessible`) while it builds the backend, rather than
+    # leaving it to fail mid-upload: that is start-up on the MCP adapter and the first
+    # document operation on the API, which is where `get_storage` resolves.
     gdrive_service_account_json: str = ""
     gdrive_root_folder_id: str = ""
     # Rendering. The image installs Pandoc and Typst at these names (Dockerfile.api).
