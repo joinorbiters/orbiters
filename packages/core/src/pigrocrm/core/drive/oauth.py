@@ -296,6 +296,10 @@ class GoogleDriveOAuthService:
                 # exactly like a first connection.
                 account.root_folder_ids = []
                 account.storage_folder_id = None
+                # And with it whatever proof somebody had of it: there is no verified
+                # `None`, and the next folder this identity chooses is proven on its own
+                # credential (`GoogleDriveAccountService.set_roots`).
+                account.storage_folder_verified = False
         account.google_sub = grant.subject
         account.email_address = grant.email_address
         account.refresh_token_ciphertext = ciphertext

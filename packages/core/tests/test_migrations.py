@@ -562,3 +562,60 @@ def test_the_activity_feed_index_is_descending_on_both_columns() -> None:
     # Both members, in this order: an index on `occurred_at DESC` alone leaves the
     # tie-break to an in-memory sort, which is the cost this index exists to remove.
     assert "USING btree (occurred_at DESC, id DESC)" in definition, definition
+
+
+def test_a_write_folder_configured_before_0027_is_not_assumed_verified() -> None:
+    """The one thing migration 0027 has to get right about the rows that already exist.
+
+    `storage_folder_verified` answers "did anybody ever prove this folder is reachable
+    with this credential?", and for every folder configured before the column existed
+    the honest answer is no -- `set_roots` verified a *new* folder and had nowhere to
+    record it, so the flag cannot be backfilled from anything. A `server_default` of
+    `true`, or a backfill "because the folder is set", would make the first save after
+    an upgrade skip the very verification the column was added to make happen.
+
+    Asserted against a real row planted at 0026: a schema comparison sees the same
+    column whichever default it carries.
+    """
+    with PostgresContainer("postgres:17-alpine", driver="psycopg") as container:
+        url = container.get_connection_url()
+        config = _alembic_config(url)
+        upgrade(config, "0026")
+
+        engine: Engine = create_engine(url)
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO users (id, email, password_hash, nome, ruolo, attivo,
+                                       created_at, updated_at)
+                    VALUES ('00000000-0000-7000-8000-0000000000f1', 'titolare@example.it',
+                            'x', 'Titolare', 'admin', true, now(), now());
+
+                    INSERT INTO google_drive_accounts (
+                        id, user_id, google_sub, email_address, refresh_token_ciphertext,
+                        refresh_token_nonce, scopes_granted, status, root_folder_ids,
+                        storage_folder_id, connected_at, created_at, updated_at)
+                    VALUES ('00000000-0000-7000-8000-0000000000f2',
+                            '00000000-0000-7000-8000-0000000000f1', 'sub-1',
+                            'titolare@example.it', '\\x01'::bytea, '\\x02'::bytea,
+                            '[]'::jsonb, 'active', '[]'::jsonb, '1AbCdEfGhIjKlMnOpQ',
+                            now(), now(), now());
+                    """
+                )
+            )
+        engine.dispose()
+
+        upgrade(config, "0027")
+
+        engine = create_engine(url)
+        with engine.connect() as connection:
+            verified = connection.execute(
+                text("SELECT storage_folder_verified FROM google_drive_accounts")
+            ).scalar_one()
+        engine.dispose()
+
+    assert verified is False, (
+        "a folder configured before the column existed was never proven: assuming it was "
+        "makes the first save after the upgrade skip the verification 0027 exists to run"
+    )

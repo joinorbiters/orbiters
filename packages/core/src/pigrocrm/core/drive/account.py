@@ -312,28 +312,28 @@ class GoogleDriveAccountService:
         `account.status == "active"`: on any other status the folder is saved
         unverified, same as `root_folder_ids` always are.
 
-        **And it stays unverified.** Reconnecting makes the account `active` again, but
-        the panel's next save resends *the same* id, and the paragraph below skips a
-        folder that has not changed -- the skip is decided on the id, not on whether it
-        was ever proven, and nothing on this row records the difference. So a folder
-        chosen during a revoked or expired period is proven by the first document
-        written into it: `GDriveStorage.put` reaches `files.create` with that folder as
-        the parent, and a wrong id comes back as «caricamento su Drive fallito (404)» --
-        later than the panel would have said it, and in worse words. Saying it in the
-        panel instead needs the row to remember that the stored folder was never
-        verified (a `storage_folder_verified` column), which this table does not have;
-        the alternative of re-verifying every unchanged folder is refused below, for
-        reasons that do not stop being true here.
+        **And the row remembers that it was.** `storage_folder_verified` is written on
+        every save that names a folder: `True` when this call proved it, `False` when it
+        saved one it could not prove, and `False` when the folder was cleared (there is
+        no verified `None`). That column is what makes the skip below safe. Without it
+        the skip was decided on the id alone, so the panel's next save after a
+        reconnection -- which resends *the same* id -- proved nothing either, and a
+        folder chosen while the credential was broken was left to be discovered by the
+        first document written into it: `GDriveStorage.put` reaching `files.create` with
+        a wrong parent, coming back as «caricamento su Drive fallito (404)», later than
+        the panel would have said it and in worse words.
 
-        **An unchanged folder is not verified.** The panel resends the configured
-        `storage_folder_id` on every save, so a roots-only edit arrives naming the folder
-        the row already holds. Re-proving it proves nothing -- it was proven when it was
-        chosen, the one exception being the folder chosen while the credential was broken
-        that the paragraph above accounts for -- and costs a Drive call per save; worse,
-        a grant that has since lost a scope, or a folder somebody moved, would refuse a
-        change that has nothing to do with the folder and discard the roots edit with it.
-        So verification runs only for a folder that is genuinely *new*, which is also the
-        case a titolare is most likely to have got wrong here.
+        **An unchanged folder is verified once, and only once.** The panel resends the
+        configured `storage_folder_id` on every save, so a roots-only edit arrives naming
+        the folder the row already holds. Re-proving a folder already marked verified
+        proves nothing and costs a Drive call per save; worse, a grant that has since lost
+        a scope, or a folder somebody moved, would refuse a change that has nothing to do
+        with the folder and discard the roots edit with it. So an unchanged folder is
+        verified only when it is *not yet* marked verified, and even then only while the
+        grant can actually answer the call -- an `active` account missing a Drive scope
+        keeps the unproven folder rather than paying for it with the roots edit
+        (`_needs_verification`). A genuinely new folder is always verified, missing scope
+        included: that is a choice somebody is making now, and refusing it is the answer.
 
         **PATCH semantics, and why `model_fields_set` is read here.** The route is a
         `PATCH`: it changes the fields the request named and leaves the rest alone.
@@ -344,26 +344,36 @@ class GoogleDriveAccountService:
         the read roots erase the write folder, and record `storage_folder_id: None` in
         the timeline as though somebody had asked for that. `model_fields_set` is the
         one place the difference still exists, so it is what decides: named (with an id
-        or with `null`) means write it and record it, absent means neither -- and only
-        naming a real id, never `null`, on an `active` account, and one the row does not
-        already hold, means verify it.
+        or with `null`) means write it -- the id and its `storage_folder_verified`
+        together -- and record it, absent means none of that; and only naming a real id,
+        never `null`, means it might be verified, on the terms `_needs_verification`
+        settles.
         """
         actor.require_write(_ROOTS_ACTION)
         account = self._present(actor)
-        if (
-            account.status == "active"
-            and "storage_folder_id" in data.model_fields_set
-            and data.storage_folder_id is not None
-            and data.storage_folder_id != account.storage_folder_id
-        ):
-            # Before any mutation: a failed verification must leave the row and the
-            # timeline exactly as they were.
-            self._verify_storage_folder(account, data.storage_folder_id)
+        named = "storage_folder_id" in data.model_fields_set
+        chosen = data.storage_folder_id
+        verified = account.storage_folder_verified
+        if named and chosen is not None:
+            if self._needs_verification(account, chosen):
+                # Before any mutation: a failed verification must leave the row and the
+                # timeline exactly as they were.
+                self._verify_storage_folder(account, chosen)
+                verified = True
+            else:
+                # Either the same folder that is already marked verified -- which stays
+                # verified -- or one saved without being proven, on a credential that
+                # could not answer for it. The next save that can, proves it.
+                verified = verified and chosen == account.storage_folder_id
+        elif named:
+            # An explicit `null`: the folder is gone, and so is its verification.
+            verified = False
         account.root_folder_ids = list(data.root_folder_ids)
         payload: dict[str, object] = {"root_folder_ids": list(data.root_folder_ids)}
-        if "storage_folder_id" in data.model_fields_set:
-            account.storage_folder_id = data.storage_folder_id
-            payload["storage_folder_id"] = data.storage_folder_id
+        if named:
+            account.storage_folder_id = chosen
+            account.storage_folder_verified = verified
+            payload["storage_folder_id"] = chosen
         # Last thing before the commit: ActivityService.record flushes and joins this
         # transaction, so nothing may commit after it on this session.
         self.activities.record(
@@ -375,6 +385,30 @@ class GoogleDriveAccountService:
         )
         self.session.commit()
         return GoogleDriveAccountRead.model_validate(account)
+
+    @staticmethod
+    def _needs_verification(account: GoogleDriveAccount, folder_id: str) -> bool:
+        """Whether `set_roots` should spend one `files.get` proving `folder_id` before
+        writing it -- the whole of the rule its docstring's last two paragraphs state.
+
+        A non-`active` credential cannot answer the call truthfully, so nothing is
+        verified over one. A folder the row does not already hold is always verified: it
+        is a choice being made now, and a missing Drive scope is an answer to it
+        (`_verify_storage_folder` raises), not a reason to save it anyway. A folder the
+        row *does* hold is verified only when nothing ever proved it -- and only while
+        both scopes are still granted, because the panel resends that id on every save
+        and a scope that went away must cost the unproven folder, never the roots edit
+        that arrived with it.
+        """
+        if account.status != "active":
+            return False
+        if folder_id != account.storage_folder_id:
+            return True
+        if account.storage_folder_verified:
+            return False
+        return all(
+            scope in account.scopes_granted for scope in (DRIVE_SCOPE_READONLY, DRIVE_SCOPE_FILE)
+        )
 
     def _verify_storage_folder(self, account: GoogleDriveAccount, folder_id: str) -> None:
         """Proves `folder_id` is visible with `account`'s own credential and is

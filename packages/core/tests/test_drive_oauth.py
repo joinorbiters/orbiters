@@ -1082,49 +1082,44 @@ def test_set_roots_saves_a_new_storage_folder_unverified_on_a_revoked_or_expired
         )
 
         assert read.storage_folder_id == "3AbCdEfGhIjKlMnOpQ"
+        assert read.storage_folder_verified is False
         db_session.refresh(account)
         assert account.storage_folder_id == "3AbCdEfGhIjKlMnOpQ"
+        assert account.storage_folder_verified is False
         assert account.status == status, "set_roots must not itself change the credential's status"
         db_session.delete(account)
         db_session.flush()
 
 
-def test_a_folder_saved_while_revoked_is_never_verified_by_a_later_save(
+def test_a_folder_saved_while_revoked_is_verified_by_the_first_save_after_reconnection(
     db_session: Session, admin_user: User
 ) -> None:
-    """The honest boundary of the two rules above, asserted so that the docstring
-    describing it cannot drift away from it again.
+    """The gap `storage_folder_verified` exists to close.
 
     A folder chosen while the credential was broken is saved unverified (the test
-    above). Reconnecting makes the account `active`, and the panel then resends that
-    same id on the next save -- but "unchanged, skip it" is decided on the *id*, not on
-    whether it was ever proven, so no verification ever happens: what proves the folder
-    is the first document written into it, where a wrong id comes back as a failed
-    upload instead of a `ValidationFailed` naming the field.
-
-    Closing that gap needs the row to remember whether the stored folder was proven --
-    a column this table does not have -- and the alternative, re-verifying an unchanged
-    folder on every save, is refused for the reasons
-    `test_set_roots_verifies_nothing_when_the_storage_folder_did_not_change` gives. So
-    this is a documented consequence rather than a bug in hiding, and the test exists
-    to keep it documented.
+    above), and now the row *says so*. Reconnecting makes the account `active` and the
+    panel resends that same id on its next save -- and "unchanged, skip it" no longer
+    swallows it, because the skip is decided on the id **and** on whether the folder
+    was ever proven. So the first save after a reconnection is the one that proves it,
+    and from then on nothing verifies it again.
     """
-
-    def fail_if_built(_account: GoogleDriveAccount) -> DriveTransport:
-        raise AssertionError("nessuna verifica è attesa in questo scenario")
-
     account = _connected_drive_account(db_session, admin_user, status="revoked")
-    service = _drive_service_account(db_session, transport_factory=fail_if_built)
+    drive = FakeDrive()
+    drive.add_folder("Fatture", parent=drive.root_id, file_id="3AbCdEfGhIjKlMnOpQ")
+    service = _drive_service_account(db_session, transport_factory=_fake_transport_factory(drive))
 
     # Chosen while the credential is revoked: saved, unverified, no Drive call.
-    service.set_roots(
+    first = service.set_roots(
         DriveRootsUpdate(
             root_folder_ids=["1AbCdEfGhIjKlMnOpQ"], storage_folder_id="3AbCdEfGhIjKlMnOpQ"
         ),
         _drive_actor(admin_user),
     )
+    assert first.storage_folder_verified is False
+    assert drive.calls == []
 
-    # Reconnected. The panel's next save resends the same id, and it is *not* verified.
+    # Reconnected. The panel's next save resends the same id, and *this* is where it is
+    # proven -- one Drive call, and the row remembers the answer.
     account.status = "active"
     db_session.flush()
     read = service.set_roots(
@@ -1136,6 +1131,50 @@ def test_a_folder_saved_while_revoked_is_never_verified_by_a_later_save(
 
     assert read.storage_folder_id == "3AbCdEfGhIjKlMnOpQ"
     assert read.root_folder_ids == ["2AbCdEfGhIjKlMnOpQ"]
+    assert read.storage_folder_verified is True
+    db_session.refresh(account)
+    assert account.storage_folder_verified is True
+    assert len(drive.calls) == 1
+
+    # And a third save resends it again: already proven, so no second Drive call.
+    service.set_roots(
+        DriveRootsUpdate(
+            root_folder_ids=["1AbCdEfGhIjKlMnOpQ"], storage_folder_id="3AbCdEfGhIjKlMnOpQ"
+        ),
+        _drive_actor(admin_user),
+    )
+    assert len(drive.calls) == 1
+
+
+def test_a_wrong_folder_saved_while_revoked_is_refused_in_the_panel_after_reconnection(
+    db_session: Session, admin_user: User
+) -> None:
+    """The other half of the same closure, and the whole point of it: the id that was
+    never proven is refused by the *panel*, naming the field, instead of coming back as
+    «caricamento su Drive fallito (404)» on the first document somebody generates."""
+    account = _connected_drive_account(db_session, admin_user, status="revoked")
+    drive = FakeDrive()  # knows nothing about "9NonEsisteSuDriveXXXX"
+    service = _drive_service_account(db_session, transport_factory=_fake_transport_factory(drive))
+    service.set_roots(
+        DriveRootsUpdate(
+            root_folder_ids=["1AbCdEfGhIjKlMnOpQ"], storage_folder_id="9NonEsisteSuDriveXXXX"
+        ),
+        _drive_actor(admin_user),
+    )
+
+    account.status = "active"
+    db_session.flush()
+    with pytest.raises(ValidationFailed) as caught:
+        service.set_roots(
+            DriveRootsUpdate(
+                root_folder_ids=["1AbCdEfGhIjKlMnOpQ"], storage_folder_id="9NonEsisteSuDriveXXXX"
+            ),
+            _drive_actor(admin_user),
+        )
+
+    assert caught.value.details["field"] == "storage_folder_id"
+    db_session.refresh(account)
+    assert account.storage_folder_verified is False
 
 
 def test_set_roots_refuses_verification_missing_the_read_scope_without_calling_drive(
@@ -1206,15 +1245,17 @@ def test_set_roots_verifies_nothing_when_the_storage_folder_did_not_change(
     verification refuses a change that has nothing to do with the folder and the roots
     edit is lost with it.
 
-    The missing scope here is what makes that visible without a network fake: a
-    verification that ran at all would refuse before touching Drive, and the transport
-    factory would fail the test if it were ever built."""
+    "Unchanged" is not enough on its own any more -- it is unchanged *and already
+    proven*, which is what `storage_folder_verified` records and what this row carries.
+    The transport factory fails the test the moment it is built, which is the strongest
+    way to show no Drive call is attempted."""
 
     def fail_if_built(_account: GoogleDriveAccount) -> DriveTransport:
-        raise AssertionError("una cartella invariata non va verificata")
+        raise AssertionError("una cartella invariata e già verificata non va verificata")
 
-    account = _connected_drive_account(db_session, admin_user, scopes=(DRIVE_SCOPE_READONLY,))
+    account = _connected_drive_account(db_session, admin_user)
     account.storage_folder_id = "3AbCdEfGhIjKlMnOpQ"
+    account.storage_folder_verified = True
     db_session.flush()
     service = _drive_service_account(db_session, transport_factory=fail_if_built)
 
@@ -1230,3 +1271,113 @@ def test_set_roots_verifies_nothing_when_the_storage_folder_did_not_change(
     db_session.refresh(account)
     assert account.root_folder_ids == ["1AbCdEfGhIjKlMnOpQ"]
     assert account.storage_folder_id == "3AbCdEfGhIjKlMnOpQ"
+
+
+def test_a_verified_folder_is_remembered_as_verified(db_session: Session, admin_user: User) -> None:
+    """The plain case: a folder proven against Drive at the moment it was chosen is
+    recorded as proven, so no later save pays for the same `files.get` again -- and so
+    the panel can tell a folder that was checked from one that never was."""
+    account = _connected_drive_account(db_session, admin_user)
+    drive = FakeDrive()
+    drive.add_folder("Fatture", parent=drive.root_id, file_id="3AbCdEfGhIjKlMnOpQ")
+    service = _drive_service_account(db_session, transport_factory=_fake_transport_factory(drive))
+
+    read = service.set_roots(
+        DriveRootsUpdate(
+            root_folder_ids=["1AbCdEfGhIjKlMnOpQ"], storage_folder_id="3AbCdEfGhIjKlMnOpQ"
+        ),
+        _drive_actor(admin_user),
+    )
+
+    assert read.storage_folder_verified is True
+    db_session.refresh(account)
+    assert account.storage_folder_verified is True
+
+
+def test_clearing_the_storage_folder_clears_the_verification_with_it(
+    db_session: Session, admin_user: User
+) -> None:
+    """There is no verified `None`. A row left saying `True` with no folder in it would
+    tell the next folder chosen -- while the credential is broken, say -- that somebody
+    had already proven it."""
+    account = _connected_drive_account(db_session, admin_user)
+    account.storage_folder_id = "3AbCdEfGhIjKlMnOpQ"
+    account.storage_folder_verified = True
+    db_session.flush()
+    drive = FakeDrive()
+    service = _drive_service_account(db_session, transport_factory=_fake_transport_factory(drive))
+
+    read = service.set_roots(
+        DriveRootsUpdate(root_folder_ids=["1AbCdEfGhIjKlMnOpQ"], storage_folder_id=None),
+        _drive_actor(admin_user),
+    )
+
+    assert read.storage_folder_id is None
+    assert read.storage_folder_verified is False
+    db_session.refresh(account)
+    assert account.storage_folder_verified is False
+    assert drive.calls == []
+
+
+def test_an_unproven_folder_is_not_re_verified_when_the_grant_lost_a_scope(
+    db_session: Session, admin_user: User
+) -> None:
+    """The boundary of the re-verification rule, and the reason it is a rule about the
+    *grant* and not only about the flag.
+
+    An `active` account that has since lost `drive.readonly` cannot answer the
+    verification call at all, so running it would turn a save that only edits the read
+    roots into a `Conflict` and discard that edit -- the exact damage
+    `test_set_roots_verifies_nothing_when_the_storage_folder_did_not_change` refuses to
+    pay for an already-proven folder. An unproven folder is worth one call, not the
+    roots edit, so it stays unproven and the save goes through. Choosing a *new* folder
+    is still refused over the same missing scope (two tests above): that is a choice
+    somebody is making now, not a change they are being punished for.
+    """
+
+    def fail_if_built(_account: GoogleDriveAccount) -> DriveTransport:
+        raise AssertionError("una verifica impossibile non va tentata")
+
+    account = _connected_drive_account(db_session, admin_user, scopes=(DRIVE_SCOPE_FILE,))
+    account.storage_folder_id = "3AbCdEfGhIjKlMnOpQ"
+    db_session.flush()
+    service = _drive_service_account(db_session, transport_factory=fail_if_built)
+
+    read = service.set_roots(
+        DriveRootsUpdate(
+            root_folder_ids=["2AbCdEfGhIjKlMnOpQ"], storage_folder_id="3AbCdEfGhIjKlMnOpQ"
+        ),
+        _drive_actor(admin_user),
+    )
+
+    assert read.root_folder_ids == ["2AbCdEfGhIjKlMnOpQ"]
+    assert read.storage_folder_id == "3AbCdEfGhIjKlMnOpQ"
+    assert read.storage_folder_verified is False
+    db_session.refresh(account)
+    assert account.root_folder_ids == ["2AbCdEfGhIjKlMnOpQ"]
+    assert account.storage_folder_verified is False
+
+
+def test_a_patch_that_does_not_name_the_storage_folder_never_verifies_it(
+    db_session: Session, admin_user: User
+) -> None:
+    """Re-verification is still only ever about a folder the request *names*. A PATCH
+    that omits `storage_folder_id` is not asking about the write folder at all, so an
+    unproven one stays unproven and costs no Drive call -- the panel resends the id on
+    every save (that is the path the reconnection test covers), and a client that says
+    nothing about the folder gets nothing done to it."""
+
+    def fail_if_built(_account: GoogleDriveAccount) -> DriveTransport:
+        raise AssertionError("una PATCH che non nomina la cartella non deve verificarla")
+
+    account = _connected_drive_account(db_session, admin_user)
+    account.storage_folder_id = "3AbCdEfGhIjKlMnOpQ"
+    db_session.flush()
+    service = _drive_service_account(db_session, transport_factory=fail_if_built)
+
+    read = service.set_roots(
+        DriveRootsUpdate(root_folder_ids=["2AbCdEfGhIjKlMnOpQ"]), _drive_actor(admin_user)
+    )
+
+    assert read.storage_folder_id == "3AbCdEfGhIjKlMnOpQ"
+    assert read.storage_folder_verified is False
