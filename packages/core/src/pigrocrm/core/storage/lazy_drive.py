@@ -1,14 +1,15 @@
 """Drive as a `DocumentStorage`, on the titolare's own credential, resolved late.
 
 **Why late.** The service-account backend is fully described by two environment
-variables, so `storage_from_settings` can build it, verify its root folder, and fail at
-startup if either is wrong. This one is described by a *row*: the connected Google
-account and the folder its owner chose in Impostazioni → Drive. That row does not exist
-on a fresh installation, and the API has to start anyway -- otherwise the only screen
-that could create it is unreachable, and `PIGROCRM_STORAGE_BACKEND=gdrive` becomes a
-setting nobody can ever finish configuring. So construction reads nothing at all, and
-the first `put`/`get`/`delete` is where the answer is either found or refused with
-`StorageNotConfigured`.
+variables, so `storage_from_settings` can build it, verify its root folder, and refuse
+the configuration by name the moment it is asked for one -- start-up on the MCP adapter,
+the first document operation on the API (`factory.py` says which and why). This one is
+described by a *row*: the connected Google account and the folder its owner chose in
+Impostazioni → Drive. That row does not exist on a fresh installation, and the API has
+to start anyway -- otherwise the only screen that could create it is unreachable, and
+`PIGROCRM_STORAGE_BACKEND=gdrive` becomes a setting nobody can ever finish configuring.
+So construction reads nothing at all, and the first `put`/`get`/`delete` is where the
+answer is either found or refused with `StorageNotConfigured`.
 
 **Why it re-reads the row.** The folder is a settings field a person edits while the
 process is running. A storage that resolved once and cached forever would keep writing
@@ -37,10 +38,11 @@ from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.config import Settings
-from pigrocrm.core.drive.account import GoogleDriveAccountService
+from pigrocrm.core.drive.account import GoogleDriveAccountService, missing_scope_conflict
 from pigrocrm.core.drive.errors import DriveCredentialRevoked
 from pigrocrm.core.drive.models import GoogleDriveAccount
 from pigrocrm.core.drive.repository import DriveRepository
+from pigrocrm.core.drive.schemas import DRIVE_SCOPE_FILE
 from pigrocrm.core.drive.transport import HttpCall, user_transport_for
 from pigrocrm.core.gmail.tokens import GoogleTokenClient
 from pigrocrm.core.storage.errors import StorageNotConfigured
@@ -62,6 +64,13 @@ _REVOKED_REASON = (
     "Il consenso Google Drive per {email} è stato revocato: la scrittura dei documenti "
     "è sospesa finché non ricolleghi Drive da Impostazioni → Drive."
 )
+
+# The name the missing-scope refusal gives what it is refusing. A *feature*, not a call:
+# `missing_scope_conflict` writes "<feature> non è disponibile: manca l'autorizzazione
+# ...", and what is unavailable here is putting documents on Drive at all -- every
+# `put`, `get` and `delete` of this backend -- rather than the one request that happened
+# to notice.
+_FEATURE_WRITE = "la scrittura dei documenti su Drive"
 
 
 @dataclass(frozen=True)
@@ -96,18 +105,28 @@ class LazyUserDriveStorage:
     transport, and one of the two `GoogleTokenClient`s would be discarded along with the
     access token it had just paid an OAuth round-trip for -- and a revoked grant
     discovered by both would be written to the row twice. So `_lock` guards `_resolve`
-    end to end, and guards the moment `_record_revocation` claims the resolution it is
-    about to invalidate (the same shape, and the same reason, as `pigrocrm_api.deps`'s
-    own `_engine_lock`) -- which makes "one resolution, one transport, one token, one
-    revocation recorded" true by construction rather than by timing.
+    end to end, and guards the moment `_record_revocation` claims -- by identity -- the
+    very resolution its caller's failure came out of (the same shape, and the same
+    reason, as `pigrocrm_api.deps`'s own `_engine_lock`) -- which makes "one resolution,
+    one transport, one token, one revocation recorded against the credential that
+    actually failed" true by construction rather than by timing.
 
     The lock is held across the row read, not merely across the assignment, and that is
-    a deliberate trade: it costs one serialised indexed statement on a single-tenant
-    table per storage operation, and it buys a check-then-build that cannot interleave.
-    A lock taken only around the assignment would let both threads build first and then
-    argue about which build to keep, which is the whole cost this exists to avoid. It is
-    never held while Drive is called: `_run` resolves, releases, and only then uploads,
-    so concurrent uploads stay concurrent.
+    a deliberate trade whose full price is worth stating. It costs, per storage
+    operation: a session opened from `session_factory` -- which in production checks a
+    connection out of the pool and *can block* there if every connection is busy -- and
+    one indexed statement on a single-tenant table, both serialised across every thread
+    doing document work. What it buys is a check-then-build that cannot interleave. A
+    lock taken only around the assignment would let both threads build first and then
+    argue about which build to keep, which is the whole cost this exists to avoid; a
+    read taken before the lock would be a read whose answer may already be stale by the
+    time the lock is acquired, so it would have to be taken again anyway.
+
+    What is *not* held under it is the part that talks to Google: no Drive request and no
+    token exchange happens inside `_resolve` (`user_transport_for` composes a transport
+    and calls nothing), and `_run` resolves, releases, and only then uploads -- so
+    concurrent uploads stay concurrent and the serialised window stays a database
+    window, never a network one.
     """
 
     def __init__(
@@ -146,6 +165,11 @@ class LazyUserDriveStorage:
         screen, and telling them apart here would only invite four sentences that
         describe the same next action.
 
+        A connected, configured account whose grant is missing `drive.file` is the one
+        state that gets its own refusal, because it is the one with a *different* next
+        action: not "connect Drive and choose a folder" -- both are done -- but "grant
+        the authorisation this one is short of". See the check below.
+
         Under `_lock` from the row read to the assignment (class docstring): the read is
         what decides whether to build, so a concurrent caller that slipped in between
         the two would build a second transport for an answer this one had already found.
@@ -158,6 +182,26 @@ class LazyUserDriveStorage:
                     # into a folder the row no longer names if the account came back.
                     self._resolution = None
                     raise StorageNotConfigured()
+                if DRIVE_SCOPE_FILE not in account.scopes_granted:
+                    # The scope that lets this credential create a file at all, checked
+                    # here because nothing between here and Google does. Without it the
+                    # upload reaches `files.create` and comes back a 403, which
+                    # `GDriveStorage` reports as «caricamento su Drive fallito (403)»:
+                    # an outage-shaped sentence for a configuration problem, naming
+                    # neither the missing authorisation nor the screen that grants it.
+                    # A person can reach this state honestly -- the consent screen lets
+                    # fewer scopes be ticked than were asked for, and a client whose
+                    # scope list grows leaves older grants short of one.
+                    #
+                    # Not `StorageNotConfigured`, and the difference is the next action:
+                    # nothing here is unconfigured (the account is connected, the folder
+                    # is chosen), so "collega Drive e scegli la cartella" would send
+                    # somebody to redo work that is already done. The resolution is
+                    # dropped for the same reason it is dropped above, and the scope
+                    # lives on the row this re-reads, so a re-authorisation takes effect
+                    # at the next operation rather than at the next restart.
+                    self._resolution = None
+                    raise missing_scope_conflict(DRIVE_SCOPE_FILE, _FEATURE_WRITE)
                 current = self._resolution
                 if current is not None and (
                     current.account_id == account.id and current.updated_at == account.updated_at
@@ -181,8 +225,18 @@ class LazyUserDriveStorage:
             self._resolution = resolved
             return resolved
 
-    def _record_revocation(self) -> None:
+    def _record_revocation(self, resolution: _Resolution) -> None:
         """Marks the row revoked, in its own session, and forgets the resolution.
+
+        `resolution` is the one the failure came out of, passed in by `_run` rather than
+        read from `self` -- because `self._resolution` means "whichever account is
+        cached *now*", and this object is shared by every request in the process and
+        re-resolves whenever the row changes. A settings change, a disconnect and
+        reconnect, or a concurrent operation that met a newer row can all replace it
+        between the failed refresh and this call, and what got written then was a
+        revocation stamped on a credential that had never been asked for anything: a
+        healthy Drive painted red in the shell banner, and the one that actually failed
+        left `active`.
 
         Its own session because `mark_revoked` commits: the operation that discovered
         this is about to raise and its caller's transaction will be rolled back, so the
@@ -209,17 +263,27 @@ class LazyUserDriveStorage:
         unavailable database needs -- while the exception it would have replaced is not
         re-derivable at all, because it is what the caller is being told.
         """
-        # Claimed under `_lock`, written outside it. Taking the resolution and clearing
-        # it in one atomic step is what makes the record happen *once*: two threads that
-        # both met the revocation arrive here, and the second finds `None` and returns
-        # without writing. The write itself commits and must not be holding a lock every
-        # other operation's resolution waits on -- and it does not need to, because the
-        # thread that got here holds the only reference to that resolution.
+        # Claimed under `_lock`, written outside it -- and claimed by *identity*, which
+        # is what makes the record happen at most once and always about the right row.
+        # Two threads that both met the revocation on the same resolution arrive here,
+        # and the second finds it already cleared and returns without writing; a thread
+        # whose resolution has since been replaced finds a different object and returns
+        # too, leaving the newer account alone. Equality would not do: two resolutions of
+        # the same row are two different attempts, and the second one has not failed.
+        #
+        # Nothing is written in that last case, deliberately. The state this skips is
+        # re-derivable -- the next operation resolves again and meets the same
+        # `invalid_grant`, which is the retry this bookkeeping is best effort for --
+        # while a fact recorded against an account that was never asked for a token is
+        # not correctable by anything.
+        #
+        # The write itself commits and must not be holding a lock every other
+        # operation's resolution waits on -- and it does not need to, because the thread
+        # that got here holds the only reference to that resolution.
         with self._lock:
-            resolution = self._resolution
+            if self._resolution is not resolution:
+                return
             self._resolution = None
-        if resolution is None:
-            return
         try:
             session = self._session_factory()
             try:
@@ -265,11 +329,13 @@ class LazyUserDriveStorage:
         `UserTokens` raised, not flattened -- a caller that reacts to a revocation has
         to be able to match on it, which is why `drive/errors.py` made it a type.
         """
-        storage = self._resolve().storage
+        resolution = self._resolve()
         try:
-            return operation(storage)
+            return operation(resolution.storage)
         except DriveCredentialRevoked:
-            self._record_revocation()
+            # The resolution this operation actually used, not whatever is cached by the
+            # time the failure surfaces -- see `_record_revocation`.
+            self._record_revocation(resolution)
             raise
 
     # ---- DocumentStorage --------------------------------------------------------

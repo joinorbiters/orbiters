@@ -98,6 +98,7 @@ def _account(
     status: str = "active",
     storage_folder_id: str | None = STORAGE_FOLDER,
     updated_at: datetime | None = None,
+    scopes: tuple[str, ...] = (DRIVE_SCOPE_READONLY, DRIVE_SCOPE_FILE),
 ) -> GoogleDriveAccount:
     """A connected Drive with a write folder chosen -- the state the lazy storage has
     to find.
@@ -122,7 +123,7 @@ def _account(
         email_address=MAILBOX,
         refresh_token_ciphertext=ciphertext,
         refresh_token_nonce=nonce,
-        scopes_granted=[DRIVE_SCOPE_READONLY, DRIVE_SCOPE_FILE],
+        scopes_granted=list(scopes),
         status=status,
         root_folder_ids=[],
         storage_folder_id=storage_folder_id,
@@ -660,3 +661,137 @@ def test_two_threads_meeting_an_unresolved_storage_resolve_it_once(
     assert not errors
     assert builds == 1, f"expected one transport to be built, got {builds}"
     assert gmail.token_requests == 1
+
+
+def test_a_revocation_is_never_recorded_against_a_resolution_that_moved(
+    db_session: Session,
+) -> None:
+    """The account marked `revoked` must be the one whose credential failed -- and the
+    only way to know that is to carry the resolution the failure came from.
+
+    `_record_revocation` used to read `self._resolution`, which is "whichever account is
+    cached *now*". This object is shared by every request in the process and re-resolves
+    whenever the row changes, so "now" is not "then": a settings change, a disconnect
+    and reconnect, or a concurrent operation that met a newer row can all replace the
+    resolution between the failed refresh and the bookkeeping. What was then written was
+    a revocation stamped on a credential that had never been asked for anything --
+    a healthy Drive shown as revoked in the shell banner, and the failing one left
+    `active`.
+
+    So `_run` hands `_record_revocation` the resolution it actually used, and the record
+    happens only if that is still the current one (identity, not equality: two
+    resolutions of the same row are still two different attempts). The accepted
+    consequence is asserted too -- when the resolution moved, *nothing* is recorded:
+    the next operation resolves again and meets the same `invalid_grant`, which is the
+    retry this bookkeeping is best-effort for, and that is a far better outcome than a
+    fact recorded about the wrong account.
+
+    The swap is made from inside the token exchange that is about to answer
+    `invalid_grant`, which is the one moment production's own race has: the failure
+    exists, and the resolution it belongs to is no longer the cached one.
+    """
+    now = datetime.now(UTC)
+    # The account that gets resolved: `storage_account()` answers with the most recently
+    # updated row, so the stamps are explicit rather than left to two flushes racing.
+    failing = _account(db_session, updated_at=now)
+    other = _account(db_session, updated_at=now - timedelta(hours=1))
+    settings = gmail_settings(storage_backend="gdrive")
+    gmail = FakeGmail(revoked=True)
+    drive = FakeDrive(root_id=STORAGE_FOLDER)
+    swaps: list[str] = []
+
+    def swap_then_refuse(
+        method: str, url: str, headers: dict[str, str], body: bytes | None
+    ) -> tuple[int, bytes]:
+        swaps.append(url)
+        storage._resolution = lazy_drive._Resolution(
+            account_id=other.id,
+            email_address=other.email_address,
+            updated_at=other.updated_at,
+            storage=GDriveStorage(
+                transport=user_transport_for(other, settings, http=drive),
+                root_folder_id=STORAGE_FOLDER,
+            ),
+        )
+        return gmail(method, url, headers, body)
+
+    storage = LazyUserDriveStorage(
+        _sessions(db_session),
+        settings,
+        http=drive,
+        tokens=GoogleTokenClient(
+            client_id=settings.google_client_id,
+            client_secret=settings.google_client_secret,
+            transport=GmailTransport(http=swap_then_refuse, sleep=lambda _: None),
+        ),
+    )
+
+    with pytest.raises(DriveCredentialRevoked) as caught:
+        storage.put(KEY, PDF, "application/pdf")
+
+    assert swaps  # the resolution really was replaced before the record ran
+    assert caught.value.details["email_address"] == MAILBOX
+    db_session.expire_all()
+    # The account that was swapped in is untouched: it was never asked for a token.
+    swapped_in = db_session.get(GoogleDriveAccount, other.id)
+    assert swapped_in is not None
+    assert swapped_in.status == "active"
+    assert swapped_in.last_error is None
+    # And nothing at all was recorded, which is the accepted cost of not guessing.
+    still_failing = db_session.get(GoogleDriveAccount, failing.id)
+    assert still_failing is not None and still_failing.status == "active"
+    assert db_session.execute(select(Activity.kind)).scalars().all() == []
+
+
+def test_a_grant_without_the_write_scope_refuses_the_upload_with_guidance(
+    db_session: Session,
+) -> None:
+    """`drive.file` is the scope that lets this credential create a file at all, and
+    until now nothing checked it before a write.
+
+    A titolare can arrive here honestly: the consent screen lets a person tick fewer
+    scopes than were asked for, and a Google client whose scope list changes between
+    two authorisations leaves older grants short of one. What happened then was a
+    `files.create` refused by Google as a 403 inside `GDriveStorage`, surfacing as
+    «caricamento su Drive fallito (403)» -- an outage-shaped sentence for a
+    configuration problem, with no mention of the authorisation that is missing or of
+    the screen that grants it.
+
+    So resolution refuses first, with the very `Conflict`
+    `GoogleDriveAccountService.usable` raises for a missing scope, and no Drive request
+    is made to get there: one rule, one sentence, wherever a missing scope is met.
+    Deliberately not `StorageNotConfigured`: nothing here is unconfigured -- the account
+    is connected and the folder is chosen -- and the action to take is not the one that
+    refusal names.
+    """
+    _account(db_session, scopes=(DRIVE_SCOPE_READONLY,))
+    drive = FakeDrive(root_id=STORAGE_FOLDER)
+    gmail = FakeGmail()
+    storage = _lazy(db_session, drive=drive, gmail=gmail)
+
+    with pytest.raises(Conflict) as caught:
+        storage.put(KEY, PDF, "application/pdf")
+
+    assert caught.value.details["scope"] == DRIVE_SCOPE_FILE
+    assert "Impostazioni → Drive" in caught.value.message
+    # Neither Drive nor Google's token endpoint was called: the refusal is about the
+    # grant, and asking anyway would have spent a round-trip to be told the same thing
+    # in worse words.
+    assert drive.requests == []
+    assert gmail.token_requests == 0
+
+
+def test_the_write_scope_is_re_read_when_the_row_changes(db_session: Session) -> None:
+    """The scope lives on the row the resolution already re-reads, so a
+    re-authorisation that finally grants `drive.file` takes effect at the next
+    operation -- no restart, exactly as a changed folder does."""
+    account = _account(db_session, scopes=(DRIVE_SCOPE_READONLY,))
+    storage = _lazy(db_session, drive=FakeDrive(root_id=STORAGE_FOLDER), gmail=FakeGmail())
+    with pytest.raises(Conflict):
+        storage.put(KEY, PDF, "application/pdf")
+
+    account.scopes_granted = [DRIVE_SCOPE_READONLY, DRIVE_SCOPE_FILE]
+    account.updated_at = datetime.now(UTC)
+    db_session.flush()
+
+    storage.put(KEY, PDF, "application/pdf")  # no refusal: the grant is complete now

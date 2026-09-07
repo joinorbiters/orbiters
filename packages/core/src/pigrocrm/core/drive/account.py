@@ -4,9 +4,13 @@ grants access to -- the Drive twin of `gmail/account.py`.
 That module's docstring draws the one distinction this file must not blur either:
 *is the credential healthy?* is `status`; *is this feature available?* is derived from
 `scopes_granted` at the point of use. A Drive grant missing `drive.file` still lets the
-CRM read from `root_folder_ids` -- it is only writing into `storage_folder_id` that is
-unavailable -- so `health` reports that scope as merely missing, never as a reason to
-paint the whole banner red.
+CRM read from `root_folder_ids`, and one missing `drive.readonly` can still be written
+into -- neither is a broken credential, and `status` stays `active` for both. What
+`health` says about them is nonetheless `scope_missing`: each is a feature that is off,
+the two places that discover it are refusals a person meets mid-action (the storage's
+own resolution, and choosing a write folder), and `missing_scopes` alone reaches only
+the settings page. The banner names the scope that is missing, so the fix -- one
+re-authorisation -- is legible from wherever it is read.
 
 Four statuses, the same four `GoogleAccount.status` carries and for the same reason
 (see that model's docstring, and `GoogleDriveAccount`'s): nothing, wait, re-consent,
@@ -90,19 +94,23 @@ _SCOPE_TEXT = (
 # apart from a 404 anywhere else in the same call (the token endpoint, notably) -- see
 # `_verify_storage_folder`'s own docstring.
 _WHAT_VERIFY_STORAGE_FOLDER = "verifica della cartella di scrittura"
-# The `feature` name `_verify_storage_folder` hands to `_missing_scope_conflict` when
-# it refuses to call Drive at all over a missing `drive.readonly`. Distinct from
+# The `feature` name `_verify_storage_folder` hands to `missing_scope_conflict` when
+# it refuses to call Drive at all over a missing scope. Distinct from
 # `_WHAT_VERIFY_STORAGE_FOLDER` on purpose: that one names a Drive *call* that was
 # made and failed, this one names the *feature* that a scope gate refused before any
 # call happened -- the same distinction `usable`'s own `feature` parameter draws.
 _FEATURE_VERIFY_STORAGE_FOLDER = "la verifica della cartella di scrittura"
 
 
-def _missing_scope_conflict(scope: str, feature: str) -> Conflict:
+def missing_scope_conflict(scope: str, feature: str) -> Conflict:
     """The one sentence for "this Drive grant is active but missing a scope",
-    shared by `usable` and `_verify_storage_folder` so the two gates -- one for using
-    a configured Drive, one for choosing its write folder -- read identically to
-    whoever hits either of them.
+    shared by `usable`, `_verify_storage_folder` and `storage/lazy_drive.py`'s own
+    resolution, so the three gates -- using a configured Drive, choosing its write
+    folder, writing a document into it -- read identically to whoever hits any of them.
+
+    Public for that third caller: the document storage holds no actor and asks no
+    question this class can answer for it, but the refusal a titolare reads must not
+    depend on which of the three noticed the scope was missing.
     """
     return Conflict(
         "google_drive_account",
@@ -203,13 +211,19 @@ class GoogleDriveAccountService:
                     when=account.consent_expires_at.strftime("%d/%m/%Y alle %H:%M"),
                 ),
             )
-        if DRIVE_SCOPE_READONLY in missing:
-            # Only the read scope raises a banner. A grant missing `drive.file` can
-            # still read every configured root, which is most of the feature;
-            # `missing_scopes` carries that fact to the settings page without a
-            # banner over the whole app -- the same treatment Gmail gives a missing
-            # `gmail.send`.
-            return answer("scope_missing", _SCOPE_TEXT.format(scope=DRIVE_SCOPE_READONLY))
+        if missing:
+            # Either scope raises the banner, and the sentence names the one that is
+            # actually missing. `drive.readonly` is the reading half; `drive.file` is the
+            # writing half, and on an installation whose documents go to Drive its
+            # absence stops every upload -- refused at the storage's own resolution and
+            # at the moment a write folder is chosen. Both of those are refusals a
+            # person meets while trying to do something, and `missing_scopes` alone
+            # reaches only the settings page, so a grant missing the write scope would
+            # otherwise be a feature that is off with nothing on any screen saying so.
+            #
+            # Both missing is one sentence naming both, not two banners: the shell shows
+            # one, and the fix for either is the same single re-authorisation.
+            return answer("scope_missing", _SCOPE_TEXT.format(scope=" e ".join(missing)))
         return answer(None, None)
 
     def usable(self, actor: Actor, *, scope: str, feature: str) -> GoogleDriveAccount:
@@ -234,7 +248,7 @@ class GoogleDriveAccountService:
         if scope not in account.scopes_granted:
             # Not a credential problem: `status` stays `active` and every other scope
             # keeps working. It is this feature that is unavailable.
-            raise _missing_scope_conflict(scope, feature)
+            raise missing_scope_conflict(scope, feature)
         return account
 
     def mark_revoked(self, account: GoogleDriveAccount, actor: Actor, reason: str) -> None:
@@ -294,6 +308,15 @@ class GoogleDriveAccountService:
         unverified, same as `root_folder_ids` always are, and is verified for real at
         the next save made after the credential is reconnected and active again.
 
+        **An unchanged folder is not verified.** The panel resends the configured
+        `storage_folder_id` on every save, so a roots-only edit arrives naming the folder
+        the row already holds. Re-proving it proves nothing -- it was proven when it was
+        chosen -- and costs a Drive call per save; worse, a grant that has since lost a
+        scope, or a folder somebody moved, would refuse a change that has nothing to do
+        with the folder and discard the roots edit with it. So verification runs only for
+        a folder that is genuinely *new*, which is also the only case a titolare could
+        have got wrong here.
+
         **PATCH semantics, and why `model_fields_set` is read here.** The route is a
         `PATCH`: it changes the fields the request named and leaves the rest alone.
         `root_folder_ids` is required, so it is always one of them. `storage_folder_id`
@@ -312,6 +335,7 @@ class GoogleDriveAccountService:
             account.status == "active"
             and "storage_folder_id" in data.model_fields_set
             and data.storage_folder_id is not None
+            and data.storage_folder_id != account.storage_folder_id
         ):
             # Before any mutation: a failed verification must leave the row and the
             # timeline exactly as they were.
@@ -346,13 +370,18 @@ class GoogleDriveAccountService:
         will actually accept a write there has no cheap way to be asked ahead of one,
         and `verify_root_accessible` settles for exactly this same proof at startup.
 
-        `DRIVE_SCOPE_READONLY` is checked first, and without ever building a
-        transport: an `active` account missing it cannot make this call succeed no
-        matter what `folder_id` names, and letting the request through to Drive
-        anyway would answer with the same 404 a genuinely wrong id gets -- naming the
-        *folder* as the problem when the problem is the grant. `_missing_scope_conflict`
-        is the same `Conflict` `usable` would raise for the identical scope on the
-        identical account, so the two gates read as one rule from either call site.
+        **Both scopes are checked first, and without ever building a transport.**
+        `DRIVE_SCOPE_READONLY` is what makes this call answerable at all: an `active`
+        account missing it cannot make it succeed no matter what `folder_id` names, and
+        letting the request through to Drive anyway would answer with the same 404 a
+        genuinely wrong id gets -- naming the *folder* as the problem when the problem is
+        the grant. `DRIVE_SCOPE_FILE` is what makes the folder this verifies *usable*:
+        without it every upload into it is refused (`storage/lazy_drive.py` refuses at
+        resolution, with this same sentence), so saving it would record a choice that
+        cannot work and hand the discovery to the first document somebody generates.
+        `missing_scope_conflict` is the same `Conflict` `usable` would raise for the
+        identical scope on the identical account, so the gates read as one rule from
+        every call site.
 
         A 404 from the call itself means the id names nothing this credential can
         see -- the wrong id, a folder never shared with this account -- and becomes a
@@ -364,8 +393,9 @@ class GoogleDriveAccountService:
         `mark_revoked` already records everywhere else a refresh answers
         `invalid_grant` -- so it is recorded here too, then re-raised unflattened.
         """
-        if DRIVE_SCOPE_READONLY not in account.scopes_granted:
-            raise _missing_scope_conflict(DRIVE_SCOPE_READONLY, _FEATURE_VERIFY_STORAGE_FOLDER)
+        for scope in (DRIVE_SCOPE_READONLY, DRIVE_SCOPE_FILE):
+            if scope not in account.scopes_granted:
+                raise missing_scope_conflict(scope, _FEATURE_VERIFY_STORAGE_FOLDER)
         transport = self._transport_factory(account)
         try:
             meta = transport.json(

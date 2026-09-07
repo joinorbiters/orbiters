@@ -922,17 +922,23 @@ def test_the_original_pdf_can_come_straight_from_drive(
         def forget(self) -> None:
             pass
 
-    def capture(*, tokens, **_):  # noqa: ANN001, ANN202
-        """The transport seam pointed at the in-memory Drive, with the token provider
+    real_user_transport_for = reader_module.user_transport_for
+
+    def capture(account, settings, **_):  # noqa: ANN001, ANN202
+        """The composition seam pointed at the in-memory Drive, with the token provider
         `drive_reader_for` built *captured* on the way past and replaced by a stub --
         the same monkeypatch `test_drive_reader.py::_inject` uses, and for the same
         reason: the composition can then be asserted without Google's token endpoint
         being called at all (this suite opens no socket, see the root `conftest.py`).
+
+        `user_transport_for` is the name replaced, because that is the one helper both
+        users of a user-credentialled Drive compose through; the real one still runs, so
+        the row's refresh token is really unsealed on the way past.
         """
-        providers.append(tokens)
+        providers.append(real_user_transport_for(account, settings)._tokens)
         return DriveTransport(tokens=_Tokens(), http=drive, sleep=lambda _: None)
 
-    monkeypatch.setattr(reader_module, "DriveTransport", capture)
+    monkeypatch.setattr(reader_module, "user_transport_for", capture)
     actor = _drive_account(db_session)
     service = _svc(db_session, tmp_path, settings=gmail_settings())
     cid = _fiscal_customer_id(db_session)

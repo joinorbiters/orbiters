@@ -559,18 +559,28 @@ def test_health_within_the_warning_window_shows_the_expiring_banner_with_the_dat
     assert CONSENT_WARNING_HOURS == 48
 
 
-def test_health_missing_readonly_raises_the_scope_missing_banner(
+def test_health_raises_the_scope_missing_banner_for_either_missing_scope(
     db_session: Session, admin_user: User
 ) -> None:
-    """The read scope gates the banner; the write scope alone does not -- a Drive
-    grant missing only `drive.file` can still read every configured root."""
+    """Both scopes gate the banner, and each names itself in the sentence.
+
+    `drive.readonly` is the reading half and `drive.file` is the writing half, and a
+    grant missing either one has a feature that is off with no other place to learn it:
+    the write scope is checked at the storage's first upload (`LazyUserDriveStorage`)
+    and at the moment a write folder is chosen, both of which are refusals a person
+    meets while trying to do something, rather than a state they can see. Only
+    `missing_scopes` carried the fact before, which the settings page reads and the
+    shell does not -- so an installation whose documents were configured to go to Drive
+    could sit there with every upload refused and nothing on any screen saying why.
+    """
     account = _connected_drive_account(
         db_session, admin_user, scopes=("openid", "email", DRIVE_SCOPE_READONLY)
     )
     db_session.flush()
     health = _drive_service_account(db_session).health(_drive_actor(admin_user))
 
-    assert health.banner is None
+    assert health.banner == "scope_missing"
+    assert DRIVE_SCOPE_FILE in (health.banner_text or "")
     assert health.missing_scopes == [DRIVE_SCOPE_FILE]
 
     account.scopes_granted = ["openid", "email", DRIVE_SCOPE_FILE]
@@ -580,6 +590,15 @@ def test_health_missing_readonly_raises_the_scope_missing_banner(
     assert health2.banner == "scope_missing"
     assert DRIVE_SCOPE_READONLY in (health2.banner_text or "")
     assert health2.missing_scopes == [DRIVE_SCOPE_READONLY]
+
+    # And a complete grant reports nothing at all: the banner is for a feature that is
+    # off, not for a scope list somebody might want to read.
+    account.scopes_granted = ["openid", "email", DRIVE_SCOPE_READONLY, DRIVE_SCOPE_FILE]
+    db_session.flush()
+    health3 = _drive_service_account(db_session).health(_drive_actor(admin_user))
+
+    assert health3.banner is None
+    assert health3.missing_scopes == []
 
 
 def test_usable_on_a_revoked_account_raises_credential_revoked(
@@ -1096,3 +1115,69 @@ def test_set_roots_refuses_verification_missing_the_read_scope_without_calling_d
     assert drive.calls == []
     db_session.refresh(account)
     assert account.storage_folder_id is None
+
+
+def test_set_roots_refuses_verification_missing_the_write_scope_without_calling_drive(
+    db_session: Session, admin_user: User
+) -> None:
+    """The other half of the same gate. `drive.readonly` is what makes the verification
+    call itself answerable; `drive.file` is what makes the folder it verifies *useful* --
+    without it every upload into that folder is refused, so saving it would record a
+    choice that cannot work and would be discovered only at the first document. Both are
+    refused before any Drive call, with the same `Conflict` `usable` raises for a missing
+    scope, naming the scope that is actually missing."""
+    account = _connected_drive_account(db_session, admin_user, scopes=(DRIVE_SCOPE_READONLY,))
+    drive = FakeDrive()
+    drive.add_folder("Fatture", parent=drive.root_id, file_id="3AbCdEfGhIjKlMnOpQ")
+    service = _drive_service_account(db_session, transport_factory=_fake_transport_factory(drive))
+
+    with pytest.raises(Conflict) as caught:
+        service.set_roots(
+            DriveRootsUpdate(
+                root_folder_ids=["1AbCdEfGhIjKlMnOpQ"], storage_folder_id="3AbCdEfGhIjKlMnOpQ"
+            ),
+            _drive_actor(admin_user),
+        )
+
+    assert DRIVE_SCOPE_FILE in caught.value.message
+    assert caught.value.details["scope"] == DRIVE_SCOPE_FILE
+    assert drive.calls == []
+    db_session.refresh(account)
+    assert account.storage_folder_id is None
+
+
+def test_set_roots_verifies_nothing_when_the_storage_folder_did_not_change(
+    db_session: Session, admin_user: User
+) -> None:
+    """The panel resends the configured `storage_folder_id` on *every* save -- there is
+    no "unchanged, skip it" on the client -- so a roots-only edit arrives as a request
+    that names the folder it already has. Verifying it again proves nothing (it was
+    proven when it was chosen) and costs a Drive call per save; worse, on a grant that
+    has since lost a scope, or a folder somebody moved to another Drive, the
+    verification refuses a change that has nothing to do with the folder and the roots
+    edit is lost with it.
+
+    The missing scope here is what makes that visible without a network fake: a
+    verification that ran at all would refuse before touching Drive, and the transport
+    factory would fail the test if it were ever built."""
+
+    def fail_if_built(_account: GoogleDriveAccount) -> DriveTransport:
+        raise AssertionError("una cartella invariata non va verificata")
+
+    account = _connected_drive_account(db_session, admin_user, scopes=(DRIVE_SCOPE_READONLY,))
+    account.storage_folder_id = "3AbCdEfGhIjKlMnOpQ"
+    db_session.flush()
+    service = _drive_service_account(db_session, transport_factory=fail_if_built)
+
+    read = service.set_roots(
+        DriveRootsUpdate(
+            root_folder_ids=["1AbCdEfGhIjKlMnOpQ"], storage_folder_id="3AbCdEfGhIjKlMnOpQ"
+        ),
+        _drive_actor(admin_user),
+    )
+
+    assert read.root_folder_ids == ["1AbCdEfGhIjKlMnOpQ"]
+    assert read.storage_folder_id == "3AbCdEfGhIjKlMnOpQ"
+    db_session.refresh(account)
+    assert account.root_folder_ids == ["1AbCdEfGhIjKlMnOpQ"]
+    assert account.storage_folder_id == "3AbCdEfGhIjKlMnOpQ"

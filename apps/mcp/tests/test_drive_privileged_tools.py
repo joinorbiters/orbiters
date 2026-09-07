@@ -157,8 +157,9 @@ def fake_drive(monkeypatch: pytest.MonkeyPatch) -> FakeDrive:
     top-level folder that is *not* configured -- so "inside the roots" is not
     accidentally true of everything on the drive.
 
-    The transport seam is `drive/reader.py`'s own `DriveTransport`, replaced with the
-    production class pointed at the in-memory Drive and a stub token provider: the same
+    The seam is `drive/reader.py`'s own `user_transport_for` -- the one helper every
+    user-credentialled Drive is composed through -- replaced with the production
+    `DriveTransport` pointed at the in-memory Drive and a stub token provider: the same
     monkeypatch `packages/core/tests/test_drive_reader.py` uses, which also keeps
     Google's token endpoint out of the picture entirely.
     """
@@ -192,8 +193,8 @@ def fake_drive(monkeypatch: pytest.MonkeyPatch) -> FakeDrive:
     )
     monkeypatch.setattr(
         reader_module,
-        "DriveTransport",
-        lambda **_: DriveTransport(tokens=StubTokens(), http=drive, sleep=lambda _: None),
+        "user_transport_for",
+        lambda *_, **__: DriveTransport(tokens=StubTokens(), http=drive, sleep=lambda _: None),
     )
     return drive
 
