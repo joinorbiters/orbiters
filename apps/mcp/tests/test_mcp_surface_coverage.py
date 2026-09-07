@@ -422,6 +422,15 @@ _BYTE: dict[Method, str] = {
 #    category is for the ones that survive being asked why, and the only way to keep that
 #    true is to delete the ones that do not the moment the tool is written.
 _COPERTE_O_UMANE: dict[Method, str] = {
+    ("SignupService", "subscribe"): (
+        "e' il visitatore della pagina pubblica /orbiters che lascia il *proprio* "
+        "indirizzo per la community (spec 2026-09-07): un atto della persona su di se', "
+        "non un'operazione che un agente compie per conto del titolare. Non tocca il "
+        "database del CRM -- scrive nel database `orbiters`, separato di proposito -- e "
+        "l'unico adapter che la raggiunge e' `POST /api/orbiters/signups`, senza actor. "
+        "Un tool che la esponesse iscriverebbe qualcuno alla lista con l'email di "
+        "qualcun altro"
+    ),
     ("DocumentService", "create"): "create_document_from_template e' l'unica creazione "
     "che non richieda di caricare byte",
     ("DocumentService", "update"): "titolo e campi custom: nessun agente ha motivo di "

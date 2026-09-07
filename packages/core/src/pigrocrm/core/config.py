@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="PIGROCRM_", env_file=".env", extra="ignore")
 
     database_url: str = "postgresql+psycopg://pigrocrm:pigrocrm@localhost:5432/pigrocrm"
+    # The Orbiters signup list (docs/superpowers/specs/2026-09-07-orbiters-landing-design.md)
+    # lives in a database of its own, not in the CRM schema above. Empty means "the same
+    # server and credentials as `database_url`, database named `orbiters`"; set it only to
+    # put that list somewhere else. `orbiters.database.ensure_orbiters_database` creates
+    # the database if it is missing, which needs CREATE DATABASE on the server.
+    orbiters_database_url: str = ""
     jwt_secret: str = "change-me-in-production-please-set-a-real-secret"
     access_token_minutes: int = 15
     # Six months, sliding: `/api/auth/refresh` consumes the old jti and issues a new row

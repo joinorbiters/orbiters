@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-const PAGES = ['/', '/privacy', '/termini'] as const
+const PAGES = ['/', '/privacy', '/termini', '/orbiters'] as const
 const BUDGET_BYTES = 40 * 1024
 
 test.describe('the landing page', () => {

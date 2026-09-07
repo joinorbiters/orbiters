@@ -1,0 +1,138 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
+
+const html = readFileSync(join(__dirname, 'orbiters.html'), 'utf-8')
+const css = readFileSync(join(__dirname, 'orbiters.css'), 'utf-8')
+const js = readFileSync(join(__dirname, 'orbiters.js'), 'utf-8')
+
+function meta(name: string): string | undefined {
+  return html.match(new RegExp(`<meta\\s+(?:name|property)="${name}"\\s+content="([^"]*)"`))?.[1]
+}
+
+describe('orbiters.html', () => {
+  it('is in Italian, names itself, and describes itself', () => {
+    expect(html).toMatch(/<html lang="it">/)
+    expect(html.match(/<title>([^<]+)<\/title>/)?.[1]).toContain('Orbiters')
+    expect((meta('description') ?? '').length).toBeGreaterThan(40)
+    expect(meta('og:type')).toBe('website')
+    expect(meta('og:title')).toContain('Orbiters')
+  })
+
+  it('has exactly one form, and it asks for one thing', () => {
+    expect(html.match(/<form/g)).toHaveLength(1)
+    expect(html.match(/<input/g)).toHaveLength(1)
+    expect(html).toMatch(/<input[^>]+type="email"/)
+    expect(html).toMatch(/<label[^>]+for="email"/)
+    expect(html).toMatch(/<button type="submit">Entra in orbita<\/button>/)
+  })
+
+  it('does not post the form anywhere without the script', () => {
+    // The endpoint speaks JSON. A native `action=` would send it urlencoded and show
+    // the visitor a 422 they cannot read; the noscript line is the honest version.
+    expect(html).not.toMatch(/<form[^>]+action=/)
+    expect(html).toContain('<noscript>')
+  })
+
+  it('speaks to the reader, in the second person and in a few words', () => {
+    const text = html
+      .replace(/<head>[\s\S]*<\/head>/, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    expect(text.split(' ').length).toBeLessThan(90)
+    expect(text).toContain('Lascia l\'email')
+    for (const word of ['freelance', 'fatturare']) {
+      expect(text.toLowerCase()).toContain(word)
+    }
+  })
+
+  it('requests nothing from another origin and measures nothing', () => {
+    expect(html).not.toMatch(/(?:href|src)="https?:/)
+    expect(html).not.toMatch(/gtag|googletagmanager|analytics|plausible|fathom|hotjar|pixel/i)
+    expect(js).not.toMatch(/https?:\/\//)
+    expect(js).not.toMatch(/localStorage|sessionStorage|document\.cookie|navigator\.sendBeacon/)
+  })
+
+  it('says where the email goes and how to get out', () => {
+    expect(html).toMatch(/href="\/privacy"/)
+    const privacy = readFileSync(join(__dirname, 'privacy.html'), 'utf-8')
+    expect(privacy).toContain('Orbiters')
+    expect(privacy).toMatch(/href="\/orbiters"/)
+  })
+
+  it('still offers the way into an installation, quietly', () => {
+    expect(html).toMatch(/href="\/app\/"/)
+  })
+})
+
+describe('orbiters.css', () => {
+  it('restates no colour: every hex but white is a token', () => {
+    const hexes = [...css.matchAll(/#[0-9a-fA-F]{3,8}\b/g)].map((m) => m[0].toLowerCase())
+    expect(new Set(hexes)).toEqual(new Set(['#ffffff']))
+    expect(css).toMatch(/var\(--color-prussian-blue\)/)
+  })
+
+  it('has hard edges: no radius, no blur, no soft shadow', () => {
+    expect(css).not.toMatch(/border-radius:(?!\s*0;)/)
+    expect(css).not.toMatch(/backdrop-filter|blur\(/)
+    for (const [, shadow] of css.matchAll(/box-shadow:\s*([^;]+);/g)) {
+      // Offsets only: `x y 0 colour`, never a blur radius.
+      for (const layer of (shadow ?? '').split(',')) {
+        expect(layer.trim()).toMatch(/^-?\d+(?:px)? -?\d+(?:px)? 0 /)
+      }
+    }
+  })
+
+  it('actually hides the form once it is hidden', () => {
+    // The author `display: grid` on .signup outranks the UA `[hidden]` rule.
+    expect(css).toMatch(/\.signup\[hidden\]\s*\{\s*display:\s*none;/)
+  })
+
+  it('does not import the landing sheet', () => {
+    expect(css).not.toMatch(/@import/)
+  })
+})
+
+describe('orbiters.js', () => {
+  it('stays small', () => {
+    // Commented source; Vite ships it at about 2.6 KB. The whole page, font aside,
+    // sits under 10 KB against the landing's 40 KB budget (e2e/landing.spec.ts).
+    expect(Buffer.byteLength(js, 'utf-8')).toBeLessThan(6 * 1024)
+  })
+
+  it('reads its colours from the stylesheet rather than carrying a copy', () => {
+    expect(js).not.toMatch(/#[0-9a-fA-F]{6}\b/)
+    expect(js).toMatch(/--color-prussian-blue/)
+  })
+
+  it('posts to the one endpoint, as JSON', () => {
+    expect(js).toContain("fetch('/api/orbiters/signups'")
+    expect(js).toMatch(/'Content-Type':\s*'application\/json'/)
+  })
+
+  it('never starts the loop when the reader asked for less motion', () => {
+    expect(js).toMatch(/prefers-reduced-motion: reduce/)
+    expect(js).toMatch(/if \(reduced\) return/)
+  })
+
+  it('noise is deterministic and stays in [0, 1)', () => {
+    document.body.innerHTML = ''
+    delete (window as unknown as { __orbiters?: unknown }).__orbiters
+    new Function(js)()
+    const api = (window as unknown as { __orbiters: { noise: (x: number, y: number) => number } })
+      .__orbiters
+    const samples = [
+      [0.2, 0.7],
+      [3.4, 9.1],
+      [100.5, 0.25],
+      [-4.2, 7.9],
+    ]
+    for (const [x, y] of samples) {
+      const a = api.noise(x!, y!)
+      expect(a).toBe(api.noise(x!, y!))
+      expect(a).toBeGreaterThanOrEqual(0)
+      expect(a).toBeLessThan(1)
+    }
+  })
+})

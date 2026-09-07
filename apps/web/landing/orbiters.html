@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Orbiters — la community dei freelance, da PigroCRM</title>
+    <meta
+      name="description"
+      content="Orbiters è la community di freelance di PigroCRM: progetti da aziende vere, strumenti per fatturare e farti pagare, gente con cui parlarne. Lascia l'email e ti avvisiamo quando apriamo."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Orbiters — freelance, ma non da soli" />
+    <meta
+      property="og:description"
+      content="Lavoro trovato insieme, fatture senza pensieri, una community di freelance. Lascia l'email: ti scriviamo quando apriamo."
+    />
+    <meta property="og:locale" content="it_IT" />
+    <link rel="icon" type="image/svg+xml" href="./orbiters-logo.svg" />
+    <link rel="stylesheet" href="./orbiters.css" />
+  </head>
+  <body>
+    <canvas id="field" aria-hidden="true"></canvas>
+
+    <main class="box">
+      <p class="brand"><span class="glyph" aria-hidden="true"></span>Orbiters</p>
+      <h1>Freelance, ma non da soli.</h1>
+      <p class="lead">
+        Progetti da aziende vere. Strumenti per fatturare e farti pagare. Gente con cui parlarne.
+        Lascia l'email: ti avvisiamo quando apriamo.
+      </p>
+
+      <form id="signup" class="signup" novalidate>
+        <label class="sr-only" for="email">La tua email</label>
+        <input
+          id="email"
+          name="email"
+          type="email"
+          autocomplete="email"
+          inputmode="email"
+          placeholder="nome@studio.it"
+          required
+        />
+        <button type="submit">Entra in orbita</button>
+      </form>
+
+      <p class="note" id="note" role="status" aria-live="polite">
+        Solo l'email, solo per dirti quando apriamo.
+        <a href="/privacy">Privacy</a>
+      </p>
+      <noscript><p class="note">Per iscriverti serve JavaScript.</p></noscript>
+    </main>
+
+    <footer class="foot">
+      <a href="/">Un progetto PigroCRM</a>
+      <a href="/app/">Accedi</a>
+    </footer>
+
+    <script type="module" src="./orbiters.js"></script>
+  </body>
+</html>

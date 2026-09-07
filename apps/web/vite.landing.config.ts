@@ -13,7 +13,9 @@ import { palettePlugin } from './landing/palette-plugin'
 function extensionlessHtml(): Plugin {
   function rewrite(req: IncomingMessage, _res: ServerResponse, next: () => void): void {
     const [pathname = '/', query] = (req.url ?? '/').split('?')
-    if (pathname !== '/' && !pathname.includes('.')) {
+    // `/api/` is the proxy's, never a page: rewriting it would post the form to
+    // `/api/orbiters/signups.html`, which the API rightly does not have.
+    if (pathname !== '/' && !pathname.includes('.') && !pathname.startsWith('/api/')) {
       req.url = `${pathname}.html${query ? `?${query}` : ''}`
     }
     next()
@@ -28,6 +30,8 @@ function extensionlessHtml(): Plugin {
     },
   }
 }
+
+const apiUrl = process.env.PIGROCRM_API_URL ?? 'http://localhost:8000'
 
 export default defineConfig({
   root: path.resolve(__dirname, 'landing'),
@@ -50,8 +54,13 @@ export default defineConfig({
         index: path.resolve(__dirname, 'landing/index.html'),
         privacy: path.resolve(__dirname, 'landing/privacy.html'),
         termini: path.resolve(__dirname, 'landing/termini.html'),
+        orbiters: path.resolve(__dirname, 'landing/orbiters.html'),
       },
     },
   },
-  preview: { port: 4173, strictPort: true },
+  // The Orbiters form posts to /api/orbiters/signups on the same origin, exactly as
+  // nginx serves it in production. Dev and preview proxy that one prefix to a running
+  // API so the form can be exercised locally; PIGROCRM_API_URL points it elsewhere.
+  server: { proxy: { '/api': { target: apiUrl, changeOrigin: true } } },
+  preview: { port: 4173, strictPort: true, proxy: { '/api': { target: apiUrl, changeOrigin: true } } },
 })

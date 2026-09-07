@@ -60,13 +60,19 @@ export function extractSharedTokens(css: string): Record<string, string> {
   return shared
 }
 
-/** Prepends the shared tokens to `landing/landing.css`, at build and at dev time. */
+/** The stylesheets that receive the tokens: the landing's own, and Orbiters', which
+ *  shares the palette but none of the soft layer (see orbiters.css). */
+const TOKEN_CONSUMERS = ['landing/landing.css', 'landing/orbiters.css']
+
+/** Prepends the shared tokens to each stylesheet in TOKEN_CONSUMERS, at build and at
+ *  dev time. */
 export function palettePlugin(): Plugin {
   return {
     name: 'pigrocrm-landing-palette',
     enforce: 'pre',
     transform(code, id) {
-      if (!id.split('?')[0]?.endsWith('landing/landing.css')) return null
+      const file = id.split('?')[0] ?? ''
+      if (!TOKEN_CONSUMERS.some((consumer) => file.endsWith(consumer))) return null
       const tokens = extractSharedTokens(readFileSync(TOKENS_CSS, 'utf-8'))
       const block = Object.entries(tokens)
         .map(([name, value]) => `  ${name}: ${value};`)
