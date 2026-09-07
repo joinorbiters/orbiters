@@ -3169,7 +3169,7 @@ export interface components {
         };
         /**
          * DriveHealth
-         * @description Everything the shell banner needs for Drive, in one response -- the Drive twin of
+         * @description Everything the Drive banner needs, in one response -- the Drive twin of
          *     `gmail/schemas.py`'s `GmailHealth`, including its two reasons for existing:
          *     `banner_text` is a distinct field because the action behind each reason differs, and
          *     `configured` is what tells an installation with no Google client apart from an owner
@@ -3191,12 +3191,21 @@ export interface components {
          * @description Which folders the CRM may read from, and which one it may write generated
          *     documents into.
          *
-         *     Both fields hold Drive file ids and nothing else -- `_DriveId`'s pattern is what
+         *     Both fields hold Drive file ids and nothing else -- `_DriveId`'s pattern (which is
+         *     `query.py`'s `OUTSIDE_ID_PATTERN`, the same rule `checked_outside_id` applies) is what
          *     keeps a Drive *query* (`'x' in parents or name contains 'a'`, valid syntax for
          *     `files.list`'s `q` parameter) from ever reaching this table disguised as a folder id.
          *     `extra="forbid"` is not needed here the way it is on the wider Create/Update schemas
          *     elsewhere: there are only the two fields a Drive configuration has, and nothing else
          *     to guard against.
+         *
+         *     The route is a `PATCH`, and `storage_folder_id`'s default is what makes it one:
+         *     omitting the field leaves the configured write folder alone, sending `null` clears
+         *     it. Those two are the same *value* on this model -- `None` either way -- so the
+         *     difference lives only in `model_fields_set`, which is what
+         *     `GoogleDriveAccountService.set_roots` reads rather than the attribute. Anything
+         *     added to this schema later with a `None` default inherits that obligation.
+         *     `root_folder_ids` has no default and is therefore always part of the change.
          */
         DriveRootsUpdate: {
             /** Root Folder Ids */
@@ -3892,6 +3901,8 @@ export interface components {
             root_folder_ids: string[];
             /** Storage Folder Id */
             storage_folder_id: string | null;
+            /** Storage Folder Verified */
+            storage_folder_verified: boolean;
             /** Last Error */
             last_error: string | null;
             /** Last Error At */
@@ -4424,15 +4435,26 @@ export interface components {
         };
         /**
          * PdfSorgente
-         * @description Where the original PDF already is. Slice 9A knows one place -- a `documents` row
-         *     with an uploaded version; 9C adds `drive_file_id`.
+         * @description Where the original PDF already is: a `documents` row with an uploaded version
+         *     (9A), or a file on the titolare's Drive (9C).
+         *
+         *     Exactly one of the two, and the `model_validator` is what says so rather than a
+         *     check in the service: two sources would leave "which one is the original?" to be
+         *     answered by whichever branch the service happened to test first, and none would
+         *     make `pdf_sorgente: {}` mean "no PDF" -- which already has a spelling, omitting the
+         *     field entirely.
+         *
+         *     `drive_file_id` is held to `drive/query.py`'s strict pattern here, at the edge,
+         *     because the string reaches a Drive URL: `read_bytes` checks it again on the way past
+         *     (the same `checked_outside_id`), and both checks stay -- this one so the refusal names
+         *     `pdf_sorgente.drive_file_id` to the caller who typed it, that one so no future
+         *     caller of the reader can skip it.
          */
         PdfSorgente: {
-            /**
-             * Document Id
-             * Format: uuid
-             */
-            document_id: string;
+            /** Document Id */
+            document_id?: string | null;
+            /** Drive File Id */
+            drive_file_id?: string | null;
         };
         /** PendingOffer */
         PendingOffer: {
