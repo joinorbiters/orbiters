@@ -289,11 +289,28 @@ _REASON_GMAIL = (
 )
 
 
+def _unconditional_paths(base: Path) -> list[Path]:
+    """Every `.py` file under `base` that runs on a default installation, `prompts/`
+    included when `base` is the real `tools/`.
+
+    One helper for the three scans below (`_modules`, `_registered_tool_names`,
+    `_tools_source`) so that widening the sweep is one edit rather than three -- three
+    was how `prompts/` came to be missing from two of them while `server.py` registered
+    it unconditionally.
+
+    The `base == TOOLS_DIR` guard is for the scans' own tests, which point `base` at a
+    `tmp_path`: a temporary directory has no `prompts/` sibling to find.
+    """
+    paths = list(base.rglob("*.py"))
+    if base == TOOLS_DIR:
+        paths += list((TOOLS_DIR.parent / "prompts").rglob("*.py"))
+    return sorted(path for path in paths if path not in PRIVILEGED_MODULES)
+
+
 def _modules(base: Path = TOOLS_DIR) -> list[ast.Module]:
     return [
         ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for path in sorted(base.rglob("*.py"))
-        if path not in PRIVILEGED_MODULES
+        for path in _unconditional_paths(base)
     ]
 
 
@@ -325,7 +342,7 @@ def _registered_tool_names(base: Path = TOOLS_DIR) -> set[str]:
 
 
 def _tools_source(base: Path = TOOLS_DIR) -> str:
-    """Every `.py` file under `tools/`, concatenated.
+    """Every `.py` file under `tools/` **and under `prompts/`**, concatenated.
 
     Whole-package, like `_registered_tool_names` above and for a second reason of its
     own: the actual call into a service lives one file over, in the
@@ -335,12 +352,19 @@ def _tools_source(base: Path = TOOLS_DIR) -> str:
     name -- must fail exactly as if it were called inline in `tools/__init__.py`
     itself; scanning the whole package is what makes that true regardless of which
     file the call physically sits in.
+
+    `prompts/` is in for the same reason and was missing: `server.py` calls
+    `register_prompts` **unconditionally**, so §10's four prompts are as reachable on a
+    default installation as any tool in `tools/__init__.py`, and every ban below read
+    right past them. A prompt is a function with a `context` -- it can call
+    `InvoiceService.issue` exactly as a tool can -- and «un prompt» is a plausible place
+    for somebody to put a convenience that ends in a fiscal write, precisely because it
+    does not look like a tool.
+
+    Which files those are is `_unconditional_paths`' answer, shared with the two scans
+    above so the sweep is widened in one place.
     """
-    return "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in base.rglob("*.py")
-        if path not in PRIVILEGED_MODULES
-    )
+    return "\n".join(path.read_text(encoding="utf-8") for path in _unconditional_paths(base))
 
 
 def _receivers_of(method: str, base: Path = TOOLS_DIR) -> list[str | None]:
@@ -425,6 +449,12 @@ def test_the_source_scan_actually_reads_more_than_one_file() -> None:
     source = _tools_source()
     assert "def search(" in source  # tools/invoices.py
     assert "def log_time(" in source  # tools/timetracking.py
+    # And `prompts/`, which `server.py` registers unconditionally and which this sweep
+    # read right past until the 9C final review. Anchored on two of the four so that a
+    # sweep silently narrowing back to `tools/` fails here instead of leaving every ban
+    # below green over a directory it no longer looks at.
+    assert "def stato_cliente(" in source  # prompts/customer.py
+    assert "def chiusura_mese(" in source  # prompts/dashboards.py
 
 
 def test_the_registration_scan_reads_every_module_and_not_only_the_first() -> None:
@@ -749,11 +779,18 @@ def _agent_reachable_source() -> str:
 
     Wider than `_tools_source()` on purpose, and the width is the point: agent-reachable
     code is not only `tools/`. `resources/entities.py` renders the `customer://`,
-    `person://` and `deal://` templates, and `server.py` itself carries three inline
-    `@mcp.resource` bodies plus `describe_schema`/`refresh_schema` -- all registered
-    unconditionally, none of them scanned by the tools-only sweep. A `drive_reader_for`
-    built inside a resource render would be exactly as reachable as one built in a tool,
-    while leaving no trace under `tools/` at all.
+    `person://` and `deal://` templates, `prompts/` holds §10's four prompts, and
+    `server.py` itself carries three inline `@mcp.resource` bodies plus
+    `describe_schema`/`refresh_schema` -- all registered unconditionally, none of them
+    scanned by a tools-only sweep. A `drive_reader_for` built inside a resource render or
+    a prompt body would be exactly as reachable as one built in a tool, while leaving no
+    trace under `tools/` at all.
+
+    `prompts/` was the one missing, and it was missing from `_tools_source` too: nothing
+    about it is conditional (`server.py` calls `register_prompts` outside every `if`), and
+    a prompt takes the same `McpContext` a tool does, so «un prompt che riassume e poi
+    emette» would have passed every ban in this file. It is now in both sweeps, through
+    `_unconditional_paths`.
 
     `PRIVILEGED_MODULES` are subtracted, as everywhere else in this file: their whole
     existence is conditional.
@@ -761,21 +798,22 @@ def _agent_reachable_source() -> str:
     paths = [
         path
         for base in (TOOLS_DIR, TOOLS_DIR.parent / "resources")
-        for path in sorted(base.rglob("*.py"))
-        if path not in PRIVILEGED_MODULES
+        for path in _unconditional_paths(base)
     ]
     paths.append(TOOLS_DIR.parent / "server.py")
     return "\n".join(path.read_text(encoding="utf-8") for path in paths)
 
 
-def test_the_wide_scan_really_reads_the_resources_and_the_server() -> None:
+def test_the_wide_scan_really_reads_the_resources_the_prompts_and_the_server() -> None:
     """Guards the widening, the way this file guards every other scan. An
     `_agent_reachable_source` that silently collapsed back to `tools/` would leave the
-    Drive-reader ban below green while no longer looking at the two places it was
+    Drive-reader ban below green while no longer looking at the three places it was
     widened for."""
     source = _agent_reachable_source()
     assert "def render_customer(" in source  # resources/entities.py
     assert "def customer_resource(" in source  # server.py's inline @mcp.resource
+    assert "def stato_cliente(" in source  # prompts/customer.py
+    assert "def revisione_pipeline(" in source  # prompts/dashboards.py
     assert "def search_everything(" in source  # tools/__init__.py, i.e. the old width
 
 
