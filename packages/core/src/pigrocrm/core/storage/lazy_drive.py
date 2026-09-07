@@ -26,6 +26,7 @@ that invalidates it -- a revoked grant, recorded on the row so the shell banner 
 so, then re-raised unchanged.
 """
 
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -85,19 +86,28 @@ class LazyUserDriveStorage:
     credentials, because this object is constructed once per process while both the
     session and the credential are things it has to obtain again later.
 
-    **Not thread-safe yet, and that is a note for whoever wires it up.** `_resolution`
-    is read and written with no lock. Nothing here corrupts -- the field is replaced
-    wholesale by a single assignment, never mutated in place, so a concurrent reader
-    sees either the old resolution or the new one and both are coherent -- but two
-    threads meeting a cold or newly-invalidated cache will each resolve and each build a
-    transport, so one of the two `GoogleTokenClient`s is thrown away along with its
-    cached access token, and a revocation can be recorded twice. The instance that
-    reaches production is process-scoped and shared across requests (FastAPI runs sync
-    endpoints in a thread pool), so the task that wires it into `deps.py` should guard
-    the resolution with a lock -- the same shape, and the same reason, as `deps.py`'s
-    own `_engine_lock`. Deliberately not added here: a lock in this class with no
-    concurrent caller yet would be untested code protecting a scenario this task cannot
-    reach.
+    **Resolution is serialised, because this object is shared.** The instance that
+    reaches production is built once per process and used by every request (FastAPI runs
+    sync endpoints in a thread pool, and the MCP adapter dispatches concurrently too),
+    so two operations can meet a cold -- or newly invalidated -- cache at the same
+    instant. Nothing here would corrupt without a lock: `_resolution` is replaced
+    wholesale by a single assignment, never mutated in place. What would happen instead
+    is waste and a double record: each thread would resolve, each would build its own
+    transport, and one of the two `GoogleTokenClient`s would be discarded along with the
+    access token it had just paid an OAuth round-trip for -- and a revoked grant
+    discovered by both would be written to the row twice. So `_lock` guards `_resolve`
+    end to end, and guards the moment `_record_revocation` claims the resolution it is
+    about to invalidate (the same shape, and the same reason, as `pigrocrm_api.deps`'s
+    own `_engine_lock`) -- which makes "one resolution, one transport, one token, one
+    revocation recorded" true by construction rather than by timing.
+
+    The lock is held across the row read, not merely across the assignment, and that is
+    a deliberate trade: it costs one serialised indexed statement on a single-tenant
+    table per storage operation, and it buys a check-then-build that cannot interleave.
+    A lock taken only around the assignment would let both threads build first and then
+    argue about which build to keep, which is the whole cost this exists to avoid. It is
+    never held while Drive is called: `_run` resolves, releases, and only then uploads,
+    so concurrent uploads stay concurrent.
     """
 
     def __init__(
@@ -118,6 +128,12 @@ class LazyUserDriveStorage:
         self._http = http
         self._tokens = tokens
         self._resolution: _Resolution | None = None
+        # Guards every read and every write of `_resolution` -- see the class
+        # docstring. Not reentrant, and it does not need to be: `_resolve` and
+        # `_record_revocation` are the only holders, `_run` calls them one after the
+        # other rather than one inside the other, and nothing either of them calls
+        # comes back into this object.
+        self._lock = threading.Lock()
 
     # ---- resolution -------------------------------------------------------------
 
@@ -129,36 +145,41 @@ class LazyUserDriveStorage:
         disconnected it" and "the grant was revoked": all four are fixed on the same
         screen, and telling them apart here would only invite four sentences that
         describe the same next action.
+
+        Under `_lock` from the row read to the assignment (class docstring): the read is
+        what decides whether to build, so a concurrent caller that slipped in between
+        the two would build a second transport for an answer this one had already found.
         """
-        with self._session_factory() as session:
-            account = DriveRepository(session).storage_account()
-            if account is None or account.storage_folder_id is None:
-                # Dropped, not kept: a stale resolution would otherwise keep writing
-                # into a folder the row no longer names if the account came back.
-                self._resolution = None
-                raise StorageNotConfigured()
-            current = self._resolution
-            if current is not None and (
-                current.account_id == account.id and current.updated_at == account.updated_at
-            ):
-                return current
-            resolved = _Resolution(
-                account_id=account.id,
-                email_address=account.email_address,
-                updated_at=account.updated_at,
-                storage=GDriveStorage(
-                    transport=user_transport_for(
-                        account, self._settings, http=self._http, tokens=self._tokens
+        with self._lock:
+            with self._session_factory() as session:
+                account = DriveRepository(session).storage_account()
+                if account is None or account.storage_folder_id is None:
+                    # Dropped, not kept: a stale resolution would otherwise keep writing
+                    # into a folder the row no longer names if the account came back.
+                    self._resolution = None
+                    raise StorageNotConfigured()
+                current = self._resolution
+                if current is not None and (
+                    current.account_id == account.id and current.updated_at == account.updated_at
+                ):
+                    return current
+                resolved = _Resolution(
+                    account_id=account.id,
+                    email_address=account.email_address,
+                    updated_at=account.updated_at,
+                    storage=GDriveStorage(
+                        transport=user_transport_for(
+                            account, self._settings, http=self._http, tokens=self._tokens
+                        ),
+                        root_folder_id=account.storage_folder_id,
                     ),
-                    root_folder_id=account.storage_folder_id,
-                ),
-            )
-        # Outside the `with`: the session is closed and the account row is detached,
-        # and nothing above this line reads it again. Assigned after the block for the
-        # same reason -- a failure while composing must not leave a half-built
-        # resolution cached.
-        self._resolution = resolved
-        return resolved
+                )
+            # Outside the session's `with`: the session is closed and the account row is
+            # detached, and nothing above this line reads it again. Assigned after the
+            # block for the same reason -- a failure while composing must not leave a
+            # half-built resolution cached.
+            self._resolution = resolved
+            return resolved
 
     def _record_revocation(self) -> None:
         """Marks the row revoked, in its own session, and forgets the resolution.
@@ -188,8 +209,15 @@ class LazyUserDriveStorage:
         unavailable database needs -- while the exception it would have replaced is not
         re-derivable at all, because it is what the caller is being told.
         """
-        resolution = self._resolution
-        self._resolution = None
+        # Claimed under `_lock`, written outside it. Taking the resolution and clearing
+        # it in one atomic step is what makes the record happen *once*: two threads that
+        # both met the revocation arrive here, and the second finds `None` and returns
+        # without writing. The write itself commits and must not be holding a lock every
+        # other operation's resolution waits on -- and it does not need to, because the
+        # thread that got here holds the only reference to that resolution.
+        with self._lock:
+            resolution = self._resolution
+            self._resolution = None
         if resolution is None:
             return
         try:

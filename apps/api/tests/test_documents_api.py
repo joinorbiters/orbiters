@@ -1,11 +1,38 @@
+import sys
+from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session
 
-from pigrocrm.core.config import Settings
-from pigrocrm.core.storage.lazy_drive import LazyUserDriveStorage
-from pigrocrm_api.deps import get_storage
+# The in-memory Drive and the in-memory Google token endpoint live with the core tests,
+# which are a separate pytest root with no package of their own -- reached by path
+# exactly as `apps/mcp/tests/test_drive_privileged_tools.py` reaches them, rather than
+# duplicated into a second pair of fakes that would be a second place for the two to
+# disagree about what Google does.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "packages" / "core" / "tests"))
+from fakes.fake_drive import FOLDER_MIME, FakeDrive  # noqa: E402
+from fakes.fake_gmail import FakeGmail  # noqa: E402
+from fakes.gmail_fixtures import TOKEN_KEY, gmail_settings  # noqa: E402
+from sqlalchemy.orm import Session, sessionmaker  # noqa: E402
+
+import pigrocrm_api.deps as deps  # noqa: E402
+from pigrocrm.core.auth.models import User  # noqa: E402
+from pigrocrm.core.config import Settings, get_settings  # noqa: E402
+from pigrocrm.core.drive.models import GoogleDriveAccount  # noqa: E402
+from pigrocrm.core.drive.schemas import DRIVE_SCOPE_FILE, DRIVE_SCOPE_READONLY  # noqa: E402
+from pigrocrm.core.gmail.crypto import seal  # noqa: E402
+from pigrocrm.core.gmail.tokens import GoogleTokenClient  # noqa: E402
+from pigrocrm.core.gmail.transport import GmailTransport  # noqa: E402
+from pigrocrm.core.storage import lazy_drive  # noqa: E402
+from pigrocrm.core.storage.lazy_drive import LazyUserDriveStorage  # noqa: E402
+from pigrocrm_api.deps import get_storage  # noqa: E402
+
+PDF = b"%PDF-1.7\nfinto\n"
+# A Drive file id of the shape the titolare types into Impostazioni → Drive.
+STORAGE_FOLDER = "1CartellaScritturaAPI"
+REFRESH_TOKEN = "1//0gApiDriveStorageRefresh"
+DRIVE_MAILBOX = "titolare@example.it"
 
 
 def _customer(client: TestClient) -> str:
@@ -250,3 +277,179 @@ def test_an_upload_before_drive_is_connected_is_a_409_that_says_what_to_do(
     body = response.json()
     assert body["code"] == "conflict"
     assert "Impostazioni → Drive" in body["detail"]
+
+
+def _connected_drive(session: Session) -> GoogleDriveAccount:
+    """The titolare's Drive, connected, with a write folder chosen.
+
+    The refresh token is really sealed with the key `gmail_settings()` publishes, so the
+    unsealing the storage does at resolution runs for real -- the same seeding
+    `packages/core/tests/test_storage_factory.py` does, kept local for the reason every
+    other suite in this repository keeps its own: `conftest` is an ambiguous module name
+    across three test roots, and a fixture module for one row would be a third place to
+    look.
+    """
+    user = User(
+        email=f"titolare-{uuid4().hex[:8]}@example.it",
+        nome="Titolare",
+        password_hash="x",
+        ruolo="admin",
+        attivo=True,
+    )
+    session.add(user)
+    session.flush()
+    ciphertext, nonce = seal(REFRESH_TOKEN, TOKEN_KEY)
+    account = GoogleDriveAccount(
+        user_id=user.id,
+        google_sub=f"sub-{user.id}",
+        email_address=DRIVE_MAILBOX,
+        refresh_token_ciphertext=ciphertext,
+        refresh_token_nonce=nonce,
+        scopes_granted=[DRIVE_SCOPE_READONLY, DRIVE_SCOPE_FILE],
+        status="active",
+        root_folder_ids=[],
+        storage_folder_id=STORAGE_FOLDER,
+    )
+    session.add(account)
+    session.flush()
+    return account
+
+
+def _drive_installation(
+    session: Session, monkeypatch: pytest.MonkeyPatch, drive: FakeDrive, gmail: FakeGmail
+) -> Settings:
+    """An installation whose documents go to the titolare's own Drive, wired to fakes.
+
+    Three things, and each of them replaces exactly one piece of the outside world:
+
+    * `PIGROCRM_STORAGE_BACKEND=gdrive` with no service account -- the settings the
+      dependency reads to choose the second Drive route;
+    * `deps._factory` -- the API's own sessionmaker, pointed at this test's connection,
+      because `get_storage` hands the storage a factory that opens *fresh* sessions and
+      the real one would build an engine against a database that is not the
+      testcontainer. `join_transaction_mode="create_savepoint"` is what lets those
+      sessions see this test's uncommitted rows and nest their own work inside the
+      transaction the `api_session` fixture rolls back;
+    * `lazy_drive.user_transport_for` -- the network. The real helper still runs (it is
+      what unseals the refresh token), only with the Drive HTTP call and Google's token
+      endpoint pointed at the two in-memory fakes. One `GoogleTokenClient`, built here
+      and reused by every resolution, because a client per call would cache nothing and
+      the token count below is the whole point.
+
+    `jwt_secret` is the one the `logged_in` cookie was signed with (`conftest.py`
+    overrides `get_settings` with a bare `Settings`), so replacing the settings mid-test
+    changes the storage backend and nothing else about who the caller is.
+    """
+    settings = gmail_settings(
+        storage_backend="gdrive",
+        jwt_secret=Settings(_env_file=None).jwt_secret,  # type: ignore[call-arg]
+    )
+    monkeypatch.setattr(deps, "_storage", None)
+    monkeypatch.setattr(
+        deps,
+        "_factory",
+        sessionmaker(
+            bind=session.get_bind(),
+            expire_on_commit=False,
+            future=True,
+            join_transaction_mode="create_savepoint",
+        ),
+    )
+    tokens = GoogleTokenClient(
+        client_id=settings.google_client_id,
+        client_secret=settings.google_client_secret,
+        transport=GmailTransport(http=gmail, sleep=lambda _: None),
+    )
+    real_user_transport_for = lazy_drive.user_transport_for
+    monkeypatch.setattr(
+        lazy_drive,
+        "user_transport_for",
+        lambda account, account_settings, **_: real_user_transport_for(
+            account, account_settings, http=drive, tokens=tokens
+        ),
+    )
+    return settings
+
+
+def test_an_upload_goes_to_the_titolares_own_drive_and_downloads_back_identical(
+    logged_in: TestClient, api_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The slice, through the API: `PIGROCRM_STORAGE_BACKEND=gdrive` with no service
+    account, a Drive the titolare has connected and chosen a folder in, and the bytes of
+    an upload land in *their* Drive under *that* folder -- then come back byte-identical
+    from the download route, which is the only way documents are ever read (spec 5).
+
+    `get_storage` is the real dependency here, not an override: what this test exists to
+    prove is that the dependency itself passes a session factory to
+    `storage_from_settings`, which is the one thing standing between this configuration
+    and a 500 at every upload.
+
+    `token_requests == 1` is the assertion about *scope*, and it is why this test makes
+    two requests instead of one. A storage built per request would build a second
+    transport with a second `GoogleTokenClient` for the download, and pay a second OAuth
+    round-trip to read back what it had just written. One exchange for both requests is
+    what "one storage per process" looks like from outside.
+    """
+    drive = FakeDrive(root_id=STORAGE_FOLDER)
+    gmail = FakeGmail()
+    settings = _drive_installation(api_session, monkeypatch, drive, gmail)
+    _connected_drive(api_session)
+    logged_in.app.dependency_overrides[get_settings] = lambda: settings
+    del logged_in.app.dependency_overrides[get_storage]
+
+    customer_id = _customer(logged_in)
+    document_id = logged_in.post(
+        "/api/documents", json={"customer_id": customer_id, "tipo": "documento", "titolo": "Doc"}
+    ).json()["id"]
+
+    uploaded = logged_in.post(
+        f"/api/documents/{document_id}/versions",
+        files={"file": ("scansione.pdf", PDF, "application/pdf")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+
+    downloaded = logged_in.get(f"/api/documents/{document_id}/download")
+    assert downloaded.status_code == 200, downloaded.text
+    assert downloaded.content == PDF
+
+    # The bytes really are on the titolare's Drive, beneath the folder they picked --
+    # one folder per customer and one per document, exactly the arrangement the service
+    # account produces (spec 5.4).
+    written = [f for f in drive.files.values() if f.mime != FOLDER_MIME]
+    assert [f.data for f in written] == [PDF]
+    folders = {f.id: f for f in drive.files.values() if f.mime == FOLDER_MIME}
+    document_folder = folders[written[0].parent]
+    assert folders[document_folder.parent].parent == STORAGE_FOLDER
+    assert gmail.token_requests == 1
+
+
+def test_the_api_builds_one_storage_for_the_whole_process_and_opens_nothing_to_do_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two properties of the dependency itself, neither visible over HTTP.
+
+    *One instance.* Every request that touches a document asks for `get_storage`, and
+    each one that built its own `LazyUserDriveStorage` would throw away the access token
+    the previous request obtained -- so the instance is cached in the module, behind a
+    lock, the way `_engine`/`_factory` already are (`_storage_lock`; `test_deps.py`
+    drives the engine's equivalent cold start with eight threads).
+
+    *Nothing is opened to build it.* The session factory is passed as a callable, not
+    called, so a process configured for Drive can construct its storage without an
+    engine, without a connection and without the `google_drive_accounts` row that may
+    not exist yet -- which is the entire reason this storage resolves late. `_factory`
+    staying `None` is that, asserted.
+
+    Reset the way the rest of this module's process-scoped state is reset: by
+    monkeypatching the global, which `pytest` undoes at the end of the test.
+    """
+    monkeypatch.setattr(deps, "_storage", None)
+    monkeypatch.setattr(deps, "_factory", None)
+    settings = gmail_settings(storage_backend="gdrive")
+
+    first = deps.get_storage(settings)
+    second = deps.get_storage(settings)
+
+    assert isinstance(first, LazyUserDriveStorage)
+    assert first is second
+    assert deps._factory is None

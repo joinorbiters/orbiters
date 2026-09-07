@@ -27,6 +27,14 @@ _factory: sessionmaker[Session] | None = None
 # guarantee this codebase wants to lean on.
 _engine_lock = threading.Lock()
 
+_storage: DocumentStorage | None = None
+# The same guarantee as `_engine_lock`, for the same reason and with the same shape:
+# one storage per process even when several requests reach a cold start at once. It
+# matters more here than for the engine, because the object being cached holds a token
+# cache -- two instances mean two `GoogleTokenClient`s and an extra OAuth round-trip
+# per request that lost the race.
+_storage_lock = threading.Lock()
+
 
 def _get_session_factory() -> sessionmaker[Session]:
     global _engine, _factory
@@ -81,12 +89,46 @@ SnapshotSessionDep = Annotated[Session, Depends(get_snapshot_session)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
+def _fresh_session() -> Session:
+    """A session the caller owns and closes -- deliberately *not* the request's.
+
+    This is what `get_storage` hands to `storage_from_settings`, and it is a callable
+    rather than a `Session` for two reasons. The storage it belongs to outlives every
+    request (one per process), so it cannot hold a session that must not; and it opens
+    one only when it actually resolves an account, which is why a process with
+    `PIGROCRM_STORAGE_BACKEND=gdrive` and nobody's Drive connected yet still starts.
+
+    The request's own `SessionDep` would be wrong even where the lifetimes happened to
+    line up: `LazyUserDriveStorage` closes what it opens, and it records a revoked grant
+    by committing on its own behalf -- both of which would reach into the transaction
+    the route is in the middle of.
+    """
+    return _get_session_factory()()
+
+
 def get_storage(settings: SettingsDep) -> DocumentStorage:
-    """One backend per process, chosen from settings. `settings` is already
-    `get_settings`'s own `lru_cache`d singleton, so this builds at most one
-    `GDriveStorage` (whose own token cache is then shared across requests) rather
-    than re-authenticating on every call."""
-    return storage_from_settings(settings)
+    """One backend per process, chosen from settings and built once behind a lock.
+
+    Once, and cached: the two Drive backends hold a token cache that only earns its keep
+    across requests (`GoogleTokenClient` is documented as one per process), so building
+    per request would turn every document read into an OAuth round-trip. `settings` is
+    `get_settings`'s own `lru_cache`d singleton, so there is only ever one answer to
+    cache -- and it therefore reads the settings of the *first* request to ask, which is
+    also true of `_get_session_factory`'s engine and is what makes a settings change a
+    restart rather than a surprise mid-process.
+
+    Still a FastAPI dependency, and that is what makes it overridable: the tests replace
+    it with a `LocalFileStorage` under `tmp_path` (`conftest.py`) rather than letting
+    uploads write into the repository's own working tree. The cache itself is reset the
+    way `_engine`/`_factory` are -- by monkeypatching the module global, as
+    `test_deps.py` and `test_documents_api.py` do.
+    """
+    global _storage
+    if _storage is None:
+        with _storage_lock:
+            if _storage is None:  # a concurrent caller may have just finished building it
+                _storage = storage_from_settings(settings, session_factory=_fresh_session)
+    return _storage
 
 
 StorageDep = Annotated[DocumentStorage, Depends(get_storage)]
