@@ -37,6 +37,7 @@ const ACCOUNT = {
   consent_expires_at: null,
   root_folder_ids: [ROOT_ID_1],
   storage_folder_id: STORAGE_ID,
+  storage_folder_verified: true,
   last_error: null,
   last_error_at: null,
   connected_at: '2026-08-01T09:00:00Z',
