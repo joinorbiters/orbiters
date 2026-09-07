@@ -211,6 +211,16 @@ def inflated(db_engine: Engine) -> Iterator[Engine]:
                 delete(PipelineStage).where(PipelineStage.id.notin_(pre_existing_stages))
             )
             session.commit()
+        # Deleting 50 000 rows leaves their dead tuples in the heap and their entries in
+        # every index until a VACUUM reclaims them. Left there, they inflate `relpages`
+        # for the next module's plans: `test_sort_plan.py` sees a composite B-tree costed
+        # as though it still held this corpus and picks a narrower index under an
+        # `Incremental Sort`, and `test_trgm_escape.py`'s 500-row seq scan is costed on a
+        # heap of dead pages. Leaving the tables as this fixture found them is the one way
+        # this file cannot change what a later test sees.
+        with db_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+            for table in _SEARCHED_TABLES:
+                connection.execute(text(f"VACUUM (ANALYZE) {table}"))
 
 
 @pytest.fixture
