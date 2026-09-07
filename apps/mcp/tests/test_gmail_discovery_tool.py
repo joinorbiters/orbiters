@@ -1,5 +1,4 @@
-"""`discover_gmail_correspondents`: the seventeenth opt-in tool, and the first that is
-about Gmail.
+"""`discover_gmail_correspondents`: an opt-in tool, and the first that is about Gmail.
 
 Everything `tools/gmail.py` grants reads the stored mirror; everything it refuses spends
 the owner's Gmail quota under the owner's consent. Discovery is on the refused side of
@@ -156,7 +155,7 @@ async def test_the_tool_exists_only_behind_both_switches(
     mcp_session: Session, tmp_path: Path, full_access: bool, gmail: bool, present: bool
 ) -> None:
     """Two conditions, one tool. Without the switch it is a forbidden operation like the
-    other sixteen; without Google there is no mailbox to ask, and a tool that answered
+    others; without Google there is no mailbox to ask, and a tool that answered
     409 on every call would be the "registered but broken" state both guards exist to
     prevent."""
     server = build_server(

@@ -78,7 +78,7 @@ DriveBannerReason = Literal["revoked", "expiring", "expired", "scope_missing"] |
 
 
 class DriveHealth(BaseModel):
-    """Everything the shell banner needs for Drive, in one response -- the Drive twin of
+    """Everything the Drive banner needs, in one response -- the Drive twin of
     `gmail/schemas.py`'s `GmailHealth`, including its two reasons for existing:
     `banner_text` is a distinct field because the action behind each reason differs, and
     `configured` is what tells an installation with no Google client apart from an owner

@@ -52,15 +52,17 @@ TOOLS_DIR = Path(__file__).resolve().parents[1] / "src" / "pigrocrm_mcp" / "tool
 # imported outside the guard, all fail there.
 PRIVILEGED_MODULES = (TOOLS_DIR / "privileged.py", TOOLS_DIR / "drive_privileged.py")
 
-# Sixteen operations: the five fiscal ones that turn a draft into a fiscal fact or
-# change what one says after the fact, and the eleven that are closer to configuration
-# or to rewriting the past than to recording an entity. Each is reachable over REST by a
+# The banned operations this package does have a tool for -- the count is deliberately
+# not written down here, because it has already gone stale twice: the fiscal ones, which
+# turn a draft into a fiscal fact or change what one says after the fact, then the ones
+# closer to configuration or to rewriting the past than to recording an entity, then the
+# groups the comments below introduce. Each is reachable over REST by a
 # human with the right role; none is reachable by an agent at all. `bind_time_to_invoice`
 # and `get_fiscal_estimate` belong to `AnalyticsService`, which does not exist until plan
 # 4B -- declared here regardless, because the ban is a decision made now and plan 4B must
 # not have to touch this list to honour it.
 #
-# Two of the sixteen were added after an audit found the repo stating this policy twice
+# Two of them were added after an audit found the repo stating this policy twice
 # and the two statements disagreeing:
 #
 #   * `update_fiscal_profile` is one of the *four* names slice 3 §11 actually banned
@@ -92,19 +94,19 @@ FORBIDDEN = (
     "reopen_period",
     "bind_time_to_invoice",
     "get_fiscal_estimate",
-    # The seventeenth, and the first that is not fiscal: asking Gmail who at a customer's
+    # The first that is not fiscal: asking Gmail who at a customer's
     # domain the owner has corresponded with. Not irreversible -- it stores nothing --
     # but it spends the owner's Gmail quota under the owner's OAuth consent, which is
     # the exact reason `sync` and `backfill` are refused to agents outright. It is on
     # this list rather than on `FORBIDDEN_GMAIL` because, unlike those two, the
     # installation *can* opt in: the same switch that hands an agent the fiscal acts.
     "discover_gmail_correspondents",
-    # The eighteenth and nineteenth, and both fiscal again: writing a numbered, issued
+    # Fiscal again: writing a numbered, issued
     # row straight into the register (slice 9 §3), and declaring the numbers it will
     # never carry (slice 9 §3.2).
     "import_issued_invoice",
     "declare_invoice_register_gaps",
-    # The twentieth, twenty-first and twenty-second, and none of them fiscal: reading
+    # None of these three fiscal: reading
     # the titolare's Google Drive (slice 9 §4.2). Like `discover_gmail_correspondents`
     # they spend the titolare's quota under the titolare's OAuth consent, and unlike
     # every other entry here what they *return* is the content of a personal Drive --
@@ -158,8 +160,8 @@ REST_ONLY_FORBIDDEN = frozenset(
 # The tools above that exist only on an installation where Google is configured as well:
 # on one without it there is no mailbox to ask and no credential to read Drive with, so
 # the switch alone does not make them appear.
-# `test_the_sixteen_are_registered_exactly_when_the_installation_opted_in` accounts for
-# them by building both kinds of installation.
+# `test_they_are_registered_exactly_when_the_installation_opted_in` accounts for them
+# by building both kinds of installation.
 FORBIDDEN_NEEDING_GMAIL = frozenset(
     {
         "discover_gmail_correspondents",
@@ -171,9 +173,9 @@ FORBIDDEN_NEEDING_GMAIL = frozenset(
 
 # The service methods behind them. Listed separately because a future tool could call one
 # under an innocuous name -- `finalise_invoice` registering a tool that calls `issue`
-# would pass a name check and defeat the point. Fifteen, not sixteen: the sixteenth is
-# `FiscalProfileService.upsert`, which a bare name cannot express and which is banned by
-# `FORBIDDEN_QUALIFIED_CALLS` below.
+# would pass a name check and defeat the point. One of the operations above has no entry
+# here: `FiscalProfileService.upsert`, which a bare name cannot express and which is
+# banned by `FORBIDDEN_QUALIFIED_CALLS` below.
 FORBIDDEN_SERVICE_CALLS = (
     "issue",
     "annul",
@@ -225,8 +227,8 @@ FORBIDDEN_SERVICE_CALLS = (
 # PDF header needs it for every role. Putting "upsert" in the tuple above would ban the
 # substring, so any call spelled that way, on any service, would fail this file with a
 # message about the fiscal profile. A ban on a name is not a ban on an operation, and the
-# fifteen names above are safe only because each of them happens to be unique; this one
-# is not, so it names its receiver and `_receivers_of` resolves it.
+# bare names above are safe only because each of them happens to be unique; this one is
+# not, so it names its receiver and `_receivers_of` resolves it.
 FORBIDDEN_QUALIFIED_CALLS = (("FiscalProfileService", "upsert"),)
 
 _REASON = (
@@ -614,7 +616,7 @@ def test_the_structural_ban_has_a_second_line_on_the_credential_itself() -> None
     )
 
 
-async def test_the_sixteen_are_registered_exactly_when_the_installation_opted_in(
+async def test_they_are_registered_exactly_when_the_installation_opted_in(
     mcp_session: Session, tmp_path: Path
 ) -> None:
     """Both halves of the switch, in one assertion, because them disagreeing is the
@@ -622,13 +624,13 @@ async def test_the_sixteen_are_registered_exactly_when_the_installation_opted_in
 
     Everything above proves the tools are absent on a default installation -- the
     guarantee for everyone who never touches the setting. This adds the other direction:
-    with `mcp_full_access` on, all sixteen are there.
+    with `mcp_full_access` on, every one of them is there.
 
-    A half-open switch is worse than either honest state. Sixteen registered tools that
-    all refuse wastes an agent's turns and reads as a broken product; sixteen open
-    capabilities with no tool to reach them is a setting that does nothing. Worst is
-    fifteen of sixteen: the operator believes the switch is on and the one refusal
-    arrives at the moment somebody is issuing an invoice.
+    A half-open switch is worse than either honest state. Registered tools that all
+    refuse waste an agent's turns and read as a broken product; open capabilities with no
+    tool to reach them are a setting that does nothing. Worst is all but one: the
+    operator believes the switch is on and the one refusal arrives at the moment
+    somebody is issuing an invoice.
 
     This test asks the built server rather than reading the source, which is why it sits
     apart from its neighbours: registration is conditional at *runtime*, on a value no
