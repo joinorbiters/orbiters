@@ -7,13 +7,15 @@ should find in their own dump. See docs/superpowers/specs/2026-09-07-orbiters-la
 
 from pigrocrm.core.orbiters.database import ensure_orbiters_database, orbiters_database_url
 from pigrocrm.core.orbiters.models import OrbitersBase, Signup
-from pigrocrm.core.orbiters.schemas import SignupCreate, SignupRead
+from pigrocrm.core.orbiters.schemas import SignupCreate, SignupList, SignupListItem, SignupRead
 from pigrocrm.core.orbiters.service import SignupService
 
 __all__ = [
     "OrbitersBase",
     "Signup",
     "SignupCreate",
+    "SignupList",
+    "SignupListItem",
     "SignupRead",
     "SignupService",
     "ensure_orbiters_database",

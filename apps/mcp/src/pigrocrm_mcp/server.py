@@ -286,6 +286,14 @@ def build_server(
     # rather than a briefing whose figures were true at no single instant.
     register_prompts(mcp, context, _guard)
 
+    # Orbiters (2026-09-07): one read on a database that is not the CRM's. Unconditional,
+    # because the setting it needs has a default derived from `database_url`; the engine
+    # is built on the first call, so a server that never lists the signups never
+    # touches that database at all (see `tools/orbiters.py`).
+    from pigrocrm_mcp.tools import orbiters as orbiters_tools
+
+    orbiters_tools.register(mcp, context, _guard, resolved_settings)
+
     if gmail_configured(resolved_settings):
         # Conditional, and this is the whole of "absent, not broken": not registered
         # means not listed and not callable. An installation that self-hosts precisely

@@ -10,6 +10,21 @@ class SignupCreate(BaseModel):
     email: EmailStr
 
 
+class SignupListItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    email: str
+    created_at: datetime
+
+
+class SignupList(BaseModel):
+    """Newest first. `totale` counts the whole list, not just the page returned."""
+
+    totale: int
+    iscrizioni: list[SignupListItem]
+
+
 class SignupRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

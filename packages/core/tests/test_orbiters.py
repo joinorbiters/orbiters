@@ -106,3 +106,24 @@ def test_the_same_address_again_is_one_row_and_a_second_success(
 def test_an_address_that_is_not_one_is_refused_before_the_database() -> None:
     with pytest.raises(ValidationError):
         SignupCreate(email="non-e-una-email")
+
+
+def test_the_list_is_newest_first_and_counts_everything(orbiters_session: Session) -> None:
+    from pigrocrm.core.actor import Actor
+
+    service = SignupService(orbiters_session)
+    for address in ("prima@studio.it", "seconda@studio.it", "terza@studio.it"):
+        service.subscribe(SignupCreate(email=address))
+    page = service.list_recent(Actor(id=None, type="mcp", role="admin"), limit=2)
+    assert page.totale == 3
+    assert [item.email for item in page.iscrizioni] == ["terza@studio.it", "seconda@studio.it"]
+
+
+def test_only_an_admin_may_read_the_list(orbiters_session: Session) -> None:
+    from pigrocrm.core.actor import Actor
+    from pigrocrm.core.errors import PermissionDenied
+
+    with pytest.raises(PermissionDenied):
+        SignupService(orbiters_session).list_recent(
+            Actor(id=None, type="mcp", role="collaboratore")
+        )
