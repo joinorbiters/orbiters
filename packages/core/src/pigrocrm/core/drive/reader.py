@@ -70,13 +70,18 @@ from pigrocrm.core.drive.query import (
 )
 from pigrocrm.core.drive.schemas import DRIVE_SCOPE_READONLY
 from pigrocrm.core.drive.text import PLAIN_TEXT_MIME, DriveText, drive_text
-from pigrocrm.core.drive.transport import DriveTransport, user_transport_for
+from pigrocrm.core.drive.transport import TRANSPORT_ENTITY, DriveTransport, user_transport_for
 from pigrocrm.core.errors import Conflict, NotFound
 
 # The entity every refusal of this module is reported under. One name for a folder and
 # a file alike, deliberately: the entity is part of what a caller reads, and saying
 # `drive_folder` for one and `drive_file` for the other would tell apart the two cases
 # the identical message above exists to keep indistinguishable.
+#
+# *Every* refusal, including the ones the transport raises: a Google failure mid-read
+# arrives under `TRANSPORT_ENTITY` (the storage's subject) and `_guarded` re-stamps it
+# here, so this constant is a property of the module rather than of the call sites that
+# happen to remember it.
 ENTITY = "drive_file"
 
 # How far up the parent chain a file may be from a configured root. Drive lets a file
@@ -316,14 +321,34 @@ class DriveReader:
         return min(max_bytes, self._download_max_bytes)
 
     def _guarded(self, work: Callable[[], _T]) -> _T:
-        """Every public operation, with the one exception that has a *reaction* attached.
+        """Every public operation: the exception that has a *reaction* attached, and the
+        entity every other failure is reported under.
 
         `DriveCredentialRevoked` is not swallowed and not re-worded: the callback
         records the fact (and commits it, on its own transaction) and the exception
         continues, so the caller stops instead of carrying on against a dead
         credential. Wrapped here, once, rather than at the four call sites -- and the
         public methods call the private internals below precisely so that a nested
-        operation cannot fire the callback twice for one failure.
+        operation cannot fire the callback twice for one failure. It is caught *before*
+        the `Conflict` clause below because it is one, and the order of `except` clauses
+        is what keeps the reaction attached to it.
+
+        **The entity of a transport failure.** `DriveTransport` reports its own failures
+        under `TRANSPORT_ENTITY` (`document_blob`), which is right for the caller it was
+        written for -- `GDriveStorage` reaches Drive for the bytes of a CRM document --
+        and wrong for every caller of this class. A Google 500 while listing a folder the
+        titolare named arrived as «document_blob: elenco fallito (500)»: there is no CRM
+        document in that operation, `_resolve_original_pdf` documents the opposite, and an
+        adapter routing on the entity would send somebody to the documents screen. So the
+        transport's entity, and *only* it, is re-stamped as `ENTITY` on the way out.
+
+        Only it, deliberately: `google_drive_account` (the credential) and `google_drive`
+        (an outage after every retry was spent) are already the truthful subject of their
+        own refusals, and flattening them into `drive_file` would claim a file was the
+        problem when the account was. The one-entity rule is also why this lives here and
+        not as a constructor argument on the transport: it then holds for *any* transport
+        a reader was handed, including the doubles composed in tests, rather than only for
+        the one `drive_reader_for` builds.
         """
         try:
             return work()
@@ -331,6 +356,19 @@ class DriveReader:
             if self._on_revoked is not None:
                 self._on_revoked()
             raise
+        except Conflict as refusal:
+            if refusal.details.get("entity") != TRANSPORT_ENTITY:
+                raise
+            # Rebuilt rather than mutated: `Conflict` composes its own message from the
+            # entity, so re-stamping `details` alone would leave a sentence that still
+            # said `document_blob`. Every other detail travels -- `status` and `what` in
+            # particular, which `storage/gdrive.py` reads and `_metadata` matches on.
+            passthrough = {
+                key: value
+                for key, value in refusal.details.items()
+                if key not in ("entity", "reason")
+            }
+            raise Conflict(ENTITY, refusal.details["reason"], **passthrough) from refusal
 
     def _list_children(self, folder_id: str, page_token: str | None) -> DriveListing:
         if not self._within_roots(folder_id, {}):
@@ -468,15 +506,52 @@ class DriveReader:
             raise
 
 
+class _AlreadyAuthorized:
+    """The type of `ALREADY_AUTHORIZED`, and the only reason it is a type rather than a
+    string: mypy can then tell the two apart, and no `action` a caller composes from
+    data can accidentally *be* it."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - diagnostics only
+        return "ALREADY_AUTHORIZED"
+
+
+# What a caller passes as `action` to say "the agent ban for this operation has already
+# been applied, under a name this call cannot know".
+#
+# There is exactly one such caller -- `InvoiceService._drive_reader`, whose operation is
+# `import_issued_invoice`, checked by `import_issued` under that name before any of this
+# runs. Passing the name again here would check the same ban twice; passing anything else
+# would check the wrong one.
+#
+# It exists as a named constant because it replaced `action=None`, i.e. a *default*. The
+# ban was then skipped by any caller who simply did not think about it -- a new REST route
+# or MCP tool composing a reader inherited the exemption in silence, which is the one
+# mistake in this file that has no symptom until somebody reads a Drive they should not
+# have. `action` is now required, and the exemption has to be spelled out at the call
+# site, where a reviewer sees the words «already authorized» and asks by whom.
+ALREADY_AUTHORIZED = _AlreadyAuthorized()
+
+# `str` for a real operation, the sentinel above for the one caller that has already
+# applied the ban itself. Not `str | None`: see `ALREADY_AUTHORIZED`.
+DriveAction = str | _AlreadyAuthorized
+
+
 def drive_reader_for(
-    session: Session, actor: Actor, settings: Settings, *, feature: str, action: str | None = None
+    session: Session,
+    actor: Actor,
+    settings: Settings,
+    *,
+    feature: str,
+    action: DriveAction,
 ) -> DriveReader:
     """A reader on this actor's connected Drive account, or the refusal that says why not.
 
     The order is the point, and there are now four gates in it, each of which must come
     before the next has anything to say:
 
-    1. `action`, when given: the operation the caller is about, checked against
+    1. `action`: the operation the caller is about, checked against
        `AGENT_FORBIDDEN_ACTIONS` before this function touches the database at all. An
        agent credential on an installation that has not opted in is refused here, so it
        never learns whether a Drive is even connected;
@@ -499,14 +574,20 @@ def drive_reader_for(
     confined to it (see `core/actor.py`, and the commit its comment names). A route that
     composes a reader inherits the ban by passing its action.
 
-    It is *optional* because one existing caller must not pass one:
+    It is **required**, and one caller must not pass a real one:
     `InvoiceService._drive_reader`, whose operation is `import_issued_invoice` -- already
     on the list, and already checked by `import_issued` under that name. Passing it here
     too would check the same ban twice, and passing anything else would check the wrong
-    one. `None` therefore means "the caller's own authorization has already run", which
-    is a statement a caller makes deliberately rather than a default it inherits by
-    forgetting; nothing here can tell those two apart, which is why the three MCP tools
-    are tested against a closed agent credential one by one.
+    one. That caller passes `ALREADY_AUTHORIZED` instead, by name.
+
+    It used to default to `None` with the same meaning, and the default was the bug: an
+    exemption nobody had to ask for. A new route or tool composing a reader and not
+    thinking about the ban inherited it silently, and this is the one omission in this
+    module with no symptom -- the reader works, the roots are honoured, and an agent
+    credential the installation never opted in for reads the titolare's Drive. Spelling
+    it at the call site is what makes a reviewer ask "already authorized by whom?";
+    nothing here can answer that, which is also why the three MCP tools are tested
+    against a closed agent credential one by one.
 
     **Empty roots are guidance, not an empty answer.** A connected credential with no
     `root_folder_ids` is a real state -- `DriveRootsUpdate` requires at least one, so
@@ -527,7 +608,7 @@ def drive_reader_for(
     owning a process-wide cache, and the same choice `apps/mcp`'s privileged tools
     already make.
     """
-    if action is not None:
+    if isinstance(action, str):
         # Before the session is touched: a refusal here must not double as "there is a
         # Drive account for this user".
         actor.require_agent_allowed(action)

@@ -10,6 +10,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from pigrocrm.core.drive.query import OUTSIDE_ID_PATTERN
 from pigrocrm.core.validation import SafeStr
 
 # A Drive file id, never a query nor free text: Google mints these as URL-safe base64
@@ -18,8 +19,16 @@ from pigrocrm.core.validation import SafeStr
 # obviously-wrong single-character or few-character inputs a typo would produce, and it
 # is what makes `DriveRootsUpdate` reject a Drive *query* -- `'x' in parents or name
 # contains 'a'` -- outright rather than forwarding it to the Drive API as a folder id.
-_DRIVE_ID_PATTERN = r"^[A-Za-z0-9_-]{10,128}$"
-_DriveId = Annotated[SafeStr, Field(pattern=_DRIVE_ID_PATTERN)]
+#
+# The pattern is `query.py`'s own, imported and never re-typed. It was written out here
+# once, identically, and that is exactly the shape of duplication `OUTSIDE_ID_PATTERN`'s
+# comment there warns about: two spellings of one rule diverge silently in both
+# directions -- a looser one here would let a query reach `checked_outside_id` and be
+# refused from three levels down instead of by this schema, and a stricter one would
+# refuse a root the titolare configured legitimately. Same rule, same source, whether it
+# arrives on a PATCH body (here) or as an MCP tool argument (`drive_privileged.py`, which
+# imports the same name).
+_DriveId = Annotated[SafeStr, Field(pattern=OUTSIDE_ID_PATTERN)]
 
 DRIVE_SCOPE_READONLY = "https://www.googleapis.com/auth/drive.readonly"
 DRIVE_SCOPE_FILE = "https://www.googleapis.com/auth/drive.file"
@@ -86,7 +95,8 @@ class DriveRootsUpdate(BaseModel):
     """Which folders the CRM may read from, and which one it may write generated
     documents into.
 
-    Both fields hold Drive file ids and nothing else -- `_DriveId`'s pattern is what
+    Both fields hold Drive file ids and nothing else -- `_DriveId`'s pattern (which is
+    `query.py`'s `OUTSIDE_ID_PATTERN`, the same rule `checked_outside_id` applies) is what
     keeps a Drive *query* (`'x' in parents or name contains 'a'`, valid syntax for
     `files.list`'s `q` parameter) from ever reaching this table disguised as a folder id.
     `extra="forbid"` is not needed here the way it is on the wider Create/Update schemas

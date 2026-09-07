@@ -167,6 +167,120 @@ def test_a_readonly_actor_cannot_set_roots(logged_in: TestClient, drive_ready: T
     assert response.status_code == 403, response.text
 
 
+# --- and who may not, whatever their role ------------------------------------------------
+
+
+def _agent_client(admin_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """A client presenting a personal access token on an installation that has **not**
+    opted in -- the credential an agent is handed, over the REST surface it can reach.
+
+    Two things have to be arranged, and both are the point of the helper:
+
+      * the token is minted through `POST /api/tokens` under the admin's own cookie, so
+        this is a real PAT belonging to a real administrator. That is the credential the
+        ban has to hold against: `PatService.resolve` answers `Actor(type="mcp",
+        role="admin")`, and an administrator passes every role check there is.
+      * `mcp_full_access` is forced **off**. `get_actor` builds `PatService(session)`
+        with no settings, so the switch is read from the process-wide `get_settings()`
+        and not from the `client` fixture's dependency override -- and this repository's
+        own `.env` has it *on*, so a test that inherited it would assert the opposite of
+        what it claims and pass anyway (`test_mcp_invoice_ban.py` says the same thing
+        about its own settings). Patched at the one name that decides it.
+    """
+    raw = admin_client.post("/api/tokens", json={"nome": "Claude"})
+    assert raw.status_code == 201, raw.text
+    token = raw.json()["token"]
+    monkeypatch.setattr(
+        "pigrocrm.core.auth.pat_service.get_settings",
+        lambda: Settings(_env_file=None),  # type: ignore[call-arg]
+    )
+    agent = TestClient(admin_client.app, base_url="https://testserver")
+    agent.headers["Authorization"] = f"Bearer {token}"
+    return agent
+
+
+def test_an_agent_token_cannot_repoint_the_drive_roots(
+    logged_in: TestClient,
+    drive_ready: TestClient,
+    api_session: Session,
+    admin_user: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The route half of `AGENT_FORBIDDEN_ACTIONS`' three Drive-configuration entries,
+    and the reason they are on that list at all.
+
+    Every confinement slice 9C's reader enforces is a confinement to
+    `root_folder_ids`: a file outside them answers «non trovato» in the same words as one
+    that does not exist, and there is no search. All of it is true of *whatever folders
+    that column names* -- so a credential that can rewrite the column has, in one PATCH,
+    the whole of the titolare's Drive rather than the corner of it they chose to share.
+    The same column names the folder `storage/gdrive.py` writes the CRM's own documents
+    into, which is the second half of the damage: repointing it does not only widen a
+    read, it moves the document store.
+
+    There is no MCP tool for this and there never will be -- it is a settings panel --
+    which is exactly why the ban has to be on the *operation*: a PAT is accepted on
+    every REST route, so "no tool" protects nothing here.
+
+    The row is re-read afterwards because a 403 that had already written is not a
+    refusal.
+    """
+    account = _connected_account(api_session, admin_user.id)
+    account.root_folder_ids = [ROOT_ID]
+    api_session.flush()
+    agent = _agent_client(logged_in, monkeypatch)
+
+    response = agent.patch(
+        "/api/drive/account/roots",
+        json={"root_folder_ids": [OTHER_ROOT_ID], "storage_folder_id": STORAGE_ID},
+    )
+
+    assert response.status_code == 403, response.text
+    assert response.json()["code"] == "agent_forbidden"
+    api_session.refresh(account)
+    assert account.root_folder_ids == [ROOT_ID]
+    assert account.storage_folder_id is None
+
+
+def test_an_agent_token_cannot_start_the_drive_consent_flow(
+    logged_in: TestClient, drive_ready: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Granting the consent is a person's act by construction -- somebody has to be at
+    Google's screen -- but *starting* it is a request, and an unbanned start writes a
+    pending state row and hands back a URL. Refused before either: `require_write` runs
+    ahead of the `actor.id is None` check and ahead of the state being issued.
+    """
+    agent = _agent_client(logged_in, monkeypatch)
+
+    response = agent.get("/api/drive/oauth/start", follow_redirects=False)
+
+    assert response.status_code == 403, response.text
+    assert response.json()["code"] == "agent_forbidden"
+
+
+def test_an_agent_token_cannot_disconnect_the_drive_account(
+    logged_in: TestClient,
+    drive_ready: TestClient,
+    api_session: Session,
+    admin_user: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cheapest of the three to perform and not the least damaging: a disconnected
+    account is one `storage/gdrive.py` can no longer write through, so an agent that
+    could call this could take the CRM's document store offline with one DELETE and no
+    way for it to put it back.
+    """
+    account = _connected_account(api_session, admin_user.id)
+    agent = _agent_client(logged_in, monkeypatch)
+
+    response = agent.delete("/api/drive/account")
+
+    assert response.status_code == 403, response.text
+    assert response.json()["code"] == "agent_forbidden"
+    api_session.refresh(account)
+    assert account.status == "active"
+
+
 # --- the OAuth round trip ---------------------------------------------------------------
 
 

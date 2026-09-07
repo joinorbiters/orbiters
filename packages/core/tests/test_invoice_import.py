@@ -1039,6 +1039,12 @@ def test_a_drive_file_that_is_not_a_pdf_is_refused(db_session: Session, tmp_path
     assert caught.value.details["field"] == "pdf_sorgente.drive_file_id"
     assert db_session.execute(select(Invoice).where(Invoice.numero == 7)).first() is None
     assert _imported_documents(db_session) == []
+    # And it was refused *without downloading it*. The mime is a fact one `files.get`
+    # already knows, so paying for the bytes to learn it spends the titolare's bandwidth
+    # and Drive quota to reach a decidable "no" -- for a 20 MB spreadsheet somebody named
+    # by mistake, in full. `alt=media` is how the reader asks for content; the assertion
+    # is that no request ever carried it.
+    assert not [request for request in drive.requests if request.params.get("alt") == ["media"]]
 
 
 def test_a_register_refusal_after_the_drive_read_files_no_document(

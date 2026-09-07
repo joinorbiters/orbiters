@@ -117,6 +117,44 @@ FORBIDDEN = (
     "import_drive_file",
 )
 
+# The other half of `AGENT_FORBIDDEN_ACTIONS`: operations that are banned to an agent
+# credential and have **no MCP tool at all** -- not "not registered by default", but no
+# tool anywhere in `apps/mcp`, now or planned.
+#
+# They exist because the ban list is keyed on the operation rather than on a transport,
+# so it can hold an operation this package never offers. All three are Drive
+# *configuration* (spec 9 §5.2): naming the root folders the reader may see and the
+# folder the document storage writes into (`account.py`'s `_ROOTS_ACTION`), and
+# connecting or disconnecting the grant itself (`oauth.py`'s
+# `_CONNECT_ACTION`/`_DISCONNECT_ACTION`). A settings panel is the only caller; there is
+# nothing here for an agent to be handed even with the switch on.
+#
+# The reason they are banned anyway is the reason this file's own subject exists: a
+# personal access token is accepted on every REST route, and `PATCH
+# /api/drive/account/roots` is a REST route. Without the ban an agent token could
+# repoint the roots at any folder of the titolare's Drive -- making every confinement
+# `core/drive/reader.py` enforces true of a folder list the agent chose -- or disconnect
+# the account and take the CRM's own document store offline. `apps/api/tests/
+# test_drive_api.py` pins all three at the route.
+#
+# Enumerated here, and this is why the equality above is a union rather than a plain
+# `==`: the two lists still have to be one list, but "in `AGENT_FORBIDDEN_ACTIONS` and
+# not in `FORBIDDEN`" now has exactly three admissible answers, written down with their
+# justification instead of left as slack in the assertion. A fourth added to the ban
+# list without a tool -- or one of these three growing a tool and staying here -- fails.
+#
+# Spelled as the action strings the services pass to `require_write`, which for a
+# settings operation are Italian sentences and not tool names: the string *is* the
+# identity of the operation for `_refuse_if_agent`, so a copy re-spelled prettily here
+# would be a ban that silently stopped matching.
+REST_ONLY_FORBIDDEN = frozenset(
+    {
+        "impostare le cartelle Drive",
+        "collegare Google Drive",
+        "scollegare Google Drive",
+    }
+)
+
 # The tools above that exist only on an installation where Google is configured as well:
 # on one without it there is no mailbox to ask and no credential to read Drive with, so
 # the switch alone does not make them appear.
@@ -509,20 +547,40 @@ def test_the_structural_ban_has_a_second_line_on_the_credential_itself() -> None
     passes to `require_admin` were chosen separately -- mapped here rather than renamed,
     because the tool name is the agent-facing contract and the action string is the
     audited one.
+
+    `REST_ONLY_FORBIDDEN` is the union's other term, and it is what keeps this a
+    statement rather than a loose fit: the ban list is keyed on the *operation*, so it
+    can legitimately hold one this package offers no tool for -- Drive's three
+    configuration operations, reachable only over REST and only by a person. Those three
+    are enumerated there with their justification, so "banned but toolless" has three
+    named answers instead of being slack in this assertion. A fourth, or one of these
+    growing a tool and staying in that set, fails here.
     """
     from pigrocrm.core.actor import AGENT_FORBIDDEN_ACTIONS
 
     tool_name_to_action = {"mark_invoice_transmitted": "mark_transmitted_externally"}
     attesi = {tool_name_to_action.get(name, name) for name in FORBIDDEN}
 
-    assert attesi == set(AGENT_FORBIDDEN_ACTIONS), (
+    # The union would still balance if one of the three grew a tool and stayed in both
+    # sets, so the disjointness is asserted on its own: `REST_ONLY_FORBIDDEN` claims
+    # "no tool", and a claim nothing checks is a comment.
+    assert not (REST_ONLY_FORBIDDEN & attesi), (
+        "un'operazione elencata in REST_ONLY_FORBIDDEN ha ora un tool MCP: togliela da "
+        f"quel set, la sua motivazione non vale piu' -- {sorted(REST_ONLY_FORBIDDEN & attesi)}"
+    )
+    assert attesi | REST_ONLY_FORBIDDEN == set(AGENT_FORBIDDEN_ACTIONS), (
         "le due meta' del divieto sono divergenti: FORBIDDEN vieta il tool, "
         "AGENT_FORBIDDEN_ACTIONS vieta l'operazione a qualunque credenziale di tipo "
         "agente. Un nome aggiunto a una sola delle due lascia proprio il buco che la "
         "seconda e' stata scritta per chiudere -- l'assenza del tool non impedisce la "
-        "stessa chiamata via REST con lo stesso token.\n"
+        "stessa chiamata via REST con lo stesso token. Un'operazione vietata che non ha "
+        "nessun tool va elencata e motivata in REST_ONLY_FORBIDDEN, non lasciata come "
+        "gioco in questa asserzione.\n"
         f"solo in FORBIDDEN: {sorted(attesi - set(AGENT_FORBIDDEN_ACTIONS))}\n"
-        f"solo in AGENT_FORBIDDEN_ACTIONS: {sorted(set(AGENT_FORBIDDEN_ACTIONS) - attesi)}"
+        "solo in AGENT_FORBIDDEN_ACTIONS: "
+        f"{sorted(set(AGENT_FORBIDDEN_ACTIONS) - attesi - REST_ONLY_FORBIDDEN)}\n"
+        "in REST_ONLY_FORBIDDEN ma non vietate: "
+        f"{sorted(REST_ONLY_FORBIDDEN - set(AGENT_FORBIDDEN_ACTIONS))}"
     )
 
 

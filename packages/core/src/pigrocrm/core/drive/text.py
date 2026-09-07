@@ -96,8 +96,47 @@ class DriveText:
 
     testo: str
     mime: str
+    # "There is more of this document than you are seeing", and it covers every reason
+    # for that rather than only the byte cut: `max_bytes` reached, or the extraction
+    # itself stopped short (`MAX_PDF_PAGES`, or the budget). One field, because a caller
+    # has one decision to make on it. Not set for a document that simply has no text --
+    # an un-OCRed scan, a type this slice does not read -- since nothing was cut there.
     troncato: bool
     provenienza: str = PROVENIENZA
+
+
+def _extracted(content: bytes, *, mime: str, budget: int | None) -> tuple[str, bool]:
+    """`extract_text`'s answer, plus whether the reader stopped before the end.
+
+    The flag exists for `drive_text`'s `troncato`, and it exists because `MAX_PDF_PAGES`
+    is a cut that leaves no trace: a 505-page PDF holding little text per page is parsed
+    to page 500 and answered in full, under the byte ceiling, with `troncato: false` --
+    "here is the document" about five pages that were never read. `troncato` is the one
+    field a caller has for "there is more of this than you are seeing", so a cut that
+    does not set it is a cut nobody can find out about.
+
+    Two stops, one flag, because they mean the same thing to whoever reads the answer:
+    the page ceiling, and the byte budget the caller passed. The second usually shows up
+    as a truncation anyway (a budget measured in characters is exceeded before the same
+    number of bytes is), but "usually" is not a guarantee -- pages are stripped and
+    joined afterwards, which can bring the total back under the ceiling -- and the honest
+    answer does not depend on that arithmetic working out.
+
+    Separate from `extract_text` rather than widening it: that one is public, is called
+    by anything that bounds the text itself, and returning a tuple there would make every
+    such caller unpack a flag it has no use for.
+    """
+    if mime == PDF_MIME:
+        return _pdf_text(content, budget)
+    if mime == DOCX_MIME:
+        return _docx_text(content), False
+    if mime.startswith("text/"):
+        # `errors="replace"`, not `strict`: a note somebody wrote in Latin-1 in 2009 is
+        # still a note, and refusing it would be refusing the document over its
+        # encoding. The replacement character is visible in the answer, which is the
+        # honest way to say "this byte was not text".
+        return content.decode("utf-8", errors="replace"), False
+    return "", False
 
 
 def extract_text(content: bytes, *, mime: str, budget: int | None = None) -> str:
@@ -115,18 +154,12 @@ def extract_text(content: bytes, *, mime: str, budget: int | None = None) -> str
     useful answer than the empty string, and a list would have to grow by one commit
     per file type somebody actually has. What is *not* text is refused by having no
     branch at all, which is the safe direction for the mistake to fall.
+
+    A caller that bounds the text itself and needs to know whether the reader stopped
+    short -- at `budget`, or at the page ceiling -- wants `_extracted`, which this
+    delegates to. `drive_text` is the caller that needs it, for `troncato`.
     """
-    if mime == PDF_MIME:
-        return _pdf_text(content, budget)
-    if mime == DOCX_MIME:
-        return _docx_text(content)
-    if mime.startswith("text/"):
-        # `errors="replace"`, not `strict`: a note somebody wrote in Latin-1 in 2009 is
-        # still a note, and refusing it would be refusing the document over its
-        # encoding. The replacement character is visible in the answer, which is the
-        # honest way to say "this byte was not text".
-        return content.decode("utf-8", errors="replace")
-    return ""
+    return _extracted(content, mime=mime, budget=budget)[0]
 
 
 def drive_text(content: bytes, *, mime: str, max_bytes: int) -> DriveText:
@@ -136,8 +169,13 @@ def drive_text(content: bytes, *, mime: str, max_bytes: int) -> DriveText:
         raise ValidationFailed(
             "drive_text", "max_bytes", "un limite di zero byte non restituisce niente"
         )
-    testo, troncato = _truncate(extract_text(content, mime=mime, budget=max_bytes), max_bytes)
-    return DriveText(testo=testo, mime=mime, troncato=troncato)
+    # Two independent reasons the answer can be short of the document, ORed into the one
+    # field a caller has for it: the extraction stopped early (the page ceiling, or the
+    # budget), and the text that came back did not fit `max_bytes`. Either alone is a
+    # `troncato: true`; only "read to the end and it fitted" is false.
+    intero, interrotto = _extracted(content, mime=mime, budget=max_bytes)
+    testo, tagliato = _truncate(intero, max_bytes)
+    return DriveText(testo=testo, mime=mime, troncato=tagliato or interrotto)
 
 
 def _truncate(text: str, max_bytes: int) -> tuple[str, bool]:
@@ -154,8 +192,19 @@ def _truncate(text: str, max_bytes: int) -> tuple[str, bool]:
     return encoded[:max_bytes].decode("utf-8", errors="ignore") + TEXT_TRUNCATION_MARKER, True
 
 
-def _pdf_text(content: bytes, budget: int | None) -> str:
-    """`pypdf`, page by page, stopping at `budget`.
+def _pdf_text(content: bytes, budget: int | None) -> tuple[str, bool]:
+    """`pypdf`, page by page, stopping at `budget` -- and whether it stopped short.
+
+    The second element is true when a page was left unread: the document has more pages
+    than `MAX_PDF_PAGES`, or `budget` was reached before the last page. It is what makes
+    `drive_text`'s `troncato` honest about the *page* ceiling, which unlike the byte
+    ceiling leaves nothing in the text to notice (see `_extracted`).
+
+    A failure answers `("", False)`, not `("", True)`: an encrypted or malformed PDF is
+    not a document that was cut short, it is a document with no readable text, and
+    `troncato: true` there would tell a caller to ask for more of something that has
+    none. That distinction is the one `read_drive_file`'s docstring makes for a scan
+    without OCR, and it is the same distinction.
 
     `pypdf` rather than the `pdftotext` binary the test suite's own
     `extract_pdf_text` fixture shells out to: that binary is in the API image only
@@ -172,8 +221,14 @@ def _pdf_text(content: bytes, budget: int | None) -> str:
     """
     pages: list[str] = []
     held = 0
+    interrotto = False
     try:
         reader = PdfReader(BytesIO(content))
+        # Counted before the slice, because the slice is what has to be reported: a
+        # document with more pages than the ceiling is answered without them, and
+        # `len(reader.pages)` is a property of the parsed cross-reference table rather
+        # than a second pass over the file.
+        interrotto = len(reader.pages) > MAX_PDF_PAGES
         for page in reader.pages[:MAX_PDF_PAGES]:
             text = page.extract_text() or ""
             pages.append(text)
@@ -181,10 +236,16 @@ def _pdf_text(content: bytes, budget: int | None) -> str:
             # byte, so passing the budget in characters guarantees passing it in bytes.
             held += len(text)
             if budget is not None and held > budget:
+                # Short of the last page it was allowed to read, so short of the
+                # document -- whether or not the join below ends up over `max_bytes`.
+                interrotto = interrotto or len(pages) < min(len(reader.pages), MAX_PDF_PAGES)
                 break
     except Exception:
-        return ""
-    return "\n".join(page.strip() for page in pages if page.strip())
+        # `False`, not `interrotto`: a malformation discovered on page three of a
+        # thousand-page file is not a truncation, and the caller is told the document
+        # has no readable text (see the docstring).
+        return "", False
+    return "\n".join(page.strip() for page in pages if page.strip()), interrotto
 
 
 def _docx_text(content: bytes) -> str:
