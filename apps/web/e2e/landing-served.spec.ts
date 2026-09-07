@@ -15,7 +15,7 @@ test.describe('the served stack', () => {
     await expect(page.locator('#root')).toHaveCount(0)
   })
 
-  for (const path of ['/privacy', '/termini']) {
+  for (const path of ['/privacy', '/termini', '/orbiters']) {
     test(`${path} answers 200`, async ({ page }) => {
       expect((await page.goto(path))?.status()).toBe(200)
     })

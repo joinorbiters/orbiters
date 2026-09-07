@@ -13,6 +13,7 @@ from pigrocrm.core.auth.tokens import decode_token
 from pigrocrm.core.config import Settings, get_settings
 from pigrocrm.core.db import create_engine_from_settings, session_factory
 from pigrocrm.core.errors import DomainError
+from pigrocrm.core.orbiters import ensure_orbiters_database
 from pigrocrm.core.storage import DocumentStorage, storage_from_settings
 
 ACCESS_COOKIE = "pigrocrm_access"
@@ -87,6 +88,34 @@ def get_snapshot_session() -> Iterator[Session]:
 
 SnapshotSessionDep = Annotated[Session, Depends(get_snapshot_session)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+
+_orbiters_factory: sessionmaker[Session] | None = None
+_orbiters_lock = threading.Lock()
+
+
+def get_orbiters_session() -> Iterator[Session]:
+    """A session on the `orbiters` database, which is not the CRM's.
+
+    Built lazily, once per process, behind its own lock -- the same shape as
+    `_get_session_factory`. Lazily is load-bearing here: `ensure_orbiters_database`
+    runs `CREATE DATABASE` and `create_all` the first time anyone asks, so an
+    installation that never serves the Orbiters page never creates the database, and
+    the API boots even where that user may not create databases at all. The first
+    signup, not the deploy, is what pays for it and what fails if it cannot be done.
+    """
+    global _orbiters_factory
+    if _orbiters_factory is None:
+        with _orbiters_lock:
+            if _orbiters_factory is None:
+                _orbiters_factory = session_factory(ensure_orbiters_database(get_settings()))
+    session = _orbiters_factory()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+OrbitersSessionDep = Annotated[Session, Depends(get_orbiters_session)]
 
 
 def _fresh_session() -> Session:
