@@ -22,27 +22,11 @@ if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {}
 }
 
-// jsdom implements no IntersectionObserver at all (unlike the pointer-capture gap
-// above, not even a stub). landing/reveal.js gates every reveal on
-// `typeof IntersectionObserver === 'function'` — deliberately, so a browser that
-// lacks the API gets a fully visible page instead of one stuck hidden — but that
-// means every test of reveal.js's default (non-stubbed) path would otherwise see
-// the API as "absent" and never hide anything, which is indistinguishable from the
-// bug the gate exists to avoid. Global and permanent: any future
-// IntersectionObserver-gated code hits this identical jsdom gap.
-if (typeof window.IntersectionObserver !== 'function') {
-  window.IntersectionObserver = class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  } as unknown as typeof IntersectionObserver
-}
-
-// The same jsdom gap, one API over: no ResizeObserver at all. `cmdk` (the command
-// palette) constructs one unconditionally in an effect, so without this every test that
-// mounts the palette dies with an uncaught `ReferenceError` instead of a failed
-// assertion. Global and permanent, like the two stubs above: any future component that
-// measures itself hits the identical gap.
+// jsdom has no ResizeObserver at all. `cmdk` (the command palette) constructs one
+// unconditionally in an effect, so without this every test that mounts the palette
+// dies with an uncaught `ReferenceError` instead of a failed assertion. Global and
+// permanent, like the stub above: any future component that measures itself hits the
+// identical gap.
 if (typeof window.ResizeObserver !== 'function') {
   window.ResizeObserver = class {
     observe() {}

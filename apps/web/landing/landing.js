@@ -21,7 +21,6 @@
       },
     })
   }
-  window.__pigroLanding = { start: start }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', start)
   } else {

@@ -2,6 +2,12 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
+/**
+ * The step under a Card is the border colour, not the ink `--shadow-md` casts under a
+ * popover or a dialog: a CRM page shows many cards at once, and a full-ink step on
+ * every one of them would draw the page in shadows. Floating surfaces get the ink;
+ * surfaces that sit on the page get the faded line they are drawn with.
+ */
 function Card({
   className,
   size = "default",

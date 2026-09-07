@@ -1,11 +1,12 @@
 /* The field of tiles, shared by the landing and by Orbiters.
  *
- * A classic script, not a module: the page scripts that use it (`landing.js`,
- * `orbiters.js`) stay self-contained IIFEs their tests can load with `new Function`,
- * and this one only has to run first, which document order guarantees. Colours are
- * read from the CSS custom properties the palette plugin injects, so there is no
- * second copy of the palette in JavaScript. Nothing here is required for the page:
- * without it the grid is still there and the boxes still read.
+ * Written as an IIFE that publishes `window.__pigroField`, not as an ES module with
+ * exports: the page scripts that use it (`landing.js`, `orbiters.js`) stay
+ * self-contained, their tests can load them with `new Function`, and this one only
+ * has to run first -- module scripts execute in document order, which is enough.
+ * Colours are read from the CSS custom properties the palette plugin injects, so
+ * there is no second copy of the palette in JavaScript. Nothing here is required for
+ * the page: without it the grid is still there and the boxes still read.
  */
 ;(function () {
   var reduced =
@@ -69,13 +70,20 @@
     var cols, rows, dpr
     var last = 0
 
+    /* Returns false when nothing changed, so a resize event that moved no pixel --
+       a phone's address bar coming and going -- does not throw the bitmap away. */
     function size() {
-      dpr = Math.min(window.devicePixelRatio || 1, 2)
-      canvas.width = Math.round(canvas.clientWidth * dpr)
-      canvas.height = Math.round(canvas.clientHeight * dpr)
+      var nextDpr = Math.min(window.devicePixelRatio || 1, 2)
+      var width = Math.round(canvas.clientWidth * nextDpr)
+      var height = Math.round(canvas.clientHeight * nextDpr)
+      if (width === canvas.width && height === canvas.height && nextDpr === dpr) return false
+      dpr = nextDpr
+      canvas.width = width
+      canvas.height = height
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
       cols = Math.ceil(canvas.clientWidth / cell)
       rows = Math.ceil(canvas.clientHeight / cell)
+      return true
     }
 
     function paint(t) {
@@ -101,24 +109,38 @@
 
     size()
     paint(0)
-    window.addEventListener('resize', function () {
-      size()
-      paint(last)
-    })
+
+    /* One repaint per frame at most, however many events ask for it. The canvas is
+       observed directly rather than the window: the landing's hero is content-sized
+       and grows or shrinks when the web font swaps in, which fires no resize event. */
+    var pending = false
+    function refresh() {
+      if (pending) return
+      pending = true
+      window.requestAnimationFrame(function () {
+        pending = false
+        if (size()) paint(last)
+      })
+    }
+    if (typeof ResizeObserver === 'function') {
+      new ResizeObserver(refresh).observe(canvas)
+    } else {
+      window.addEventListener('resize', refresh)
+    }
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(refresh)
 
     if (!options.animate || reduced) return
-    var previous = 0
-    function frame(now) {
-      /* Eight frames a second: the drift reads as slow weather, and a phone does
-         not spend its battery on wallpaper. */
-      if (now - previous > 125) {
-        previous = now
+    /* Eight frames a second, scheduled with a timer and painted on the next frame:
+       the drift reads as slow weather, the tab still pauses in the background, and
+       the page does not wake on every vsync to decide it has nothing to do. */
+    function tick() {
+      window.requestAnimationFrame(function () {
         last += 0.012
         paint(last)
-      }
-      window.requestAnimationFrame(frame)
+        window.setTimeout(tick, 125)
+      })
     }
-    window.requestAnimationFrame(frame)
+    window.setTimeout(tick, 125)
   }
 
   window.__pigroField = { noise: noise, mount: mount, diagonal: diagonal }

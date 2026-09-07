@@ -50,12 +50,14 @@ test.describe('the landing page', () => {
     for (const path of PAGES) {
       test(`${path} shows all of its content and all of its links work`, async ({ page }) => {
         await page.goto(path)
-        // Every .rise element must be visible: the hidden state only ever exists
-        // because a script put it there.
-        const risen = page.locator('.rise')
-        const count = await risen.count()
-        for (let index = 0; index < count; index += 1) {
-          await expect(risen.nth(index)).toBeVisible()
+        // Nothing on these pages is revealed by a script: every box, card and kicker
+        // is visible on the first paint, and the same without any JavaScript at all.
+        for (const selector of ['h1', '.box', '.card', '.kicker']) {
+          const found = page.locator(selector)
+          const count = await found.count()
+          for (let index = 0; index < count; index += 1) {
+            await expect(found.nth(index)).toBeVisible()
+          }
         }
         await expect(page.locator('h1')).toBeVisible()
         for (const link of await page.locator('a[href^="/"]').all()) {

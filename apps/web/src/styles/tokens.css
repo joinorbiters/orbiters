@@ -88,8 +88,9 @@
   --border: color-mix(in oklab, var(--color-prussian-blue) 24%, #ffffff);
   --input: color-mix(in oklab, var(--color-prussian-blue) 32%, #ffffff);
   --ring: var(--color-watermelon);
-  /* The grid the page sits on, and the step every raised surface casts. Same 7% line
-     as landing.css and orbiters.css. */
+  /* The grid the page sits on (the same 7% line landing/system.css declares), and the
+     step every *floating* surface casts -- popovers, dialogs, menus. Cards sit on the
+     page and cast their border colour instead (see ui/card.tsx). */
   --grid-line: color-mix(in oklab, var(--color-prussian-blue) 7%, transparent);
   --step: var(--color-prussian-blue);
 

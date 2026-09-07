@@ -68,7 +68,6 @@
     if (form && note) signup(form, note)
   }
 
-  window.__orbiters = { start: start }
   if (doc.readyState === 'loading') {
     doc.addEventListener('DOMContentLoaded', start)
   } else {

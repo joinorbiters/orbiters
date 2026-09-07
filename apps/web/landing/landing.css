@@ -1,15 +1,15 @@
 /* The landing page's own stylesheet. It has no Tailwind, no framework and no
    palette of its own: palette-plugin.ts prepends the fifteen shared tokens out of
-   src/styles/tokens.css at build time, so the five colours, the font stack and the
-   radius scale are literally the same values the app renders.
+   src/styles/tokens.css, then landing/system.css, so the five colours and the font
+   stack are literally the values the app renders, and the grid line, the tile and
+   the glyph are written once for this sheet and orbiters.css.
 
    Since Orbiters (2026-09-07) the whole product shares one visual system: a faint
-   grid the page sits on, tiles painted on it, boxes with hard edges and a stepped
-   shadow the colour of the ink, and no radius, blur or soft shadow anywhere. The
-   landing draws it in the same words as orbiters.css and the app's tokens.css.
+   grid the page sits on, tiles painted on it, opaque boxes with hard edges and a
+   stepped shadow the colour of the ink, and no radius, blur or soft shadow anywhere.
 
-   Every token below is a var() or a color-mix() of one of those. #ffffff is the
-   only literal, and only ever as the neutral a tint is mixed toward. */
+   Every colour below is a var() of a shared token. #ffffff appears only as the fill
+   of the opaque surfaces the text sits on. */
 :root {
   --landing-surface: var(--color-mint-cream);
   /* Text. 17.3:1 and 7.7:1 on --landing-surface respectively. */
@@ -23,11 +23,10 @@
   /* Raw Watermelon is correct here: a focus ring is a component (3:1), not text,
      and it measures 4.14:1 against --landing-surface. */
   --landing-focus: var(--color-watermelon);
-  /* The grid the tiles snap to. Prussian Blue at 7%, the same line as the app's
-     body and as Orbiters. */
-  --landing-grid: color-mix(in oklab, var(--color-prussian-blue) 7%, transparent);
-  /* The tile, read by landing.js so the canvas and the page share one grid. */
-  --landing-cell: 16px;
+  /* The grid line and the tile come from system.css; landing.js reads the cell so
+     the canvas and the page share one grid. */
+  --landing-grid: var(--system-grid);
+  --landing-cell: var(--system-cell);
   /* The shadow is an offset, never a blur: the same colour as the border, moved. */
   --landing-step: 8px;
 }
@@ -68,16 +67,6 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* A reader who asked for more contrast is asking for less of exactly this. */
-@media (prefers-contrast: more) {
-  body {
-    background-image: none;
-  }
-  #hero-field {
-    display: none;
-  }
-}
-
 .wrap {
   max-width: 72rem;
   margin-inline: auto;
@@ -92,7 +81,7 @@ body {
   max-width: 62ch;
 }
 
-/* --- Header: the brand and one link, on a rule the colour of the ink. */
+/* --- Header: the brand and one link. */
 .top {
   display: flex;
   align-items: center;
@@ -110,22 +99,12 @@ body {
   text-decoration: none;
 }
 
-/* Four tiles, one of them the accent: the wordmark is the field, at glyph scale.
-   Identical to Orbiters' and to the app's BrandMark. */
-.glyph {
-  width: 6px;
-  height: 6px;
-  background-color: var(--landing-ink);
-  box-shadow:
-    6px 0 0 var(--color-royal-gold),
-    0 6px 0 var(--color-watermelon),
-    6px 6px 0 var(--landing-ink);
-  margin: 0 0.6rem 0.4rem 0;
-}
-
 /* --- Hero: the field behind, one box in front. */
 .hero {
   position: relative;
+  /* Its own stacking context, so the canvas at z-index -1 sits behind the box and
+     in front of the page, whatever a later rule paints on main or the header. */
+  isolation: isolate;
   padding-block: clamp(3rem, 9vw, 8rem);
   overflow: hidden;
 }
@@ -154,6 +133,7 @@ body {
 .card {
   background-color: #ffffff;
   border-width: 2px;
+  /* Three quarters of the box's step: the cards are smaller and there are three. */
   box-shadow: 6px 6px 0 var(--landing-ink);
   padding: clamp(1.25rem, 3vw, 2rem);
 }
@@ -197,21 +177,22 @@ li {
 /* A sentence, not a label: one tile and a few words in sentence case, where the
    old design put a tracked-out capital line. */
 .kicker {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
   font-size: 1rem;
   font-weight: 500;
   color: var(--landing-ink-quiet);
   margin-bottom: 1rem;
 }
 
+/* Inline, not a flex item: the kicker on the policy pages is a sentence with a
+   <time> inside, and it has to keep flowing as text. */
 .kicker::before {
   content: '';
+  display: inline-block;
   width: 8px;
   height: 8px;
+  margin-right: 0.6rem;
+  vertical-align: 0.1em;
   background-color: var(--landing-cta);
-  flex: none;
 }
 
 /* Square bullets the size of a tile. */

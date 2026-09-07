@@ -1,0 +1,38 @@
+/* The part of the visual system the two landing sheets share, injected once.
+   palette-plugin.ts prepends this file to landing.css and to orbiters.css right after
+   the tokens, so the grid line, the tile, the step and the glyph are written here and
+   nowhere else in the landing. The app cannot consume this file (Tailwind owns its
+   cascade), so tokens.css restates the grid line and BrandMark.tsx the glyph; the
+   test in landing-style.test.ts holds those two copies to these values.
+
+   Every colour is a var() of a shared token; not even white is spelled out here. */
+:root {
+  /* Prussian Blue at 7%: the line of the grid every page sits on. */
+  --system-grid: color-mix(in oklab, var(--color-prussian-blue) 7%, transparent);
+  /* The tile. Orbiters shrinks it to 14px on a phone (see orbiters.css) so the field
+     stays legible there; the landing and the app keep 16px. */
+  --system-cell: 16px;
+}
+
+/* Four tiles, one of them the accent: the wordmark is the field, at glyph scale. */
+.glyph {
+  width: 6px;
+  height: 6px;
+  background-color: var(--color-prussian-blue);
+  box-shadow:
+    6px 0 0 var(--color-royal-gold),
+    0 6px 0 var(--color-watermelon),
+    6px 6px 0 var(--color-prussian-blue);
+  margin: 0 0.6rem 0.4rem 0;
+}
+
+/* The grid and the field are texture above the ground and below the text. A reader
+   who asked for more contrast is asking for less of exactly this. */
+@media (prefers-contrast: more) {
+  body {
+    background-image: none;
+  }
+  canvas {
+    display: none;
+  }
+}

@@ -46,8 +46,8 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, 'dist-landing'),
     emptyOutDir: true,
-    // The pages have no shared JS chunk to speak of, and inlining the ~1 KB of
-    // reveal.js would put it inside three HTML files instead of one cacheable one.
+    // field.js is shared by the landing and Orbiters; inlining it would put a copy
+    // inside two HTML files instead of one cacheable asset.
     assetsInlineLimit: 0,
     rollupOptions: {
       input: {
