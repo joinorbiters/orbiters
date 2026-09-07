@@ -455,7 +455,9 @@ def test_drive_does_not_retry_a_non_transient_client_error() -> None:
 
 
 def test_storage_from_settings_defaults_to_local(tmp_path: Path) -> None:
-    settings = Settings(storage_local_root=str(tmp_path))
+    # `_env_file=None`: the default under test is the code's, not whatever backend the
+    # worktree's `.env` happens to select on the machine running the suite.
+    settings = Settings(_env_file=None, storage_local_root=str(tmp_path))  # type: ignore[call-arg]
     assert isinstance(storage_from_settings(settings), LocalFileStorage)
 
 
