@@ -9,10 +9,39 @@ pattern rather than transcribed.
 
 import json
 import shutil
+import sys
+from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
-from mcp import Client
+
+# The in-memory Drive and the in-memory Google token endpoint live with the core tests,
+# which are a separate pytest root with no package of their own -- reached by path
+# exactly as `test_drive_privileged_tools.py` reaches them, rather than duplicated into
+# a second pair of fakes that would be a second place for the two to disagree about
+# what Google does.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "packages" / "core" / "tests"))
+from fakes.fake_drive import FOLDER_MIME, FakeDrive  # noqa: E402
+from fakes.fake_gmail import FakeGmail  # noqa: E402
+from fakes.gmail_fixtures import TOKEN_KEY, gmail_settings  # noqa: E402
+from mcp import Client  # noqa: E402
+from sqlalchemy.orm import Session  # noqa: E402
+
+from pigrocrm.core.actor import Actor  # noqa: E402
+from pigrocrm.core.auth.models import User  # noqa: E402
+from pigrocrm.core.drive.models import GoogleDriveAccount  # noqa: E402
+from pigrocrm.core.drive.schemas import DRIVE_SCOPE_FILE, DRIVE_SCOPE_READONLY  # noqa: E402
+from pigrocrm.core.gmail.crypto import seal  # noqa: E402
+from pigrocrm.core.gmail.tokens import GoogleTokenClient  # noqa: E402
+from pigrocrm.core.gmail.transport import GmailTransport  # noqa: E402
+from pigrocrm.core.storage import lazy_drive  # noqa: E402
+from pigrocrm_mcp.server import build_server  # noqa: E402
+
+# A Drive file id of the shape the titolare types into Impostazioni → Drive.
+STORAGE_FOLDER = "1CartellaScritturaMCP"
+REFRESH_TOKEN = "1//0gMcpDriveStorageRefresh"
+DRIVE_MAILBOX = "titolare@example.it"
 
 needs_binaries = pytest.mark.skipif(
     shutil.which("pandoc") is None or shutil.which("typst") is None,
@@ -294,3 +323,138 @@ async def test_describe_emitter_profile_reads_the_issuer_every_header_prints(
     # Storage keys, never bytes (spec slice 2 §7): the logo travels as a key the REST
     # API can serve, exactly like every other identifier on this surface.
     assert "logo_key" in profile
+
+
+class _Provider:
+    """The `server` fixture's provider, plus the one thing a Drive-backed storage needs.
+
+    `__call__` answers the suite's own transactional session, so a tool call reads and
+    writes inside the transaction `mcp_session` rolls back -- exactly what the shared
+    `server` fixture does, and the reason it passes a bare `lambda: session`. What a
+    bare lambda cannot offer is `new_session`: the lazily-resolved Drive storage opens a
+    session per operation and closes it, and closing this one would end the transaction
+    the tool call is still running in. So `new_session` binds a fresh `Session` to the
+    same `Connection` with `create_savepoint` -- independent lifecycle, same uncommitted
+    rows, and its own commits nested inside the fixture's transaction rather than
+    escaping it (`packages/core/tests/test_storage_factory.py::_sessions` explains the
+    same choice at length).
+
+    Deliberately no `scope`: `build_server` reads that attribute to decide whether to
+    open a session per logical call, and a provider without one keeps the single shared
+    session this suite is built on.
+    """
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+        self._bind = session.get_bind()
+
+    def __call__(self) -> Session:
+        return self._session
+
+    def new_session(self) -> Session:
+        return Session(bind=self._bind, join_transaction_mode="create_savepoint")
+
+
+def _connected_drive(session: Session) -> GoogleDriveAccount:
+    """The titolare's Drive, connected, with a write folder chosen.
+
+    Seeded here rather than shared from a fixture module, the way every other suite in
+    this repository that needs this row seeds its own (`test_drive_tools.py`,
+    `test_drive_privileged_tools.py`, `apps/api/tests/test_documents_api.py`). The
+    refresh token is really sealed with the key `gmail_settings()` publishes, so the
+    unsealing the storage does at resolution runs for real.
+    """
+    user = User(
+        email=f"titolare-{uuid4().hex[:8]}@example.it",
+        nome="Titolare",
+        password_hash="x",
+        ruolo="admin",
+        attivo=True,
+    )
+    session.add(user)
+    session.flush()
+    ciphertext, nonce = seal(REFRESH_TOKEN, TOKEN_KEY)
+    account = GoogleDriveAccount(
+        user_id=user.id,
+        google_sub=f"sub-{user.id}",
+        email_address=DRIVE_MAILBOX,
+        refresh_token_ciphertext=ciphertext,
+        refresh_token_nonce=nonce,
+        scopes_granted=[DRIVE_SCOPE_READONLY, DRIVE_SCOPE_FILE],
+        status="active",
+        root_folder_ids=[],
+        storage_folder_id=STORAGE_FOLDER,
+    )
+    session.add(account)
+    session.flush()
+    return account
+
+
+@needs_binaries
+async def test_a_document_an_agent_generates_lands_in_the_titolares_own_drive(
+    mcp_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    seeded_template_id: str,
+    seeded_customer_id: str,
+) -> None:
+    """`build_server(..., storage=None)` on an installation whose documents go to the
+    titolare's own Drive: the tool renders a PDF and the bytes land in *their* Drive,
+    under *the folder they chose*, carrying *their* access token.
+
+    No `storage` is passed, on purpose -- that is the whole test. Every other MCP test
+    hands `build_server` a `LocalFileStorage` under `tmp_path`, so nothing until now
+    exercised the branch production actually uses, where the adapter has to give
+    `storage_from_settings` a way to reach the database or the configuration is refused
+    at every single tool call.
+
+    The network is the only thing replaced: `user_transport_for` still unseals the row's
+    refresh token for real, with Google's token endpoint and Drive itself answered by
+    the two in-memory fakes. One token exchange for the whole tool call, because one
+    storage per process holds one token client.
+    """
+    settings = gmail_settings(storage_backend="gdrive")
+    drive = FakeDrive(root_id=STORAGE_FOLDER)
+    gmail = FakeGmail()
+    _connected_drive(mcp_session)
+
+    tokens = GoogleTokenClient(
+        client_id=settings.google_client_id,
+        client_secret=settings.google_client_secret,
+        transport=GmailTransport(http=gmail, sleep=lambda _: None),
+    )
+    real_user_transport_for = lazy_drive.user_transport_for
+    monkeypatch.setattr(
+        lazy_drive,
+        "user_transport_for",
+        lambda account, account_settings, **_: real_user_transport_for(
+            account, account_settings, http=drive, tokens=tokens
+        ),
+    )
+
+    server = build_server(
+        _Provider(mcp_session),
+        lambda: Actor(id=None, type="mcp", role="admin"),
+        None,
+        settings,
+    )
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "create_document_from_template",
+            {
+                "template_id": seeded_template_id,
+                "customer_id": seeded_customer_id,
+                "titolo": "Offerta su Drive",
+                "variabili": {"oggetto": "Advisory"},
+            },
+        )
+
+    assert not result.is_error, result.content[0].text
+    written = [f for f in drive.files.values() if f.mime != FOLDER_MIME]
+    assert len(written) == 1, [f.name for f in written]
+    assert written[0].data.startswith(b"%PDF")
+    # One folder per customer, one per document, both beneath the folder the titolare
+    # picked -- the arrangement the service-account backend produces (spec 5.4).
+    folders = {f.id: f for f in drive.files.values() if f.mime == FOLDER_MIME}
+    document_folder = folders[written[0].parent]
+    assert folders[document_folder.parent].parent == STORAGE_FOLDER
+    assert gmail.token_requests == 1

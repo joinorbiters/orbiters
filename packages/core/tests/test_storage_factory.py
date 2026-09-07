@@ -16,6 +16,8 @@ network and of nothing else.
 """
 
 import base64
+import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -43,6 +45,7 @@ from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 from pigrocrm.core.gmail.crypto import seal
 from pigrocrm.core.gmail.tokens import GoogleTokenClient
 from pigrocrm.core.gmail.transport import GmailTransport
+from pigrocrm.core.storage import lazy_drive
 from pigrocrm.core.storage.errors import StorageNotConfigured
 from pigrocrm.core.storage.factory import storage_from_settings
 from pigrocrm.core.storage.gdrive import GDriveStorage
@@ -587,3 +590,73 @@ def test_user_transport_for_reports_a_wrong_key_as_a_credential_problem(
         user_transport_for(account, wrong_key)
 
     assert "PIGROCRM_GOOGLE_TOKEN_KEY" in excinfo.value.details["reason"]
+
+
+# --- One resolution, however many threads ask for it at once -------------------------
+
+
+def test_two_threads_meeting_an_unresolved_storage_resolve_it_once(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The instance that reaches production is built once per process and shared by
+    every request, and FastAPI runs sync endpoints in a thread pool -- so two uploads
+    can meet a cold (or newly invalidated) cache at the same instant. Unguarded, each
+    would resolve, each would build its own transport, and one of the two
+    `GoogleTokenClient`s would be thrown away along with the access token it had just
+    paid an OAuth round-trip for. The upload that lost the race then re-authenticates
+    for no reason, and a revoked grant can be recorded twice.
+
+    So resolution is serialised, and this is the test of it: one transport built and one
+    token exchanged, for two concurrent `put`s. Both assertions matter -- the build count
+    is what the lock guarantees structurally, and the token count is the cost the second
+    build would have imposed.
+
+    The delay in the session factory is the same device `apps/api/tests/test_deps.py`
+    uses on the engine's own cold start: it widens a window that already exists so the
+    race is exercised on purpose rather than when a machine happens to be slow. It sits
+    where the resolution reads the row, which is inside the guarded region, so the
+    thread that arrives second is genuinely made to wait for the first.
+    """
+    _account(db_session)
+    gmail = FakeGmail()
+    drive = FakeDrive(root_id=STORAGE_FOLDER)
+
+    builds = 0
+    builds_lock = threading.Lock()
+    real_user_transport_for = lazy_drive.user_transport_for
+
+    def counting_user_transport_for(*args: object, **kwargs: object) -> object:
+        nonlocal builds
+        with builds_lock:
+            builds += 1
+        return real_user_transport_for(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(lazy_drive, "user_transport_for", counting_user_transport_for)
+
+    working = _sessions(db_session)
+
+    def slow_sessions() -> Session:
+        time.sleep(0.05)
+        return working()
+
+    storage = _lazy(db_session, drive=drive, gmail=gmail, sessions=slow_sessions)
+
+    start = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def upload(key: str) -> None:
+        start.wait()
+        try:
+            storage.put(key, PDF, "application/pdf")
+        except BaseException as exc:  # noqa: BLE001 - surfaced via `errors`, not swallowed
+            errors.append(exc)
+
+    threads = [threading.Thread(target=upload, args=(key,)) for key in (KEY, OTHER_KEY)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors
+    assert builds == 1, f"expected one transport to be built, got {builds}"
+    assert gmail.token_requests == 1

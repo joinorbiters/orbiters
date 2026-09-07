@@ -73,7 +73,10 @@ def build_server(
     # instead of a document/version tool call writing real files into this
     # repository's own working tree under the default `./var/documents` root.
     # `__main__.py` never passes one, so production still gets exactly one
-    # `storage_from_settings(get_settings())` per process, same as the API.
+    # `storage_from_settings(...)` per process, same as the API -- `build_server` is
+    # called once, at start-up, and the storage it builds is the one every tool call
+    # then shares (which is what keeps a Drive backend's access token cached across
+    # calls instead of re-authenticating on each).
     #
     # `settings` is optional for the same reason and resolved the same way. It decides
     # one thing only: whether the Gmail tools are registered at all. A test that wants
@@ -81,8 +84,26 @@ def build_server(
     # gets the process's own -- and an installation with no Google client therefore has
     # no Gmail surface rather than a broken one (spec 5.3).
     resolved_settings = settings or get_settings()
+    # `resolved_settings`, not a second `get_settings()`: an installation is something a
+    # caller declares once. A test that says "storage_backend is gdrive" and lets this
+    # build the storage was, until this line, silently given the *process's* backend
+    # instead -- and production is unaffected either way, since `__main__.py` passes
+    # neither argument.
+    #
+    # `session_factory` is what the titolare's-own-Drive backend needs and no other
+    # backend does: the account and the folder it writes into live in a row, so the
+    # storage has to be able to open a session at each operation, long after this
+    # function returned. `new_session` opens a fresh one the storage owns and closes
+    # (see `ScopedSessionProvider.new_session`); a plain callable provider does not have
+    # it, and `storage_from_settings` then refuses that configuration by name rather
+    # than closing the session a tool call is running in.
     context = McpContext(
-        session_provider, actor_provider, storage or storage_from_settings(get_settings())
+        session_provider,
+        actor_provider,
+        storage
+        or storage_from_settings(
+            resolved_settings, session_factory=getattr(session_provider, "new_session", None)
+        ),
     )
     mcp = MCPServer("PigroCRM", instructions=INSTRUCTIONS)
 
