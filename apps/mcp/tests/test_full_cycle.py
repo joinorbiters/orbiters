@@ -93,7 +93,7 @@ def cycle(mcp_session: Session, tmp_path: Path) -> dict[str, Any]:
     """
     # The install's own configuration, as `Actor.system()` and not as the agent. Two
     # reasons, and the first is now enforced: `update_fiscal_profile` is one of the
-    # sixteen operations `AGENT_FORBIDDEN_ACTIONS` refuses to any agent credential
+    # operations `AGENT_FORBIDDEN_ACTIONS` refuses to any agent credential
     # whatever its role, so setting the fixture up as `AGENTE` meant building the scene
     # by doing a thing this very test then asserts an agent cannot do. The second is that
     # it was never true anyway: nobody installs a CRM by asking an agent to choose the

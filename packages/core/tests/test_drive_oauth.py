@@ -1089,6 +1089,55 @@ def test_set_roots_saves_a_new_storage_folder_unverified_on_a_revoked_or_expired
         db_session.flush()
 
 
+def test_a_folder_saved_while_revoked_is_never_verified_by_a_later_save(
+    db_session: Session, admin_user: User
+) -> None:
+    """The honest boundary of the two rules above, asserted so that the docstring
+    describing it cannot drift away from it again.
+
+    A folder chosen while the credential was broken is saved unverified (the test
+    above). Reconnecting makes the account `active`, and the panel then resends that
+    same id on the next save -- but "unchanged, skip it" is decided on the *id*, not on
+    whether it was ever proven, so no verification ever happens: what proves the folder
+    is the first document written into it, where a wrong id comes back as a failed
+    upload instead of a `ValidationFailed` naming the field.
+
+    Closing that gap needs the row to remember whether the stored folder was proven --
+    a column this table does not have -- and the alternative, re-verifying an unchanged
+    folder on every save, is refused for the reasons
+    `test_set_roots_verifies_nothing_when_the_storage_folder_did_not_change` gives. So
+    this is a documented consequence rather than a bug in hiding, and the test exists
+    to keep it documented.
+    """
+
+    def fail_if_built(_account: GoogleDriveAccount) -> DriveTransport:
+        raise AssertionError("nessuna verifica è attesa in questo scenario")
+
+    account = _connected_drive_account(db_session, admin_user, status="revoked")
+    service = _drive_service_account(db_session, transport_factory=fail_if_built)
+
+    # Chosen while the credential is revoked: saved, unverified, no Drive call.
+    service.set_roots(
+        DriveRootsUpdate(
+            root_folder_ids=["1AbCdEfGhIjKlMnOpQ"], storage_folder_id="3AbCdEfGhIjKlMnOpQ"
+        ),
+        _drive_actor(admin_user),
+    )
+
+    # Reconnected. The panel's next save resends the same id, and it is *not* verified.
+    account.status = "active"
+    db_session.flush()
+    read = service.set_roots(
+        DriveRootsUpdate(
+            root_folder_ids=["2AbCdEfGhIjKlMnOpQ"], storage_folder_id="3AbCdEfGhIjKlMnOpQ"
+        ),
+        _drive_actor(admin_user),
+    )
+
+    assert read.storage_folder_id == "3AbCdEfGhIjKlMnOpQ"
+    assert read.root_folder_ids == ["2AbCdEfGhIjKlMnOpQ"]
+
+
 def test_set_roots_refuses_verification_missing_the_read_scope_without_calling_drive(
     db_session: Session, admin_user: User
 ) -> None:

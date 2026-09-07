@@ -16,8 +16,9 @@ setup specifically: a service account has no Drive storage quota of its own.
 explicitly shared with the service account's address, or `files.create` fails with
 `storageQuotaExceeded`. Every call below carries `supportsAllDrives=true` for that
 reason, and `verify_root_accessible` (called once by `storage_from_settings`, not by
-anything in this class automatically) turns a misconfigured root into a startup failure
-instead of a first-upload one.
+anything in this class automatically) turns a misconfigured root into one refusal that
+names it -- at start-up on the MCP adapter, and inside the first request that needs a
+document backend on the API -- instead of a `storageQuotaExceeded` on a real upload.
 
 **Placement vs. identity.** The key is a path, and `a/b/c.pdf` is filed under nested
 folders `a` then `b` beneath the configured root, with a file `c.pdf` inside -- one
@@ -315,14 +316,18 @@ class GDriveStorage:
 
     def verify_root_accessible(self) -> None:
         """Confirms the configured root folder exists, this credential can see it, and
-        it lives on a Shared Drive -- so a misconfiguration surfaces once, at startup,
-        with a message that says what to fix, instead of showing up later as a bare 404
-        or a `storageQuotaExceeded` on some customer's first upload.
+        it lives on a Shared Drive -- so a misconfiguration surfaces once, with a
+        message that says what to fix, instead of showing up later as a bare 404 or a
+        `storageQuotaExceeded` on some customer's first upload.
 
         Not called by anything else in this class: `storage_from_settings` calls it
         once, right after constructing a `GDriveStorage`, which is what makes this a
-        startup check rather than a per-request one. A script or a test that only
-        needs the type is free to skip the network round trip entirely.
+        per-process check rather than a per-request one. *When* in the process depends
+        on the adapter: the MCP server builds its backend in `build_server`, so this
+        runs at start-up there, while `pigrocrm_api.deps.get_storage` builds on first
+        use, so on the API it runs inside the first request that needs a document
+        backend -- and its failure is that request's, not the boot's. A script or a
+        test that only needs the type is free to skip the network round trip entirely.
         """
         url = file_meta_url(self._root_folder_id, fields="id,driveId")
         try:

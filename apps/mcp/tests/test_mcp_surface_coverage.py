@@ -1,7 +1,7 @@
 """The complement of `test_mcp_invoice_ban.py`, and the half of the product's central
 claim that had no test at all.
 
-That file proves sixteen named operations are **not** reachable as MCP tools. Nothing
+That file proves a list of named operations is **not** reachable as MCP tools. Nothing
 proved the other direction: that every *other* public service method is. The claim the
 product actually makes is "an agent can do anything a user can, minus a deliberate,
 named, tested list of exclusions", and a ban list on its own only tests the subtraction.
@@ -19,8 +19,7 @@ be a tool for this" are different statements and only one of them is a policy.
 
 Adding a public service method therefore fails this file until somebody either writes
 the tool or writes down why not. That is the entire point: the decision is forced at the
-moment it is cheap, and it is recorded next to the sixteen refusals it has to live
-beside.
+moment it is cheap, and it is recorded next to the refusals it has to live beside.
 
 Two properties of the walk are worth stating, because they are what makes the result
 trustworthy rather than merely green:
@@ -72,7 +71,7 @@ Method = tuple[str, str]
 # half a dozen services.
 
 
-# 1. Forbidden. The sixteen operations of `test_mcp_invoice_ban.py`, which owns the
+# 1. Forbidden. The banned operations of `test_mcp_invoice_ban.py`, which owns the
 #    policy; they appear here only so that the sweep's arithmetic accounts for them, and
 #    a test below asserts this block names exactly the same methods that file bans. If
 #    the two ever disagree, one of them is out of date and neither can be trusted.

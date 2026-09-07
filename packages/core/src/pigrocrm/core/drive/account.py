@@ -8,9 +8,10 @@ CRM read from `root_folder_ids`, and one missing `drive.readonly` can still be w
 into -- neither is a broken credential, and `status` stays `active` for both. What
 `health` says about them is nonetheless `scope_missing`: each is a feature that is off,
 the two places that discover it are refusals a person meets mid-action (the storage's
-own resolution, and choosing a write folder), and `missing_scopes` alone reaches only
-the settings page. The banner names the scope that is missing, so the fix -- one
-re-authorisation -- is legible from wherever it is read.
+own resolution, and choosing a write folder), and `missing_scopes` alone is a list with
+no sentence around it. So the banner text names the scope that is missing, and the fix
+-- one re-authorisation -- is legible from the Drive settings page, which is where this
+answer is rendered.
 
 Four statuses, the same four `GoogleAccount.status` carries and for the same reason
 (see that model's docstring, and `GoogleDriveAccount`'s): nothing, wait, re-consent,
@@ -144,7 +145,11 @@ class GoogleDriveAccountService:
         )
 
     def health(self, actor: Actor) -> DriveHealth:
-        """One call answers the whole shell banner for Drive.
+        """One call answers the whole Drive banner on the settings page.
+
+        The web renders `banner`/`banner_text` in Impostazioni → Drive and nowhere
+        else, so this is the answer to "what does that page say", not a fact the rest of
+        the application is showing anybody.
 
         No account at all is not a problem to report: an installation that never
         connected Drive has nothing to say about it, and a banner there would be an
@@ -217,11 +222,11 @@ class GoogleDriveAccountService:
             # writing half, and on an installation whose documents go to Drive its
             # absence stops every upload -- refused at the storage's own resolution and
             # at the moment a write folder is chosen. Both of those are refusals a
-            # person meets while trying to do something, and `missing_scopes` alone
-            # reaches only the settings page, so a grant missing the write scope would
-            # otherwise be a feature that is off with nothing on any screen saying so.
+            # person meets while trying to do something, and `missing_scopes` alone is a
+            # list of URLs, so a grant missing the write scope would otherwise be a
+            # feature that is off with no sentence anywhere saying which one.
             #
-            # Both missing is one sentence naming both, not two banners: the shell shows
+            # Both missing is one sentence naming both, not two banners: the panel shows
             # one, and the fix for either is the same single re-authorisation.
             return answer("scope_missing", _SCOPE_TEXT.format(scope=" e ".join(missing)))
         return answer(None, None)
@@ -305,17 +310,30 @@ class GoogleDriveAccountService:
         breaking exactly the recovery path the paragraph above describes (fixing the
         folder list from a revoked or expired account). So verification is gated on
         `account.status == "active"`: on any other status the folder is saved
-        unverified, same as `root_folder_ids` always are, and is verified for real at
-        the next save made after the credential is reconnected and active again.
+        unverified, same as `root_folder_ids` always are.
+
+        **And it stays unverified.** Reconnecting makes the account `active` again, but
+        the panel's next save resends *the same* id, and the paragraph below skips a
+        folder that has not changed -- the skip is decided on the id, not on whether it
+        was ever proven, and nothing on this row records the difference. So a folder
+        chosen during a revoked or expired period is proven by the first document
+        written into it: `GDriveStorage.put` reaches `files.create` with that folder as
+        the parent, and a wrong id comes back as «caricamento su Drive fallito (404)» --
+        later than the panel would have said it, and in worse words. Saying it in the
+        panel instead needs the row to remember that the stored folder was never
+        verified (a `storage_folder_verified` column), which this table does not have;
+        the alternative of re-verifying every unchanged folder is refused below, for
+        reasons that do not stop being true here.
 
         **An unchanged folder is not verified.** The panel resends the configured
         `storage_folder_id` on every save, so a roots-only edit arrives naming the folder
         the row already holds. Re-proving it proves nothing -- it was proven when it was
-        chosen -- and costs a Drive call per save; worse, a grant that has since lost a
-        scope, or a folder somebody moved, would refuse a change that has nothing to do
-        with the folder and discard the roots edit with it. So verification runs only for
-        a folder that is genuinely *new*, which is also the only case a titolare could
-        have got wrong here.
+        chosen, the one exception being the folder chosen while the credential was broken
+        that the paragraph above accounts for -- and costs a Drive call per save; worse,
+        a grant that has since lost a scope, or a folder somebody moved, would refuse a
+        change that has nothing to do with the folder and discard the roots edit with it.
+        So verification runs only for a folder that is genuinely *new*, which is also the
+        case a titolare is most likely to have got wrong here.
 
         **PATCH semantics, and why `model_fields_set` is read here.** The route is a
         `PATCH`: it changes the fields the request named and leaves the rest alone.
@@ -327,7 +345,8 @@ class GoogleDriveAccountService:
         the timeline as though somebody had asked for that. `model_fields_set` is the
         one place the difference still exists, so it is what decides: named (with an id
         or with `null`) means write it and record it, absent means neither -- and only
-        naming a real id, never `null`, on an `active` account, means verify it.
+        naming a real id, never `null`, on an `active` account, and one the row does not
+        already hold, means verify it.
         """
         actor.require_write(_ROOTS_ACTION)
         account = self._present(actor)

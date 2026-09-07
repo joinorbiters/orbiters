@@ -1,4 +1,4 @@
-"""The sixteen operations closed to agents, closed on the credential and not on the tool.
+"""The operations closed to agents, closed on the credential and not on the tool.
 
 Found by review, and it is the one finding that changed the project's threat model.
 
@@ -51,7 +51,7 @@ def test_an_admin_agent_is_refused_every_forbidden_action(action: str) -> None:
 @pytest.mark.parametrize("action", sorted(AGENT_FORBIDDEN_ACTIONS))
 def test_a_human_admin_is_refused_none_of_them(action: str) -> None:
     """The other half, and the one that keeps this from being a way to break the
-    product: a person with the right role may still do all sixteen. If this passed
+    product: a person with the right role may still do every one of them. If this passed
     while the product had stopped working, the test above would be satisfied by a
     service that refuses everybody."""
     HUMAN_ADMIN.require_admin(action)
@@ -71,7 +71,7 @@ def test_the_refusal_names_the_credential_and_not_the_role() -> None:
 
 
 def test_an_agent_keeps_everything_that_was_never_banned() -> None:
-    """The ban is sixteen named operations, not a second role. An agent recording a
+    """The ban is a list of named operations, not a second role. An agent recording a
     time entry or creating a customer is the product working as designed."""
     AGENT_ADMIN.require_write("log_time")
     AGENT_ADMIN.require_write("create_invoice")
@@ -102,7 +102,7 @@ def test_an_opted_in_agent_is_refused_none_of_them(action: str) -> None:
     the setting exists in order to be safe.
 
     Asserted per action rather than on a couple of samples, because a partial opt-in --
-    fifteen of sixteen opening -- would be the worst of both: the operator believes the
+    all but one of them opening -- would be the worst of both: the operator believes the
     switch is on and one operation still refuses, in a product where the refusal arrives
     at the moment somebody is trying to issue an invoice.
     """
