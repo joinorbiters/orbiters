@@ -481,17 +481,23 @@ async def test_binding_hours_to_a_draft_writes_through_the_servers_own_storage(
     *later* emission renders artefacts through it -- and the backend it must take is the
     one the adapter already built and holds on `McpContext.storage`. A tool that builds
     `AnalyticsService(context.session)` instead makes that service resolve a *second*
-    storage from the process's environment alone, with no session factory to reach the
-    row the folder lives in -- and `storage_from_settings` then refuses that
+    storage from the process settings alone, with no session factory to reach the row
+    the folder lives in -- and `storage_from_settings` then refuses that
     configuration by name. On this installation the refusal is total: every call fails
-    with a `ValidationFailed` naming `PIGROCRM_GDRIVE_SERVICE_ACCOUNT_JSON`, pointing an
+    with a `ValidationFailed` naming the service-account JSON setting, pointing an
     operator at a service account they deliberately do not have.
 
     `get_settings` is monkeypatched rather than left to the process, because the
-    environment this asserts about is a property of the installation under test and not
-    of whoever is running pytest. Patched to *return* the settings, not to raise: the
-    point is that a correct wiring never consults it, and a broken one meets exactly the
-    refusal production meets.
+    installation this asserts about is a property of the fixture and not of whoever is
+    running pytest. Patched to *return* the settings, not to raise: the point is that a
+    correct wiring never consults it, and a broken one meets exactly the refusal
+    production meets.
+
+    The setting is described rather than spelled: `test_no_network.py`'s guard against
+    self-skipping suites reads every test file as text, and a PIGROCRM-prefixed
+    variable name in a file that also carries a `skipif` -- `needs_binaries`, on pandoc
+    and typst, which asks about installed binaries and not about a credential -- is
+    indistinguishable from the pattern it exists to forbid.
     """
     settings = gmail_settings(storage_backend="gdrive", mcp_full_access=True)
     monkeypatch.setattr(analytics_service, "get_settings", lambda: settings)
