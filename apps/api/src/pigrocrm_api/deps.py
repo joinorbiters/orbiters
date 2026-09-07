@@ -119,9 +119,21 @@ def get_storage(settings: SettingsDep) -> DocumentStorage:
 
     Still a FastAPI dependency, and that is what makes it overridable: the tests replace
     it with a `LocalFileStorage` under `tmp_path` (`conftest.py`) rather than letting
-    uploads write into the repository's own working tree. The cache itself is reset the
-    way `_engine`/`_factory` are -- by monkeypatching the module global, as
-    `test_deps.py` and `test_documents_api.py` do.
+    uploads write into the repository's own working tree. The cache is cleared through
+    `reset_storage_cache()` below, which is what the tests that change the backend call.
+
+    **What the lock is held across, on one configuration.** With a service account
+    configured, `storage_from_settings` verifies the root folder before it returns
+    (`GDriveStorage.verify_root_accessible`), which is a Drive round-trip with a retry
+    budget -- so the first request to ask for a document backend holds `_storage_lock`
+    across a network call, and any other request that arrives in that window waits for
+    it. Kept deliberately: it happens once per process, every waiter needs that same
+    answer before it can do anything with a document, and the alternative -- build
+    outside the lock and swap the result in -- would pay a second verification round-trip
+    and hand one of the two builds' token cache straight to the garbage collector, which
+    is the exact waste this cache exists to prevent. The other two backends make no call
+    here at all: `local` touches a `Path`, and the titolare's-own-Drive route reads
+    nothing until its first operation (`LazyUserDriveStorage`).
     """
     global _storage
     if _storage is None:
@@ -132,6 +144,27 @@ def get_storage(settings: SettingsDep) -> DocumentStorage:
 
 
 StorageDep = Annotated[DocumentStorage, Depends(get_storage)]
+
+
+def reset_storage_cache() -> None:
+    """Forgets the process's storage, so the next `get_storage` builds a new one.
+
+    Exists for the tests, and named so that they no longer have to assign this module's
+    private `_storage` to say what they mean. Two of them do say it -- the one that
+    drives a whole Drive installation over HTTP, and the one that asserts the cache
+    itself -- and a test that pokes a private global is a test that silently stops
+    working the day the global is renamed or a second one joins it. This function is
+    that knowledge, kept next to the cache it clears.
+
+    Under `_storage_lock`, for the same reason `get_storage` builds under it: clearing
+    the cache while another thread is between the check and the assignment would let
+    that thread's build survive the reset. Nothing is rebuilt here -- the backend is
+    resolved lazily by the next caller, which is also what makes this safe to call
+    before a test has settled which settings the process should read.
+    """
+    global _storage
+    with _storage_lock:
+        _storage = None
 
 
 def get_actor(request: Request, session: SessionDep, settings: SettingsDep) -> Actor:

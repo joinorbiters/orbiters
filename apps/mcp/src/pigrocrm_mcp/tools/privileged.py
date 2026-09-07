@@ -395,7 +395,14 @@ def register(
         obbligatorio e non ha default.
         """
         return (
-            AnalyticsService(context.session)
+            # `context.storage`, never the default: `AnalyticsService` resolves a backend
+            # from `get_settings()` when it is handed none, and on an installation whose
+            # documents live on the titolare's own Drive that resolution has no session
+            # factory to reach the row the folder lives in -- so it refuses the whole
+            # configuration by name and every call to this tool fails with a message
+            # about service-account variables the operator deliberately does not have.
+            # The adapter already holds the one backend this process writes through.
+            AnalyticsService(context.session, context.storage)
             .bind_time_to_invoice(
                 UUID(deal_id),
                 BindTimeRequest(
@@ -417,7 +424,11 @@ def register(
         sempre come tale.
         """
         return (
-            AnalyticsService(context.session)
+            # No storage of its own is read by the estimate, but the argument is passed
+            # for the same reason it is above: which backend this process writes through
+            # is the adapter's answer, and a call site that omits it is one refactor away
+            # from resolving a second one from the environment (see `bind_time_to_invoice`).
+            AnalyticsService(context.session, context.storage)
             .get_fiscal_estimate(anno, context.actor)
             .model_dump(mode="json")
         )

@@ -10,6 +10,8 @@ pattern rather than transcribed.
 import json
 import shutil
 import sys
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -29,13 +31,18 @@ from mcp import Client  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
 from pigrocrm.core.actor import Actor  # noqa: E402
+from pigrocrm.core.analytics import service as analytics_service  # noqa: E402
 from pigrocrm.core.auth.models import User  # noqa: E402
 from pigrocrm.core.drive.models import GoogleDriveAccount  # noqa: E402
 from pigrocrm.core.drive.schemas import DRIVE_SCOPE_FILE, DRIVE_SCOPE_READONLY  # noqa: E402
+from pigrocrm.core.fiscal.schemas import FiscalProfileUpsert  # noqa: E402
+from pigrocrm.core.fiscal.service import FiscalProfileService  # noqa: E402
 from pigrocrm.core.gmail.crypto import seal  # noqa: E402
 from pigrocrm.core.gmail.tokens import GoogleTokenClient  # noqa: E402
 from pigrocrm.core.gmail.transport import GmailTransport  # noqa: E402
 from pigrocrm.core.storage import lazy_drive  # noqa: E402
+from pigrocrm.core.timetracking.schemas import TimeEntryCreate  # noqa: E402
+from pigrocrm.core.timetracking.service import TimeEntryService  # noqa: E402
 from pigrocrm_mcp.server import build_server  # noqa: E402
 
 # A Drive file id of the shape the titolare types into Impostazioni → Drive.
@@ -458,3 +465,65 @@ async def test_a_document_an_agent_generates_lands_in_the_titolares_own_drive(
     document_folder = folders[written[0].parent]
     assert folders[document_folder.parent].parent == STORAGE_FOLDER
     assert gmail.token_requests == 1
+
+
+async def test_binding_hours_to_a_draft_writes_through_the_servers_own_storage(
+    mcp_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    seeded_customer_id: str,
+    seeded_deal_id: Any,
+    seeded_user_id: Any,
+) -> None:
+    """`bind_time_to_invoice` on the installation of the test above: `gdrive` chosen,
+    no service account, documents on the titolare's own Drive.
+
+    The tool reaches `InvoiceService`, whose constructor takes a backend because a
+    *later* emission renders artefacts through it -- and the backend it must take is the
+    one the adapter already built and holds on `McpContext.storage`. A tool that builds
+    `AnalyticsService(context.session)` instead makes that service resolve a *second*
+    storage from the process's environment alone, with no session factory to reach the
+    row the folder lives in -- and `storage_from_settings` then refuses that
+    configuration by name. On this installation the refusal is total: every call fails
+    with a `ValidationFailed` naming `PIGROCRM_GDRIVE_SERVICE_ACCOUNT_JSON`, pointing an
+    operator at a service account they deliberately do not have.
+
+    `get_settings` is monkeypatched rather than left to the process, because the
+    environment this asserts about is a property of the installation under test and not
+    of whoever is running pytest. Patched to *return* the settings, not to raise: the
+    point is that a correct wiring never consults it, and a broken one meets exactly the
+    refusal production meets.
+    """
+    settings = gmail_settings(storage_backend="gdrive", mcp_full_access=True)
+    monkeypatch.setattr(analytics_service, "get_settings", lambda: settings)
+    FiscalProfileService(mcp_session).upsert(
+        FiscalProfileUpsert(codice_regime="RF19"), Actor(id=None, type="system", role="admin")
+    )
+    entry = TimeEntryService(mcp_session).create(
+        TimeEntryCreate(
+            deal_id=seeded_deal_id,
+            user_id=seeded_user_id,
+            data=date(2026, 3, 2),
+            ore=Decimal("4.00"),
+            descrizione="Analisi",
+            fatturabile=True,
+            tariffa_applicata=Decimal("100.000000"),
+        ),
+        Actor(id=None, type="user", role="admin"),
+    )
+    server = build_server(
+        _Provider(mcp_session),
+        lambda: Actor(id=None, type="mcp", role="admin", full_access=True),
+        None,
+        settings,
+    )
+
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "bind_time_to_invoice",
+            {"deal_id": str(seeded_deal_id), "entry_ids": [str(entry.id)]},
+        )
+
+    assert not result.is_error, result.content[0].text
+    draft = _payload(result)
+    assert draft["stato"] == "bozza"
+    assert draft["imponibile"] == "400.00"

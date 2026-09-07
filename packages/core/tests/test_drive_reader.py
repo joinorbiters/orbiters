@@ -638,16 +638,24 @@ def _actor(account: GoogleDriveAccount) -> Actor:
 
 def _inject(monkeypatch: pytest.MonkeyPatch, drive: FakeDrive, providers: list[Any]) -> None:
     """The transport seam, pointed at an in-memory Drive -- the same monkeypatch
-    `apps/mcp/tests/test_gmail_discovery_tool.py` uses for `GmailTransport`. The token
-    provider `drive_reader_for` built is *captured* on the way past and then replaced by
-    a stub, so the composition can be asserted without Google's token endpoint being
-    called at all."""
+    `apps/mcp/tests/test_gmail_discovery_tool.py` uses for `GmailTransport`, and the same
+    name `storage/lazy_drive.py`'s own tests replace: `user_transport_for`, the one helper
+    both users of a user-credentialled Drive compose through.
 
-    def capture(*, tokens: Any, **_: Any) -> DriveTransport:
-        providers.append(tokens)
+    The real helper still runs, so the row's refresh token is really unsealed and the
+    provider it built is *captured* on the way past; only the transport handed back is a
+    stub over the fake Drive, so the composition can be asserted without Google's token
+    endpoint being called at all.
+    """
+    real = reader_module.user_transport_for
+
+    def capture(account: Any, settings: Any, **_: Any) -> DriveTransport:
+        # `_tokens` on purpose: the provider is what this asserts about, and it exists
+        # nowhere else -- `user_transport_for` builds it and keeps it.
+        providers.append(real(account, settings)._tokens)
         return DriveTransport(tokens=StubTokens(), http=drive, sleep=lambda _: None)
 
-    monkeypatch.setattr(reader_module, "DriveTransport", capture)
+    monkeypatch.setattr(reader_module, "user_transport_for", capture)
 
 
 def test_drive_reader_for_composes_the_reader_from_the_stored_account(
@@ -714,8 +722,8 @@ def test_a_revocation_discovered_mid_read_marks_the_account_and_re_raises(
     drive = _tree()
     monkeypatch.setattr(
         reader_module,
-        "DriveTransport",
-        lambda **_: DriveTransport(
+        "user_transport_for",
+        lambda *_, **__: DriveTransport(
             tokens=RevokedTokens(account.id), http=drive, sleep=lambda _: None
         ),
     )

@@ -47,7 +47,7 @@ from typing import Any, TypeVar
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
-from pigrocrm.core.config import DRIVE_TEXT_MAX_BYTES_DEFAULT, Settings, decode_google_token_key
+from pigrocrm.core.config import DRIVE_TEXT_MAX_BYTES_DEFAULT, Settings
 from pigrocrm.core.drive.account import GoogleDriveAccountService
 from pigrocrm.core.drive.errors import DriveCredentialRevoked
 from pigrocrm.core.drive.query import (
@@ -70,11 +70,8 @@ from pigrocrm.core.drive.query import (
 )
 from pigrocrm.core.drive.schemas import DRIVE_SCOPE_READONLY
 from pigrocrm.core.drive.text import PLAIN_TEXT_MIME, DriveText, drive_text
-from pigrocrm.core.drive.transport import DriveTransport, UserTokens
+from pigrocrm.core.drive.transport import DriveTransport, user_transport_for
 from pigrocrm.core.errors import Conflict, NotFound
-from pigrocrm.core.gmail.crypto import unseal
-from pigrocrm.core.gmail.tokens import GoogleTokenClient
-from pigrocrm.core.gmail.transport import GmailTransport
 
 # The entity every refusal of this module is reported under. One name for a folder and
 # a file alike, deliberately: the entity is part of what a caller reads, and saying
@@ -487,9 +484,10 @@ def drive_reader_for(
        a revoked grant, an expired consent or a missing `drive.readonly` is learnt at
        the ask rather than from a failed Drive call;
     3. the roots, which must not be empty -- see below;
-    4. only then the refresh token, unsealed and wrapped in `UserTokens` for a
-       `DriveTransport`. The roots come from the row, so a reader cannot be pointed at a
-       folder the titolare did not configure.
+    4. only then the credential, composed by `user_transport_for` -- the row's refresh
+       token unsealed, wrapped in `UserTokens`, handed to a `DriveTransport`. The roots
+       come from the row, so a reader cannot be pointed at a folder the titolare did not
+       configure.
 
     `feature` is the name the refusal uses ("la lettura dei documenti da Drive"), so a
     missing scope reads as a feature that is off rather than as a broken credential.
@@ -523,10 +521,11 @@ def drive_reader_for(
     commits on its own behalf, so the fact outlives the rollback of whatever operation
     discovered it, and then the exception continues.
 
-    The `GoogleTokenClient` is built here and lives as long as the reader. Unlike
-    `routers/gmail.py`'s per-process cache, that means one token exchange per reader
-    rather than one per hour per process -- the price of `packages/core` not owning a
-    process-wide cache, and the same choice `apps/mcp`'s privileged tools already make.
+    The `GoogleTokenClient` `user_transport_for` builds lives as long as the reader.
+    Unlike `routers/gmail.py`'s per-process cache, that means one token exchange per
+    reader rather than one per hour per process -- the price of `packages/core` not
+    owning a process-wide cache, and the same choice `apps/mcp`'s privileged tools
+    already make.
     """
     if action is not None:
         # Before the session is touched: a refusal here must not double as "there is a
@@ -540,21 +539,13 @@ def drive_reader_for(
             _NO_ROOTS.format(feature=feature),
             email_address=account.email_address,
         )
-    refresh_token = unseal(
-        account.refresh_token_ciphertext,
-        account.refresh_token_nonce,
-        decode_google_token_key(settings),
-    )
-    tokens = UserTokens(
-        account_id=account.id,
-        email_address=account.email_address,
-        refresh_token=refresh_token,
-        tokens=GoogleTokenClient(
-            client_id=settings.google_client_id,
-            client_secret=settings.google_client_secret,
-            transport=GmailTransport(),
-        ),
-    )
+    # The three steps -- unseal the row's refresh token, wrap it in a `UserTokens`
+    # provider over the slice 5 token client, hand that to a `DriveTransport` -- written
+    # once, in `transport/user_transport_for`, and shared with the document storage. Not
+    # repeated here: a second copy would be a second place the plaintext refresh token
+    # exists as a local variable, and a second thing to fix the day the composition
+    # changes.
+    transport = user_transport_for(account, settings)
 
     def on_revoked() -> None:
         accounts.mark_revoked(
@@ -567,7 +558,7 @@ def drive_reader_for(
         )
 
     return DriveReader(
-        DriveTransport(tokens=tokens),
+        transport,
         roots=account.root_folder_ids,
         text_max_bytes=settings.drive_text_max_bytes,
         on_revoked=on_revoked,

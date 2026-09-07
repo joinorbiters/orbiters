@@ -1,4 +1,5 @@
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from uuid import uuid4
 
@@ -315,6 +316,22 @@ def _connected_drive(session: Session) -> GoogleDriveAccount:
     return account
 
 
+@pytest.fixture
+def fresh_storage_cache() -> Iterator[None]:
+    """`get_storage` caches one backend for the whole process, so a test that changes
+    which backend the settings name has to clear it -- before, so it does not inherit
+    the one an earlier test built, and after, so it does not leave a Drive-backed
+    storage behind for the next one.
+
+    Through `deps.reset_storage_cache()` rather than by assigning `deps._storage`: the
+    cache is that module's business, and a test that reaches into its private state is
+    one rename away from silently resetting nothing.
+    """
+    deps.reset_storage_cache()
+    yield
+    deps.reset_storage_cache()
+
+
 def _drive_installation(
     session: Session, monkeypatch: pytest.MonkeyPatch, drive: FakeDrive, gmail: FakeGmail
 ) -> Settings:
@@ -344,7 +361,6 @@ def _drive_installation(
         storage_backend="gdrive",
         jwt_secret=Settings(_env_file=None).jwt_secret,  # type: ignore[call-arg]
     )
-    monkeypatch.setattr(deps, "_storage", None)
     monkeypatch.setattr(
         deps,
         "_factory",
@@ -372,7 +388,10 @@ def _drive_installation(
 
 
 def test_an_upload_goes_to_the_titolares_own_drive_and_downloads_back_identical(
-    logged_in: TestClient, api_session: Session, monkeypatch: pytest.MonkeyPatch
+    logged_in: TestClient,
+    api_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    fresh_storage_cache: None,
 ) -> None:
     """The slice, through the API: `PIGROCRM_STORAGE_BACKEND=gdrive` with no service
     account, a Drive the titolare has connected and chosen a folder in, and the bytes of
@@ -424,7 +443,7 @@ def test_an_upload_goes_to_the_titolares_own_drive_and_downloads_back_identical(
 
 
 def test_the_api_builds_one_storage_for_the_whole_process_and_opens_nothing_to_do_it(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, fresh_storage_cache: None
 ) -> None:
     """Two properties of the dependency itself, neither visible over HTTP.
 
@@ -440,10 +459,10 @@ def test_the_api_builds_one_storage_for_the_whole_process_and_opens_nothing_to_d
     not exist yet -- which is the entire reason this storage resolves late. `_factory`
     staying `None` is that, asserted.
 
-    Reset the way the rest of this module's process-scoped state is reset: by
-    monkeypatching the global, which `pytest` undoes at the end of the test.
+    The storage cache is cleared through the module's own `reset_storage_cache`
+    (`fresh_storage_cache`, above); `_factory` is still monkeypatched, which `pytest`
+    undoes at the end of the test.
     """
-    monkeypatch.setattr(deps, "_storage", None)
     monkeypatch.setattr(deps, "_factory", None)
     settings = gmail_settings(storage_backend="gdrive")
 
