@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.analytics.schemas import BindTimeRequest
 from pigrocrm.core.analytics.service import AnalyticsService
+from pigrocrm.core.config import Settings
 from pigrocrm.core.errors import Conflict, NotFound, PermissionDenied, ValidationFailed
 from pigrocrm.core.invoices.schemas import InvoiceIssue
 from pigrocrm.core.invoices.service import InvoiceService
@@ -432,7 +433,10 @@ def test_an_hour_already_on_an_issued_invoice_cannot_be_invoiced_twice(
 
 
 def test_an_hour_on_a_draft_can_be_rebound(
-    db_session: Session, billable_deal_id: UUID, seeded_user_id: UUID
+    db_session: Session,
+    billable_deal_id: UUID,
+    seeded_user_id: UUID,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Binding is written when the draft line is created, not at issue, so while the
     invoice is a draft the hours stay modifiable and re-selectable -- which is what lets
@@ -440,8 +444,18 @@ def test_an_hour_on_a_draft_can_be_rebound(
 
     Constructed with no injected storage, deliberately: every read call site builds
     `AnalyticsService(session)` with one argument, and a draft produces no artefact, so
-    the one-argument form has to keep working here too.
+    the one-argument form has to keep working here too. That form resolves its storage
+    from `get_settings()`, which reads the worktree's `.env`: pinned to the code's own
+    defaults (`_env_file=None`) so an installation that has switched its document store
+    to Drive does not turn this into a test of its configuration.
     """
+    from pigrocrm.core.analytics import service as analytics_service
+
+    monkeypatch.setattr(
+        analytics_service,
+        "get_settings",
+        lambda: Settings(_env_file=None),  # type: ignore[call-arg]
+    )
     entry = _log(
         db_session,
         billable_deal_id,

@@ -16,14 +16,16 @@ plus a sort, while the identical-by-construction `ORDER BY col DESC, id DESC` is
 spelled out descending, and it is the one column that carries a second, descending index
 for it.
 
-**`ANALYZE`, not `VACUUM (ANALYZE)`, and that is a finding rather than a shortcut.**
+**`ANALYZE` is what the statistics need; `VACUUM (ANALYZE)` is what a shared database needs.**
 `test_search_plan.py` records that a GIN index keeps its planner statistics in its own
 metapage, which only `VACUUM` writes, so a bulk-loaded GIN index reports "no statistics"
 until vacuumed. A B-tree keeps nothing equivalent: what the planner costs it with is
 `pg_class.reltuples`/`relpages` for the index relation, and `do_analyze_rel` updates those
 for every index of the table it analyses. Checked rather than assumed -- these assertions
 pass with `ANALYZE` alone on a freshly bulk-loaded corpus, which is what says the B-tree
-case is not the GIN case.
+case is not the GIN case. The fixture still vacuums, for a different reason: in a full
+run the corpus is loaded into tables that other modules have filled and emptied, and the
+dead tuples they leave change the plan (see `ordered_corpus`).
 
 **The corpus is smaller than `test_search_plan.py`'s.** That file needs 50 000 rows per
 table because a `BitmapOr` over four trigram indexes only wins against a parallel
@@ -146,9 +148,15 @@ def ordered_corpus(db_engine: Engine) -> Iterator[Engine]:
     cannot run inside the savepoint the `db_session` fixture holds open, and a planner with
     no statistics costs a 20 000-row table as though it held ten.
 
-    Plain `ANALYZE` is enough here -- see the module docstring on why a B-tree is not a GIN
-    index -- but it still runs on an `AUTOCOMMIT` connection, because `ANALYZE` acquires its
-    own locks and there is nothing for it to be inside.
+    Plain `ANALYZE` would be enough for the *statistics* -- see the module docstring on why
+    a B-tree is not a GIN index -- but the corpus is only fresh when this module runs alone.
+    In a whole-directory run the tables arrive carrying the dead tuples of whatever ran
+    before (`test_search_plan.py` deletes 50 000 rows per table), and `relpages` of the
+    composite indexes are then costed on pages this corpus never wrote: the planner picks
+    the narrower single-column index under an `Incremental Sort` and the assertions below
+    fail on a plan the production data would never produce. `VACUUM (ANALYZE)` reclaims
+    them first. It runs on an `AUTOCOMMIT` connection because `VACUUM` cannot run inside a
+    transaction block at all.
     """
     factory = session_factory(db_engine)
     with factory() as session:
@@ -157,7 +165,7 @@ def ordered_corpus(db_engine: Engine) -> Iterator[Engine]:
         session.commit()
     with db_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
         for table in _ORDERED_TABLES:
-            connection.execute(text(f"ANALYZE {table}"))
+            connection.execute(text(f"VACUUM (ANALYZE) {table}"))
     try:
         yield db_engine
     finally:
@@ -174,6 +182,11 @@ def ordered_corpus(db_engine: Engine) -> Iterator[Engine]:
                 delete(PipelineStage).where(PipelineStage.id.notin_(pre_existing_stages))
             )
             session.commit()
+        # And reclaim what the deletes left behind, so the next module's planner does not
+        # cost these tables on 20 000 dead tuples (see `test_search_plan.py`'s teardown).
+        with db_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+            for table in _ORDERED_TABLES:
+                connection.execute(text(f"VACUUM (ANALYZE) {table}"))
 
 
 @pytest.fixture
