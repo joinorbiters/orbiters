@@ -104,6 +104,14 @@ beforeEach(() => {
 })
 
 describe('AppShell', () => {
+  it('is exactly as tall as its parent, never as tall as the page', () => {
+    const { container } = renderShell()
+    const root = container.firstElementChild as HTMLElement
+    expect(root.className).toMatch(/\bh-full\b/)
+    expect(root.className).toMatch(/\boverflow-hidden\b/)
+    expect(root.className).not.toMatch(/\bh-dvh\b/)
+  })
+
   it('shows the top-level entries and the group headers in Italian', () => {
     renderShell()
     const nav = sidebar()
