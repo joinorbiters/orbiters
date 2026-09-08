@@ -92,7 +92,7 @@ export function EconomicTab({ periodo }: { periodo: Periodo }) {
             />
           </>
         ) : (
-          <div className="border bg-card p-4 sm:col-span-2">
+          <div className="rounded-lg border bg-card p-4 sm:col-span-2">
             <p className="text-sm text-muted-foreground">Stima fiscale</p>
             <p className="mt-1 text-sm">
               Non disponibile qui: serve un profilo fiscale configurato e un account
@@ -119,7 +119,7 @@ export function EconomicTab({ periodo }: { periodo: Periodo }) {
       />
 
       {fiscale && (
-        <p className="border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+        <p className="rounded-lg border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
           Stima basata sul regime forfettario: coefficiente di redditività{' '}
           {percent(fiscale.coefficiente_redditivita)}, imposta sostitutiva{' '}
           {percent(fiscale.aliquota_imposta_sostitutiva)}, INPS {percent(fiscale.aliquota_inps)} su

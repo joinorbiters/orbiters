@@ -69,6 +69,12 @@ beforeEach(() => {
   vi.mocked(toast.success).mockReset()
 })
 
+/** The row's actions live behind the «⋯» menu since the 2026-09-08 revision (design
+ *  spec §4); the trigger is labelled per row so a table of them stays unambiguous. */
+async function openRowMenu(label: string) {
+  await userEvent.click(await screen.findByRole('button', { name: `Azioni per ${label}` }))
+}
+
 describe('FieldsPanel', () => {
   it('asks for both active and archived fields, never just the active half', async () => {
     vi.mocked(api.GET).mockReturnValueOnce(Promise.resolve(ok([ACTIVE_FIELD])))
@@ -95,9 +101,13 @@ describe('FieldsPanel', () => {
     renderPanel()
 
     expect(await screen.findByText('Vecchio campo')).toBeInTheDocument()
-    expect(screen.getByText('Archiviato')).toBeInTheDocument()
-    expect(screen.getByText('Attivo')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /ripristina vecchio campo/i })).toBeInTheDocument()
+    // The two states as pills, on the one component every state in the product goes
+    // through (§4): `ink` for the field in use, `muted` for one that claims nothing.
+    expect(screen.getByText('Archiviato')).toHaveAttribute('data-tone', 'muted')
+    expect(screen.getByText('Attivo')).toHaveAttribute('data-tone', 'ink')
+
+    await openRowMenu('Vecchio campo')
+    expect(screen.getByRole('menuitem', { name: 'Ripristina' })).toBeInTheDocument()
   })
 
   it('unarchives a field through the real endpoint when "Ripristina" is clicked', async () => {
@@ -107,8 +117,8 @@ describe('FieldsPanel', () => {
     )
     renderPanel()
 
-    const restoreButton = await screen.findByRole('button', { name: /ripristina vecchio campo/i })
-    await userEvent.click(restoreButton)
+    await openRowMenu('Vecchio campo')
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Ripristina' }))
 
     await waitFor(() =>
       expect(api.POST).toHaveBeenCalledWith(
@@ -233,7 +243,8 @@ describe('FieldsPanel', () => {
       vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([ACTIVE_FIELD])))
       renderPanel()
 
-      await userEvent.click(await screen.findByRole('button', { name: /modifica segmento/i }))
+      await openRowMenu('Segmento')
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Modifica' }))
       const dialog = screen.getByRole('dialog')
       expect(within(dialog).getByLabelText('Etichetta')).toHaveValue('Segmento')
       expect(within(dialog).getByText('segmento')).toBeInTheDocument() // Chiave, read-only context
@@ -245,7 +256,8 @@ describe('FieldsPanel', () => {
       vi.mocked(api.PATCH).mockReturnValueOnce(Promise.resolve(ok(ACTIVE_FIELD)))
       renderPanel()
 
-      await userEvent.click(await screen.findByRole('button', { name: /modifica segmento/i }))
+      await openRowMenu('Segmento')
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Modifica' }))
       const dialog = screen.getByRole('dialog')
       await userEvent.clear(within(dialog).getByLabelText('Etichetta'))
       await userEvent.type(within(dialog).getByLabelText('Etichetta'), 'Settore commerciale')
@@ -267,7 +279,8 @@ describe('FieldsPanel', () => {
       vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([selectField])))
       renderPanel()
 
-      await userEvent.click(await screen.findByRole('button', { name: /modifica segmento/i }))
+      await openRowMenu('Segmento')
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Modifica' }))
       expect(screen.getByLabelText('Opzioni (una per riga)')).toHaveValue('A\nB')
     })
 
@@ -275,7 +288,8 @@ describe('FieldsPanel', () => {
       vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([ACTIVE_FIELD])))
       renderPanel()
 
-      await userEvent.click(await screen.findByRole('button', { name: /modifica segmento/i }))
+      await openRowMenu('Segmento')
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Modifica' }))
       expect(screen.queryByLabelText(/opzioni/i)).not.toBeInTheDocument()
     })
   })

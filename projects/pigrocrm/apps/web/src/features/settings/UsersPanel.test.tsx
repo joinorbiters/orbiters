@@ -74,6 +74,16 @@ beforeEach(() => {
   vi.mocked(useAuth).mockReturnValue(sessionAs({ id: 'someone-else', ruolo: 'admin' }))
 })
 
+/**
+ * The row's actions live behind the «⋯» menu since the 2026-09-08 revision (design spec
+ * §4), so every assertion about them opens that row's menu first. The trigger is
+ * labelled per row -- «Azioni per Ada Admin» -- because a table of identical «Azioni»
+ * buttons is ambiguous to a screen reader and to a test alike.
+ */
+async function openRowMenu(nome: string) {
+  await userEvent.click(await screen.findByRole('button', { name: `Azioni per ${nome}` }))
+}
+
 describe('UsersPanel', () => {
   it('lists users with their role and status', async () => {
     vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([ADMIN, DISABLED_USER])))
@@ -82,7 +92,19 @@ describe('UsersPanel', () => {
     expect(await screen.findByText('Ada Admin')).toBeInTheDocument()
     expect(screen.getByText('Amministratore')).toBeInTheDocument()
     expect(screen.getByText('Disattivato')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Riattiva' })).toBeInTheDocument()
+
+    await openRowMenu('Ex Collega')
+    expect(screen.getByRole('menuitem', { name: 'Riattiva' })).toBeInTheDocument()
+  })
+
+  it('reports the status as a pill, on the one component every state in the product uses', async () => {
+    vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([ADMIN, DISABLED_USER])))
+    renderPanel()
+
+    // `data-tone` rather than a class: it is what `StatusPill` puts on the element for
+    // exactly this, and it survives the next restyle.
+    expect(await screen.findByText('Attivo')).toHaveAttribute('data-tone', 'ink')
+    expect(screen.getByText('Disattivato')).toHaveAttribute('data-tone', 'muted')
   })
 
   it('shows a failed list as a distinct alert, not an empty-looking table', async () => {
@@ -99,7 +121,8 @@ describe('UsersPanel', () => {
     vi.mocked(api.PATCH).mockReturnValueOnce(Promise.resolve(ok({ ...DISABLED_USER, attivo: true })))
     renderPanel()
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Riattiva' }))
+    await openRowMenu('Ex Collega')
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Riattiva' }))
 
     await waitFor(() =>
       expect(api.PATCH).toHaveBeenCalledWith(
@@ -195,7 +218,8 @@ describe('UsersPanel', () => {
     )
     renderPanel()
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Disattiva' }))
+    await openRowMenu('Altro Utente')
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Disattiva' }))
 
     expect(await screen.findByText('Disattivato')).toBeInTheDocument()
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Utente disattivato'))
@@ -235,7 +259,16 @@ describe('UsersPanel', () => {
       vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([ADMIN])))
       renderPanel()
 
-      expect(await screen.findByRole('button', { name: 'Disattiva' })).toBeDisabled()
+      await openRowMenu('Ada Admin')
+      // Present and disabled, never absent: an action a record cannot take *right now*
+      // is a different thing from one it can never take, and a menu whose items move
+      // between rows is a menu nobody learns (`RowActions`' own docstring).
+      // `aria-disabled`, not `toBeDisabled()`: a Radix menu item is a `div`, and jest-dom
+      // only reads the `disabled` attribute of a form control.
+      expect(screen.getByRole('menuitem', { name: 'Disattiva' })).toHaveAttribute(
+        'aria-disabled',
+        'true',
+      )
     })
 
     it('still allows deactivating someone else', async () => {
@@ -243,8 +276,11 @@ describe('UsersPanel', () => {
       vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([ADMIN, OTHER_ACTIVE_USER])))
       renderPanel()
 
-      const buttons = await screen.findAllByRole('button', { name: 'Disattiva' })
-      expect(buttons.some((button) => !button.hasAttribute('disabled'))).toBe(true)
+      await openRowMenu('Altro Utente')
+      expect(screen.getByRole('menuitem', { name: 'Disattiva' })).not.toHaveAttribute(
+        'aria-disabled',
+        'true',
+      )
     })
 
     it('disables the role selector for your own row too, so you cannot demote yourself out of this screen', async () => {

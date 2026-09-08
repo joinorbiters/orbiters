@@ -257,6 +257,30 @@ describe('how a deal row reads', () => {
     expect(screen.getByText('SV')).toBeInTheDocument()
   })
 
+  /**
+   * The line under the deal's name is who the work is for -- what turns a list of
+   * project names into a list of work (design spec §4). It has to be asserted on the
+   * *rendered* cell: the column's `accessorFn` is still the bare `nome`, so a
+   * misspelled `customer_ragione_sociale` here would leave every `cellValue` assertion
+   * in this file green.
+   */
+  it('names the deal\u2019s customer on the line under it', () => {
+    renderCell(0, { ...BASE_DEAL, customer_ragione_sociale: 'ACME Srl' })
+    expect(screen.getByText('ACME Srl')).toBeInTheDocument()
+  })
+
+  /** `DealRead` fills the name from a batched lookup, so a row that arrived before that
+   *  field existed (or from an API that does not send it yet) carries `undefined`. One
+   *  line, not an empty second line under the name: `EntityCell` treats
+   *  `undefined`/`null`/`''` alike, and this is the assertion that keeps it that way. */
+  it('draws no second line for a deal whose customer name did not come back', () => {
+    renderCell(0, { ...BASE_DEAL, customer_ragione_sociale: null })
+    // The name's own wrapper holds the name and, when there is one, the sub-line. One
+    // child means no second line at all -- not a second line rendered empty, which
+    // would take the vertical space and make every row of the table taller for nothing.
+    expect(screen.getByText('Sito vetrina').parentElement?.children).toHaveLength(1)
+  })
+
   /** The header has to sit over the digits it labels, which only the column can say. */
   it('declares value and probability right-aligned columns, so their headers move too', () => {
     const [, valore, probabilita] = buildDealColumns([])
@@ -267,6 +291,17 @@ describe('how a deal row reads', () => {
   it('right-aligns the expected value inside its own cell', () => {
     renderCell(1, { ...BASE_DEAL, valore_previsto: '2500.50' })
     expect(screen.getByText(/2\.500,50/).className).toContain('text-right')
+  })
+
+  /** A percentage is a figure: it needs the tabular digits that make a column of them
+   *  line up, which `meta.align` alone cannot give (that moves the header). Asserted on
+   *  the rendered cell because `NumberCell` is a `cell` renderer and the `accessorFn`
+   *  assertion above it goes nowhere near one. */
+  it('renders the probability through NumberCell, with tabular figures', () => {
+    renderCell(2, { ...BASE_DEAL, probabilita: 10 })
+    const cell = screen.getByText('10%')
+    expect(cell.className).toContain('tabular-nums')
+    expect(cell.className).toContain('text-right')
   })
 
   it('puts a calendar icon before the expected closing date', () => {

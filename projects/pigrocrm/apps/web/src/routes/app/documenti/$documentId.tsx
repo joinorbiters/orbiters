@@ -1,4 +1,5 @@
 import { createFileRoute, useParams } from '@tanstack/react-router'
+import { FileText } from 'lucide-react'
 import { EntityDetailLayout } from '@/components/EntityDetailLayout'
 import { QueryErrorBanner } from '@/components/QueryErrorBanner'
 import { Button } from '@/components/ui/button'
@@ -31,6 +32,7 @@ function DocumentDetail() {
 
   return (
     <EntityDetailLayout
+      icon={FileText}
       title={record.titolo}
       subtitle={DOCUMENT_TYPE_LABELS[record.tipo] ?? record.tipo}
       entityType="document"

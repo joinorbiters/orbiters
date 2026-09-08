@@ -247,6 +247,19 @@ describe('WeekGrid', () => {
     expect(screen.queryByTestId('grid-total')).not.toBeInTheDocument()
   })
 
+  it('opens with its title and its week controls in the page header', async () => {
+    // The intestazione of design spec §4: the `<h1>` is the only thing naming this
+    // screen, and choosing a week is this page's primary action -- there is nothing to
+    // create here.
+    routeGet({
+      '/api/deals': () => ok({ items: [deal(DEAL, 'Progetto Alfa')], next_cursor: null }),
+      '/api/time-entries': () => ok({ items: [], next_cursor: null }),
+    })
+    renderGrid()
+    expect(await screen.findByRole('heading', { level: 1, name: 'Ore' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Questa settimana' })).toBeInTheDocument()
+  })
+
   it('moves a whole week at a time', async () => {
     routeGet({
       '/api/deals': () => ok({ items: [deal(DEAL, 'Progetto Alfa')], next_cursor: null }),

@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { Building2 } from 'lucide-react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { EntityDetailLayout } from './EntityDetailLayout'
 
@@ -30,6 +31,7 @@ beforeEach(() => {
 function renderLayout(overrides: Partial<Parameters<typeof EntityDetailLayout>[0]> = {}) {
   return render(
     <EntityDetailLayout
+      icon={Building2}
       title="ACME Srl"
       subtitle="Cliente"
       entityType="customer"
@@ -46,6 +48,14 @@ describe('EntityDetailLayout', () => {
     renderLayout()
     expect(screen.getByText('ACME Srl')).toBeInTheDocument()
     expect(screen.getByText('Cliente')).toBeInTheDocument()
+  })
+
+  it('draws the title through PageHeader, as the page\u2019s one h1', () => {
+    // Every detail page opens with the same intestazione every list page does (design
+    // spec \u00a74), which is what makes the product predictable to learn -- and the
+    // record's name is the only `<h1>` on the screen, since the shell has no top bar.
+    renderLayout()
+    expect(screen.getByRole('heading', { level: 1, name: 'ACME Srl' })).toBeInTheDocument()
   })
 
   it('exposes the same three tabs for every entity', () => {

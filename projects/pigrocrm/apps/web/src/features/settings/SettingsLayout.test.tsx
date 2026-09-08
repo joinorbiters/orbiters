@@ -20,6 +20,14 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 })
 
 describe('SettingsLayout (the /app/impostazioni route guard)', () => {
+  it('opens with its title as the page heading, from PageHeader', () => {
+    // The shell has had no top bar since the 2026-09-08 revision, so the page's own
+    // `<h1>` is the only thing naming the screen.
+    mockAuth.isAdmin = true
+    render(<SettingsLayout />)
+    expect(screen.getByRole('heading', { level: 1, name: 'Impostazioni' })).toBeInTheDocument()
+  })
+
   it('renders the tabs and the active child route for an admin', () => {
     mockAuth.isAdmin = true
     render(<SettingsLayout />)

@@ -23,6 +23,23 @@ describe('BigNumber', () => {
     render(<BigNumber label="Deal aperti" value="12" />)
     expect(screen.getByRole('group', { name: /deal aperti/i })).toBeInTheDocument()
   })
+
+  /**
+   * The KPI card of the reference screenshots (design spec §4): a 15px Charcoal label
+   * over a 30px semibold value. Asserted as the utilities that set those sizes, not as
+   * a computed `font-size`: jsdom loads no stylesheet, so a Tailwind arbitrary value
+   * computes to nothing at all and an assertion on the rendered size would pass on a
+   * card with no styling whatever. What it protects is the one thing this shape must
+   * never do -- a value that reads at the same size and weight as its label, when the
+   * whole point is that the figure is what the eye lands on.
+   */
+  it('sets the label and the value at the two sizes the KPI card is specified at', () => {
+    render(<BigNumber label="Deal aperti" value="12" />)
+    expect(screen.getByText('Deal aperti')).toHaveClass('text-[15px]')
+    const value = screen.getByText('12')
+    expect(value).toHaveClass('text-[30px]')
+    expect(value).toHaveClass('font-semibold')
+  })
 })
 
 describe('BarRows', () => {
