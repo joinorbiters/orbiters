@@ -39,6 +39,15 @@ L'email è normalizzata in minuscolo prima di essere salvata. Una seconda iscriz
 indirizzo non è un errore: la pagina risponde "sei in orbita" in entrambi i casi, e l'API
 distingue con lo status (201 la prima volta, 200 le successive) e con il campo `nuova`.
 
+> **Colonne al 2026-09-08.** Alle tre di sopra si sono aggiunte le sei `utm_*` (String 200) e poi
+> `nome`, `cognome` (String 120) e `linkedin_url` (String 300), tutte nullable e tutte aggiunte da
+> `ensure_orbiters_database` con `ADD COLUMN IF NOT EXISTS` (`models.LATE_COLUMNS`). Nome e cognome
+> sono obbligatori nello schema, non nella colonna: le ventiquattro righe raccolte prima non ne
+> hanno uno. E la risposta al POST non è più la riga: è `{"ok": true}` con 201 sempre, identica per
+> una prima iscrizione e per una ripetuta, perché su una scrittura pubblica ogni campo restituito è
+> leggibile da chiunque indovini un indirizzo. `nuova` e la distinzione 200/201 restano dentro il
+> processo (`SignupRead`), non sul filo.
+
 ## 4. La pagina
 
 Stile preso da craft.wild.as: pagina chiara con una griglia appena visibile, e un campo di

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const html = readFileSync(join(__dirname, 'orbiters.html'), 'utf-8')
 const css = readFileSync(join(__dirname, 'orbiters.css'), 'utf-8')
@@ -19,11 +19,35 @@ describe('orbiters.html', () => {
     expect(meta('og:title')).toContain('Orbiters')
   })
 
-  it('has exactly one form, and it asks for one thing', () => {
+  it('has one form, and it asks for four things, three of them required', () => {
     expect(html.match(/<form/g)).toHaveLength(1)
-    expect(html.match(/<input/g)).toHaveLength(1)
+    const inputs = [...html.matchAll(/<input[\s\S]*?\/>/g)].map((match) => match[0])
+    expect(inputs.map((tag) => tag.match(/name="([^"]+)"/)?.[1])).toEqual([
+      'nome',
+      'cognome',
+      'email',
+      'linkedin_url',
+    ])
+    // The LinkedIn profile is the one thing nobody has to give.
+    expect(inputs.filter((tag) => /\brequired\b/.test(tag))).toHaveLength(3)
     expect(html).toMatch(/<input[^>]+type="email"/)
-    expect(html).toMatch(/<label[^>]+for="email"/)
+    expect(html).toMatch(/<input[^>]+type="url"/)
+    for (const name of ['nome', 'cognome', 'email', 'linkedin_url']) {
+      expect(html).toMatch(new RegExp(`<label[^>]+for="${name}"`))
+    }
+    // The length rule is visible in the field rather than discovered in a 422. The
+    // numbers are the API's columns: 120/120/320/300.
+    expect(inputs.map((tag) => tag.match(/maxlength="(\d+)"/)?.[1])).toEqual([
+      '120',
+      '120',
+      '320',
+      '300',
+    ])
+    // The error text lives in #note; without this a screen reader hears "invalid" on
+    // the focused field and never the reason.
+    expect(inputs.every((tag) => tag.includes('aria-describedby="note"'))).toBe(true)
+    expect(html).toContain('Profilo LinkedIn (facoltativo)')
+    expect(html).toContain('placeholder="https://www.linkedin.com/in/\u2026"')
     expect(html).toMatch(/<button type="submit">Entra in orbita<\/button>/)
   })
 
@@ -132,10 +156,10 @@ describe('orbiters.js', () => {
       expect(utmFrom('?utm_source=%20%20&utm_medium=')).toBeNull()
     })
 
-    it('is nothing when the URL says nothing, so the body stays the bare email', () => {
+    it('is nothing when the URL says nothing, so the body carries no utm key', () => {
       expect(load()('')).toBeNull()
       expect(load()('?ref=abc')).toBeNull()
-      expect(js).toMatch(/utm \? \{ email: email, utm: utm \} : \{ email: email \}/)
+      expect(js).toMatch(/if \(utm\) payload\.utm = utm/)
     })
   })
 
@@ -145,5 +169,162 @@ describe('orbiters.js', () => {
     expect(html).toMatch(
       /<script type="module" src="\.\/field\.js"><\/script>\s*<script type="module" src="\.\/orbiters\.js">/,
     )
+  })
+})
+
+describe('the form, once the script has hold of it', () => {
+  const formHtml = html.match(/<form[\s\S]*?<\/form>/)?.[0] ?? ''
+  const noteHtml = html.match(/<p class="note" id="note"[\s\S]*?<\/p>/)?.[0] ?? ''
+  const filled = { nome: '  Ada  ', cognome: 'Lovelace', email: 'ada@studio.it', linkedin_url: '' }
+  let bodies: Array<Record<string, unknown>> = []
+
+  type Answer = { ok: boolean; status: number; json?: () => Promise<unknown> }
+
+  function mount(search = '', answer: Answer = { ok: true, status: 201 }): void {
+    document.body.innerHTML = formHtml + noteHtml
+    bodies = []
+    window.history.replaceState({}, '', '/orbiters' + search)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: string, init: { body: string }) => {
+        bodies.push(JSON.parse(init.body) as Record<string, unknown>)
+        return Promise.resolve(answer)
+      }),
+    )
+    new Function(js)()
+  }
+
+  /** What the API actually answers on a refused field -- see the API test
+   *  `test_the_422_names_the_field_it_refused_so_the_form_can_point_at_it`. */
+  function refusedField(name: string): Answer {
+    return {
+      ok: false,
+      status: 422,
+      json: () => Promise.resolve({ detail: [{ loc: ['body', name], msg: 'no' }] }),
+    }
+  }
+
+  function field(name: string): HTMLInputElement {
+    return document.querySelector(`input[name="${name}"]`) as HTMLInputElement
+  }
+
+  function fill(values: Record<string, string>): void {
+    for (const [name, value] of Object.entries(values)) field(name).value = value
+  }
+
+  function note(): HTMLElement {
+    return document.getElementById('note') as HTMLElement
+  }
+
+  async function submit(): Promise<void> {
+    const form = document.getElementById('signup') as HTMLFormElement
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    document.body.innerHTML = ''
+  })
+
+  it('sends the four fields trimmed, and no LinkedIn key when nobody gave one', async () => {
+    mount()
+    fill(filled)
+    await submit()
+    expect(bodies).toEqual([{ email: 'ada@studio.it', nome: 'Ada', cognome: 'Lovelace' }])
+    expect(note().textContent).toBe('Sei in orbita. Ti scriviamo noi.')
+    expect((document.getElementById('signup') as HTMLFormElement).hidden).toBe(true)
+  })
+
+  it('sends the LinkedIn profile when there is one, alongside the attribution', async () => {
+    mount('?utm_source=linkedin')
+    fill({ ...filled, linkedin_url: 'https://www.linkedin.com/in/ada' })
+    await submit()
+    expect(bodies).toEqual([
+      {
+        email: 'ada@studio.it',
+        nome: 'Ada',
+        cognome: 'Lovelace',
+        linkedin_url: 'https://www.linkedin.com/in/ada',
+        utm: { utm_source: 'linkedin' },
+      },
+    ])
+  })
+
+  it.each([
+    ['nome', 'Scrivi il tuo nome e riprova.'],
+    ['cognome', 'Scrivi il tuo cognome e riprova.'],
+  ])('asks for the %s before it posts anything', async (name, message) => {
+    mount()
+    fill({ ...filled, [name]: '   ' })
+    await submit()
+    expect(bodies).toEqual([])
+    expect(note().textContent).toBe(message)
+    expect(note().getAttribute('data-tone')).toBe('error')
+    expect(field(name).getAttribute('aria-invalid')).toBe('true')
+    expect(document.activeElement).toBe(field(name))
+  })
+
+  it.each([
+    'linkedin.com/in/ada',
+    'https://example.com/in/ada',
+    'http://www.linkedin.com/in/ada',
+    // These three are the reason the check parses the URL instead of searching it: the
+    // host is a substring of the path or of a longer domain, not the host.
+    'https://notlinkedin.com/in/ada',
+    'https://evil.com/linkedin.com/ada',
+    'https://example.com/?u=linkedin.com/ada',
+    'https://linkedin.com.evil.com/in/ada',
+    'non e un indirizzo',
+  ])('refuses %s: a profile is https and on linkedin.com', async (value) => {
+    mount()
+    fill({ ...filled, linkedin_url: value })
+    await submit()
+    expect(bodies).toEqual([])
+    expect(note().textContent).toBe('Controlla il profilo LinkedIn e riprova.')
+    expect(field('linkedin_url').getAttribute('aria-invalid')).toBe('true')
+    expect(document.activeElement).toBe(field('linkedin_url'))
+  })
+
+  it.each([
+    'https://www.linkedin.com/in/ada',
+    'https://linkedin.com/in/ada',
+    'https://it.linkedin.com/in/ada',
+  ])('accepts %s', async (value) => {
+    mount()
+    fill({ ...filled, linkedin_url: value })
+    await submit()
+    expect(bodies[0]?.linkedin_url).toBe(value)
+  })
+
+  it.each([
+    ['nome', 'Scrivi il tuo nome e riprova.'],
+    ['cognome', 'Scrivi il tuo cognome e riprova.'],
+    ['email', "Controlla l'indirizzo e riprova."],
+    ['linkedin_url', 'Controlla il profilo LinkedIn e riprova.'],
+  ])('blames %s when the API is the one refusing it', async (name, message) => {
+    mount('', refusedField(name))
+    fill(filled)
+    await submit()
+    expect(note().textContent).toBe(message)
+    expect(field(name).getAttribute('aria-invalid')).toBe('true')
+    expect(document.activeElement).toBe(field(name))
+  })
+
+  it('falls back to the address when a 422 says nothing it can use', async () => {
+    mount('', { ok: false, status: 422, json: () => Promise.reject(new Error('vuoto')) })
+    fill(filled)
+    await submit()
+    expect(note().textContent).toBe("Controlla l'indirizzo e riprova.")
+    expect(field('email').getAttribute('aria-invalid')).toBe('true')
+  })
+
+  it('still refuses an address that is not one', async () => {
+    mount()
+    fill({ ...filled, email: 'ciao' })
+    await submit()
+    expect(bodies).toEqual([])
+    expect(note().textContent).toBe("Controlla l'indirizzo e riprova.")
+    expect(field('email').getAttribute('aria-invalid')).toBe('true')
   })
 })

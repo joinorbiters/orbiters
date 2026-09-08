@@ -36,8 +36,52 @@
     return utm
   }
 
+  /* The four fields, in the order the form reads them: the first one that is wrong is
+     the one the note talks about and the one that gets the focus. The same names the
+     API's 422 uses in `detail[].loc`, which is how a refusal from the server points at
+     a field too. */
+  var FIELDS = ['nome', 'cognome', 'email', 'linkedin_url']
+  var WRONG = {
+    nome: 'Scrivi il tuo nome e riprova.',
+    cognome: 'Scrivi il tuo cognome e riprova.',
+    email: "Controlla l'indirizzo e riprova.",
+    linkedin_url: 'Controlla il profilo LinkedIn e riprova.',
+  }
+
+  /* A profile, not any URL: parsed, never searched. Looking for the host as a substring
+     accepted `evil.com/linkedin.com/ada` and `example.com/?u=linkedin.com/x` -- the host
+     is in the path there, not in the host -- and the API then refused them with a 422
+     the visitor could do nothing about. Only `https`, and the same host rule the schema
+     applies, so client and server agree in both directions. */
+  function isProfile(value) {
+    var url
+    try {
+      url = new URL(value)
+    } catch (error) {
+      return false
+    }
+    var host = url.hostname.toLowerCase()
+    return url.protocol === 'https:' && (host === 'linkedin.com' || /\.linkedin\.com$/.test(host))
+  }
+
+  /* Which field a 422 is about. `detail[].loc` is `["body", "<campo>"]`; anything the
+     form does not own (a `utm_` key, an empty body) falls back to the address, which is
+     the one field a visitor can always usefully re-read. */
+  function blame(body) {
+    var errors = (body && body.detail) || []
+    for (var i = 0; i < errors.length; i += 1) {
+      var loc = errors[i].loc || []
+      var name = loc[loc.length - 1]
+      if (FIELDS.indexOf(name) >= 0) return name
+    }
+    return 'email'
+  }
+
   function signup(form, note, utm) {
-    var input = form.querySelector('input[name="email"]')
+    var inputs = {}
+    for (var i = 0; i < FIELDS.length; i += 1) {
+      inputs[FIELDS[i]] = form.querySelector('input[name="' + FIELDS[i] + '"]')
+    }
     var button = form.querySelector('button')
 
     function say(text, tone) {
@@ -45,27 +89,50 @@
       note.setAttribute('data-tone', tone)
     }
 
+    function refuse(input, message) {
+      input.setAttribute('aria-invalid', 'true')
+      say(message, 'error')
+      input.focus()
+    }
+
     form.addEventListener('submit', function (event) {
       event.preventDefault()
-      var email = input.value.trim()
-      if (!input.checkValidity() || email.indexOf('@') < 1) {
-        input.setAttribute('aria-invalid', 'true')
-        say("Controlla l'indirizzo e riprova.", 'error')
-        input.focus()
-        return
+      var value = {}
+      for (var j = 0; j < FIELDS.length; j += 1) {
+        value[FIELDS[j]] = inputs[FIELDS[j]].value.trim()
+        inputs[FIELDS[j]].removeAttribute('aria-invalid')
       }
-      input.removeAttribute('aria-invalid')
+      if (value.nome === '') return refuse(inputs.nome, WRONG.nome)
+      if (value.cognome === '') return refuse(inputs.cognome, WRONG.cognome)
+      if (!inputs.email.checkValidity() || value.email.indexOf('@') < 1) {
+        return refuse(inputs.email, WRONG.email)
+      }
+      if (value.linkedin_url !== '' && !isProfile(value.linkedin_url)) {
+        return refuse(inputs.linkedin_url, WRONG.linkedin_url)
+      }
+      var payload = { email: value.email, nome: value.nome, cognome: value.cognome }
+      if (value.linkedin_url !== '') payload.linkedin_url = value.linkedin_url
+      if (utm) payload.utm = utm
       button.disabled = true
       fetch('/api/orbiters/signups', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(utm ? { email: email, utm: utm } : { email: email }),
+        body: JSON.stringify(payload),
       })
         .then(function (response) {
           if (response.status === 422) {
-            input.setAttribute('aria-invalid', 'true')
-            say("Controlla l'indirizzo e riprova.", 'error')
-            return
+            /* The API refused a field. Blaming the address on every 422 -- which is what
+               this did -- marked a perfectly good address as wrong and left the real
+               culprit unmarked, with no way to submit. */
+            return response
+              .json()
+              .catch(function () {
+                return null
+              })
+              .then(function (body) {
+                var name = blame(body)
+                refuse(inputs[name], WRONG[name])
+              })
           }
           if (!response.ok) throw new Error(String(response.status))
           form.hidden = true
