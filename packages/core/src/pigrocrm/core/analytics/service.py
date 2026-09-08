@@ -1,5 +1,5 @@
 from collections import defaultdict
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -15,7 +15,10 @@ from pigrocrm.core.analytics.schemas import (
     BudgetPage,
     BudgetQuery,
     BudgetVsActualRow,
+    CashMonth,
+    CashOverview,
     DealPnl,
+    EconomicOverview,
     FiscalEstimate,
     PeriodPnl,
     PeriodPnlQuery,
@@ -388,7 +391,105 @@ class AnalyticsService:
             deal_non_preventivati=len(rows) - len(budgeted),
         )
 
-    def get_fiscal_estimate(self, anno: int, actor: Actor) -> FiscalEstimate:
+    def cash_overview(self, anno: int, actor: Actor) -> CashOverview:
+        """The year as cash, month by month (`CashOverview`). Read by anyone who may read
+        the dashboard: nothing here is fiscal, and every figure is a SUM the repository
+        produced plus additions done once, here."""
+        actor.require_agent_allowed("cash_overview")
+        incassato = self.repo.monthly_incassato(anno)
+        da_incassare = self.repo.monthly_da_incassare(anno)
+        bozze = self.repo.monthly_bozze(anno)
+        costi = self.repo.monthly_costi(anno)
+        months = range(1, 13)
+        zero = ZERO_MONEY
+        stack_andamento = max(
+            (incassato.get(m, zero) + costi.get(m, zero) for m in months), default=zero
+        )
+        stack_proiezione = max(
+            (
+                incassato.get(m, zero)
+                + da_incassare.get(m, zero)
+                + bozze.get(m, zero)
+                + costi.get(m, zero)
+                for m in months
+            ),
+            default=zero,
+        )
+
+        def share(value: Decimal, of: Decimal) -> float:
+            return float(value / of) if of > zero else 0.0
+
+        mesi = [
+            CashMonth(
+                anno=anno,
+                mese=m,
+                incassato=incassato.get(m, zero),
+                da_incassare=da_incassare.get(m, zero),
+                bozze=bozze.get(m, zero),
+                costi=costi.get(m, zero),
+                quote_andamento={
+                    "incassato": share(incassato.get(m, zero), stack_andamento),
+                    "costi": share(costi.get(m, zero), stack_andamento),
+                },
+                quote_proiezione={
+                    "incassato": share(incassato.get(m, zero), stack_proiezione),
+                    "da_incassare": share(da_incassare.get(m, zero), stack_proiezione),
+                    "bozze": share(bozze.get(m, zero), stack_proiezione),
+                    "costi": share(costi.get(m, zero), stack_proiezione),
+                },
+            )
+            for m in months
+        ]
+        tot_incassato = sum_money(incassato.values())
+        tot_da_incassare = sum_money(da_incassare.values())
+        tot_bozze = sum_money(bozze.values())
+        tot_costi = sum_money(costi.values())
+        proiettato = round_money(tot_incassato + tot_da_incassare + tot_bozze)
+        return CashOverview(
+            anno=anno,
+            incassato=tot_incassato,
+            da_incassare=tot_da_incassare,
+            bozze=tot_bozze,
+            proiettato=proiettato,
+            costi=tot_costi,
+            lordo_effettivo=round_money(tot_incassato - tot_costi),
+            lordo_proiettato=round_money(proiettato - tot_costi),
+            mesi=mesi,
+        )
+
+    def economic_overview(self, anno: int, actor: Actor) -> EconomicOverview:
+        """The economic tab of the dashboard, in one answer: the cash view for everyone,
+        and for an admin with a fiscal profile the estimate on what was collected and on
+        what is projected, with the two nets. **No MCP tool** -- it carries the fiscal
+        estimate, and `get_fiscal_estimate`'s reasons apply unchanged."""
+        cassa = self.cash_overview(anno, actor)
+        fiscale = fiscale_proiettato = None
+        netto = netto_proiettato = None
+        if actor.role == "admin":
+            try:
+                fiscale = self.get_fiscal_estimate(anno, actor, ricavi=cassa.incassato)
+                fiscale_proiettato = self.get_fiscal_estimate(anno, actor, ricavi=cassa.proiettato)
+            except NotFound:
+                # No fiscal profile yet: the page says so and shows the cash alone.
+                fiscale = fiscale_proiettato = None
+        if fiscale is not None and fiscale.totale_dovuto is not None:
+            netto = round_money(cassa.lordo_effettivo - fiscale.totale_dovuto)
+        if fiscale_proiettato is not None and fiscale_proiettato.totale_dovuto is not None:
+            netto_proiettato = round_money(
+                cassa.lordo_proiettato - fiscale_proiettato.totale_dovuto
+            )
+        return EconomicOverview(
+            calcolato_alle=datetime.now(UTC),
+            cassa=cassa,
+            fiscale=fiscale,
+            fiscale_proiettato=fiscale_proiettato,
+            netto_effettivo=netto,
+            netto_proiettato=netto_proiettato,
+        )
+
+    def get_fiscal_estimate(
+        self, anno: int, actor: Actor, *, ricavi: Decimal | None = None
+    ) -> FiscalEstimate:
         """A **period** report, never per deal (§8).
 
         Acme computed this per offer, and the level was the defect rather than the
@@ -423,7 +524,9 @@ class AnalyticsService:
             anno=anno,
             # Every issued invoice of the year, deal or no deal: the estimate is about
             # the person's income, and an invoice attached to no deal is still income.
-            ricavi=self.repo.annual_revenue(anno),
+            # `ricavi` overrides the year's issued revenue when the caller asks "what if":
+            # the economic overview passes what was collected, and what is projected.
+            ricavi=ricavi if ricavi is not None else self.repo.annual_revenue(anno),
             coefficiente=profile.coefficiente_redditivita,
             aliquota_sostitutiva=profile.aliquota_imposta_sostitutiva,
             aliquota_inps=profile.aliquota_inps,

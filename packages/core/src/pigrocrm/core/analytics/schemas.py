@@ -10,7 +10,7 @@ computing any economic total at all -- Acme's whole P&L lived in `App.jsx`, with
 fiscal constants and float hour sums.
 """
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
@@ -195,6 +195,62 @@ class FiscalEstimate(BaseModel):
     aliquota_inps: Decimal | None
     contributi: Decimal | None
     reddito_netto_stimato: Decimal | None
+    # Substitute tax plus contributions: the one figure a person actually has to set
+    # aside. Computed here, once, so no screen adds the two lines up on its own.
+    totale_dovuto: Decimal | None = None
+
+
+class CashMonth(BaseModel):
+    """One month of the cash view: what came in, what is still owed, what sits in
+    drafts and proformas, what went out. Amounts are `totale` (VAT included: money in
+    the bank), costs are `importo`.
+
+    `quote` are the same four amounts as a share of the tallest month of their chart, in
+    [0, 1], computed here: the browser scales a bar with them and never turns an amount
+    string into a number (apps/web/src/test/no-browser-arithmetic.test.ts)."""
+
+    anno: int
+    mese: int
+    incassato: Decimal = Field(max_digits=12, decimal_places=2)
+    da_incassare: Decimal = Field(max_digits=12, decimal_places=2)
+    bozze: Decimal = Field(max_digits=12, decimal_places=2)
+    costi: Decimal = Field(max_digits=12, decimal_places=2)
+    quote_andamento: dict[str, float]
+    quote_proiezione: dict[str, float]
+
+
+class CashOverview(BaseModel):
+    """The year as money, not as revenue by competence: `incassato` is invoices paid in
+    the year (by `data_incasso`), `da_incassare` invoices issued and unpaid (by due
+    date), `bozze` drafts and proformas not yet turned into invoices, `costi` what was
+    spent. `proiettato` is the first three added up -- what the year would collect if
+    everything issued and drafted came in -- and the two `lordo` figures are income
+    less costs, actual and projected."""
+
+    anno: int
+    incassato: Decimal = Field(max_digits=12, decimal_places=2)
+    da_incassare: Decimal = Field(max_digits=12, decimal_places=2)
+    bozze: Decimal = Field(max_digits=12, decimal_places=2)
+    proiettato: Decimal = Field(max_digits=12, decimal_places=2)
+    costi: Decimal = Field(max_digits=12, decimal_places=2)
+    lordo_effettivo: Decimal = Field(max_digits=12, decimal_places=2)
+    lordo_proiettato: Decimal = Field(max_digits=12, decimal_places=2)
+    mesi: list[CashMonth]
+
+
+class EconomicOverview(BaseModel):
+    """Impostazioni economiche della dashboard: la cassa dell'anno e, per un admin con
+    un profilo fiscale configurato, la stima fiscale calcolata due volte -- sui ricavi
+    incassati e sui ricavi proiettati -- con i netti che ne seguono. Per chi non e'
+    admin, o senza profilo, la parte fiscale e' `None` e la pagina mostra solo la cassa."""
+
+    calcolato_alle: datetime
+    cassa: CashOverview
+    fiscale: FiscalEstimate | None
+    fiscale_proiettato: FiscalEstimate | None
+    # lordo less what is owed, on the two bases; None whenever the estimate is.
+    netto_effettivo: Decimal | None = Field(default=None, max_digits=12, decimal_places=2)
+    netto_proiettato: Decimal | None = Field(default=None, max_digits=12, decimal_places=2)
 
 
 class BindTimeRequest(BaseModel):

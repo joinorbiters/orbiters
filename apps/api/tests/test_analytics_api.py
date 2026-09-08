@@ -492,3 +492,22 @@ def test_the_openapi_document_describes_every_analytics_route(logged_in: TestCli
     names = {param["name"] for param in paths["/api/analytics/pnl"]["get"]["parameters"]}
     assert {"from", "to"} <= names
     assert "da" not in names
+
+
+def test_the_economic_overview_answers_everyone_and_keeps_the_estimate_for_admins(
+    logged_in: TestClient, collaborator_client: TestClient
+) -> None:
+    anno = ANNO
+    admin = logged_in.get("/api/analytics/panoramica", params={"anno": anno})
+    assert admin.status_code == 200, admin.text
+    body = admin.json()
+    assert body["cassa"]["anno"] == anno
+    assert len(body["cassa"]["mesi"]) == 12
+    for key in ("incassato", "da_incassare", "bozze", "proiettato", "costi", "lordo_effettivo"):
+        assert key in body["cassa"]
+    # Without a fiscal profile even an admin gets cash alone, never a 404.
+    assert body["fiscale"] is None
+
+    other = collaborator_client.get("/api/analytics/panoramica", params={"anno": anno})
+    assert other.status_code == 200, other.text
+    assert other.json()["fiscale"] is None

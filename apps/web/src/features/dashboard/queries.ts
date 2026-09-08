@@ -7,8 +7,9 @@ import type { Periodo } from './periodo'
 
 export type CommercialDashboard = components['schemas']['CommercialDashboard']
 export type EconomicDashboard = components['schemas']['EconomicDashboard']
-export type OperationalDashboard = components['schemas']['OperationalDashboard']
-export type Signal = components['schemas']['Signal']
+export type EconomicOverview = components['schemas']['EconomicOverview']
+export type CashMonth = components['schemas']['CashMonth']
+export type FiscalEstimate = components['schemas']['FiscalEstimate']
 export type PipelineStageSummary = components['schemas']['PipelineStageSummary']
 export type PendingOffer = components['schemas']['PendingOffer']
 export type AutomationsDescription = components['schemas']['AutomationsDescription']
@@ -37,14 +38,12 @@ export function useEconomicDashboard(periodo: Periodo) {
   })
 }
 
-export function useOperationalDashboard() {
+/** The economic tab reads the year, not the period: cash is an annual story (the
+ *  fiscal estimate only exists per year), so the picker's `da` names the year. */
+export function useEconomicOverview(anno: number) {
   return useQuery({
-    // An empty params object in the key, not the period: §6's dashboard is the current week
-    // and a backlog, so there is no period in the question and none in what identifies the
-    // answer. The `['dashboard']` prefix is still the first element, which is what
-    // `useUpdateAutomationConfig`'s prefix invalidation relies on.
-    queryKey: queryKeys.dashboard('operativa', {}),
-    queryFn: () => unwrap(api.GET('/api/dashboard/operativa')),
+    queryKey: queryKeys.dashboard('panoramica', { anno: String(anno) }),
+    queryFn: () => unwrap(api.GET('/api/analytics/panoramica', { params: { query: { anno } } })),
     staleTime: DASHBOARD_STALE_MS,
   })
 }

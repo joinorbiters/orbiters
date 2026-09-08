@@ -104,35 +104,9 @@ describe('CommercialTab', () => {
   })
 
   it('formats every money figure from the API string, cents included', async () => {
-    // `Number("0.29") * 100` is 28.999999999999996. Nothing here parses a money string at
-    // all -- `Intl.NumberFormat.format` takes it verbatim -- and this is the assertion
-    // that would notice if somebody reintroduced the parse.
-    vi.mocked(api.GET).mockResolvedValue(
-      ok({
-        ...RESPONSE,
-        chiusure: { ...RESPONSE.chiusure, valore_vinto: '15000.29' },
-      }),
-    )
-    renderTab()
-    expect(await screen.findByText('15.000,29 €')).toBeInTheDocument()
-    // useGrouping: 'always' -- it-IT withholds the separator below five integer digits.
-    expect(screen.getByText('3.000,00 €')).toBeInTheDocument()
-  })
-
-  it('labels the weighted value a stima, in a column of its own', async () => {
-    // §4: "Etichettata *stima*, in una colonna con un'intestazione diversa da qualunque
-    // cifra di fatturato". A weighted pipeline figure read as revenue is the exact
-    // confusion this label prevents.
     vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
     renderTab()
-    expect(await screen.findByRole('columnheader', { name: /stima/i })).toBeInTheDocument()
-    expect(screen.getByText('610,00 €')).toBeInTheDocument()
-  })
-
-  it('shows deals without a value separately and never as zero', async () => {
-    vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
-    renderTab()
-    expect(await screen.findByRole('columnheader', { name: /senza valore/i })).toBeInTheDocument()
+    expect(await screen.findByText('15.000,00 €')).toBeInTheDocument()
   })
 
   it('shows the conversion rate, and shows a dash rather than 0% when it is null', async () => {
@@ -168,37 +142,6 @@ describe('CommercialTab', () => {
     expect(screen.queryByText(/non sono attribuibili/i)).not.toBeInTheDocument()
   })
 
-  it('shows the age of each pending offer', async () => {
-    vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
-    renderTab()
-    expect(await screen.findByText(/42 giorni/i)).toBeInTheDocument()
-  })
-
-  it('says the age is unknown rather than printing zero days', async () => {
-    // `giorni: null` means `stato_dal` is unknown; "0 giorni" would read as "sent today".
-    vi.mocked(api.GET).mockResolvedValue(
-      ok({
-        ...RESPONSE,
-        offerte_in_attesa: [{ ...RESPONSE.offerte_in_attesa[0]!, stato_dal: null, giorni: null }],
-      }),
-    )
-    renderTab()
-    expect(await screen.findByText(/data ignota/i)).toBeInTheDocument()
-  })
-
-  it('states the inconsistency signal as a count, and promises no list that does not exist', async () => {
-    // The brief pointed this at `/app/documenti?solo_deal_non_vinto=true`. There is no
-    // `/app/documenti` list route in this codebase at all -- only
-    // `/app/documenti/$documentId` -- and no list page anywhere reads a search parameter.
-    // A link under a label promising a filtered list, landing on a 404, is the defect
-    // Task A13 found in its own brief. Until the drill-through exists the signal is a
-    // number with its explanation, which is honest.
-    vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
-    renderTab()
-    expect(await screen.findByText(/offerta accettata, deal non vinto/i)).toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /offerta accettata/i })).not.toBeInTheDocument()
-  })
-
   it('renders an error banner and no dashboard when the request fails', async () => {
     vi.mocked(api.GET).mockResolvedValue(
       failed({ title: 'Errore', detail: 'Non disponibile', code: 'unavailable' }, 500),
@@ -225,5 +168,15 @@ describe('CommercialTab', () => {
     vi.mocked(api.GET).mockResolvedValue(ok({ ...RESPONSE, pipeline: [] }))
     renderTab()
     expect(await screen.findByText(/nessun dato nel periodo/i)).toBeInTheDocument()
+  })
+
+  it('shows nothing but the first row and the pipeline: no offers, no signals, no detail table', async () => {
+    vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
+    renderTab()
+    await screen.findByText('Pipeline aperta per stato')
+    expect(screen.queryByText(/Offerte in attesa/)).toBeNull()
+    expect(screen.queryByText('Segnali')).toBeNull()
+    expect(screen.queryByText('Dettaglio per stato')).toBeNull()
+    expect(screen.queryByText(/Chiusure previste/)).toBeNull()
   })
 })

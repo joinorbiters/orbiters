@@ -441,6 +441,16 @@ _BYTE: dict[Method, str] = {
 #    category is for the ones that survive being asked why, and the only way to keep that
 #    true is to delete the ones that do not the moment the tool is written.
 _COPERTE_O_UMANE: dict[Method, str] = {
+    ("AnalyticsService", "economic_overview"): (
+        "la scheda economica della dashboard porta con se' la stima fiscale calcolata su "
+        "incassato e proiettato: valgono le ragioni di `get_fiscal_estimate`, che non e' "
+        "e non sara' un tool. Raggiungibile solo da `GET /api/analytics/panoramica`"
+    ),
+    ("AnalyticsService", "cash_overview"): (
+        "la meta' senza fisco della stessa scheda (incassato, da incassare, bozze, costi, "
+        "per mese): un agente ha gia' `get_economic_dashboard` e `get_period_pnl` per le "
+        "cifre riportabili, e questa vista di cassa esiste per i grafici della pagina"
+    ),
     ("TenantService", "provision"): (
         "e' la persona che crea il *proprio* spazio dal login pubblico (spec 2026-09-08): "
         "una scelta su di se', come l'iscrizione a Orbiters, non un'operazione che un "
