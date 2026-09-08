@@ -69,6 +69,12 @@ class SignupService:
         form never asked. The rows collected before this form had a name field have
         `nome` NULL, and somebody signing up again is how they get one; a profile left
         out the first time and given the second is the same case.
+
+        The values filled in this way are **unverified**: whoever types an address the
+        second time is not necessarily the person who owns it. That is tolerable only
+        because the write is blind -- `subscribe` answers `SignupAck`, which says
+        nothing about the row -- so nobody can use it to read, or to probe, what was
+        already there.
         """
         changed = False
         for field in ("nome", "cognome", "linkedin_url"):

@@ -37,6 +37,8 @@
           type="text"
           autocomplete="given-name"
           placeholder="Nome"
+          maxlength="120"
+          aria-describedby="note"
           required
         />
         <label class="sr-only" for="cognome">Cognome</label>
@@ -46,6 +48,8 @@
           type="text"
           autocomplete="family-name"
           placeholder="Cognome"
+          maxlength="120"
+          aria-describedby="note"
           required
         />
         <label class="sr-only" for="email">La tua email</label>
@@ -56,6 +60,8 @@
           autocomplete="email"
           inputmode="email"
           placeholder="nome@studio.it"
+          maxlength="320"
+          aria-describedby="note"
           required
         />
         <label class="sr-only" for="linkedin_url">Profilo LinkedIn (facoltativo)</label>
@@ -66,12 +72,15 @@
           autocomplete="url"
           inputmode="url"
           placeholder="https://www.linkedin.com/in/…"
+          maxlength="300"
+          aria-describedby="note"
         />
         <button type="submit">Entra in orbita</button>
       </form>
 
       <p class="note" id="note" role="status" aria-live="polite">
-        Nome, cognome ed email. Ti scriviamo solo per dirti quando apriamo.
+        Nome, cognome ed email — il resto è facoltativo. Ti scriviamo solo per dirti quando
+        apriamo.
         <a href="/privacy">Privacy</a>
       </p>
       <noscript><p class="note">Per iscriverti serve JavaScript.</p></noscript>
