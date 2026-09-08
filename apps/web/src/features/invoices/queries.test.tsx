@@ -1,9 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/lib/api'
-import { useInvoice, useInvoices } from './queries'
+import { downloadInvoiceArtifact, useInvoice, useInvoices } from './queries'
 
 function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -62,5 +62,92 @@ describe('useInvoices', () => {
       '/api/invoices',
       expect.objectContaining({ params: { query: { tipo: 'proforma', anno: 2026 } } }),
     )
+  })
+})
+
+/**
+ * The one thing about a download `openapi-fetch` cannot do for us is also the one
+ * thing that used to go wrong after a quiet quarter of an hour: the access cookie
+ * lasts fifteen minutes, and a raw `fetch` that meets a 401 has nowhere to go. These
+ * exercise `fetchWithRefresh` (lib/api.ts) *through* the download, because the bug was
+ * never in the helper -- it was in this function not having one.
+ *
+ * `globalThis.fetch` is stubbed here and not, as elsewhere in this file, `api.GET`:
+ * a raw `fetch` is looked up at call time, so a stub really does intercept it --
+ * unlike `openapi-fetch`'s client, which captured `globalThis.fetch` into a closure
+ * at `createClient()` time (see this file's header).
+ */
+describe('downloadInvoiceArtifact', () => {
+  const clicks = vi.fn()
+
+  beforeEach(() => {
+    // jsdom implements neither, and both are called on the happy path.
+    URL.createObjectURL = vi.fn(() => 'blob:pdf')
+    URL.revokeObjectURL = vi.fn()
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(clicks)
+    clicks.mockReset()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  function pdf() {
+    return new Response('%PDF', { status: 200 })
+  }
+
+  function unauthenticated() {
+    return new Response(JSON.stringify({ detail: 'Autenticazione richiesta' }), {
+      status: 401,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+
+  it('refreshes the session and retries when the access cookie has expired', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(unauthenticated())
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(pdf())
+    vi.stubGlobal('fetch', fetchMock)
+
+    await downloadInvoiceArtifact('inv-1', 'pdf')
+
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      '/api/invoices/inv-1/pdf',
+      '/api/auth/refresh',
+      '/api/invoices/inv-1/pdf',
+    ])
+    expect(URL.createObjectURL).toHaveBeenCalled()
+    expect(clicks).toHaveBeenCalledTimes(1)
+    vi.unstubAllGlobals()
+  })
+
+  it('surfaces the session as gone when the refresh fails too', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(unauthenticated())
+      .mockResolvedValueOnce(unauthenticated())
+    vi.stubGlobal('fetch', fetchMock)
+
+    // The *original* 401 is what reaches the caller, not the refresh's own: what
+    // failed, from the user's point of view, is the download.
+    await expect(downloadInvoiceArtifact('inv-1', 'pdf')).rejects.toMatchObject({
+      code: 'unauthenticated',
+      status: 401,
+    })
+    expect(clicks).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+
+  it('does not refresh anything when the first request succeeds', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(pdf())
+    vi.stubGlobal('fetch', fetchMock)
+
+    await downloadInvoiceArtifact('inv-1', 'xml')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/invoices/inv-1/xml')
+    vi.unstubAllGlobals()
   })
 })

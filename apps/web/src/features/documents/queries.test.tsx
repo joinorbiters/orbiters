@@ -1,9 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/lib/api'
-import { OFFER_TRANSITIONS, useDocument, useDocuments } from './queries'
+import { downloadDocument, OFFER_TRANSITIONS, useDocument, useDocuments } from './queries'
 
 function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -80,5 +80,67 @@ describe('OFFER_TRANSITIONS', () => {
     expect(OFFER_TRANSITIONS.inviata).toEqual(['accettata', 'rifiutata', 'bozza'])
     expect(OFFER_TRANSITIONS.accettata).toEqual([])
     expect(OFFER_TRANSITIONS.rifiutata).toEqual([])
+  })
+})
+
+/**
+ * The same fifteen-minute hole `downloadInvoiceArtifact` had (see
+ * features/invoices/queries.test.tsx for the full reasoning): a binary download is a
+ * raw `fetch`, and a raw `fetch` that meets an expired access cookie used to simply
+ * report «Autenticazione richiesta». `globalThis.fetch` is stubbable here precisely
+ * because this is a raw `fetch` looked up at call time, unlike the shared client.
+ */
+describe('downloadDocument', () => {
+  const clicks = vi.fn()
+
+  beforeEach(() => {
+    URL.createObjectURL = vi.fn(() => 'blob:doc')
+    URL.revokeObjectURL = vi.fn()
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(clicks)
+    clicks.mockReset()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  function unauthenticated() {
+    return new Response(JSON.stringify({ detail: 'Autenticazione richiesta' }), {
+      status: 401,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+
+  it('refreshes the session and retries when the access cookie has expired', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(unauthenticated())
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(new Response('ciao', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await downloadDocument('doc-1', 2)
+
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      '/api/documents/doc-1/download?numero=2',
+      '/api/auth/refresh',
+      '/api/documents/doc-1/download?numero=2',
+    ])
+    expect(clicks).toHaveBeenCalledTimes(1)
+  })
+
+  it('surfaces the session as gone when the refresh fails too', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(unauthenticated())
+      .mockResolvedValueOnce(unauthenticated())
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(downloadDocument('doc-1')).rejects.toMatchObject({
+      code: 'unauthenticated',
+      status: 401,
+    })
+    expect(clicks).not.toHaveBeenCalled()
   })
 })

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, toProblem, unwrap } from '@/lib/api'
+import { api, fetchWithRefresh, toProblem, unwrap } from '@/lib/api'
 import type { components } from '@/lib/api-types'
 import { queryKeys } from '@/lib/query'
 
@@ -317,12 +317,17 @@ export function useSaveFiscalProfile() {
  * `openapi-fetch` cannot express a binary response, and the server's own
  * `Content-Disposition` is what names the file -- which for the XML is the SdI's
  * convention and matters to whoever receives it.
+ *
+ * Through `fetchWithRefresh`, not a bare `fetch`: being outside the typed client is a
+ * statement about response *types*, and it used to silently also mean "and outside the
+ * session handling", so a PDF asked for more than fifteen minutes after the last
+ * request answered «Autenticazione richiesta». See `lib/api.ts`.
  */
 export async function downloadInvoiceArtifact(
   invoiceId: string,
   kind: 'pdf' | 'xml',
 ): Promise<void> {
-  const response = await fetch(`/api/invoices/${invoiceId}/${kind}`, { credentials: 'include' })
+  const response = await fetchWithRefresh(`/api/invoices/${invoiceId}/${kind}`)
   if (!response.ok) {
     const payload: unknown = await response.json().catch(() => null)
     throw toProblem(payload, response.status)

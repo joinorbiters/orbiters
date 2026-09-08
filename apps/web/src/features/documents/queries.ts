@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, toProblem, unwrap } from '@/lib/api'
+import { api, fetchWithRefresh, toProblem, unwrap } from '@/lib/api'
 import type { components } from '@/lib/api-types'
 import { queryKeys } from '@/lib/query'
 
@@ -274,9 +274,12 @@ export function useTemplatePreview() {
  */
 export async function downloadDocument(documentId: string, numero?: number): Promise<void> {
   const search = numero === undefined ? '' : `?numero=${numero}`
-  const response = await fetch(`/api/documents/${documentId}/download${search}`, {
-    credentials: 'include',
-  })
+  // `fetchWithRefresh`, not a bare `fetch`: this call is outside the typed client
+  // because of the *response type*, and that used to silently also put it outside the
+  // session handling every other request gets -- so a download attempted more than
+  // fifteen minutes after the last request failed with «Autenticazione richiesta»
+  // while a valid refresh cookie sat in the jar. See `lib/api.ts`.
+  const response = await fetchWithRefresh(`/api/documents/${documentId}/download${search}`)
   if (!response.ok) {
     const payload: unknown = await response.json().catch(() => null)
     throw toProblem(payload, response.status)
