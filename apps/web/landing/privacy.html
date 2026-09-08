@@ -6,13 +6,13 @@
     <title>PigroCRM — Informativa sulla privacy</title>
     <meta
       name="description"
-      content="Che dati tratta PigroCRM, dove restano, e cosa fa esattamente con l'accesso a Gmail: gli scope richiesti, quelli non richiesti, e come revocarli."
+      content="Chi tratta i tuoi dati su joinorbiters.com e pigro.joinorbiters.com, dove stanno, per quanto, e cosa fa PigroCRM con Gmail e Google Drive se li colleghi."
     />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="PigroCRM — Informativa sulla privacy" />
     <meta
       property="og:description"
-      content="I dati restano sul tuo server. Questa pagina dice cosa PigroCRM legge da Gmail, perché, e cosa non tocca mai."
+      content="Titolare Humancraft di Ivan Sala. Server in Unione Europea, un database per spazio, nessun tracciamento. Cosa chiediamo a Google, e cosa no."
     />
     <meta property="og:locale" content="it_IT" />
     <link rel="icon" type="image/svg+xml" href="./orbiters-logo.svg" />
@@ -25,22 +25,65 @@
     </header>
 
     <main class="wrap section">
-      <p class="kicker">Ultimo aggiornamento <time datetime="2026-08-20">20 agosto 2026</time></p>
+      <p class="kicker">Ultimo aggiornamento <time datetime="2026-09-08">8 settembre 2026</time></p>
       <h1 class="measure">Informativa sulla privacy</h1>
 
       <div class="measure" style="display: grid; gap: 1.25rem; margin-top: 2rem">
-        <h2>Dove stanno i dati</h2>
+        <h2>Chi tratta i dati</h2>
         <p>
-          PigroCRM è un programma che installi tu, sul tuo server. Non esiste un servizio gestito,
-          non esiste un nostro database, non esiste un account da creare presso di noi. I dati dei
-          tuoi clienti stanno nel tuo PostgreSQL, sul tuo server, e <strong>non trasferiamo</strong>
-          nulla a noi né a terzi. Chi tratta quei dati, e con quale base giuridica, sei tu.
+          Il titolare del trattamento è <strong>Humancraft di Ivan Sala</strong>, partita IVA
+          14518240966, <a class="quiet-link" href="https://humancraft.tech/">humancraft.tech</a>.
+          Per qualunque richiesta su questa informativa e sui tuoi dati scrivi a
+          <a class="quiet-link" href="mailto:ivansala@humancraft.tech">ivansala@humancraft.tech</a>.
+          Questa informativa vale per joinorbiters.com, per pigro.joinorbiters.com e per gli spazi
+          PigroCRM che ospitiamo lì.
+        </p>
+
+        <h2>La lista di Orbiters</h2>
+        <p>
+          Su <a class="quiet-link" href="/orbiters">joinorbiters.com</a> ti chiediamo una sola cosa,
+          l'indirizzo email, e la usiamo per una sola cosa: dirti quando la community apre e come
+          entrare. Se arrivi da una campagna salviamo anche i parametri della campagna
+          (<code>utm_*</code>), così sappiamo da dove sei arrivato. Base giuridica: il tuo consenso,
+          dato inserendo l'indirizzo. Conserviamo l'indirizzo finché non ci chiedi di toglierlo, e
+          non lo cediamo a nessuno.
+        </p>
+
+        <h2>Il tuo spazio PigroCRM</h2>
+        <p>
+          Quando crei uno spazio su pigro.joinorbiters.com trattiamo i dati del tuo account: nome,
+          email e password, quest'ultima conservata solo come hash. Servono a farti entrare e a
+          scriverti per cose che riguardano il tuo spazio, mai per pubblicità. Base giuridica:
+          l'esecuzione del servizio che hai chiesto.
+        </p>
+        <p>
+          Quello che inserisci dentro lo spazio, clienti, contatti, offerte, fatture, ore, è tuo.
+          Di quei dati sei tu il titolare e noi il responsabile del trattamento: li conserviamo e li
+          rendiamo disponibili a te e a nessun altro. Ogni spazio ha un <strong>database
+          separato</strong>, sullo stesso server ma isolato dagli altri; i documenti prodotti stanno
+          sul disco del server nella cartella del tuo spazio, oppure sul tuo Google Drive se lo
+          colleghi. <strong>Non trasferiamo</strong> nulla a terzi, non usiamo i tuoi dati per
+          addestrare modelli, non li vendiamo e non li leggiamo se non per assistenza a tua
+          richiesta.
+        </p>
+        <p>
+          I server stanno in <strong>Unione Europea</strong> (Hetzner, Helsinki, Finlandia). I dati
+          restano lì; i backup del database restano lì. Conserviamo lo spazio finché esiste; se lo
+          chiudi, cancelliamo il suo database e i suoi documenti entro trenta giorni, backup
+          compresi al loro ciclo naturale.
+        </p>
+
+        <h2>Cookie</h2>
+        <p>
+          Usiamo solo i due cookie tecnici della sessione, limitati al percorso del tuo spazio, che
+          servono a tenerti collegato. Nessun cookie di terze parti, nessuna analitica, nessun
+          pixel: né sulle pagine pubbliche né dentro il CRM.
         </p>
 
         <h2>L'accesso a Gmail</h2>
         <p>
-          Se scegli di collegare una casella Gmail, PigroCRM chiede a Google due autorizzazioni
-          <em>restricted</em>, e chiede esattamente queste:
+          Se scegli di collegare una casella Gmail al tuo spazio, PigroCRM chiede a Google due
+          autorizzazioni <em>restricted</em>, e chiede esattamente queste:
         </p>
         <ul style="display: grid; gap: 0.75rem">
           <li>
@@ -52,7 +95,7 @@
             i messaggi personali, né alcun messaggio che non appartenga a una di quelle
             conversazioni. L'unica eccezione, dichiarata: quando un messaggio rilevante appartiene a
             una conversazione, la conversazione viene salvata intera, compresi eventuali
-            partecipanti che non conosciamo — perché una conversazione letta a metà è peggio che non
+            partecipanti che non conosciamo, perché una conversazione letta a metà è peggio che non
             letta. Quegli indirizzi non entrano nell'anagrafica e non allargano le ricerche
             successive.
           </li>
@@ -67,9 +110,16 @@
           Di ogni messaggio salviamo intestazioni, oggetto e il corpo in <em>testo semplice</em>;
           degli allegati solo nome, tipo e dimensione, <strong>mai</strong> i byte. L'HTML delle
           email non viene conservato né mostrato, perché porta con sé pixel di tracciamento e CSS
-          remoto. Puoi disattivare del tutto il salvataggio dei corpi. Tutto resta
-          <strong>sul tuo server</strong>: i dati di Gmail non passano da noi, non vengono usati per
-          addestrare alcun modello, non vengono venduti e non vengono condivisi.
+          remoto. Puoi disattivare del tutto il salvataggio dei corpi. Il token che Google ci
+          consegna è cifrato con una chiave che sta fuori dal database. I dati di Gmail non vengono
+          usati per addestrare alcun modello, non vengono venduti e non vengono condivisi.
+        </p>
+
+        <h2>L'accesso a Google Drive</h2>
+        <p>
+          Se colleghi Google Drive, PigroCRM legge solo le cartelle che gli indichi e scrive solo
+          nella cartella che scegli: lì finiscono i PDF che produce per te. Non elenca il resto del
+          tuo Drive e non lo scarica.
         </p>
 
         <h2>Cosa non chiediamo</h2>
@@ -82,28 +132,32 @@
 
         <h2>Come si toglie</h2>
         <p>
-          Puoi <strong>revocare</strong> l'accesso in qualsiasi momento, in due modi indipendenti: da
-          Impostazioni → Gmail dentro PigroCRM, oppure dalla pagina delle autorizzazioni del tuo
-          account Google. Alla disconnessione PigroCRM ti chiede se cancellare anche i messaggi già
-          salvati, e non lo fa da solo: cancellare la corrispondenza di un cliente perché è scaduto
-          un token sarebbe un danno, non un'attenzione.
+          Puoi <strong>revocare</strong> l'accesso a Google in qualsiasi momento, in due modi
+          indipendenti: da Impostazioni → Gmail o Google Drive dentro il tuo spazio, oppure dalla
+          pagina delle autorizzazioni del tuo account Google. Alla disconnessione PigroCRM ti chiede
+          se cancellare anche i messaggi già salvati, e non lo fa da solo.
         </p>
 
-        <h2>La lista d'attesa di Orbiters</h2>
+        <h2>I tuoi diritti</h2>
         <p>
-          La pagina <a class="quiet-link" href="/orbiters" style="padding: 0">/orbiters</a> chiede
-          una sola cosa, l'indirizzo email, e la usa per una sola cosa: avvisarti quando la
-          community apre. L'indirizzo finisce in un database dedicato, separato da quello del
-          CRM, e non viene ceduto a nessuno. Per toglierlo basta scriverci all'indirizzo qui
-          sotto.
+          Puoi chiederci in ogni momento di accedere ai tuoi dati, correggerli, riceverli in un
+          formato leggibile da una macchina, o cancellarli insieme allo spazio. Puoi anche
+          rivolgerti al Garante per la protezione dei dati personali. Scrivi a
+          <a class="quiet-link" href="mailto:ivansala@humancraft.tech">ivansala@humancraft.tech</a>:
+          rispondiamo entro trenta giorni.
         </p>
 
-        <h2>Contatti</h2>
+        <h2>Se lo installi tu</h2>
         <p>
-          Per qualunque domanda su questa informativa:
-          <a class="quiet-link" href="mailto:privacy@pigrocrm.it"
-            >privacy@pigrocrm.it</a
-          >.
+          PigroCRM è anche software open source che puoi installare <strong>sul tuo server</strong>.
+          In quel caso nulla passa da noi: non esiste un nostro database, non esiste un account
+          presso di noi, e chi tratta i dati, e con quale base giuridica, sei tu.
+        </p>
+
+        <h2>Modifiche</h2>
+        <p>
+          Se questa informativa cambia, cambia la data in cima e, se il cambiamento ti riguarda,
+          te lo scriviamo all'indirizzo del tuo account.
         </p>
       </div>
 
@@ -112,6 +166,5 @@
         <a class="quiet-link" href="/termini">Termini</a>
       </footer>
     </main>
-
   </body>
 </html>
