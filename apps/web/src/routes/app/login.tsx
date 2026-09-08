@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { toProblem } from '@/lib/api'
+import { api, toProblem } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { tenantPrefix } from '@/lib/tenant'
 
@@ -17,6 +17,15 @@ function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
+  // Signup is offered by the root only. The root is the unprefixed page -- or the page
+  // under the root's own space name (PIGROCRM_ROOT_SLUG), which only the API knows.
+  const [isRoot, setIsRoot] = useState(tenantPrefix === '')
+  useEffect(() => {
+    if (tenantPrefix === '') return
+    void api.GET('/api/tenants/root').then(({ data }) => {
+      if (data?.slug && `/${data.slug}` === tenantPrefix) setIsRoot(true)
+    })
+  }, [])
 
   /**
    * The redirect is driven by the *session*, never by "the login call returned".
@@ -100,12 +109,18 @@ function LoginPage() {
             </Button>
             {/* Only the root offers to create a space: a space creating spaces is not a
                 thing this product means (spec 2026-09-08 §6). */}
-            {tenantPrefix === '' && (
+            {isRoot && (
               <Button
                 type="button"
                 variant="outline"
                 className="w-full"
-                onClick={() => void navigate({ to: '/app/registrati' })}
+                onClick={() =>
+                  tenantPrefix === ''
+                    ? void navigate({ to: '/app/registrati' })
+                    : // The signup page lives at the unprefixed root: a different basepath
+                      // is a different application instance, so this is a navigation.
+                      window.location.assign('/app/registrati')
+                }
               >
                 Crea il tuo spazio
               </Button>

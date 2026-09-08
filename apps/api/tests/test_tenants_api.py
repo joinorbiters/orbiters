@@ -163,6 +163,7 @@ def test_the_root_slug_is_the_root_itself_and_nobody_elses_name(
     try:
         with TestClient(app, base_url="https://testserver") as client:
             assert client.get("/humancraft/health").json() == {"status": "ok"}
+            assert client.get("/humancraft/api/tenants/root").json() == {"slug": "humancraft"}
             # The root's own login answers here, and the cookie is the root's (`Path=/`).
             assert client.get("/humancraft/api/auth/me").status_code == 401
             assert client.get("/api/tenants/humancraft/disponibile").json()["motivo"] == (
@@ -174,3 +175,9 @@ def test_the_root_slug_is_the_root_itself_and_nobody_elses_name(
         registry.dispose()
         reset_session_factories()
         get_settings.cache_clear()
+
+
+def test_the_root_space_endpoint_names_the_root_or_says_there_is_none(
+    spaces_client: TestClient,
+) -> None:
+    assert spaces_client.get("/api/tenants/root").json() == {"slug": None}

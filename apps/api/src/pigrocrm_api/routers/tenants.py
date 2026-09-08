@@ -8,12 +8,27 @@ thing this product means.
 """
 
 from fastapi import APIRouter, Response, status
+from pydantic import BaseModel
 
 from pigrocrm.core.tenants import TenantAvailability, TenantRead, TenantService, TenantSignup
 from pigrocrm_api.deps import SettingsDep, TenantsRegistryDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
 
 router = APIRouter(prefix="/api/tenants", tags=["tenants"], responses=PROBLEM_RESPONSES)
+
+
+class RootSpace(BaseModel):
+    """The root installation's own space name (`PIGROCRM_ROOT_SLUG`), or null when the
+    root answers only without a prefix."""
+
+    slug: str | None
+
+
+@router.get("/root", response_model=RootSpace)
+def root_space(settings: SettingsDep) -> RootSpace:
+    """What the SPA asks under a prefix to learn whether it is the root wearing its own
+    name -- in which case its login may still offer to create a space."""
+    return RootSpace(slug=settings.root_slug or None)
 
 
 @router.get("/{slug}/disponibile", response_model=TenantAvailability)
