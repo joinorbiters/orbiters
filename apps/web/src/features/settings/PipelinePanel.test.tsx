@@ -49,6 +49,12 @@ beforeEach(() => {
   vi.mocked(toast.success).mockReset()
 })
 
+/** The row's actions live behind the «⋯» menu since the 2026-09-08 revision (design
+ *  spec §4); the trigger is labelled per row so a table of them stays unambiguous. */
+async function openRowMenu(nome: string) {
+  await userEvent.click(await screen.findByRole('button', { name: `Azioni per ${nome}` }))
+}
+
 describe('PipelinePanel', () => {
   it('lists the pipeline stages', async () => {
     vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([STAGE])))
@@ -66,10 +72,19 @@ describe('PipelinePanel', () => {
   })
 
   // The brief never deleted a stage at all (this task's fourth named gap).
-  it('offers a way to delete a stage', async () => {
+  it('offers a way to delete a stage, behind the row menu', async () => {
     vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([STAGE])))
     renderPanel()
-    expect(await screen.findByRole('button', { name: /elimina lead/i })).toBeInTheDocument()
+    await openRowMenu('Lead')
+    expect(screen.getByRole('menuitem', { name: 'Elimina' })).toBeInTheDocument()
+  })
+
+  it('reports the stage type as a pill, tinted by the type the backend guarantees', async () => {
+    vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([STAGE])))
+    renderPanel()
+    // `DEAL_STAGE_TONE` keys on `tipo`, not on the (renameable) name, so this stays
+    // right for a tenant that calls its open stage anything at all.
+    expect(await screen.findByText('Aperto')).toHaveAttribute('data-tone', 'muted')
   })
 
   it('does nothing without confirmation', async () => {
@@ -77,7 +92,8 @@ describe('PipelinePanel', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(false)
     renderPanel()
 
-    await userEvent.click(await screen.findByRole('button', { name: /elimina lead/i }))
+    await openRowMenu('Lead')
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Elimina' }))
     expect(api.DELETE).not.toHaveBeenCalled()
   })
 
@@ -87,7 +103,8 @@ describe('PipelinePanel', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     renderPanel()
 
-    await userEvent.click(await screen.findByRole('button', { name: /elimina lead/i }))
+    await openRowMenu('Lead')
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Elimina' }))
 
     await waitFor(() =>
       expect(api.DELETE).toHaveBeenCalledWith(
@@ -123,7 +140,8 @@ describe('PipelinePanel', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     renderPanel()
 
-    await userEvent.click(await screen.findByRole('button', { name: /elimina lead/i }))
+    await openRowMenu('Lead')
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Elimina' }))
 
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(

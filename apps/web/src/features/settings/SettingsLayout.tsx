@@ -1,7 +1,8 @@
 import { Link, Outlet, useRouterState } from '@tanstack/react-router'
-import { ShieldAlert } from 'lucide-react'
+import { Settings, ShieldAlert } from 'lucide-react'
 import { defaultDashboardSearch } from '@/features/dashboard/search'
 import { SETTINGS_TABS } from '@/features/settings/tabs'
+import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useIsAdmin } from '@/lib/auth'
@@ -72,21 +73,29 @@ export function SettingsLayout() {
   const active =
     SETTINGS_TABS.find((tab) => location.pathname.endsWith(tab.value))?.value ?? 'campi'
 
+  // `Tabs` wraps the header rather than sitting under it: the underline tabs of §4 are
+  // *part* of the page's intestazione (`PageHeader`'s own `tabs` slot draws them and
+  // closes them with the rule), and Radix needs the list inside its own root.
+  // `SETTINGS_TABS` stays the single source -- `AppShell` renders the same array as the
+  // sidebar's sub-items, so the two cannot drift.
   return (
-    <div className="p-8">
-      <h1 className="mb-6 text-2xl font-semibold tracking-tight">Impostazioni</h1>
-      <Tabs value={active}>
-        <TabsList>
-          {SETTINGS_TABS.map((tab) => (
-            <TabsTrigger key={tab.value} value={tab.value} asChild>
-              <Link to={`/app/impostazioni/${tab.value}`}>{tab.label}</Link>
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
-      <div className="mt-6">
+    <Tabs value={active}>
+      <PageHeader
+        icon={Settings}
+        title="Impostazioni"
+        tabs={
+          <TabsList>
+            {SETTINGS_TABS.map((tab) => (
+              <TabsTrigger key={tab.value} value={tab.value} asChild>
+                <Link to={`/app/impostazioni/${tab.value}`}>{tab.label}</Link>
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        }
+      />
+      <div className="px-8 py-6">
         <Outlet />
       </div>
-    </div>
+    </Tabs>
   )
 }

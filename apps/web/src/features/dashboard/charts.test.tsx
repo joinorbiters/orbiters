@@ -23,6 +23,21 @@ describe('BigNumber', () => {
     render(<BigNumber label="Deal aperti" value="12" />)
     expect(screen.getByRole('group', { name: /deal aperti/i })).toBeInTheDocument()
   })
+
+  /**
+   * The KPI card of the reference screenshots (design spec §4): a 15px Charcoal label
+   * over a 30px semibold value. Asserted as rendered type sizes rather than as class
+   * names because the spec states sizes, and a card whose value reads at the same
+   * weight as its label is the one thing this shape must never do -- the whole point is
+   * that the figure is what the eye lands on.
+   */
+  it('sets the label and the value at the two sizes the KPI card is specified at', () => {
+    render(<BigNumber label="Deal aperti" value="12" />)
+    expect(screen.getByText('Deal aperti')).toHaveClass('text-[15px]')
+    const value = screen.getByText('12')
+    expect(value).toHaveClass('text-[30px]')
+    expect(value).toHaveClass('font-semibold')
+  })
 })
 
 describe('BarRows', () => {

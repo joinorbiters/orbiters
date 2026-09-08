@@ -1,8 +1,10 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { Plus, Search } from 'lucide-react'
+import { Plus, Search, Users } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { DataTable } from '@/components/DataTable'
+import { FilterRow } from '@/components/FilterRow'
+import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { buildPersonColumns } from '@/features/people/columns'
@@ -12,7 +14,11 @@ import { toProblem, type ProblemDetail } from '@/lib/api'
 import { useCanWrite } from '@/lib/auth'
 import { useEntitySchema } from '@/lib/schema'
 
-function PeoplePage({ initialSearch }: { initialSearch: string }) {
+/**
+ * Exported so `index.test.tsx` can render the list without a router -- the same split
+ * `CustomersPage` makes next door.
+ */
+export function PeoplePage({ initialSearch }: { initialSearch: string }) {
   const navigate = useNavigate()
   const canWrite = useCanWrite()
   const [search, setSearch] = useState(initialSearch)
@@ -30,43 +36,52 @@ function PeoplePage({ initialSearch }: { initialSearch: string }) {
   const columns = buildPersonColumns(schema.data?.custom_fields ?? [])
 
   return (
-    <div className="p-8">
-      <header className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Persone</h1>
-        {canWrite && (
-          <Button
-            onClick={() => {
-              setProblem(null)
-              setOpen(true)
-            }}
-          >
-            <Plus className="mr-2 size-4" />
-            Nuova persona
-          </Button>
-        )}
-      </header>
+    <>
+      <PageHeader
+        icon={Users}
+        title="Persone"
+        actions={
+          canWrite && (
+            <Button
+              onClick={() => {
+                setProblem(null)
+                setOpen(true)
+              }}
+            >
+              <Plus className="mr-2 size-4" />
+              Nuova persona
+            </Button>
+          )
+        }
+      />
 
-      <div className="relative mb-4 max-w-sm">
-        <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          className="pl-9"
-          placeholder="Cerca per nome, cognome o email…"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
+      {/* Search only, like Clienti: a person has no state, and this revision adds no
+          filter a page did not already have. */}
+      <FilterRow>
+        <div className="relative w-full max-w-sm">
+          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            className="pl-9"
+            placeholder="Cerca per nome, cognome o email…"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </div>
+      </FilterRow>
+
+      <div className="px-8 pb-8">
+        <DataTable
+          columns={columns}
+          data={people.data?.items ?? []}
+          isLoading={people.isLoading}
+          isError={people.isError}
+          error={people.error}
+          onRowClick={(row) =>
+            void navigate({ to: '/app/persone/$personId', params: { personId: row.id } })
+          }
+          emptyMessage="Nessuna persona. Creane una per iniziare."
         />
       </div>
-
-      <DataTable
-        columns={columns}
-        data={people.data?.items ?? []}
-        isLoading={people.isLoading}
-        isError={people.isError}
-        error={people.error}
-        onRowClick={(row) =>
-          void navigate({ to: '/app/persone/$personId', params: { personId: row.id } })
-        }
-        emptyMessage="Nessuna persona. Creane una per iniziare."
-      />
 
       <PersonForm
         title="Nuova persona"
@@ -86,7 +101,7 @@ function PeoplePage({ initialSearch }: { initialSearch: string }) {
           })
         }}
       />
-    </div>
+    </>
   )
 }
 

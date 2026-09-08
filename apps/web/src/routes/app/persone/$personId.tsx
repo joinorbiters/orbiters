@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate, useParams } from '@tanstack/react-router'
-import { Pencil, Trash2 } from 'lucide-react'
+import { Pencil, Trash2, Users } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { renderFieldValue } from '@/components/DynamicFieldRenderer'
@@ -109,6 +109,7 @@ export function PersonDetail() {
   return (
     <>
       <EntityDetailLayout
+        icon={Users}
         title={fullName}
         subtitle={person.ruolo ?? 'Persona'}
         entityType="person"

@@ -52,6 +52,12 @@ beforeEach(() => {
   vi.mocked(api.DELETE).mockReset()
 })
 
+/** The row's actions live behind the «⋯» menu since the 2026-09-08 revision (design
+ *  spec §4); the trigger is labelled per row so a table of them stays unambiguous. */
+async function openRowMenu(nome: string) {
+  await userEvent.click(await screen.findByRole('button', { name: `Azioni per ${nome}` }))
+}
+
 describe('TemplatesPanel', () => {
   it('lists templates and reads a page, not a bare array', async () => {
     vi.mocked(api.GET).mockResolvedValue(ok({ items: [TEMPLATE], next_cursor: null }))
@@ -161,14 +167,22 @@ describe('TemplatesPanel', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('nome già in uso')
   })
 
+  it('reports the state as a pill, on the one component every state in the product uses', async () => {
+    vi.mocked(api.GET).mockResolvedValue(
+      ok({ items: [TEMPLATE, { ...TEMPLATE, id: 't2', nome: 'Spenta', attivo: false }], next_cursor: null }),
+    )
+    renderPanel()
+    expect(await screen.findByText('Attivo')).toHaveAttribute('data-tone', 'ink')
+    expect(screen.getByText('Disattivato')).toHaveAttribute('data-tone', 'muted')
+  })
+
   it('deactivates through DELETE and offers the way back', async () => {
     vi.mocked(api.GET).mockResolvedValue(ok({ items: [TEMPLATE], next_cursor: null }))
     vi.mocked(api.DELETE).mockResolvedValue(ok({ ...TEMPLATE, attivo: false }))
     renderPanel()
 
-    await userEvent.click(
-      await screen.findByRole('button', { name: 'Disattiva Consulenza CTO' }),
-    )
+    await openRowMenu('Consulenza CTO')
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Disattiva' }))
     await waitFor(() => expect(api.DELETE).toHaveBeenCalled())
   })
 
@@ -179,7 +193,8 @@ describe('TemplatesPanel', () => {
     vi.mocked(api.POST).mockResolvedValue(ok(TEMPLATE))
     renderPanel()
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Riattiva Consulenza CTO' }))
+    await openRowMenu('Consulenza CTO')
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Riattiva' }))
     await waitFor(() => expect(api.POST).toHaveBeenCalled())
     const [path] = vi.mocked(api.POST).mock.calls[0] as unknown as [string]
     expect(path).toContain('/activate')
@@ -190,7 +205,8 @@ describe('TemplatesPanel', () => {
     vi.mocked(api.POST).mockResolvedValue(ok({ markdown: 'Oggetto: Oggetto' }))
     renderPanel()
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Modifica Consulenza CTO' }))
+    await openRowMenu('Consulenza CTO')
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Modifica' }))
     await userEvent.click(screen.getByRole('button', { name: 'Anteprima' }))
 
     await waitFor(() => expect(api.POST).toHaveBeenCalled())

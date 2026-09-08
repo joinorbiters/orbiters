@@ -1,8 +1,9 @@
 import type { ColumnDef } from '@tanstack/react-table'
-import { Archive, ArchiveRestore, Pencil, Plus } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { Badge } from '@/components/ui/badge'
+import { RowActions } from '@/components/RowActions'
+import { StatusPill } from '@/components/StatusPill'
 import { Button } from '@/components/ui/button'
 import { DataTable, type DataTableFeatures } from '@/components/DataTable'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -205,61 +206,52 @@ export function FieldsPanel() {
     {
       header: 'Stato',
       id: 'archived',
+      // The same pill every state in the product goes through (design spec §4). `ink`
+      // for a field in use, `muted` for one that claims nothing: archiving is
+      // reversible and touches no stored value, so it is not `danger`.
       cell: (info) => (
-        <Badge variant={info.row.original.archived ? 'secondary' : 'default'}>
+        <StatusPill tone={info.row.original.archived ? 'muted' : 'ink'}>
           {info.row.original.archived ? 'Archiviato' : 'Attivo'}
-        </Badge>
+        </StatusPill>
       ),
     },
     {
       header: '',
       id: 'actions',
+      meta: { align: 'right' },
+      // Behind the «⋯» like every other row action (§4), and the labels now say in
+      // words what the archive/restore icons only implied.
+      //
       // Archiving/restoring stay single-click, with no confirm: unlike an
       // irreversible action elsewhere in Settings (a pipeline-stage delete, a
       // token revoke), the other half of this pair is always one more click
-      // away in this same row.
+      // away in this same menu. Not marked destructive for the same reason.
       cell: (info) => {
         const field = info.row.original
         return (
-          <div className="flex justify-end gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={`Modifica ${field.label}`}
-              onClick={() => openEditDialog(field)}
-            >
-              <Pencil className="size-4" />
-            </Button>
-            {field.archived ? (
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={`Ripristina ${field.label}`}
-                onClick={() =>
-                  unarchive.mutate(field.id, {
-                    onSuccess: () => toast.success('Campo ripristinato'),
-                    onError: (error) => toast.error(toProblem(error).detail),
-                  })
-                }
-              >
-                <ArchiveRestore className="size-4" />
-              </Button>
-            ) : (
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={`Archivia ${field.label}`}
-                onClick={() =>
-                  archive.mutate(field.id, {
-                    onSuccess: () => toast.success('Campo archiviato'),
-                    onError: (error) => toast.error(toProblem(error).detail),
-                  })
-                }
-              >
-                <Archive className="size-4" />
-              </Button>
-            )}
-          </div>
+          <RowActions
+            label={`Azioni per ${field.label}`}
+            items={[
+              { label: 'Modifica', onSelect: () => openEditDialog(field) },
+              field.archived
+                ? {
+                    label: 'Ripristina',
+                    onSelect: () =>
+                      unarchive.mutate(field.id, {
+                        onSuccess: () => toast.success('Campo ripristinato'),
+                        onError: (error) => toast.error(toProblem(error).detail),
+                      }),
+                  }
+                : {
+                    label: 'Archivia',
+                    onSelect: () =>
+                      archive.mutate(field.id, {
+                        onSuccess: () => toast.success('Campo archiviato'),
+                        onError: (error) => toast.error(toProblem(error).detail),
+                      }),
+                  },
+            ]}
+          />
         )
       },
     },

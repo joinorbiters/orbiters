@@ -1,4 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
+import { Receipt } from 'lucide-react'
 import { EntityDetailLayout } from '@/components/EntityDetailLayout'
 import { QueryErrorBanner } from '@/components/QueryErrorBanner'
 import { InvoiceActions } from '@/features/invoices/InvoiceActions'
@@ -30,6 +31,7 @@ export function InvoiceDetail() {
 
   return (
     <EntityDetailLayout
+      icon={Receipt}
       title={formatInvoiceNumber(row)}
       subtitle={row.causale ?? undefined}
       entityType="invoice"

@@ -1,7 +1,9 @@
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
-import { LayoutGrid, Search } from 'lucide-react'
+import { Handshake, LayoutGrid, Search } from 'lucide-react'
 import { useState } from 'react'
 import { DataTable } from '@/components/DataTable'
+import { FilterChip, FilterRow } from '@/components/FilterRow'
+import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { buildDealColumns } from '@/features/deals/columns'
@@ -34,7 +36,11 @@ const DRILL_THROUGHS = [
   },
 ] as const
 
-function DealsList({
+/**
+ * Exported so `lista.test.tsx` can render the list without a router; the route
+ * component below is what reads the URL. Same split as `CustomersPage`/`PeoplePage`.
+ */
+export function DealsList({
   initialSearch,
   filters,
 }: {
@@ -53,68 +59,110 @@ function DealsList({
   const columns = buildDealColumns(schema.data?.custom_fields ?? [])
 
   return (
-    <div className="p-8">
-      <header className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Deal — lista</h1>
-        <Button variant="outline" asChild>
-          <Link to="/app/deal">
-            <LayoutGrid className="mr-2 size-4" />
-            Vista Kanban
-          </Link>
-        </Button>
-      </header>
+    <>
+      <PageHeader
+        icon={Handshake}
+        title="Deal"
+        description="La stessa pipeline della board, letta come elenco."
+        actions={
+          <Button variant="outline" asChild>
+            <Link to="/app/deal">
+              <LayoutGrid className="mr-2 size-4" />
+              Vista Kanban
+            </Link>
+          </Button>
+        }
+      />
 
-      <div className="relative mb-4 max-w-sm">
-        <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          className="pl-9"
-          placeholder="Cerca per nome…"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
+      <FilterRow>
+        {/* The two chips are the two drill-throughs, and nothing more: this list has
+            never had a stage filter and the revision does not add one. They navigate
+            instead of setting local state because the predicate is evaluated on the
+            server -- see `DRILL_THROUGHS` above and criterion 2. «Tutti» is on exactly
+            when neither is, so the row also states what is on screen. */}
+        <div role="group" aria-label="Filtra i deal" className="flex flex-wrap items-center gap-2">
+          <FilterChip
+            pressed={active.length === 0}
+            onPress={() => void navigate({ to: '/app/deal/lista', search: {} })}
+          >
+            Tutti
+          </FilterChip>
+          {DRILL_THROUGHS.map((filter) => {
+            const pressed = filters[filter.key] === true
+            return (
+              <FilterChip
+                key={filter.key}
+                pressed={pressed}
+                onPress={() =>
+                  void navigate({
+                    to: '/app/deal/lista',
+                    // One at a time: the two predicates are disjoint by construction (a
+                    // deal cannot be both not-won and won), so carrying the other one
+                    // along would only ever produce an empty list.
+                    search: pressed ? {} : { [filter.key]: true },
+                  })
+                }
+              >
+                {filter.label}
+              </FilterChip>
+            )
+          })}
+        </div>
+
+        <div className="relative w-full max-w-sm">
+          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            className="pl-9"
+            placeholder="Cerca per nome…"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </div>
+      </FilterRow>
+
+      <div className="px-8 pb-8">
+        {/* The chip says which filter is on; this says what it is hiding. A filter
+            applied without also being stated is what this slice calls a partial
+            result. */}
+        {active.length > 0 && (
+          <div className="mb-4 space-y-2">
+            {active.map((filter) => (
+              <p
+                key={filter.key}
+                role="status"
+                className="flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm"
+              >
+                <span>
+                  <strong>{filter.label}</strong> — {filter.explanation}
+                </span>
+              </p>
+            ))}
+          </div>
+        )}
+
+        {deals.data?.truncated && (
+          <p
+            role="status"
+            className="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          >
+            Ci sono troppi deal da mostrare tutti insieme: alcuni potrebbero mancare da questo
+            elenco. Contatta un amministratore.
+          </p>
+        )}
+
+        <DataTable
+          columns={columns}
+          data={deals.data?.items ?? []}
+          isLoading={deals.isLoading}
+          isError={deals.isError}
+          error={deals.error}
+          onRowClick={(row) =>
+            void navigate({ to: '/app/deal/$dealId', params: { dealId: row.id } })
+          }
+          emptyMessage="Nessun deal."
         />
       </div>
-
-      {active.length > 0 && (
-        <div className="mb-4 space-y-2">
-          {active.map((filter) => (
-            <p
-              key={filter.key}
-              role="status"
-              className="flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm"
-            >
-              <span>
-                <strong>{filter.label}</strong> — {filter.explanation}
-              </span>
-              <Button variant="outline" size="sm" asChild>
-                <Link to="/app/deal/lista" search={{}}>
-                  Rimuovi il filtro
-                </Link>
-              </Button>
-            </p>
-          ))}
-        </div>
-      )}
-
-      {deals.data?.truncated && (
-        <p
-          role="status"
-          className="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-        >
-          Ci sono troppi deal da mostrare tutti insieme: alcuni potrebbero mancare da questo
-          elenco. Contatta un amministratore.
-        </p>
-      )}
-
-      <DataTable
-        columns={columns}
-        data={deals.data?.items ?? []}
-        isLoading={deals.isLoading}
-        isError={deals.isError}
-        error={deals.error}
-        onRowClick={(row) => void navigate({ to: '/app/deal/$dealId', params: { dealId: row.id } })}
-        emptyMessage="Nessun deal."
-      />
-    </div>
+    </>
   )
 }
 

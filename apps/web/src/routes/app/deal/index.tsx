@@ -1,7 +1,8 @@
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
-import { List, Plus } from 'lucide-react'
+import { Handshake, List, Plus } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { PageHeader } from '@/components/PageHeader'
 import { QueryErrorBanner } from '@/components/QueryErrorBanner'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -62,53 +63,63 @@ function DealsKanban() {
   const boardUnavailable = stagesUnavailable || dealsUnavailable
 
   return (
-    <div className="p-8">
-      <header className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Deal</h1>
-        <div className="flex gap-2">
-          <Button variant="outline" asChild>
-            <Link to="/app/deal/lista">
-              <List className="mr-2 size-4" />
-              Vista lista
-            </Link>
-          </Button>
-          {canWrite && (
-            <Button
-              onClick={() => {
-                setProblem(null)
-                setOpen(true)
-              }}
-            >
-              <Plus className="mr-2 size-4" />
-              Nuovo deal
+    <>
+      <PageHeader
+        icon={Handshake}
+        title="Deal"
+        // No filter row: the board *is* the state filter -- every deal sits in the
+        // column of its own stage -- so a row of stage chips above it would say twice
+        // what the columns already say.
+        actions={
+          <>
+            <Button variant="outline" asChild>
+              <Link to="/app/deal/lista">
+                <List className="mr-2 size-4" />
+                Vista lista
+              </Link>
             </Button>
-          )}
-        </div>
-      </header>
+            {canWrite && (
+              <Button
+                onClick={() => {
+                  setProblem(null)
+                  setOpen(true)
+                }}
+              >
+                <Plus className="mr-2 size-4" />
+                Nuovo deal
+              </Button>
+            )}
+          </>
+        }
+      />
 
-      {boardUnavailable ? (
-        <QueryErrorBanner error={stagesUnavailable ? stages.error : deals.error} />
-      ) : (
-        <>
-          {deals.data?.truncated && <TruncatedNotice scope="dalla board e dai totali per colonna" />}
+      <div className="px-8 pb-8">
+        {boardUnavailable ? (
+          <QueryErrorBanner error={stagesUnavailable ? stages.error : deals.error} />
+        ) : (
+          <>
+            {deals.data?.truncated && (
+              <TruncatedNotice scope="dalla board e dai totali per colonna" />
+            )}
 
-          <KanbanBoard
-            stages={stages.data ?? []}
-            deals={deals.data?.items ?? []}
-            canDrag={canWrite}
-            onOpen={(dealId) => void navigate({ to: '/app/deal/$dealId', params: { dealId } })}
-            // No per-call `onError` here: `useMoveDeal` itself toasts the
-            // server's message on its own mutation-level `onError`, precisely
-            // so a second drag started before the first one settles cannot
-            // make the first call's callback disappear -- see that hook's own
-            // docstring for the `@tanstack/query-core` mechanics and the live
-            // reproduction (a soft-deleted deal's card, dragged from a stale
-            // board, 404s with "deal <id> not found" and the toast shows
-            // exactly that).
-            onMove={(dealId, stageId) => move.mutate({ dealId, stageId })}
-          />
-        </>
-      )}
+            <KanbanBoard
+              stages={stages.data ?? []}
+              deals={deals.data?.items ?? []}
+              canDrag={canWrite}
+              onOpen={(dealId) => void navigate({ to: '/app/deal/$dealId', params: { dealId } })}
+              // No per-call `onError` here: `useMoveDeal` itself toasts the
+              // server's message on its own mutation-level `onError`, precisely
+              // so a second drag started before the first one settles cannot
+              // make the first call's callback disappear -- see that hook's own
+              // docstring for the `@tanstack/query-core` mechanics and the live
+              // reproduction (a soft-deleted deal's card, dragged from a stale
+              // board, 404s with "deal <id> not found" and the toast shows
+              // exactly that).
+              onMove={(dealId, stageId) => move.mutate({ dealId, stageId })}
+            />
+          </>
+        )}
+      </div>
 
       <DealForm
         title="Nuovo deal"
@@ -128,7 +139,7 @@ function DealsKanban() {
           })
         }}
       />
-    </div>
+    </>
   )
 }
 

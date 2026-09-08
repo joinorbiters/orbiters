@@ -38,10 +38,13 @@ const BASE_PERSON: Person = {
 }
 
 describe('buildPersonColumns', () => {
-  it('shows the columns you need to call someone', () => {
+  /** «Cognome» is gone since the 2026-09-08 revision: the first cell is an `EntityCell`
+   *  that already prints the full name, so a column repeating the surname next to it
+   *  spent width on a word the reader had just read. «Azienda» stays -- it is a link,
+   *  and the sub-line under the name is not. */
+  it('shows the columns you need to call someone, and never the surname twice', () => {
     expect(buildPersonColumns([]).map((column) => column.header)).toEqual([
       'Nome',
-      'Cognome',
       'Azienda',
       'Ruolo',
       'Email',
@@ -57,22 +60,25 @@ describe('buildPersonColumns', () => {
   })
 
   it('does not add columns for archived fields, which are simply not returned', () => {
-    expect(buildPersonColumns([])).toHaveLength(6)
+    expect(buildPersonColumns([])).toHaveLength(5)
   })
 
+  // `ruolo` stands in for every native text column now that «Cognome» is gone: the dash
+  // is `displayNative`'s contract and each of the three spellings of "nothing here" has
+  // to reach it.
   it('renders a null native field as the empty dash', () => {
-    const [, cognome] = buildPersonColumns([])
-    expect(cellValue(cognome!, { ...BASE_PERSON, cognome: null })).toBe('—')
+    const [, , ruolo] = buildPersonColumns([])
+    expect(cellValue(ruolo!, { ...BASE_PERSON, ruolo: null })).toBe('—')
   })
 
   it('renders an explicitly-cleared ("") native field as the same dash, never a blank cell', () => {
-    const [, cognome] = buildPersonColumns([])
-    expect(cellValue(cognome!, { ...BASE_PERSON, cognome: '' })).toBe('—')
+    const [, , ruolo] = buildPersonColumns([])
+    expect(cellValue(ruolo!, { ...BASE_PERSON, ruolo: '' })).toBe('—')
   })
 
   it('renders a present native field as itself', () => {
-    const [, cognome] = buildPersonColumns([])
-    expect(cellValue(cognome!, { ...BASE_PERSON, cognome: 'Rossi' })).toBe('Rossi')
+    const [, , ruolo] = buildPersonColumns([])
+    expect(cellValue(ruolo!, { ...BASE_PERSON, ruolo: 'CTO' })).toBe('CTO')
   })
 
   /** The table is one of the two read surfaces the "absent checkbox reads No" rule
@@ -88,7 +94,7 @@ describe('buildPersonColumns', () => {
       required: false,
       options: [],
     }
-    const [, , , , , , checkbox] = buildPersonColumns([disponibile])
+    const [, , , , , checkbox] = buildPersonColumns([disponibile])
     expect(cellValue(checkbox!, { ...BASE_PERSON, custom_fields: {} })).toBe('No')
     expect(cellValue(checkbox!, { ...BASE_PERSON, custom_fields: { disponibile: false } })).toBe('No')
     expect(cellValue(checkbox!, { ...BASE_PERSON, custom_fields: { disponibile: true } })).toBe('Sì')
@@ -102,7 +108,7 @@ describe('buildPersonColumns', () => {
       required: false,
       options: [],
     }
-    const [, , , , , , score] = buildPersonColumns([punteggio])
+    const [, , , , , score] = buildPersonColumns([punteggio])
     expect(cellValue(score!, { ...BASE_PERSON, custom_fields: { punteggio: 0 } })).toBe('0')
   })
 })
@@ -135,12 +141,12 @@ describe("the person's company", () => {
   }
 
   it('reads the company name straight from the row, with no second request', () => {
-    const [, , azienda] = buildPersonColumns([])
+    const [, azienda] = buildPersonColumns([])
     expect(cellValue(azienda!, WITH_COMPANY)).toBe('ACME Srl')
   })
 
   it('links the company to its customer page', () => {
-    const [, , azienda] = buildPersonColumns([])
+    const [, azienda] = buildPersonColumns([])
     const rendered = renderedCell(azienda!, WITH_COMPANY)
     expect(isValidElement(rendered)).toBe(true)
     const props = (rendered as { props: Record<string, unknown> }).props
@@ -153,7 +159,7 @@ describe("the person's company", () => {
    *  link that lets the click through would navigate twice and land on the person --
    *  the one place this cell must never go. */
   it('keeps the row click from firing alongside the link', () => {
-    const [, , azienda] = buildPersonColumns([])
+    const [, azienda] = buildPersonColumns([])
     const props = (renderedCell(azienda!, WITH_COMPANY) as { props: Record<string, unknown> })
       .props
     const stopPropagation = vi.fn()
@@ -162,7 +168,7 @@ describe("the person's company", () => {
   })
 
   it('shows the empty dash, and no link, for a person with no company', () => {
-    const [, , azienda] = buildPersonColumns([])
+    const [, azienda] = buildPersonColumns([])
     expect(cellValue(azienda!, BASE_PERSON)).toBe('—')
     expect(renderedCell(azienda!, BASE_PERSON)).toBe('—')
   })
@@ -171,7 +177,7 @@ describe("the person's company", () => {
    *  API build, or a cached response from before this field existed) reads as the
    *  same dash rather than as an empty link with no text to click. */
   it('shows the dash when the id is there but the name is not', () => {
-    const [, , azienda] = buildPersonColumns([])
+    const [, azienda] = buildPersonColumns([])
     const nameless: Person = { ...BASE_PERSON, customer_id: 'c1' }
     expect(renderedCell(azienda!, nameless)).toBe('—')
   })

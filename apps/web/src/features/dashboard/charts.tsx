@@ -63,13 +63,23 @@ export function BigNumber({
       {tone === 'accent' && (
         <div aria-hidden="true" className="h-1" style={{ backgroundColor: toneColor(1) }} />
       )}
-      <div className={cn('p-4', tone === 'accent' && 'pt-3')}>
-        <p className="text-sm text-muted-foreground">{label}</p>
+      <div className={cn('p-5', tone === 'accent' && 'pt-4')}>
+        {/* 15px Charcoal over a 30px semibold figure (design spec §4). The two sizes are
+            the card: a label the same size as the value gives the eye nothing to land
+            on, which is what the reference screenshots get right. */}
+        <p className="text-[15px] leading-snug text-muted-foreground">{label}</p>
         {/* Proportional figures, not `tabular-nums`: at this size tabular digits give
             every glyph the width of a `0` and a short value reads loose. Tabular figures
             belong in the columns below, where numbers have to line up. */}
-        <p className="mt-1 text-2xl font-semibold">{value}</p>
-        {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
+        <p className="mt-1.5 text-[30px] font-semibold leading-tight tracking-tight">{value}</p>
+        {/* The card's subtitle. §4 names «vs periodo precedente» as what goes here, and
+            no dashboard endpoint returns a previous period to compare against today --
+            so `hint` carries whatever the tab can actually say (what a figure is made
+            of, what it excludes) and nothing pretends to a comparison that does not
+            exist. The variation badge the spec pairs with it is absent for the same
+            reason: a pill reading «+0%» on a number nobody compared is worse than no
+            pill. */}
+        {hint && <p className="mt-1.5 text-xs text-muted-foreground">{hint}</p>}
       </div>
     </div>
   )
