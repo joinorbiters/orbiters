@@ -1,8 +1,8 @@
-"""Proof that the repository-root socket guard is live, and that nothing opts out.
+"""Proof that the project's socket guard is live, and that nothing opts out.
 
-The guard itself is in `conftest.py` at the repository root -- see its docstring for
-why it is there and not in a test root. These two tests exist because a guard nobody
-verifies is a comment: `pytest_configure` running is not the same fact as
+The guard itself is in `conftest.py` at the root of this project -- see its docstring
+for why it is there and not in a test root. These two tests exist because a guard
+nobody verifies is a comment: `pytest_configure` running is not the same fact as
 `socket.connect` actually refusing, and the two would drift apart silently the first
 time somebody reorganised the plugin loading.
 """
@@ -12,11 +12,16 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+# pytest's configuration is at the monorepo root, two levels above this project, and
+# names every project's test roots. See docs/architecture.md for why it is not
+# per-project: `testpaths` resolves against the working directory rather than against
+# the file it is written in.
+MONOREPO_ROOT = PROJECT_ROOT.parents[1]
 TEST_ROOTS = (
-    REPO_ROOT / "packages" / "core" / "tests",
-    REPO_ROOT / "apps" / "api" / "tests",
-    REPO_ROOT / "apps" / "mcp" / "tests",
+    PROJECT_ROOT / "packages" / "core" / "tests",
+    PROJECT_ROOT / "apps" / "api" / "tests",
+    PROJECT_ROOT / "apps" / "mcp" / "tests",
 )
 
 
@@ -75,7 +80,7 @@ def test_no_test_in_this_repository_skips_itself_when_a_credential_is_absent() -
             if "skipif" not in source:
                 continue
             if any(marker in source for marker in ("environ", "getenv", "PIGROCRM_")):
-                offenders.append(str(path.relative_to(REPO_ROOT)))
+                offenders.append(str(path.relative_to(PROJECT_ROOT)))
     assert offenders == [], (
         "these tests skip themselves based on the environment, which is how a suite "
         f"stays green without ever running: {offenders}"
@@ -86,9 +91,17 @@ def test_the_three_test_roots_this_guard_claims_to_cover_all_exist() -> None:
     """The check above walks three directories by name. If a root were renamed or
     added, it would quietly walk fewer of them and keep passing -- so the set is
     asserted against `testpaths` rather than trusted.
+
+    `testpaths` is monorepo-wide and will name other projects' roots as they arrive,
+    so the comparison is against the part of it that belongs to this project. An
+    equality over the whole list would turn every future project into a failure here,
+    which is the kind of assertion people delete rather than fix.
     """
     import tomllib
 
-    config = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    declared = {REPO_ROOT / path for path in config["tool"]["pytest"]["ini_options"]["testpaths"]}
-    assert declared == set(TEST_ROOTS)
+    config = tomllib.loads((MONOREPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    declared = {
+        MONOREPO_ROOT / path for path in config["tool"]["pytest"]["ini_options"]["testpaths"]
+    }
+    mine = {path for path in declared if path.is_relative_to(PROJECT_ROOT)}
+    assert mine == set(TEST_ROOTS)
