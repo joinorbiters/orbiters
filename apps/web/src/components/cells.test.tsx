@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { DateCell, EntityCell, MoneyCell } from './cells'
+import { DateCell, EntityCell, MoneyCell, NumberCell } from './cells'
 
 describe('DateCell', () => {
   it('renders an ISO date in Italian day/month/year order', () => {
@@ -36,6 +36,40 @@ describe('DateCell', () => {
     const { container } = render(<DateCell value="" />)
     expect(screen.getByText('—')).toBeInTheDocument()
     expect(container.querySelector('svg')).toBeNull()
+  })
+
+  /** A column where "nothing here" has a better word than the dash: a token that has
+   *  never been used reads «mai», which says something the dash does not. */
+  it('lets a column name its own word for an absent date', () => {
+    render(<DateCell value={null} absent="mai" />)
+    expect(screen.getByText('mai')).toBeInTheDocument()
+    expect(screen.queryByText('—')).not.toBeInTheDocument()
+  })
+
+  /**
+   * Two wire shapes, one cell, and the rule is "show exactly the precision the value
+   * carries". A timestamp is a real instant, so it keeps its time of day -- on a token
+   * the hour is the answer, not decoration -- and `new Date` is the correct parse for it
+   * precisely because there is no calendar day to lose.
+   */
+  it('keeps the time of day when the value is a timestamp rather than a calendar day', () => {
+    render(<DateCell value="2026-09-08T10:30:00Z" />)
+    expect(screen.getByText(/set 2026/)).toBeInTheDocument()
+    expect(screen.getByText(/\d{2}:\d{2}/)).toBeInTheDocument()
+  })
+
+  it('shows a value that is no date at all as itself, never as «Invalid Date»', () => {
+    render(<DateCell value="non-una-data" />)
+    expect(screen.getByText('non-una-data')).toBeInTheDocument()
+  })
+})
+
+describe('NumberCell', () => {
+  it('aligns a figure that is not money the same way, on tabular digits', () => {
+    render(<NumberCell>7,5</NumberCell>)
+    const cell = screen.getByText('7,5')
+    expect(cell.className).toContain('text-right')
+    expect(cell.className).toContain('tabular-nums')
   })
 })
 
@@ -92,6 +126,11 @@ describe('EntityCell', () => {
   it('shows no second line at all when there is nothing to put on it', () => {
     render(<EntityCell name="Mario Rossi" sub={null} />)
     expect(screen.queryByText('—')).not.toBeInTheDocument()
+  })
+
+  it('treats an explicitly-cleared ("") sub as nothing to put on a second line', () => {
+    const { container } = render(<EntityCell name="Mario Rossi" sub="" />)
+    expect(container.querySelectorAll('.text-muted-foreground')).toHaveLength(0)
   })
 
   /** A record with no usable name still has to render a row: the em dash is the same

@@ -131,3 +131,12 @@ describe('previewImponibile', () => {
     expect(previewImponibile([{ quantita: '0.5', prezzo_unitario: '0.05' }])).toBe('0.03')
   })
 })
+
+describe('formatDate on an empty value', () => {
+  /** The accessor and `DateCell` render the same column: they have to agree on what
+   *  «nothing» looks like, and the em dash is the answer the rest of the product gives. */
+  it('reads an explicitly-cleared ("") date as absent, exactly as null is', () => {
+    expect(formatDate('')).toBe('—')
+    expect(formatDate(null)).toBe('—')
+  })
+})

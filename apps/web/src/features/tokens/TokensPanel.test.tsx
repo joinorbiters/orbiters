@@ -275,4 +275,51 @@ describe('TokensPanel', () => {
       expect(screen.queryByRole('button', { name: /revoca claude/i })).not.toBeInTheDocument()
     })
   })
+
+  /**
+   * The table reads like every other table in the product since the design revision
+   * (spec §4): the state is a round pill with a coloured dot, not the filled badge this
+   * column used to carry, and a date wears the calendar icon.
+   */
+  describe('how the table reads', () => {
+    it('shows an active token as a settled pill, not a filled badge', async () => {
+      vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([EXISTING_TOKEN])))
+      renderPanel()
+      const pill = (await screen.findByText('Attivo')).closest('[data-slot="badge"]')
+      expect(pill).toHaveAttribute('data-variant', 'pill')
+      expect(pill).toHaveAttribute('data-tone', 'ink')
+    })
+
+    /** Revoking is something the owner did on purpose. A list of old tokens in the
+     *  destructive tint would say something went wrong when nothing did. */
+    it('keeps a revoked token quiet rather than tinting it as a warning', async () => {
+      vi.mocked(api.GET).mockReturnValue(
+        Promise.resolve(ok([{ ...EXISTING_TOKEN, revoked_at: '2026-08-05T00:00:00Z' }])),
+      )
+      renderPanel()
+
+      const pill = (await screen.findByText('Revocato')).closest('[data-slot="badge"]')
+      expect(pill).toHaveAttribute('data-tone', 'muted')
+    })
+
+    /** «mai» and not the em dash: a token that has never been used is a fact about the
+     *  token, and it is the fact somebody checks before revoking one. */
+    it('says a token has never been used in words, with no calendar icon', async () => {
+      vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([EXISTING_TOKEN])))
+      renderPanel()
+      const cell = (await screen.findByText('mai')).closest('td')
+      expect(cell?.querySelector('svg')).toBeNull()
+    })
+
+    it('puts a calendar icon before a real last-used moment, and keeps its time of day', async () => {
+      vi.mocked(api.GET).mockReturnValue(
+        Promise.resolve(ok([{ ...EXISTING_TOKEN, last_used_at: '2026-08-06T10:30:00Z' }])),
+      )
+      renderPanel()
+
+      const cell = (await screen.findByText(/ago 2026/)).closest('td')
+      expect(cell?.querySelector('svg')).not.toBeNull()
+      expect(cell?.textContent).toMatch(/\d{2}:\d{2}/)
+    })
+  })
 })

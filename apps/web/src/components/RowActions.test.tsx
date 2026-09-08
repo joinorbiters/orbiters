@@ -82,8 +82,10 @@ describe('RowActions', () => {
   })
 
   /** `DataTable` also activates a row on Enter and Space so the keyboard can reach it.
-   *  Both keys open this menu, which must not double as "open the record". */
-  it('keeps Enter and Space on the trigger from activating the row as well', async () => {
+   *  Both keys open this menu, which must not double as "open the record" -- so each
+   *  case asserts both halves: the menu opened, *and* the row stayed asleep. Asserting
+   *  only the second half would go green if keyboard opening broke altogether. */
+  it('opens on Enter without activating the row underneath', async () => {
     const rowKeyDown = vi.fn()
     render(
       <div onKeyDown={rowKeyDown}>
@@ -92,6 +94,49 @@ describe('RowActions', () => {
     )
     screen.getByRole('button', { name: 'Azioni' }).focus()
     await userEvent.keyboard('{Enter}')
+    expect(screen.getByRole('menu')).toBeInTheDocument()
     expect(rowKeyDown).not.toHaveBeenCalled()
+  })
+
+  it('opens on Space without activating the row underneath', async () => {
+    const rowKeyDown = vi.fn()
+    render(
+      <div onKeyDown={rowKeyDown}>
+        <RowActions items={[{ label: 'Apri', onSelect: vi.fn() }]} />
+      </div>,
+    )
+    screen.getByRole('button', { name: 'Azioni' }).focus()
+    await userEvent.keyboard('{ }')
+    expect(screen.getByRole('menu')).toBeInTheDocument()
+    expect(rowKeyDown).not.toHaveBeenCalled()
+  })
+
+  /**
+   * The whole path this component's docstring promises, from the keyboard: open, walk to
+   * an item, run it -- and none of it reaching the row. This is the case the React portal
+   * makes non-obvious, because Radix's own activation of an item dispatches a click that
+   * bubbles up the React tree from outside the row's DOM subtree.
+   */
+  it('runs an action chosen entirely from the keyboard, once, and never wakes the row', async () => {
+    const rowClick = vi.fn()
+    const apri = vi.fn()
+    /* The row activates on Enter, on Space and on a click, and on nothing else (see
+       `DataTable`'s `handleRowKeyDown`). So the invariant to hold is not "no key ever
+       reaches the row" -- an arrow pressed inside an open menu bubbling past it is
+       harmless, and Radix's own roving focus needs the arrows to keep bubbling inside
+       the portal -- but "none of the keys the row acts on reaches it". */
+    const rowKeys: string[] = []
+    render(
+      <div onClick={rowClick} onKeyDown={(event) => rowKeys.push(event.key)}>
+        <RowActions items={[{ label: 'Apri', onSelect: apri }]} />
+      </div>,
+    )
+    screen.getByRole('button', { name: 'Azioni' }).focus()
+    await userEvent.keyboard('{Enter}')
+    await userEvent.keyboard('{ArrowDown}{Enter}')
+    expect(apri).toHaveBeenCalledOnce()
+    expect(rowClick).not.toHaveBeenCalled()
+    expect(rowKeys).not.toContain('Enter')
+    expect(rowKeys).not.toContain(' ')
   })
 })

@@ -1,34 +1,62 @@
 import { Calendar } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { formatIsoDateItalian } from '@/lib/dates'
-import { cn } from '@/lib/utils'
 
 /** The same em dash every absent value in this product renders as -- `displayNative`
  *  in the three feature column files, `formatMoney`/`formatDate` in the formatters. */
 const EMPTY = '—'
 
+/** A wire value that is a calendar day and nothing more. */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
+
+/** Day, month, year and the time of day, for a value that carries one. Matches the
+ *  formatter `features/tokens/TokensPanel.tsx` already used for «Ultimo uso»: on a
+ *  token the *hour* is the answer, not decoration. */
+const instantFormatter = new Intl.DateTimeFormat('it-IT', {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+})
+
+/**
+ * A date shown with exactly as much precision as the wire value carries, which is the
+ * one rule that lets both shapes the API sends through the same cell.
+ *
+ * A bare `YYYY-MM-DD` goes through `lib/dates.ts` -- the one module that knows
+ * `new Date('2026-01-01')` is UTC midnight and formats a day early anywhere behind
+ * Greenwich -- and renders as `gg/mm/aaaa`. A timestamp is a real instant, so
+ * `new Date` is the *correct* parse for it (there is no calendar day to lose) and it
+ * keeps its time of day. Anything that parses as neither is returned untouched rather
+ * than rendered as `Invalid Date`.
+ */
+function italianDate(value: string): string {
+  if (DATE_ONLY.test(value)) return formatIsoDateItalian(value)
+  const instant = new Date(value)
+  if (Number.isNaN(instant.getTime())) return value
+  return instantFormatter.format(instant)
+}
+
 /**
  * A date, with the small calendar icon the reference puts before every one (design
  * spec §4).
  *
- * Takes the API's own `YYYY-MM-DD` string, not a pre-formatted one, and goes through
- * `lib/dates.ts` -- the one module that knows that `new Date('2026-01-01')` is UTC
- * midnight and formats a day early anywhere behind UTC. Every date column in the
- * product already formatted through an equivalent of it (`formatIsoDateItalian` in
- * deals/costs/solleciti, its twin in `features/invoices/format.ts`), so the rendered
- * string is unchanged by this cell; what changes is that the icon exists and that
- * "absent" is one decision instead of four.
+ * Takes the API's own string, not a pre-formatted one, so that "how a date is written"
+ * and "what an absent date looks like" are each decided once instead of once per table.
+ * Every date column in the product already formatted through an equivalent of
+ * `italianDate` above, so the rendered string is unchanged by this cell; what changes is
+ * that the icon exists.
  *
  * An absent date carries no icon: a calendar beside a dash claims there is a date.
  * `''` counts as absent for the same reason `displayNative` treats it so -- a cleared
- * native column can hold either spelling.
+ * native column can hold either spelling. `absent` overrides the em dash for the columns
+ * where "nothing here" has a better word: a token that has never been used reads «mai»,
+ * which says something the dash does not.
  */
-export function DateCell({ value }: { value: string | null }) {
-  if (value === null || value === '') return <span className="text-muted-foreground">{EMPTY}</span>
+export function DateCell({ value, absent = EMPTY }: { value: string | null; absent?: string }) {
+  if (value === null || value === '') return <span className="text-muted-foreground">{absent}</span>
   return (
     <span className="inline-flex items-center gap-1.5">
       <Calendar aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-      {formatIsoDateItalian(value)}
+      {italianDate(value)}
     </span>
   )
 }
@@ -49,8 +77,21 @@ export function DateCell({ value }: { value: string | null }) {
  * the digits: see `DataTableColumnMeta`. This class is what keeps the figure hard right
  * inside the cell even when the column is wider than the number.
  */
-export function MoneyCell({ children, className }: { children: ReactNode; className?: string }) {
-  return <span className={cn('block text-right tabular-nums', className)}>{children}</span>
+export function MoneyCell({ children }: { children: ReactNode }) {
+  return <span className="block text-right tabular-nums">{children}</span>
+}
+
+/**
+ * The same alignment for a figure that is not money: hours, a day count, a percentage.
+ *
+ * Identical to `MoneyCell` by construction and deliberately not the same component: a
+ * column of hours is not a column of euros, and the day somebody adds a currency symbol
+ * or a cent-rounding rule to `MoneyCell` is the day a timesheet would silently inherit
+ * it. `tabular-nums` is what actually makes the digits line up -- `text-right` alone
+ * lines up the last character, which is not the same thing in a proportional font.
+ */
+export function NumberCell({ children }: { children: ReactNode }) {
+  return <span className="block text-right tabular-nums">{children}</span>
 }
 
 /**
@@ -99,7 +140,7 @@ export function EntityCell({ name, sub }: { name: string; sub?: string | null })
       </span>
       <span className="flex min-w-0 flex-col leading-tight">
         <span className="truncate font-medium">{label}</span>
-        {sub !== null && sub !== undefined && sub !== '' && sub !== EMPTY ? (
+        {sub !== null && sub !== undefined && sub !== '' ? (
           <span className="truncate text-xs text-muted-foreground">{sub}</span>
         ) : null}
       </span>

@@ -138,7 +138,7 @@ export function DocumentsTab({ owner }: { owner: DocumentOwner }) {
                 /* The document *type* stays a plain badge -- it is a category, not a
                    state -- while the offer's state reads as the same dotted pill every
                    other state in the product does (design spec §4). */
-                <StatusPill tone={OFFER_STATE_TONE[document.stato as OfferState] ?? 'muted'}>
+                <StatusPill tone={OFFER_STATE_TONE[document.stato as OfferState]}>
                   {OFFER_STATE_LABELS[document.stato as OfferState] ?? document.stato}
                 </StatusPill>
               )}

@@ -63,8 +63,11 @@ export const PAYMENT_STATE_LABELS: Record<StatoPagamento, string> = {
 
 /**
  * The tone each fiscal state reads as in a `StatusPill` (design spec §4). Next to the
- * labels, and a total `Record`, so a state added to `STATO_TRANSITIONS` on the server
- * fails to compile here rather than rendering as a default nobody chose.
+ * labels, and a total `Record`, so a state added to `InvoiceStato` fails to compile here
+ * rather than rendering as a default nobody chose. Note what that does and does not buy:
+ * `InvoiceStato` is a union written by hand a few lines above, not a generated type, so
+ * the compile breaks when somebody widens *it* -- adding a state to `STATO_TRANSITIONS`
+ * on the server does not by itself reach this file.
  *
  * `emessa` and `confermata` are settled: a number is assigned, or a proforma is ready to
  * become one, and neither is a problem to be looked at. `bozza` and `consumata` are

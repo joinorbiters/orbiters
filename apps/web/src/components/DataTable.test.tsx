@@ -48,6 +48,17 @@ describe('DataTable', () => {
     expect(screen.queryByText('Nessun risultato.')).not.toBeInTheDocument()
   })
 
+  /** A different shape, deliberately -- but not a different *size*: bars shorter than
+   *  the rows they stand in for, in no container, made the table jump the moment the
+   *  request landed. */
+  it('loads inside the same container as the table, at the height of a real row', () => {
+    render(<DataTable columns={COLUMNS} data={[]} isLoading />)
+    const container = screen.getByRole('status')
+    expect(container.className).toContain('rounded-xl')
+    expect(container.className).toContain('border-border')
+    expect(container.querySelector('.h-14')).not.toBeNull()
+  })
+
   it('shows an honest empty state -- the full table chrome, one row saying so -- once loading is over', () => {
     render(<DataTable columns={COLUMNS} data={[]} />)
     expect(screen.getByRole('table')).toBeInTheDocument()
@@ -181,10 +192,10 @@ describe('DataTable column meta', () => {
 describe('the table container', () => {
   /** Design spec §4: the table lives in a white rounded container with a hairline
    *  border, and nothing may bleed out of its rounded corners. */
-  it('is a rounded, hairline-bordered card that clips its own corners', () => {
+  it('is a rounded, hairline-bordered card that clips its own corners, at the radius the spec names', () => {
     render(<DataTable columns={COLUMNS} data={DATA} />)
     const container = screen.getByRole('table').closest('[data-slot="data-table"]')
-    expect(container?.className).toContain('rounded-2xl')
+    expect(container?.className).toContain('rounded-xl')
     expect(container?.className).toContain('border-border')
     expect(container?.className).toContain('bg-card')
     expect(container?.className).toContain('overflow-hidden')

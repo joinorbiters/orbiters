@@ -4,8 +4,19 @@ import { describe, expect, it } from 'vitest'
 import { buildCostColumns } from './columns'
 import type { Cost, CostCategory } from './queries'
 
+/* Written out in full rather than cast: a double cast switches the type check off, so
+   the day `CostCategory` grows a required field this fixture would keep compiling and
+   say nothing. The column reads only `id` and `nome`; the rest costs four lines. */
 const CATEGORIES: CostCategory[] = [
-  { id: 'cat-1', nome: 'Consulenze', archiviata: false } as unknown as CostCategory,
+  {
+    id: 'cat-1',
+    nome: 'Consulenze',
+    posizione: 0,
+    code: null,
+    archiviata: false,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+  },
 ]
 
 const COST: Cost = {
