@@ -79,16 +79,28 @@ def test_a_multi_line_description_keeps_its_newlines_unescaped(
 
 
 def test_a_future_date_is_refused_but_back_dating_is_not(
-    db_session: Session, seeded_deal_id: UUID, seeded_user_id: UUID
+    db_session: Session,
+    seeded_deal_id: UUID,
+    seeded_user_id: UUID,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """§6.3. Back-dating with **no year floor**, unlike slice 3's `data_emissione`: here
     you declare when work was done, and a consultant logs Monday on Friday and closes
     December at the end of January. A future hour is not data, it is a forecast, and
-    this slice makes no forecasts."""
+    this slice makes no forecasts.
+
+    "Tomorrow" is taken from the product's own clock, frozen, and not from
+    `date.today()`. The service compares against `today_local()`, so on a host running
+    in UTC -- every CI runner, and `Dockerfile.api` pins no `TZ` -- the two disagree for
+    the first hours of each Italian day and `date.today() + 1` is merely *today* in
+    Italy, which is legal and is not refused. The test then failed for a reason that has
+    nothing to do with the rule it is checking, at 01:02 Rome time on 2026-09-08.
+    """
+    congela(monkeypatch, timetracking_service_module)
     service = TimeEntryService(db_session)
     _create(service, seeded_deal_id, seeded_user_id, data=date(2019, 7, 1))
     with pytest.raises(ValidationFailed) as excinfo:
-        _create(service, seeded_deal_id, seeded_user_id, data=date.today() + timedelta(days=1))
+        _create(service, seeded_deal_id, seeded_user_id, data=OGGI_IN_ITALIA + timedelta(days=1))
     assert excinfo.value.details["field"] == "data"
 
 

@@ -73,6 +73,7 @@ commit, never from one.
 
 from typing import Any
 
+import pytest
 from corpus import REFERENCE, build_corpus
 from sqlalchemy import ColumnElement, or_, select, text
 from sqlalchemy.orm import InstrumentedAttribute, Session
@@ -357,6 +358,7 @@ def test_a_two_character_pattern_degrades_the_index_to_a_full_scan(db_session: S
     )
 
 
+@pytest.mark.planner
 def test_the_planner_left_alone_still_prefers_a_sequential_scan_at_this_scale(
     db_session: Session,
 ) -> None:

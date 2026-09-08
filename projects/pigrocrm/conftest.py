@@ -1,4 +1,4 @@
-"""No test in this repository may open a socket to anything but this machine.
+"""No test in this project may open a socket to anything but this machine.
 
 A suite that skips when credentials are absent proves nothing: it is green on a
 developer's laptop, green in CI, and has never executed the code it claims to cover.
@@ -8,8 +8,8 @@ classification -- runs for real without a network. A socket opening during the s
 therefore means something bypassed the seam, and that is exactly the failure that must
 not happen quietly.
 
-So it is enforced rather than agreed. This file lives at the repository root, not in
-one test root's `conftest.py`, because the rule is about the *suite*: an autouse
+So it is enforced rather than agreed. This file lives at the root of this project, not
+in one test root's `conftest.py`, because the rule is about the *suite*: an autouse
 fixture is scoped to the directory it is declared in, and a guard that covered
 `packages/core/tests` while `apps/api/tests` and `apps/mcp/tests` went unwatched would
 be a guarantee with two holes in it.

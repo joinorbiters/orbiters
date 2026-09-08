@@ -28,16 +28,32 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=ghcr.io/astral-sh/uv:0.9.24 /uv /usr/local/bin/uv
 
 WORKDIR /app
+# The build context is the repository root, not this directory (see the `context:`
+# key in docker-compose.yml). It has to be: the uv workspace root -- pyproject.toml
+# and the one uv.lock shared by every Python project in the monorepo -- lives one
+# level above this project. The image mirrors the repository's own layout, so every
+# relative path inside the project keeps meaning in the container exactly what it
+# means in a checkout.
 COPY pyproject.toml uv.lock ./
-COPY packages/core/pyproject.toml packages/core/
-COPY apps/api/pyproject.toml apps/api/
-COPY apps/mcp/pyproject.toml apps/mcp/
-RUN uv sync --frozen --no-dev --no-install-project
+COPY projects/pigrocrm/packages/core/pyproject.toml projects/pigrocrm/packages/core/
+COPY projects/pigrocrm/apps/api/pyproject.toml projects/pigrocrm/apps/api/
+COPY projects/pigrocrm/apps/mcp/pyproject.toml projects/pigrocrm/apps/mcp/
+# `--package` twice, rather than syncing the whole workspace: this image gets this
+# project's dependency closure and not every Python project's. `pigrocrm-mcp` is here
+# on purpose -- the MCP server ships inside the API image and is run on demand, see
+# the comment at the top of docker-compose.yml.
+#
+# Adding a Python package to the workspace adds a member uv expects to find in this
+# build context too. When that happens this build fails loudly with "Workspace member
+# ... is missing a pyproject.toml", naming it, and the fix is one more COPY line
+# above. Loud is the point: the alternative -- copying the whole tree before
+# resolving -- would silently give up the dependency layer cache instead.
+RUN uv sync --frozen --no-dev --no-install-workspace --package pigrocrm-api --package pigrocrm-mcp
 
-COPY packages ./packages
-COPY apps/api ./apps/api
-COPY apps/mcp ./apps/mcp
-RUN uv sync --frozen --no-dev
+COPY projects/pigrocrm/packages ./projects/pigrocrm/packages
+COPY projects/pigrocrm/apps/api ./projects/pigrocrm/apps/api
+COPY projects/pigrocrm/apps/mcp ./projects/pigrocrm/apps/mcp
+RUN uv sync --frozen --no-dev --package pigrocrm-api --package pigrocrm-mcp
 
 EXPOSE 8000
 # Migrations run at start-up: one instance, so there is no concurrent-migration risk.
@@ -55,4 +71,4 @@ EXPOSE 8000
 # no route to PyPI, or one where it is slow, this is the difference between the
 # container starting and not. `--no-sync` makes uv trust the image's own venv
 # exactly as built and skip that check entirely.
-CMD ["sh", "-c", "cd packages/core && uv run --no-sync alembic upgrade head && cd /app && uv run --no-sync uvicorn pigrocrm_api.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "cd projects/pigrocrm/packages/core && uv run --no-sync alembic upgrade head && cd /app && uv run --no-sync uvicorn pigrocrm_api.main:app --host 0.0.0.0 --port 8000"]
