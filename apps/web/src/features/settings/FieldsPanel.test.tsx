@@ -96,6 +96,16 @@ describe('FieldsPanel', () => {
    * field is not merely fetched but actually shown, distinguishably, with a way
    * back.
    */
+  it('wraps its toolbar instead of pushing «Nuovo campo» off the panel', async () => {
+    // At 390 the entity select (224px) and the button did not fit on one row, so the
+    // button hung outside the white panel and the page scrolled sideways to reach it
+    // (`impostazioni-390.png`).
+    vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([])))
+    renderPanel()
+    const button = await screen.findByRole('button', { name: /nuovo campo/i })
+    expect(button.parentElement!.className).toContain('flex-wrap')
+  })
+
   it('shows an archived field with a visible status and a way to restore it, not just the active ones', async () => {
     vi.mocked(api.GET).mockReturnValueOnce(Promise.resolve(ok([ACTIVE_FIELD, ARCHIVED_FIELD])))
     renderPanel()

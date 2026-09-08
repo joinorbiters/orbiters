@@ -259,7 +259,9 @@ export function FieldsPanel() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-end justify-between gap-4">
+      {/* Wrapping: at 390 the select and the button did not fit on one row and the
+          button hung outside the panel. */}
+      <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="space-y-2">
           <Label htmlFor="entity">Entità</Label>
           <Select value={entityType} onValueChange={(value) => setEntityType(value as EntityType)}>

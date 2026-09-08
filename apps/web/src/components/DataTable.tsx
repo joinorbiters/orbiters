@@ -159,10 +159,15 @@ export function DataTable<T extends RowData>({
   return (
     /* Design spec §4, to the letter: a white container, a hairline border (the ink at
        12%, `--border`) and a radius of 14 -- which is `rounded-xl`, `--radius * 1.4`,
-       and not `rounded-2xl`'s 18. And `overflow-hidden`, which is what keeps the first
-       row's hover tint and the header's own bottom rule inside those corners instead of
-       squaring them off. */
-    <div data-slot="data-table" className="overflow-hidden rounded-xl border border-border bg-card">
+       and not `rounded-2xl`'s 18. `overflow-y-hidden` is what keeps the first row's hover
+       tint and the header's own bottom rule inside those corners instead of squaring them
+       off; the horizontal axis is a *scroll* axis instead, so a table with more columns
+       than a phone is wide scrolls inside this box rather than widening the page around
+       it (screenshots at 390 of 2026-09-08). */
+    <div
+      data-slot="data-table"
+      className="overflow-x-auto overflow-y-hidden rounded-xl border border-border bg-card"
+    >
       <Table>
         <TableHeader>
           {table.getHeaderGroups().map((group) => (
