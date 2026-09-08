@@ -197,7 +197,7 @@ export function DataTable<T extends RowData>({
                 onKeyDown={(event) => handleRowKeyDown(event, row.original)}
                 tabIndex={onRowClick ? 0 : undefined}
                 className={cn(
-                  onRowClick && 'cursor-pointer focus-visible:bg-muted/50 focus-visible:outline-none',
+                  onRowClick && 'cursor-pointer focus-visible:bg-muted focus-visible:outline-none',
                 )}
               >
                 {row.getAllCells().map((cell) => (
