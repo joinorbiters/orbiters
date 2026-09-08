@@ -52,6 +52,12 @@ afterEach(() => {
   mockDelete.mockReset()
 })
 
+/** The row's actions live behind the «⋯» menu since the 2026-09-08 revision (design
+ *  spec §4); the trigger is labelled per document so a list of them stays unambiguous. */
+async function openRowMenu(titolo: string) {
+  await userEvent.click(await screen.findByRole('button', { name: `Azioni per ${titolo}` }))
+}
+
 describe('DocumentsTab', () => {
   it('lists the documents with type, state and version', async () => {
     mockGet.mockReturnValue(ok({ items: [DOCUMENT], next_cursor: null }))
@@ -108,16 +114,64 @@ describe('DocumentsTab', () => {
     expect(input).toHaveAttribute('accept', expect.stringContaining('application/pdf'))
   })
 
-  it('downloads through the API when the download button is pressed', async () => {
+  it('downloads through the API when the download item is chosen', async () => {
     mockGet.mockReturnValue(ok({ items: [DOCUMENT], next_cursor: null }))
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('%PDF', { status: 200 }))
     globalThis.URL.createObjectURL = vi.fn(() => 'blob:x')
     globalThis.URL.revokeObjectURL = vi.fn()
     render(<DocumentsTab owner={{ customerId: 'c-1' }} />, { wrapper })
-    await userEvent.click(await screen.findByRole('button', { name: 'Scarica Offerta 2026-01' }))
+    await openRowMenu('Offerta 2026-01')
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Scarica' }))
     await waitFor(() => {
       const called = fetchSpy.mock.calls.some(([url]) => String(url).includes('/download'))
       expect(called).toBe(true)
     })
+  })
+
+  /**
+   * The two icon buttons that used to sit at the end of the row are the very pattern
+   * §4 moved behind the «⋯»; the labels they carried as `aria-label` are now the
+   * items' own words.
+   */
+  it('offers download and archive behind the row menu', async () => {
+    mockGet.mockReturnValue(ok({ items: [DOCUMENT], next_cursor: null }))
+    render(<DocumentsTab owner={{ customerId: 'c-1' }} />, { wrapper })
+    await openRowMenu('Offerta 2026-01')
+    expect(screen.getByRole('menuitem', { name: 'Scarica' })).toBeInTheDocument()
+    // Archiving is a soft delete the server can undo, but it removes the row from the
+    // list the user is looking at, so it reads in the destructive tone.
+    expect(screen.getByRole('menuitem', { name: 'Archivia' })).toHaveAttribute(
+      'data-variant',
+      'destructive',
+    )
+  })
+
+  /** Disabled rather than absent, which is `RowActions`' own rule: a document created
+   *  from a template but never generated has no bytes to download yet, and that is a
+   *  state of this row rather than an action it can never take. */
+  it('disables the download item on a document with no version yet', async () => {
+    mockGet.mockReturnValue(
+      ok({ items: [{ ...DOCUMENT, versione_corrente: 0 }], next_cursor: null }),
+    )
+    render(<DocumentsTab owner={{ customerId: 'c-1' }} />, { wrapper })
+    await openRowMenu('Offerta 2026-01')
+    expect(screen.getByRole('menuitem', { name: 'Scarica' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    )
+  })
+
+  it('archives a document through the delete endpoint', async () => {
+    mockGet.mockReturnValue(ok({ items: [DOCUMENT], next_cursor: null }))
+    mockDelete.mockReturnValue(ok(undefined))
+    render(<DocumentsTab owner={{ customerId: 'c-1' }} />, { wrapper })
+    await openRowMenu('Offerta 2026-01')
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Archivia' }))
+    await waitFor(() =>
+      expect(mockDelete).toHaveBeenCalledWith(
+        '/api/documents/{document_id}',
+        expect.objectContaining({ params: { path: { document_id: 'doc-1' } } }),
+      ),
+    )
   })
 })

@@ -16,11 +16,15 @@ import { PeriodsPanel } from './PeriodsPanel'
 const mockGet = vi.spyOn(api, 'GET')
 const mockPost = vi.spyOn(api, 'POST')
 const mockDelete = vi.spyOn(api, 'DELETE')
+// Restored, not merely reset: a `window.confirm` left stubbed by one test would answer
+// for the next one silently, and the tests here disagree on purpose about its answer.
+const mockConfirm = vi.spyOn(window, 'confirm')
 
 afterEach(() => {
   mockGet.mockReset()
   mockPost.mockReset()
   mockDelete.mockReset()
+  mockConfirm.mockReset()
 })
 
 function ok(data: unknown, status = 200) {
@@ -51,6 +55,12 @@ const IVAN = {
   tariffa_oraria_default: null,
   costo_orario_default: null,
   created_at: '2026-01-01T00:00:00Z',
+}
+
+/** The row's one action lives behind the «⋯» menu since the 2026-09-08 revision
+ *  (design spec §4); the trigger is labelled per month so a list of them is unambiguous. */
+async function openRowMenu(mese: string) {
+  await userEvent.click(await screen.findByRole('button', { name: `Azioni per ${mese}` }))
 }
 
 function renderPanel() {
@@ -86,6 +96,7 @@ describe('PeriodsPanel', () => {
       '/api/period-locks': () => ok([{ ...LOCK, chiuso_da: null }]),
       '/api/users': () => ok([]),
     })
+    mockConfirm.mockReturnValue(true)
     mockDelete.mockImplementation(() =>
       failed(
         {
@@ -100,22 +111,50 @@ describe('PeriodsPanel', () => {
       ),
     )
     renderPanel()
-    await userEvent.click(await screen.findByRole('button', { name: /riapri/i }))
-    await userEvent.click(await screen.findByRole('button', { name: /conferma/i }))
+    await openRowMenu('marzo 2026')
+    await userEvent.click(screen.getByRole('menuitem', { name: /riapri/i }))
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/requires one of/i))
   })
 
-  it('does not reopen anything until the confirmation is pressed', async () => {
+  it('does not reopen anything when the confirmation is dismissed', async () => {
     respond({ '/api/period-locks': () => ok([LOCK]), '/api/users': () => ok([]) })
     mockDelete.mockImplementation(() => ok(undefined, 204))
+    // A closed period is an audited state and reopening it writes an activity, so a
+    // single misclick must not do it. The guard is the caller's own `window.confirm`,
+    // the house pattern for a destructive row action (`PipelinePanel`), rather than a
+    // second button that used to swap itself into the row.
+    mockConfirm.mockReturnValue(false)
     renderPanel()
-    await userEvent.click(await screen.findByRole('button', { name: /riapri/i }))
-    // The first press only arms the confirmation: a closed period is an audited state
-    // and reopening it writes an activity, so a single misclick must not do it.
+    await openRowMenu('marzo 2026')
+    await userEvent.click(screen.getByRole('menuitem', { name: /riapri/i }))
+    expect(mockConfirm).toHaveBeenCalled()
     expect(mockDelete).not.toHaveBeenCalled()
-    await userEvent.click(screen.getByRole('button', { name: /annulla/i }))
-    expect(mockDelete).not.toHaveBeenCalled()
-    expect(screen.getByRole('button', { name: /riapri/i })).toBeInTheDocument()
+  })
+
+  it('reopens the month through the real endpoint once confirmed', async () => {
+    respond({ '/api/period-locks': () => ok([LOCK]), '/api/users': () => ok([]) })
+    mockDelete.mockImplementation(() => ok(undefined, 204))
+    mockConfirm.mockReturnValue(true)
+    renderPanel()
+    await openRowMenu('marzo 2026')
+    await userEvent.click(screen.getByRole('menuitem', { name: /riapri/i }))
+    await waitFor(() =>
+      expect(mockDelete).toHaveBeenCalledWith('/api/period-locks/{anno}/{mese}', {
+        params: { path: { anno: 2026, mese: 3 } },
+      }),
+    )
+  })
+
+  /** Marked destructive: reopening unlocks a month whose numbers have already been
+   *  reported, which is the one thing this panel exists to prevent by accident. */
+  it('marks the reopen item as the destructive one', async () => {
+    respond({ '/api/period-locks': () => ok([LOCK]), '/api/users': () => ok([]) })
+    renderPanel()
+    await openRowMenu('marzo 2026')
+    expect(screen.getByRole('menuitem', { name: /riapri/i })).toHaveAttribute(
+      'data-variant',
+      'destructive',
+    )
   })
 
   it('closes the month picked in the form', async () => {

@@ -70,7 +70,10 @@ const TOP_LEVEL = [
   // derived from what they contain. Not admin-gated: margins and estimate-versus-actual
   // carry no role check at the service layer, and only the fiscal tab inside does --
   // gating the whole entry would hide two ordinary reads to protect a third.
-  { to: '/app/analisi/margini', label: 'Analisi', icon: TrendingUp, exact: false },
+  // The layout route, not `margini`: with `exact: false` the match is by prefix, so
+  // pointing at one tab left the entry unlit on the other two. Its index redirects to
+  // `margini`, so the click goes where it always did.
+  { to: '/app/analisi', label: 'Analisi', icon: TrendingUp, exact: false },
   { to: '/app/token', label: 'Token', icon: KeyRound, exact: false },
 ] as const
 

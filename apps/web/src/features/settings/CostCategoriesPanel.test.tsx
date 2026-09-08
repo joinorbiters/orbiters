@@ -87,6 +87,12 @@ function rowFor(nome: string) {
   return row
 }
 
+/** The row's actions live behind the «⋯» menu since the 2026-09-08 revision (design
+ *  spec §4); the trigger is labelled per category so a list of them stays unambiguous. */
+async function openRowMenu(nome: string) {
+  await userEvent.click(await screen.findByRole('button', { name: `Azioni per ${nome}` }))
+}
+
 beforeEach(() => {
   vi.mocked(api.GET).mockReset()
   vi.mocked(api.POST).mockReset()
@@ -257,7 +263,8 @@ describe('CostCategoriesPanel', () => {
     vi.mocked(api.POST).mockImplementation(() => ok({ ...CONSULENZA, archiviata: true }))
     renderPanel()
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Archivia' }))
+    await openRowMenu('Consulenza esterna')
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Archivia' }))
 
     await waitFor(() =>
       expect(api.POST).toHaveBeenCalledWith('/api/cost-categories/{category_id}/archive', {
@@ -278,7 +285,7 @@ describe('CostCategoriesPanel', () => {
     renderPanel()
 
     await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(1))
-    expect(screen.queryByText('archiviata')).not.toBeInTheDocument()
+    expect(screen.queryByText('Archiviata')).not.toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('checkbox', { name: 'Includi archiviate' }))
 
@@ -286,10 +293,14 @@ describe('CostCategoriesPanel', () => {
     expect(api.GET).toHaveBeenCalledWith('/api/cost-categories', {
       params: { query: { include_archived: true } },
     })
+    // The state reads through the one pill every state in the product goes through,
+    // `muted` because archiving claims nothing and undoes in one click.
     const archived = rowFor('Vecchia voce')
-    expect(within(archived).getByText('archiviata')).toBeInTheDocument()
-    expect(within(archived).getByRole('button', { name: 'Ripristina' })).toBeInTheDocument()
-    expect(within(archived).queryByRole('button', { name: 'Archivia' })).not.toBeInTheDocument()
+    expect(within(archived).getByText('Archiviata')).toHaveAttribute('data-tone', 'muted')
+
+    await openRowMenu('Vecchia voce')
+    expect(screen.getByRole('menuitem', { name: 'Ripristina' })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Archivia' })).not.toBeInTheDocument()
   })
 
   it('restores an archived category through the unarchive endpoint', async () => {
@@ -298,7 +309,8 @@ describe('CostCategoriesPanel', () => {
     renderPanel()
 
     await userEvent.click(await screen.findByRole('checkbox', { name: 'Includi archiviate' }))
-    await userEvent.click(await screen.findByRole('button', { name: 'Ripristina' }))
+    await openRowMenu('Vecchia voce')
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Ripristina' }))
 
     await waitFor(() =>
       expect(api.POST).toHaveBeenCalledWith('/api/cost-categories/{category_id}/unarchive', {
@@ -320,7 +332,8 @@ describe('CostCategoriesPanel', () => {
     const input = await screen.findByLabelText('Nome della categoria Consulenza esterna')
     await userEvent.clear(input)
     await userEvent.type(input, '  Consulenze  ')
-    await userEvent.click(within(rowFor('Consulenza esterna')).getByRole('button', { name: 'Salva' }))
+    await openRowMenu('Consulenza esterna')
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Salva' }))
 
     await waitFor(() =>
       expect(api.PATCH).toHaveBeenCalledWith('/api/cost-categories/{category_id}', {
@@ -330,14 +343,27 @@ describe('CostCategoriesPanel', () => {
     )
   })
 
-  /** No Salva button until something actually changed: an untouched row that offers to
-   *  save invites a write that records an "updated" activity for no change at all. */
-  it('offers no save on a row nobody has edited', async () => {
+  /**
+   * No save until something actually changed: an untouched row that offers to save
+   * invites a write that records an "updated" activity for no change at all. Disabled
+   * rather than absent, which is `RowActions`' own rule -- an item that comes and goes
+   * from row to row is a menu nobody learns -- and the item says with its own state
+   * that there is nothing to save yet.
+   */
+  it('disables the save item on a row nobody has edited, and enables it once edited', async () => {
     respond([CONSULENZA])
     renderPanel()
 
-    await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(1))
-    expect(screen.queryByRole('button', { name: 'Salva' })).not.toBeInTheDocument()
+    await openRowMenu('Consulenza esterna')
+    expect(screen.getByRole('menuitem', { name: 'Salva' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    )
+    await userEvent.keyboard('{Escape}')
+
+    await userEvent.type(screen.getByLabelText('Nome della categoria Consulenza esterna'), 'x')
+    await openRowMenu('Consulenza esterna')
+    expect(screen.getByRole('menuitem', { name: 'Salva' })).not.toHaveAttribute('aria-disabled')
   })
 
   /**
@@ -362,11 +388,13 @@ describe('CostCategoriesPanel', () => {
     )
     renderPanel()
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Archivia' }))
+    await openRowMenu('Consulenza esterna')
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Archivia' }))
     expect(await screen.findByRole('alert')).toHaveTextContent(/requires one of/)
 
     vi.mocked(api.POST).mockImplementation(() => ok({ ...CONSULENZA, archiviata: true }))
-    await userEvent.click(screen.getByRole('button', { name: 'Archivia' }))
+    await openRowMenu('Consulenza esterna')
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Archivia' }))
 
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
   })
