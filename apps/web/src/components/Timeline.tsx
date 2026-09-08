@@ -114,7 +114,13 @@ function ActivityDetail({ payload }: { payload: ActivityEntry['payload'] }) {
     )
   }
 
-  const rest = Object.entries(payload)
+  // `importata_da` is dropped rather than dumped: the `imported` label already says the
+  // invoice was issued elsewhere, and the column's value names the system it came from
+  // -- provenance the CRM keeps for itself, never product copy (`invoices/models.py`).
+  // The rest of that payload (anno, numero, totale) are facts about the document and
+  // stay. Filtered by key here, in the generic branch, so the same is true of any
+  // future `kind` that records the same field.
+  const rest = Object.entries(payload).filter(([key]) => key !== 'importata_da')
   if (rest.length === 0) return null
   return (
     <p className="mt-1 text-sm text-muted-foreground">

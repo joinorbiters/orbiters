@@ -111,8 +111,8 @@ describe('InvoiceActions', () => {
     expect(screen.getByText(/Il numero resta nel registro/)).toBeInTheDocument()
   })
 
-  it('hides the XML and regenerate actions for an invoice imported from the previous system', () => {
-    const imported = { ...ISSUED, importata_da: 'the previous system' } as Invoice
+  it('hides the XML and regenerate actions for an imported invoice', () => {
+    const imported = { ...ISSUED, importata_da: 'esterno' } as Invoice
     wrap(<InvoiceActions invoice={imported} />)
     expect(screen.queryByRole('button', { name: /XML FatturaPA/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /Rigenera/i })).toBeNull()
@@ -121,9 +121,19 @@ describe('InvoiceActions', () => {
     expect(screen.getByRole('button', { name: /^PDF$/i })).toBeInTheDocument()
   })
 
-  it('shows the "imported from the previous system" badge next to the state badge', () => {
-    const imported = { ...ISSUED, importata_da: 'the previous system' } as Invoice
+  it('shows the "imported" badge next to the state badge, naming no source', () => {
+    const imported = { ...ISSUED, importata_da: 'esterno' } as Invoice
     wrap(<InvoiceStateBadge invoice={imported} />)
-    expect(screen.getByText(/importata da the previous system/i)).toBeInTheDocument()
+    expect(screen.getByText(/^importata$/i)).toBeInTheDocument()
+  })
+
+  // Whatever the column holds -- the value is provenance the CRM keeps for itself, not
+  // copy -- the badge says only that the invoice came from elsewhere. A source name
+  // reaching the screen is the defect this assertion exists to catch.
+  it('never prints the provenance value, whatever it is', () => {
+    const imported = { ...ISSUED, importata_da: 'qualcosaltro' } as Invoice
+    wrap(<InvoiceStateBadge invoice={imported} />)
+    expect(screen.getByText(/^importata$/i)).toBeInTheDocument()
+    expect(screen.queryByText(/qualcosaltro/i)).toBeNull()
   })
 })

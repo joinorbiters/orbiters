@@ -117,10 +117,12 @@ class Invoice(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     motivo_annullamento: Mapped[str | None] = mapped_column(String(500), default=None)
     note_interne: Mapped[str | None] = mapped_column(Text, default=None)
     custom_fields: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
-    # `'the previous system'` for a row registered by slice 9's import: issued elsewhere, numbered
+    # `'esterno'` for a row registered by slice 9's import: issued elsewhere, numbered
     # elsewhere, and therefore without an XML or a PDF this CRM produced. `NULL` is the
-    # ordinary case. A string rather than a boolean because the *source* is the fact
-    # worth keeping: a second migration one day would not be "imported = true" twice.
+    # ordinary case. A string rather than a boolean because the *kind* of provenance is
+    # the fact worth keeping: a second migration one day would not be "imported = true"
+    # twice. It names no product -- the value reaches the API and the screen, and what a
+    # reader needs there is that the document came from outside, not from where.
     importata_da: Mapped[str | None] = mapped_column(String(20), default=None)
 
     __table_args__ = (

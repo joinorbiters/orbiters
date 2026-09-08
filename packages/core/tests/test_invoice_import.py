@@ -47,7 +47,7 @@ def test_an_invoice_records_where_it_was_imported_from(db_session: Session) -> N
         anno=2026,
         numero=7,
         data_emissione=date(2026, 5, 5),
-        importata_da="the previous system",
+        importata_da="esterno",
         imponibile=Decimal("2700.00"),
         imposta=Decimal("0.00"),
         # The stamp is declared and stored, never added: `totale = imponibile + imposta`
@@ -58,7 +58,7 @@ def test_an_invoice_records_where_it_was_imported_from(db_session: Session) -> N
     )
     db_session.add(row)
     db_session.flush()
-    assert db_session.get(Invoice, row.id).importata_da == "the previous system"
+    assert db_session.get(Invoice, row.id).importata_da == "esterno"
 
 
 def test_a_register_gap_is_unique_per_year_and_number(db_session: Session) -> None:
@@ -80,7 +80,7 @@ def _issued(
         anno=anno,
         numero=numero,
         data_emissione=giorno,
-        importata_da="the previous system" if importata else None,
+        importata_da="esterno" if importata else None,
         imponibile=Decimal("100.00"),
         imposta=Decimal("0.00"),
         bollo=Decimal("0.00"),
@@ -203,7 +203,7 @@ def test_an_imported_invoice_is_issued_numbered_and_moves_the_counter(
     read = service.import_issued(_payload(customer_id, numero=7, giorno=date(2026, 5, 5)), ADMIN)
 
     assert (read.anno, read.numero, read.stato, read.tipo) == (2026, 7, "emessa", "fattura")
-    assert read.importata_da == "the previous system"
+    assert read.importata_da == "esterno"
     assert read.totale == Decimal("2700.00") and read.bollo == Decimal("2.00")
     assert read.stato_pagamento == "incassato" and read.data_incasso == date(2026, 5, 20)
     assert read.xml_hash_sha256 is None and read.pdf_document_id is None
@@ -965,7 +965,7 @@ def test_the_original_pdf_can_come_straight_from_drive(
     document = documents[0]
     assert document.id == read.pdf_document_id
     assert document.customer_id == cid
-    assert document.titolo == "Fattura 2026/7 (originale the previous system)"
+    assert document.titolo == "Fattura 2026/7 (originale)"
     assert document.versione_corrente == 1
     # Provenance is recorded, so in three years the answer to "where did this PDF come
     # from?" is the Drive id it was fetched from and not a shrug.

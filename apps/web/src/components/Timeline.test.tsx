@@ -159,6 +159,10 @@ describe('Timeline', () => {
       ['deleted', 'Archiviato'],
       ['restored', 'Ripristinato'],
       ['stage_changed', 'Cambio stato'],
+      // Slice 9's import. Without a label of its own it read as "Imported" -- an English
+      // word on an otherwise Italian timeline -- and the label has to say what happened
+      // without naming the tool the document came out of.
+      ['imported', 'Fattura importata'],
     ])('labels kind "%s" as "%s"', async (kind, label) => {
       mockGet.mockReturnValue(ok([entry({ kind })]))
       renderWithClient(<Timeline entityType="customer" entityId="c1" />)
@@ -201,6 +205,32 @@ describe('Timeline', () => {
       )
       renderWithClient(<Timeline entityType="customer" entityId="c1" />)
       expect(await screen.findByText('Ragione sociale: ACME Srl')).toBeInTheDocument()
+    })
+
+    it('never echoes the import provenance, and still shows the rest of the payload', async () => {
+      // The live payload of an imported invoice: `importata_da` is provenance the CRM
+      // keeps for itself (invoices/models.py), so the generic dump must drop it -- the
+      // "Fattura importata" label above is the whole of what a reader needs -- while the
+      // year, the number and the total, which are facts about the document, stay.
+      mockGet.mockReturnValue(
+        ok([
+          entry({
+            kind: 'imported',
+            payload: { anno: 2026, numero: 2, totale: '3422.00', importata_da: 'the previous system' },
+          }),
+        ]),
+      )
+      renderWithClient(<Timeline entityType="invoice" entityId="i1" />)
+      expect(await screen.findByText('Anno: 2026 · Numero: 2 · Totale: 3422.00')).toBeInTheDocument()
+      expect(screen.queryByText(/the previous system/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/Importata da/i)).not.toBeInTheDocument()
+    })
+
+    it('adds no detail line when the payload holds nothing but the provenance', async () => {
+      mockGet.mockReturnValue(ok([entry({ kind: 'imported', payload: { importata_da: 'esterno' } })]))
+      renderWithClient(<Timeline entityType="invoice" entityId="i1" />)
+      const item = (await screen.findByText('Fattura importata')).closest('li')
+      expect(item?.querySelectorAll('p')).toHaveLength(0)
     })
 
     it('adds no detail line for an empty payload ("deleted"/"restored") -- the label already says everything true', async () => {

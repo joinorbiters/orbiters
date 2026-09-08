@@ -365,7 +365,11 @@ class InvoiceImport(BaseModel):
     trasmessa_esternamente_il: date | None = None
     pdf_sorgente: PdfSorgente | None = None
     note_interne: SafeStr | None = None
-    importata_da: Literal["the previous system"] = "the previous system"
+    # `"esterno"` and not the name of the tool the invoice came out of: the CRM's whole
+    # interest in the field is "this document was issued somewhere else, so there is no
+    # XML and no PDF of ours" -- and the value is read back by the API and printed by the
+    # web client, which makes a product name here product copy.
+    importata_da: Literal["esterno"] = "esterno"
 
 
 class RegisterGapIn(BaseModel):

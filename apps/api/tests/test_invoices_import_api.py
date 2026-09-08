@@ -120,7 +120,7 @@ def test_an_admin_imports_and_sees_the_undeclared_gaps(
     # holes underneath it, which is a different fact from the one this test is about.
     first = logged_in.post("/api/invoices/import", json=_body(customer["id"], 1, "2026-05-05"))
     assert first.status_code == 201, first.text
-    assert first.json()["fattura"]["importata_da"] == "the previous system"
+    assert first.json()["fattura"]["importata_da"] == "esterno"
     assert first.json()["buchi_non_dichiarati"] == []
 
     second = logged_in.post("/api/invoices/import", json=_body(customer["id"], 3, "2026-06-05"))

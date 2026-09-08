@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 from alembic.autogenerate import compare_metadata
-from alembic.command import upgrade
+from alembic.command import downgrade, upgrade
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
@@ -619,3 +619,111 @@ def test_a_write_folder_configured_before_0027_is_not_assumed_verified() -> None
         "a folder configured before the column existed was never proven: assuming it was "
         "makes the first save after the upgrade skip the verification 0027 exists to run"
     )
+
+
+def test_0029_renames_the_import_provenance_to_esterno_in_both_directions() -> None:
+    """The two things migration 0029 has to get right about the rows that already exist.
+
+    `invoices.importata_da` is read back by the API and by MCP, and its value used to be
+    the *name of a product* -- the previous invoicing tool. Renaming the literal in the
+    schema without moving the stored rows would leave the fourteen imported invoices
+    holding a value no `Literal` admits any more: `InvoiceRead` would still hand it to a
+    client, and the badge would print it. So the rename is a data migration, and the
+    downgrade puts the old value back, because a database rolled back to 0028 is read by
+    code that only knows the old literal.
+
+    The `imported` activity each of those rows wrote copied the value into its JSONB
+    payload (`invoices/service.py::import_issued`), and `ActivityRead` hands the payload
+    to the client whole -- so a payload left behind keeps printing the old name on the
+    invoice's own timeline. Both halves move together, or neither has moved.
+
+    Asserted against real rows planted at 0028 rather than through the ORM: the column
+    is a `String(20)` on both sides of the migration, so a schema comparison sees no
+    difference at all and only the stored value tells the two apart.
+    """
+    with PostgresContainer("postgres:17-alpine", driver="psycopg") as container:
+        url = container.get_connection_url()
+        config = _alembic_config(url)
+        upgrade(config, "0028")
+
+        engine: Engine = create_engine(url)
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO customers (id, ragione_sociale, nazione, custom_fields,
+                                           created_at, updated_at)
+                    VALUES ('00000000-0000-7000-8000-0000000000e1', 'Cliente Uno', 'IT',
+                            '{}'::jsonb, now(), now());
+
+                    INSERT INTO invoices (id, customer_id, tipo, stato, anno, numero,
+                                          data_emissione, tipo_documento, divisa,
+                                          imponibile, imposta, bollo, totale,
+                                          stato_pagamento, custom_fields, importata_da,
+                                          created_at, updated_at)
+                    VALUES ('00000000-0000-7000-8000-0000000000e2',
+                            '00000000-0000-7000-8000-0000000000e1', 'fattura', 'emessa',
+                            2026, 7, '2026-05-05', 'TD01', 'EUR',
+                            100.00, 0.00, 0.00, 100.00, 'da_incassare', '{}'::jsonb,
+                            'the previous system', now(), now()),
+                           ('00000000-0000-7000-8000-0000000000e3',
+                            '00000000-0000-7000-8000-0000000000e1', 'fattura', 'emessa',
+                            2026, 18, '2026-09-05', 'TD01', 'EUR',
+                            100.00, 0.00, 0.00, 100.00, 'da_incassare', '{}'::jsonb,
+                            NULL, now(), now());
+
+                    INSERT INTO activities (id, entity_type, entity_id, kind, actor_type,
+                                            payload, occurred_at)
+                    VALUES ('00000000-0000-7000-8000-0000000000e4', 'invoice',
+                            '00000000-0000-7000-8000-0000000000e2', 'imported', 'user',
+                            '{"anno": 2026, "numero": 7, "totale": "100.00",
+                               "importata_da": "the previous system"}'::jsonb, now()),
+                           ('00000000-0000-7000-8000-0000000000e5', 'invoice',
+                            '00000000-0000-7000-8000-0000000000e3', 'issued', 'user',
+                            '{"anno": 2026, "numero": 18}'::jsonb, now());
+                    """
+                )
+            )
+        engine.dispose()
+
+        upgrade(config, "0029")
+
+        engine = create_engine(url)
+        with engine.connect() as connection:
+            after_upgrade = dict(
+                connection.execute(text("SELECT numero, importata_da FROM invoices")).all()
+            )
+            payloads_after_upgrade = dict(
+                connection.execute(text("SELECT kind, payload FROM activities ORDER BY kind")).all()
+            )
+        engine.dispose()
+
+        downgrade(config, "0028")
+
+        engine = create_engine(url)
+        with engine.connect() as connection:
+            after_downgrade = dict(
+                connection.execute(text("SELECT numero, importata_da FROM invoices")).all()
+            )
+            payloads_after_downgrade = dict(
+                connection.execute(text("SELECT kind, payload FROM activities ORDER BY kind")).all()
+            )
+        engine.dispose()
+
+    assert after_upgrade == {7: "esterno", 18: None}, (
+        "the imported rows must carry the new literal, and an invoice PigroCRM issued "
+        f"itself must stay NULL: got {after_upgrade}"
+    )
+    assert after_downgrade == {7: "the previous system", 18: None}, (
+        f"the downgrade has to put the old literal back for code that reads it: "
+        f"got {after_downgrade}"
+    )
+    assert payloads_after_upgrade["imported"]["importata_da"] == "esterno", (
+        "the payload of the import's own activity travels to the timeline whole, so a "
+        f"payload left behind prints the old name there: got {payloads_after_upgrade}"
+    )
+    # The rest of the payload is untouched, and an activity of another `kind` gains no
+    # key it never had: `jsonb_set` on a missing path would *add* one.
+    assert payloads_after_upgrade["imported"]["numero"] == 7
+    assert "importata_da" not in payloads_after_upgrade["issued"]
+    assert payloads_after_downgrade["imported"]["importata_da"] == "the previous system"

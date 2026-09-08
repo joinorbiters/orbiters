@@ -218,7 +218,7 @@ def _import(**overrides: object) -> dict[str, object]:
 
 def test_an_import_defaults_to_esterno_and_da_incassare() -> None:
     data = InvoiceImport(**_import())
-    assert data.importata_da == "the previous system"
+    assert data.importata_da == "esterno"
     assert data.stato_pagamento == "da_incassare"
     assert data.pdf_sorgente is None
 

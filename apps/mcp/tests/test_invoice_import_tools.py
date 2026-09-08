@@ -136,7 +136,7 @@ async def test_import_registers_the_invoice_and_names_the_gaps(
         result = await client.call_tool("import_issued_invoice", {"dati": _dati(3, "2026-06-05")})
         payload = _payload(result)
         assert payload["fattura"]["numero"] == 3
-        assert payload["fattura"]["importata_da"] == "the previous system"
+        assert payload["fattura"]["importata_da"] == "esterno"
         # 2 was never imported and never declared: it is a gap left by the previous
         # numbering until an operator accounts for it.
         assert payload["buchi_non_dichiarati"] == [2]

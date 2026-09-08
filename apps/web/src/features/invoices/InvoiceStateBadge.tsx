@@ -23,11 +23,11 @@ export function InvoiceStateBadge({ invoice }: { invoice: Invoice }) {
   return (
     <span className="inline-flex gap-1">
       <Badge variant={STATE_VARIANT[stato] ?? 'secondary'}>{INVOICE_STATE_LABELS[stato]}</Badge>
-      {invoice.importata_da != null ? (
-        <Badge variant="outline">
-          importata da {invoice.importata_da === 'the previous system' ? 'the previous system' : invoice.importata_da}
-        </Badge>
-      ) : null}
+      {/* The column's value is never printed. What a reader of the register needs is
+          that this invoice was issued elsewhere -- so it carries no XML and no PDF
+          pigroCRM produced -- and not the name of the tool it came out of, which is
+          the owner's business and no part of the CRM's copy. */}
+      {invoice.importata_da != null ? <Badge variant="outline">importata</Badge> : null}
     </span>
   )
 }
