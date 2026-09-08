@@ -103,9 +103,12 @@ jobs:
         projects/pigrocrm/packages/core/tests
         projects/pigrocrm/apps/api/tests
         projects/pigrocrm/apps/mcp/tests
-      # The `slow` marker builds a fifty-thousand-row corpus. It runs on the trunk
-      # and in preflight, and is the one thing a PR does not pay for.
-      pytest-args: ${{ github.event_name == 'pull_request' && '-m "not slow"' || '' }}
+      # Two things a PR does not pay for. `slow` builds a fifty-thousand-row corpus.
+      # `planner` asserts an EXPLAIN output, and the winning plan there sits within a
+      # few percent of the loser, so it turns over on the runner's hardware rather than
+      # on the diff. Both run on the trunk and in preflight, which is where they were
+      # recorded and where they mean something.
+      pytest-args: ${{ github.event_name == 'pull_request' && '-m "not slow and not planner"' || '' }}
       # Without Pandoc and Typst the document renderer shells out to nothing and
       # about thirty tests fail on "strumento di composizione non installato". They
       # had been failing on every run of the previous workflow, which is also why
