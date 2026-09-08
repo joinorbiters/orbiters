@@ -5,6 +5,7 @@ import {
   formatMoney,
   formatQuantity,
   formatRate,
+  previewImponibile,
   sumLineTotals,
 } from './format'
 
@@ -82,5 +83,51 @@ describe('formatDate', () => {
 
   it('renders a null as an em dash', () => {
     expect(formatDate(null)).toBe('—')
+  })
+})
+
+describe('previewImponibile', () => {
+  it('sums quantity times price for every row', () => {
+    expect(
+      previewImponibile([
+        { quantita: '2', prezzo_unitario: '150.00' },
+        { quantita: '1', prezzo_unitario: '99.90' },
+      ]),
+    ).toBe('399.90')
+  })
+
+  it('adds cents as integers, never as floats', () => {
+    // `0.29 * 100` is 28.999999999999996 in this project's own Node runtime, and three
+    // rows of it is how a preview total ends in ...86 instead of ...87. Every figure
+    // here goes through `scaledFromDecimalString` (lib/decimal.ts).
+    expect(
+      previewImponibile([
+        { quantita: '1', prezzo_unitario: '0.29' },
+        { quantita: '1', prezzo_unitario: '0.29' },
+        { quantita: '1', prezzo_unitario: '0.29' },
+      ]),
+    ).toBe('0.87')
+  })
+
+  it('handles a fractional quantity, which is what hours are', () => {
+    expect(previewImponibile([{ quantita: '7.5', prezzo_unitario: '80.00' }])).toBe('600.00')
+  })
+
+  it('treats an empty or unpriced row as nothing, not as a failure', () => {
+    // A row being typed is the normal state of this form: the total simply does not
+    // count it yet, rather than reading NaN while the user is mid-keystroke.
+    expect(previewImponibile([{ quantita: '', prezzo_unitario: '' }])).toBe('0.00')
+    expect(
+      previewImponibile([
+        { quantita: '2', prezzo_unitario: '10.00' },
+        { quantita: '1', prezzo_unitario: '' },
+      ]),
+    ).toBe('20.00')
+  })
+
+  it('rounds a fractional cent to the nearest one', () => {
+    // 0.5 x 0.05 = 0.025. Half-up, and the only reason a preview may differ from the
+    // stored figure by a cent -- the server computes the real one at full scale.
+    expect(previewImponibile([{ quantita: '0.5', prezzo_unitario: '0.05' }])).toBe('0.03')
   })
 })

@@ -1,3 +1,4 @@
+import { decimalStringFromScaled, MONEY_SCALE, scaledFromDecimalString } from '@/lib/decimal'
 import type { Invoice, InvoiceLine } from './queries'
 
 const EMPTY = '—'
@@ -77,4 +78,61 @@ export function sumLineTotals(lines: Pick<InvoiceLine, 'prezzo_totale'>[]): stri
   const negative = cents < 0
   const absolute = Math.abs(cents)
   return `${negative ? '-' : ''}${Math.floor(absolute / 100)}.${String(absolute % 100).padStart(2, '0')}`
+}
+
+/** A row of the create dialog as the inputs hold it: two decimal strings, either of
+ *  which may still be empty because the user is typing. */
+interface PricedRow {
+  quantita: string
+  prezzo_unitario: string
+}
+
+/** Only a plain decimal is arithmetic here. Anything else -- a stray letter, a comma,
+ *  a half-typed minus -- contributes nothing rather than turning the whole total into
+ *  NaN while the user is mid-keystroke. */
+const DECIMAL = /^-?\d*\.?\d*$/
+
+/** `FACTOR_DECIMAL_PLACES` in `packages/core/src/pigrocrm/core/invoices/schemas.py`:
+ *  `quantita` and `prezzo_unitario` are `Numeric(12, 6)`. */
+const FACTOR_SCALE = 6
+/** Millionths times cents lands at 10^-8; this brings the product back to cents. */
+const FACTOR_TO_CENTS = 1_000_000
+
+/**
+ * What a set of typed-in rows would come to, for the create dialog's live figure.
+ *
+ * The counterpart of `sumLineTotals` for rows that do not exist server-side yet: there
+ * is no `prezzo_totale` to add up, so the product has to be formed here. Exact integer
+ * arithmetic via `lib/decimal.ts` -- the quantity in millionths (`Numeric(12,6)`, which
+ * is what makes 7,5 hours expressible), the price in cents -- and never a float:
+ * `Number('0.29') * 100` is `28.999999999999996` in this project's own Node runtime.
+ *
+ * It is a *preview*, and says so on screen. The authoritative imponibile is the one
+ * `InvoiceService` computes and stores: it works at the price's full six decimals and
+ * applies the regime's own rules (`_computed_lines`/`_apply_totals`), where this rounds
+ * the price to the cent and knows nothing about discounts or VAT. A row priced beyond
+ * two decimals can therefore differ from the stored figure by a cent, which is the
+ * right trade for a number that exists only to tell the owner they have typed 300 € and
+ * not 3.000 €.
+ *
+ * Bounds: a realistic row (thousands of units, thousands of euro) keeps the product
+ * inside `Number.MAX_SAFE_INTEGER`; the columns' own extremes (`Numeric(12,6)` twice
+ * over) do not, and `overflows_money_column` on the backend is what refuses those --
+ * this figure would visibly lose precision first, on a document the server will not
+ * accept either.
+ */
+export function previewImponibile(rows: readonly PricedRow[]): string {
+  let cents = 0
+  for (const row of rows) {
+    const quantity = row.quantita.trim()
+    const price = row.prezzo_unitario.trim()
+    if (quantity === '' || price === '') continue
+    if (!DECIMAL.test(quantity) || !DECIMAL.test(price)) continue
+    cents += Math.round(
+      (scaledFromDecimalString(quantity, FACTOR_SCALE) *
+        scaledFromDecimalString(price, MONEY_SCALE)) /
+        FACTOR_TO_CENTS,
+    )
+  }
+  return decimalStringFromScaled(cents, MONEY_SCALE)
 }

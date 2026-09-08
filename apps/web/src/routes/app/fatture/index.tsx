@@ -10,6 +10,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { buildInvoiceColumns } from '@/features/invoices/columns'
+import { NewProformaButton } from '@/features/invoices/NewProformaDialog'
 import { booleanSearchParam } from '@/lib/searchParams'
 import {
   INVOICE_STATE_LABELS,
@@ -59,13 +60,17 @@ function InvoicesPage() {
 
   return (
     <div className="p-8">
-      <header className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Fatture</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Una fattura si emette da un deal o da un cliente. Le proforma si distinguono
-          dal riferimento al posto del numero: non sono documenti fiscali finché non
-          vengono emesse.
-        </p>
+      <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Fatture</h1>
+          <p className="text-muted-foreground mt-1 text-sm">
+            Una fattura si emette da un deal, da un cliente o da qui, creando una
+            proforma da confermare ed emettere. Le proforma si distinguono dal
+            riferimento al posto del numero: non sono documenti fiscali finché non
+            vengono emesse.
+          </p>
+        </div>
+        <NewProformaButton />
       </header>
 
       {scadute === true && (
