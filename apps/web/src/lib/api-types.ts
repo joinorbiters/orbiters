@@ -3128,6 +3128,8 @@ export interface components {
             tariffa_oraria: string | null;
             /** Chiuso Il */
             chiuso_il: string | null;
+            /** Customer Ragione Sociale */
+            customer_ragione_sociale?: string | null;
             /** Custom Fields */
             custom_fields: {
                 [key: string]: unknown;
