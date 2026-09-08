@@ -84,9 +84,16 @@
   --popover-foreground: var(--color-prussian-blue);
   --primary: var(--color-watermelon-strong);
   --primary-foreground: #ffffff;
-  --secondary: #e6ecea;
+  /* The two quiet fills, from the palette and not from a hand-mixed hex.
+     Both were hexes with a green-cyan cast (#e6ecea and #eef4f2) left over from the days
+     the page ground was Mint Cream: on a neutral Paper page they read as the same
+     "azzurrino" the background lost on 2026-09-08, and neither was a tint of anything in
+     the palette. --muted *is* Paper now, because it is what a table row hover has to be
+     (spec §4: «hover Paper»), and --secondary is one step of the ink above the card so a
+     secondary button is still a surface and not a second white. */
+  --secondary: color-mix(in oklab, var(--color-charcoal-blue) 14%, #ffffff);
   --secondary-foreground: var(--color-prussian-blue);
-  --muted: #eef4f2;
+  --muted: var(--color-paper);
   --muted-foreground: var(--color-charcoal-blue);
   --accent: var(--color-royal-gold);
   --accent-foreground: var(--color-prussian-blue);
@@ -162,9 +169,11 @@
   --popover-foreground: var(--color-paper);
   --primary: var(--color-watermelon-strong);
   --primary-foreground: #ffffff;
-  --secondary: #14304f;
+  /* The same two fills, mixed the other way: white lifted into the ink, the idiom the
+     sidebar's own accent already uses, instead of the #14304f both used to carry. */
+  --secondary: color-mix(in oklab, #ffffff 12%, var(--color-prussian-blue));
   --secondary-foreground: var(--color-paper);
-  --muted: #14304f;
+  --muted: color-mix(in oklab, #ffffff 8%, var(--color-prussian-blue));
   --muted-foreground: #9fb0c0;
   --accent: var(--color-royal-gold);
   --accent-foreground: var(--color-prussian-blue);

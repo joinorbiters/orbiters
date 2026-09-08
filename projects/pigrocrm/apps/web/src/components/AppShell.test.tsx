@@ -6,7 +6,7 @@ import { SETTINGS_TABS } from '@/features/settings/tabs'
 import { AppShell } from './AppShell'
 import { SIDEBAR_GROUPS_KEY } from './sidebarGroups'
 
-const mockRoute = vi.hoisted(() => ({ pathname: '/app/clienti' }))
+const mockRoute = vi.hoisted(() => ({ pathname: '/app/clienti', search: '' }))
 
 /**
  * `Link` is substituted rather than mounted in a router, as everywhere else in this
@@ -26,13 +26,18 @@ vi.mock('@tanstack/react-router', () => ({
     to: string
     className?: string
     activeProps?: Record<string, unknown>
-    activeOptions?: { exact?: boolean }
+    activeOptions?: { exact?: boolean; includeSearch?: boolean }
   }) => {
     // `activeOptions.exact` is honoured, because the shell relies on it: without it "/app"
     // is a prefix of every other route and Home would be the current page everywhere.
-    const active = activeOptions?.exact
+    const path = activeOptions?.exact
       ? mockRoute.pathname === to
       : mockRoute.pathname === to || mockRoute.pathname.startsWith(`${to}/`)
+    // So is `includeSearch`, which TanStack defaults to *true*: a link that carries no
+    // search of its own then stops being active the moment the URL carries any, and
+    // every sidebar entry here is such a link.
+    const search = activeOptions?.includeSearch === false || mockRoute.search === ''
+    const active = path && search
     return (
       <a href={to} className={className} {...(active ? activeProps : {})}>
         {children}
@@ -94,6 +99,7 @@ beforeEach(() => {
   setViewport(true)
   mockAuth.ruolo = 'admin'
   mockRoute.pathname = '/app/clienti'
+  mockRoute.search = ''
   localStorage.clear()
 })
 
@@ -116,6 +122,33 @@ describe('AppShell', () => {
     // Spec §4: the search field sits under the brand and shows its shortcut, so it is
     // discoverable without trying the keyboard.
     expect(search).toHaveTextContent(/K/)
+  })
+
+  it('names the search landmark, so it is not one of two unlabelled regions', () => {
+    // A `role="search"` with no accessible name is announced as "search" and nothing
+    // else; the page's own filter rows will grow more of them.
+    renderShell()
+    expect(screen.getByRole('search', { name: 'Ricerca globale' })).toBeInTheDocument()
+  })
+
+  it('keeps the current page marked while the URL carries search parameters', () => {
+    // What the 1440 screenshot of this pass caught: on Home the sidebar's Home entry was
+    // not highlighted at all, because the dashboard writes its tab and period into the
+    // URL (`routes/app/index.tsx`) and `includeSearch` defaults to true.
+    mockRoute.pathname = '/app'
+    mockRoute.search = '?tab=commerciale&da=2026-09-01&a=2026-09-30'
+    renderShell()
+    expect(sidebar().getByRole('link', { name: 'Home' })).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('keeps a sub-item marked while its list carries a filter in the URL', () => {
+    mockRoute.pathname = '/app/clienti'
+    mockRoute.search = '?q=acme'
+    renderShell()
+    expect(sidebar().getByRole('link', { name: 'Clienti' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
   })
 
   it('opens the search palette from the sidebar field', async () => {
@@ -302,6 +335,23 @@ describe('AppShell', () => {
   it('renders its children inside the content panel', () => {
     renderShell(<p>contenuto</p>)
     expect(within(screen.getByRole('main')).getByText('contenuto')).toBeInTheDocument()
+  })
+
+  it('rounds the content panel to the 16 the spec draws, not to the 18 of --radius-2xl', () => {
+    // `lg:rounded-2xl` computed to 18px in the browser (10 × 1.8): the derived card
+    // radius, not the panel's own. Spec §4 says 16.
+    renderShell(<p>contenuto</p>)
+    expect(screen.getByRole('main').parentElement!.className).toContain('lg:rounded-[16px]')
+  })
+
+  it('says the role in Italian under the name, not the stored enum', () => {
+    // «admin» is what the API stores, not a word the product writes: every other place
+    // that shows a role writes it out (`features/settings/UsersPanel.tsx`), and the 1440
+    // screenshot of this pass had the raw enum sitting under Ivan's name.
+    renderShell()
+    expect(screen.getByRole('button', { name: 'Menu del profilo' })).toHaveTextContent(
+      'amministratore',
+    )
   })
 
   it('keeps the profile menu', async () => {

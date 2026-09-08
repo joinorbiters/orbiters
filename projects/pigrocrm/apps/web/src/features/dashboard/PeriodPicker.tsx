@@ -5,6 +5,11 @@ import { currentMonth, presetQuarter, presetYear, type Periodo } from './periodo
  * Two dates and three presets. Every change is handed straight back to the caller, which
  * puts it in the URL — nothing here is component state, because a period held locally is a
  * period a shared link cannot carry (§4).
+ *
+ * The presets are `outline` and not `ghost`: they sit where §4 puts a page's one strong
+ * action, and with no line and no fill they read as a caption rather than as three things
+ * you can press (visual pass of 2026-09-08). The dates carry the same 10px radius as
+ * every other control on a filter row.
  */
 export function PeriodPicker({
   periodo,
@@ -23,7 +28,7 @@ export function PeriodPicker({
         type="date"
         value={periodo.da}
         onChange={(event) => onChange({ ...periodo, da: event.target.value })}
-        className="rounded-md border bg-background px-2 py-1 text-sm"
+        className="min-w-0 rounded-lg border bg-background px-2 py-1 text-sm"
       />
       <label className="text-sm text-muted-foreground" htmlFor="periodo-a">
         al
@@ -33,15 +38,15 @@ export function PeriodPicker({
         type="date"
         value={periodo.a}
         onChange={(event) => onChange({ ...periodo, a: event.target.value })}
-        className="rounded-md border bg-background px-2 py-1 text-sm"
+        className="min-w-0 rounded-lg border bg-background px-2 py-1 text-sm"
       />
-      <Button variant="ghost" size="sm" onClick={() => onChange(currentMonth())}>
+      <Button variant="outline" size="sm" onClick={() => onChange(currentMonth())}>
         Mese
       </Button>
-      <Button variant="ghost" size="sm" onClick={() => onChange(presetQuarter())}>
+      <Button variant="outline" size="sm" onClick={() => onChange(presetQuarter())}>
         Trimestre
       </Button>
-      <Button variant="ghost" size="sm" onClick={() => onChange(presetYear())}>
+      <Button variant="outline" size="sm" onClick={() => onChange(presetYear())}>
         Anno
       </Button>
     </div>

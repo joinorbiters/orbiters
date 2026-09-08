@@ -325,6 +325,41 @@ describe('soft shapes', () => {
     expect(block('.dark')).toMatch(/--input:\s*color-mix\(in oklab, var\(--color-paper\) 20%,/)
   })
 
+  /** The value one token is assigned inside one rule, by exact selector. */
+  function declaration(selector: string, token: string): string {
+    const value = block(selector).match(new RegExp(`${token}:\\s*([^;]+);`))?.[1]
+    if (!value) throw new Error(`${token} is not declared in "${selector}"`)
+    return value.trim()
+  }
+
+  it('builds the quiet surfaces out of the palette, in both modes', () => {
+    // `--muted` is the table's hover and every quiet fill; `--secondary` the secondary
+    // button and badge. Until this pass both were hand-mixed hexes -- #eef4f2 and #e6ecea
+    // in light mode -- with the same green-cyan cast the page background lost on
+    // 2026-09-08 ("azzurrino"), and belonging to no tint in the palette. A tint, or a mix
+    // of tints toward white, is all either may be.
+    for (const selector of [':root', '.dark']) {
+      for (const token of ['--muted', '--secondary']) {
+        const value = declaration(selector, token)
+        expect(value, `${token} in ${selector}`).toMatch(
+          /^(?:var\(--color-[a-z-]+\)|color-mix\(in oklab,)/,
+        )
+        for (const hex of value.match(/#[0-9a-fA-F]{3,8}/g) ?? []) {
+          expect(hex.toLowerCase(), `hex in ${token} (${selector})`).toBe('#ffffff')
+        }
+        for (const [, name] of value.matchAll(/var\(--([a-z0-9-]+)\)/g)) {
+          expect(name, `var in ${token} (${selector})`).toMatch(/^color-/)
+        }
+      }
+    }
+  })
+
+  it('makes the quiet fill Paper itself, which is what a table row hover has to be', () => {
+    // Spec §4 says the hover is Paper, and `ui/table.tsx` draws it as `hover:bg-muted`.
+    // The two only agree while this token *is* Paper.
+    expect(declaration(':root', '--muted')).toBe('var(--color-paper)')
+  })
+
   const SHADOWS = ['xs', 'sm', 'md', 'lg', 'xl', '2xl']
 
   it('casts soft ink shadows, never a step', () => {

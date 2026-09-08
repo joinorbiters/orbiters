@@ -117,6 +117,29 @@ describe('DashboardPage', () => {
     expect(next.a).toMatch(/^\d{4}-12-31$/)
   })
 
+  it('draws the three period presets as controls and not as bare text', () => {
+    // What the 1440 screenshot of the 2026-09-08 visual pass caught: as `variant="ghost"`
+    // buttons, «Mese / Trimestre / Anno» had neither line nor fill, so the one cluster in
+    // the top right of Home read as a caption. Spec §4 gives the controls of a filter row
+    // a 12% line on the white panel.
+    renderPage()
+    for (const label of ['Mese', 'Trimestre', 'Anno']) {
+      expect(screen.getByRole('button', { name: label }).className, label).toContain(
+        'border-border',
+      )
+    }
+  })
+
+  it('lets the two dates shrink, so the period never reaches past the panel', () => {
+    // At 390 «Dal 01/09/2026 al 30/09/2026» ran off the right edge of the panel
+    // (`home-390.png`): the row already wrapped, but a date input will not go below its
+    // intrinsic width without being told it may.
+    renderPage()
+    for (const label of ['Dal', 'al']) {
+      expect(screen.getByLabelText(label).className, label).toContain('min-w-0')
+    }
+  })
+
   it('hands a changed tab back for the URL', async () => {
     const { onSearchChange } = renderPage()
     await userEvent.click(screen.getByRole('tab', { name: 'Economica' }))
