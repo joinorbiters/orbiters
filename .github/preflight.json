@@ -5,7 +5,11 @@
     {
       "id": "pigrocrm-py-lint",
       "run": "uv run ruff check projects/pigrocrm && uv run ruff format --check projects/pigrocrm",
-      "when": ["projects/pigrocrm/**/*.py", "projects/pigrocrm/ruff.toml", "ruff.toml"],
+      "when": [
+        "projects/pigrocrm/**/*.py",
+        "projects/pigrocrm/ruff.toml",
+        "ruff.toml"
+      ],
       "why": "Seconds here against a whole round trip in CI. Lint and format are the checks most likely to fail and the cheapest to have failed."
     },
     {
@@ -31,17 +35,25 @@
         "pyproject.toml",
         "uv.lock"
       ],
-      "why": "The whole Python suite, `slow` marker included: roughly half an hour, testcontainers bringing up its own Postgres on a random port. The PR path in ci.yml runs it with -m \"not slow\"; this and push:main run everything. Needs pandoc and typst on PATH or about thirty renderer tests fail on \"strumento di composizione non installato\"."
+      "why": "The whole Python suite, both `slow` and `planner` included: roughly half an hour, testcontainers bringing up its own Postgres on a random port. ci.yml deselects `slow` on pull requests and `planner` everywhere, because that one asserts which plan Postgres picks and a hosted runner picks the other one, so this is the only tier where it runs at all. Needs pandoc, typst and pdftotext on PATH or about thirty renderer tests fail on \"strumento di composizione non installato\"."
     },
     {
       "id": "pigrocrm-web-lint",
       "run": "pnpm --filter web lint",
-      "when": ["projects/pigrocrm/apps/web/**", "package.json", "pnpm-workspace.yaml"]
+      "when": [
+        "projects/pigrocrm/apps/web/**",
+        "package.json",
+        "pnpm-workspace.yaml"
+      ]
     },
     {
       "id": "pigrocrm-web-unit",
       "run": "pnpm --filter web test",
-      "when": ["projects/pigrocrm/apps/web/**", "pnpm-lock.yaml", "pnpm-workspace.yaml"],
+      "when": [
+        "projects/pigrocrm/apps/web/**",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml"
+      ],
       "why": "vitest, jsdom, no services. Also the step that writes src/routeTree.gen.ts, which the typecheck below needs and which nothing else generates."
     },
     {
