@@ -12,6 +12,7 @@ from pigrocrm.core.errors import DomainError, ValidationFailed
 from pigrocrm.core.validation import SafeStr
 from pigrocrm_api.deps import ACCESS_COOKIE, REFRESH_COOKIE, ActorDep, SessionDep, SettingsDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
+from pigrocrm_api.tenancy import cookie_path
 
 router = APIRouter(prefix="/api/auth", tags=["auth"], responses=PROBLEM_RESPONSES)
 
@@ -101,15 +102,21 @@ class LoginRequest(BaseModel):
     password: str
 
 
-def _set_cookie(response: Response, name: str, value: str, max_age: int, *, secure: bool) -> None:
+def _set_cookie(
+    response: Response, name: str, value: str, max_age: int, *, secure: bool, path: str = "/"
+) -> None:
     response.set_cookie(
-        name, value, httponly=True, secure=secure, samesite="lax", max_age=max_age, path="/"
+        name, value, httponly=True, secure=secure, samesite="lax", max_age=max_age, path=path
     )
 
 
 @router.post("/login", response_model=UserRead, responses={401: _LOGIN_UNAUTHORIZED_RESPONSE})
 def login(
-    payload: LoginRequest, response: Response, session: SessionDep, settings: SettingsDep
+    payload: LoginRequest,
+    request: Request,
+    response: Response,
+    session: SessionDep,
+    settings: SettingsDep,
 ) -> UserRead:
     # Same message regardless of which of the three the domain layer detected (unknown
     # email, wrong password, deactivated user) -- UserService.authenticate already
@@ -125,6 +132,7 @@ def login(
         issue_access_token(user.id, user.ruolo, settings),
         settings.access_token_minutes * 60,
         secure=settings.cookie_secure,
+        path=cookie_path(request),
     )
     _set_cookie(
         response,
@@ -132,6 +140,7 @@ def login(
         RefreshTokenService(session).issue(user.id, settings),
         settings.refresh_token_days * 86400,
         secure=settings.cookie_secure,
+        path=cookie_path(request),
     )
     return user
 
@@ -154,8 +163,8 @@ def logout(
                 RefreshTokenService(session).consume(payload.jti, payload.sub)
         except DomainError:
             pass
-    response.delete_cookie(ACCESS_COOKIE, path="/")
-    response.delete_cookie(REFRESH_COOKIE, path="/")
+    response.delete_cookie(ACCESS_COOKIE, path=cookie_path(request))
+    response.delete_cookie(REFRESH_COOKIE, path=cookie_path(request))
 
 
 @router.post("/refresh", response_model=UserRead, responses={401: _UNAUTHENTICATED_RESPONSE})
@@ -199,6 +208,7 @@ def refresh(
         issue_access_token(user.id, user.ruolo, settings),
         settings.access_token_minutes * 60,
         secure=settings.cookie_secure,
+        path=cookie_path(request),
     )
     # A fresh token with its own row -- not a re-signing of the same claims -- because
     # the one just consumed above can never be honoured again.
@@ -208,6 +218,7 @@ def refresh(
         refresh_tokens.issue(user.id, settings),
         settings.refresh_token_days * 86400,
         secure=settings.cookie_secure,
+        path=cookie_path(request),
     )
     return UserRead.model_validate(user)
 

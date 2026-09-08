@@ -2,8 +2,10 @@ import threading
 import time
 
 import pytest
+from fastapi import Request
 
 import pigrocrm_api.deps as deps
+from pigrocrm.core.config import Settings
 
 
 def test_get_session_builds_the_engine_exactly_once_under_concurrent_cold_start(
@@ -41,10 +43,14 @@ def test_get_session_builds_the_engine_exactly_once_under_concurrent_cold_start(
     barrier = threading.Barrier(thread_count)
     errors: list[BaseException] = []
 
+    # A root request: no space prefix, so `get_session` takes the shared root engine.
+    request = Request({"type": "http", "path": "/api/customers", "headers": [], "state": {}})
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
     def worker() -> None:
         barrier.wait()
         try:
-            generator = deps.get_session()
+            generator = deps.get_session(request, settings)
             next(generator)
             generator.close()
         except BaseException as exc:  # noqa: BLE001 - surfaced via `errors`, not swallowed

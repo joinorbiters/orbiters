@@ -4,10 +4,13 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { AuthProvider } from './lib/auth'
 import { queryClient } from './lib/query'
+import { tenantPrefix } from './lib/tenant'
 import { routeTree } from './routeTree.gen'
 import './styles/tokens.css'
 
-const router = createRouter({ routeTree })
+// Under a space the same routes live at `/<slug>/app/...`: the basepath is the one
+// place the prefix enters the router, so every `to: '/app/...'` keeps working as is.
+const router = createRouter({ routeTree, basepath: tenantPrefix || undefined })
 
 declare module '@tanstack/react-router' {
   interface Register {

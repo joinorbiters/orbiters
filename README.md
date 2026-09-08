@@ -18,6 +18,10 @@ Contatto → Cliente → Deal → Offerta → Lavoro → Time Tracking → Fattu
 - **API first** — la UI usa esclusivamente le API pubbliche. Nessuna logica esiste solo nel frontend.
 - **MCP first** — il server MCP non è un adattatore aggiunto dopo: usa gli stessi servizi della UI, in-process.
 - **Nessuna duplicazione** — ogni dato è salvato una volta sola.
+- **Single-tenant dentro, più spazi fuori** — nessun servizio conosce i tenant. Chi si iscrive
+  dal login ottiene uno *spazio*, cioè un database Postgres a sé con lo stesso schema, servito
+  su `/<nome>/app` e `/<nome>/api`; l'installazione radice resta com'è. Vedi
+  `docs/superpowers/specs/2026-09-08-spazi-un-database-per-tenant-design.md`.
 
 ## Stack
 
