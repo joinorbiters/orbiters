@@ -352,6 +352,7 @@ _CREDENZIALI: dict[Method, str] = {
     ("PatService", "resolve"): "e' il passo di autenticazione, non un'operazione",
     ("RefreshTokenService", "issue"): "sessione del browser, non superficie agentica",
     ("RefreshTokenService", "consume"): "sessione del browser, non superficie agentica",
+    ("RefreshTokenService", "rotate"): "sessione del browser, non superficie agentica",
     ("UserService", "create"): "creare utenti e' amministrazione dell'account",
     ("UserService", "update"): "cambiare ruoli e' amministrazione dell'account",
     ("UserService", "list"): "l'anagrafica utenti non serve a nessun tool",
