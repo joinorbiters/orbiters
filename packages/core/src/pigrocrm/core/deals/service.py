@@ -181,6 +181,35 @@ class DealService:
         merged.update(validated)
         return merged
 
+    def _read(self, deal: Deal) -> DealRead:
+        """One deal's read shape, customer name included.
+
+        Every read path in this class goes through here rather than calling
+        `DealRead.model_validate` directly, so a deal's customer cannot depend on which
+        method the caller happened to use -- `create`, `update`, `move_stage`, `restore`,
+        `get` and `list` all return the same shape. Mirrors `PersonService._read`.
+        """
+        return self._reads([deal])[0]
+
+    def _reads(self, deals: list[Deal]) -> list[DealRead]:
+        """The batched form, and the reason `customer_ragione_sociale` is resolved here
+        and not inside `DealRead` itself: one lookup for the whole page (see
+        `DealRepository.customer_names`), so a page of deals costs two queries rather
+        than one per row. A schema-level validator or a lazy ORM relationship would both
+        put the lookup on the row, which is exactly the N+1 this avoids.
+
+        `model_copy` and not a second `model_validate`: the name is not an attribute of
+        `Deal` at all, so there is nothing on the ORM object for `from_attributes` to
+        read -- and the value comes from a `String` column, already the right type.
+        """
+        names = self.repo.customer_names({deal.customer_id for deal in deals})
+        return [
+            DealRead.model_validate(deal).model_copy(
+                update={"customer_ragione_sociale": names.get(deal.customer_id)}
+            )
+            for deal in deals
+        ]
+
     def create(self, data: DealCreate, actor: Actor) -> DealRead:
         actor.require_write("create_deal")
         payload = data.model_dump()
@@ -209,7 +238,7 @@ class DealService:
             ENTITY, deal.id, "created", actor, {"nome": deal.nome, "stage": stage.nome}
         )
         self.session.commit()
-        return DealRead.model_validate(deal)
+        return self._read(deal)
 
     def update(self, deal_id: UUID, data: DealUpdate, actor: Actor) -> DealRead:
         actor.require_write("update_deal")
@@ -248,7 +277,7 @@ class DealService:
 
         self.activities.record(ENTITY, deal.id, "updated", actor, {"changed": sorted(changes)})
         self.session.commit()
-        return DealRead.model_validate(deal)
+        return self._read(deal)
 
     def move_stage(self, deal_id: UUID, stage_id: UUID, actor: Actor) -> DealRead:
         """The only supported way to change a deal's stage -- see `DealUpdate`'s own
@@ -279,7 +308,7 @@ class DealService:
             ENTITY, deal.id, "stage_changed", actor, {"from": previous.nome, "to": target.nome}
         )
         self.session.commit()
-        return DealRead.model_validate(deal)
+        return self._read(deal)
 
     def set_stage_in_transaction(self, deal: Deal, stage: PipelineStageRead) -> None:
         """Move a deal to a stage, and nothing else. Slice 6 §9.3's convention.
@@ -321,7 +350,7 @@ class DealService:
         deal = self.repo.get(deal_id)
         if deal is None:
             raise NotFound(ENTITY, deal_id)
-        return DealRead.model_validate(deal)
+        return self._read(deal)
 
     def soft_delete(self, deal_id: UUID, actor: Actor) -> None:
         """Sets deleted_at. No physical delete exists in this slice: a misread
@@ -401,7 +430,7 @@ class DealService:
         if was_deleted:
             self.activities.record(ENTITY, deal.id, "restored", actor)
         self.session.commit()
-        return DealRead.model_validate(deal)
+        return self._read(deal)
 
     # `list` must stay the last method defined in this class -- an unconditional
     # project rule (see `FieldDefinitionService.specs_for`'s docstring and
@@ -424,6 +453,6 @@ class DealService:
             else None
         )
         return DealPage(
-            items=[DealRead.model_validate(d) for d in items],
+            items=self._reads(items),
             next_cursor=next_cursor,
         )
