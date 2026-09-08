@@ -1,0 +1,14 @@
+extend = "../../ruff.toml"
+
+[lint.isort]
+known-first-party = ["pigrocrm", "pigrocrm_api", "pigrocrm_mcp"]
+
+# packages/core may import neither adapter. apps/api and apps/mcp each get their own
+# nested ruff.toml (extending this file) that replaces this table with a narrower one:
+# every adapter may import itself, but not the other adapter. A blanket
+# per-file-ignore on TID251 for the whole apps/ tree would not express that -- it
+# would also silence a real cross-adapter import (e.g. apps/mcp importing
+# pigrocrm_api), since ruff's suppression is per rule code, not per banned name.
+[lint.flake8-tidy-imports.banned-api]
+"pigrocrm_api".msg = "packages/core must not import from apps/api"
+"pigrocrm_mcp".msg = "packages/core must not import from apps/mcp"

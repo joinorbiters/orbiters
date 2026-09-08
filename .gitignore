@@ -30,4 +30,4 @@ data/
 .playwright-mcp/
 # Screenshots I take while reviewing pages
 *.png
-!apps/web/public/*.png
+!**/public/*.png

@@ -1,0 +1,160 @@
+# Three tiers, and the reason for each one.
+#
+#   1. Local, before the PR exists: `.github/preflight.json`. Everything expensive --
+#      the full Python suite, the Playwright run, the images. Free and parallel, and
+#      the answer arrives before the push rather than minutes after it.
+#   2. `pull_request`: one cheap gate per project, scoped to what the diff can break.
+#   3. `push` to main: everything, unconditionally. Nobody waits on it.
+#
+# A check that stops running on a PR must appear in preflight.json. Verification did
+# not get cheaper here, it moved; a heavy check in neither tier is a hole.
+#
+# Adding a project means adding one filter to `changes` and one or two jobs below
+# that call the shared gates. It must not mean another workflow file.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # PR-only. dorny/paths-filter answers from the API on a pull_request, so this job
+  # needs no checkout and costs seconds. Deliberately not used on push: main runs
+  # everything.
+  #
+  # The `permissions` block is repeated rather than widened at the top because a
+  # job-level block REPLACES the workflow-level one instead of merging: without
+  # `contents: read` restated, every pull_request run fails with "Resource not
+  # accessible by integration" and `ci` goes red with no test failure in it.
+  changes:
+    name: changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      pigrocrm_py: ${{ steps.filter.outputs.pigrocrm_py }}
+      pigrocrm_web: ${{ steps.filter.outputs.pigrocrm_web }}
+      pigrocrm_image: ${{ steps.filter.outputs.pigrocrm_image }}
+    steps:
+      # Underscores, never dashes: `needs.changes.outputs.pigrocrm-web` is invalid
+      # expression syntax and the run dies in seconds with no job started, which
+      # reads as a broken workflow rather than as a typo.
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            pigrocrm_py:
+              - 'projects/pigrocrm/apps/api/**'
+              - 'projects/pigrocrm/apps/mcp/**'
+              - 'projects/pigrocrm/packages/**'
+              - 'projects/pigrocrm/conftest.py'
+              - 'projects/pigrocrm/ruff.toml'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - 'ruff.toml'
+              - '.python-version'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/_python-gate.yml'
+            pigrocrm_web:
+              - 'projects/pigrocrm/apps/web/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/_node-gate.yml'
+            pigrocrm_image:
+              - 'projects/pigrocrm/Dockerfile.api'
+              - 'projects/pigrocrm/Dockerfile.web'
+              - 'projects/pigrocrm/docker-compose.yml'
+              - 'projects/pigrocrm/deploy/**'
+              - '.dockerignore'
+
+  # `!cancelled() &&` is not decoration. A job that `needs` a skipped job is skipped
+  # too, whatever its own `if` says, unless that `if` contains a status-check
+  # function -- and `changes` is skipped on every push. Without the guard the whole
+  # suite would skip on the trunk and `ci` would report GREEN, because skipped counts
+  # as passing. That is the one way this shape fails silently, and in the safe-looking
+  # direction.
+  pigrocrm-py:
+    name: pigrocrm · python
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.pigrocrm_py == 'true') }}
+    uses: ./.github/workflows/_python-gate.yml
+    with:
+      lint-path: projects/pigrocrm
+      sources: >-
+        projects/pigrocrm/packages/core/src
+        projects/pigrocrm/apps/api/src
+        projects/pigrocrm/apps/mcp/src
+      tests: >-
+        projects/pigrocrm/packages/core/tests
+        projects/pigrocrm/apps/api/tests
+        projects/pigrocrm/apps/mcp/tests
+      # Two things a PR does not pay for. `slow` builds a fifty-thousand-row corpus.
+      # `planner` asserts an EXPLAIN output, and the winning plan there sits within a
+      # few percent of the loser, so it turns over on the runner's hardware rather than
+      # on the diff. Both run on the trunk and in preflight, which is where they were
+      # recorded and where they mean something.
+      pytest-args: ${{ github.event_name == 'pull_request' && '-m "not slow and not planner"' || '' }}
+      # Without Pandoc and Typst the document renderer shells out to nothing and
+      # about thirty tests fail on "strumento di composizione non installato". They
+      # had been failing on every run of the previous workflow, which is also why
+      # `e2e` and `deploy` had never once executed: both sat behind this job.
+      renderer: true
+
+  pigrocrm-web:
+    name: pigrocrm · web
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.pigrocrm_web == 'true') }}
+    uses: ./.github/workflows/_node-gate.yml
+    with:
+      filter: web
+
+  # Tier 3. No `needs: changes`, so no guard is needed: the `if` decides on its own.
+  pigrocrm-images:
+    name: pigrocrm · images build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build both images from the repository root context
+        working-directory: projects/pigrocrm
+        # The compose file's own build definitions, so this proves the same context
+        # and the same Dockerfiles a deploy will use, rather than a parallel
+        # invocation that can drift from them.
+        env:
+          POSTGRES_PASSWORD: build-only-never-used
+          PIGROCRM_JWT_SECRET: build-only-never-used-and-long-enough-for-the-validator
+        run: docker compose build
+
+  ci:
+    name: ci
+    # `always()`, or a skipped dependency makes this job skip too and the check never
+    # arrives. This is the only status check the repository should ever be asked to
+    # require: every job name above can change forever without touching a ruleset.
+    if: always()
+    needs: [changes, pigrocrm-py, pigrocrm-web, pigrocrm-images]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: A needed job failed or was cancelled
+        run: |
+          printf '%s\n' '${{ toJSON(needs) }}'
+          printf '%s' '${{ toJSON(needs) }}' | jq -e '
+            to_entries
+            | map(select(.value.result == "failure" or .value.result == "cancelled"))
+            | length == 0'

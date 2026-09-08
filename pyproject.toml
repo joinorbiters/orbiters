@@ -1,11 +1,24 @@
 [project]
-name = "pigrocrm"
+name = "orbiters"
 version = "0.1.0"
 requires-python = ">=3.13,<3.14"
+# Every Python package of every project in the monorepo. One environment, one
+# resolution, one `uv.lock`: that is the whole point of a single workspace, and it is
+# what stops two projects installing two copies of SQLAlchemy at two versions. A new
+# project adds its packages here and to `[tool.uv.workspace] members` below.
 dependencies = ["pigrocrm-core", "pigrocrm-api", "pigrocrm-mcp"]
 
 [tool.uv.workspace]
-members = ["packages/*", "apps/api", "apps/mcp"]
+# Listed one by one rather than globbed. `projects/*/apps/*` would also match
+# `projects/pigrocrm/apps/web`, which is a Vite app with no `pyproject.toml`, and uv
+# refuses to start on a member that has none ("Workspace member ... is missing a
+# pyproject.toml"). An explicit list also means the error you get after adding a
+# project and forgetting this line names the package instead of a glob.
+members = [
+  "projects/pigrocrm/packages/core",
+  "projects/pigrocrm/apps/api",
+  "projects/pigrocrm/apps/mcp",
+]
 
 [tool.uv.sources]
 pigrocrm-core = { workspace = true }
@@ -31,24 +44,50 @@ dev = [
   "types-openpyxl==3.1.5.20260807",
 ]
 
+# Both tables below name one project's paths explicitly, and grow by a few lines per
+# project. That is deliberate: pytest resolves `testpaths` and mypy resolves `files`
+# against the current working directory, not against the file they are written in, so
+# a per-project config file that only works when you happen to `cd` into that project
+# is a trap. Everything runs from the repository root; CI narrows to one project by
+# passing that project's paths as arguments, which override both lists.
 [tool.pytest.ini_options]
-testpaths = ["packages/core/tests", "apps/api/tests", "apps/mcp/tests"]
+testpaths = [
+  "projects/pigrocrm/packages/core/tests",
+  "projects/pigrocrm/apps/api/tests",
+  "projects/pigrocrm/apps/mcp/tests",
+]
 asyncio_mode = "auto"
-# Nothing skips on this marker by default. It exists so a developer can say
-# `-m "not slow"` while iterating, and so CI's own `uv run pytest -q` still runs it: a
-# plan assertion that CI skips is a plan assertion that does not exist.
+# Nothing skips on either marker by default: a plan assertion that CI skips is a plan
+# assertion that does not exist, so both run in `uv run pytest -q` and both run on the
+# trunk. What they buy is a change-scoped PR gate that can leave out the two kinds of
+# check whose result is not only about the code.
 markers = [
   "slow: builds the 50 000-row inflated corpus; minutes, not seconds",
+  # A plan is not a behaviour: it is what one PostgreSQL, holding one table in one
+  # physical state, decided was cheapest. Where the two candidates sit within a few
+  # percent of each other the winner changes with the machine and with what the rest
+  # of the suite left in the table, so the same assertion passes on a 96-core devbox
+  # and fails on a two-core runner with no line of code in between. Measured
+  # 2026-09-08: 56.25..60.26 for the bitmap scan, twice, identical to the cent.
+  "planner: asserts a query plan, whose outcome depends on the machine and not only on the code",
 ]
 
 [tool.mypy]
 python_version = "3.13"
 strict = true
-mypy_path = ["packages/core/src", "apps/api/src", "apps/mcp/src"]
+mypy_path = [
+  "projects/pigrocrm/packages/core/src",
+  "projects/pigrocrm/apps/api/src",
+  "projects/pigrocrm/apps/mcp/src",
+]
 explicit_package_bases = true
-# Matches .github/workflows/*.yml's own `uv run mypy packages/core/src apps/api/src
-# apps/mcp/src` exactly, so the bare `uv run mypy` gate this repo's own task briefs
-# name actually passes instead of failing on "Missing target module, package, files,
-# or command" every time -- a gate that always fails trains people to read failure as
-# normal, and read a real one as more of the same.
-files = ["packages/core/src", "apps/api/src", "apps/mcp/src"]
+# Matches what .github/workflows/ci.yml passes on the command line exactly, so the
+# bare `uv run mypy` this repository's own task briefs name actually passes instead of
+# failing on "Missing target module, package, files, or command" every time -- a gate
+# that always fails trains people to read failure as normal, and read a real one as
+# more of the same.
+files = [
+  "projects/pigrocrm/packages/core/src",
+  "projects/pigrocrm/apps/api/src",
+  "projects/pigrocrm/apps/mcp/src",
+]
