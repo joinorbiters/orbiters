@@ -1,0 +1,85 @@
+{
+  "base": "origin/main",
+  "jobs": 4,
+  "checks": [
+    {
+      "id": "pigrocrm-py-lint",
+      "run": "uv run ruff check projects/pigrocrm && uv run ruff format --check projects/pigrocrm",
+      "when": ["projects/pigrocrm/**/*.py", "projects/pigrocrm/ruff.toml", "ruff.toml"],
+      "why": "Seconds here against a whole round trip in CI. Lint and format are the checks most likely to fail and the cheapest to have failed."
+    },
+    {
+      "id": "pigrocrm-py-types",
+      "run": "uv run mypy",
+      "when": [
+        "projects/pigrocrm/apps/api/src/**",
+        "projects/pigrocrm/apps/mcp/src/**",
+        "projects/pigrocrm/packages/core/src/**",
+        "pyproject.toml",
+        "uv.lock"
+      ],
+      "why": "mypy --strict over the three source roots. The bare `uv run mypy` works because pyproject.toml's [tool.mypy] files list names them."
+    },
+    {
+      "id": "pigrocrm-py-test",
+      "run": "uv run pytest -q projects/pigrocrm/packages/core/tests projects/pigrocrm/apps/api/tests projects/pigrocrm/apps/mcp/tests",
+      "when": [
+        "projects/pigrocrm/apps/api/**",
+        "projects/pigrocrm/apps/mcp/**",
+        "projects/pigrocrm/packages/**",
+        "projects/pigrocrm/conftest.py",
+        "pyproject.toml",
+        "uv.lock"
+      ],
+      "why": "The whole Python suite, `slow` marker included: roughly half an hour, testcontainers bringing up its own Postgres on a random port. The PR path in ci.yml runs it with -m \"not slow\"; this and push:main run everything. Needs pandoc and typst on PATH or about thirty renderer tests fail on \"strumento di composizione non installato\"."
+    },
+    {
+      "id": "pigrocrm-web-lint",
+      "run": "pnpm --filter web lint",
+      "when": ["projects/pigrocrm/apps/web/**", "package.json", "pnpm-workspace.yaml"]
+    },
+    {
+      "id": "pigrocrm-web-unit",
+      "run": "pnpm --filter web test",
+      "when": ["projects/pigrocrm/apps/web/**", "pnpm-lock.yaml", "pnpm-workspace.yaml"],
+      "why": "vitest, jsdom, no services. Also the step that writes src/routeTree.gen.ts, which the typecheck below needs and which nothing else generates."
+    },
+    {
+      "id": "pigrocrm-web-build",
+      "run": "pnpm --filter web build && pnpm --filter web build:landing && pnpm --filter web exec tsc --noEmit",
+      "when": [
+        "projects/pigrocrm/apps/web/**",
+        "package.json",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml"
+      ],
+      "why": "Build before typecheck, always: a bare tsc --noEmit on a clean checkout fails every route file with TS2307 because src/routeTree.gen.ts is gitignored and only a Vite run writes it."
+    },
+    {
+      "id": "pigrocrm-e2e",
+      "run": "bash projects/pigrocrm/apps/web/scripts/e2e.sh",
+      "when": [
+        "projects/pigrocrm/apps/web/**",
+        "projects/pigrocrm/apps/api/**",
+        "projects/pigrocrm/packages/core/src/**"
+      ],
+      "serial": true,
+      "why": "The Playwright suite against a real API and a real Postgres. `serial` because it binds three fixed host ports -- 55433 for its own Postgres, 8000 for the API, 5173 for Vite -- which are hardcoded in apps/web/scripts/e2e-env.sh rather than read from the environment. On a shared box that is also a collision with anything else holding them, and the script clears :5173 and :8000 before it starts."
+    },
+    {
+      "id": "pigrocrm-images",
+      "run": "cd projects/pigrocrm && POSTGRES_PASSWORD=build-only PIGROCRM_JWT_SECRET=build-only-and-long-enough-for-the-validator docker compose build",
+      "when": [
+        "projects/pigrocrm/Dockerfile.api",
+        "projects/pigrocrm/Dockerfile.web",
+        "projects/pigrocrm/docker-compose.yml",
+        "projects/pigrocrm/deploy/**",
+        ".dockerignore",
+        "pnpm-lock.yaml",
+        "uv.lock"
+      ],
+      "serial": true,
+      "why": "Both images build from the repository-root context they are deployed with. Serial because a docker build saturates the box and this shares it with everyone else's agents."
+    }
+  ]
+}

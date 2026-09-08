@@ -1,0 +1,164 @@
+# Deploy, for PigroCRM only. One deploy workflow per project, named after it: a
+# monorepo's projects ship on their own schedules and must never be able to deploy
+# each other by accident.
+#
+# Everything about the target -- the secrets, the arming variable, the script that
+# runs on the far side -- is exactly what the previous single ci-deploy.yml did. Only
+# the paths changed, and the CI verification below is new.
+name: Deploy PigroCRM
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-pigrocrm
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  deploy:
+    # This is the one job that must never fire by accident. Two independent
+    # conditions both have to hold:
+    #
+    # 1. a real push to main, never a pull_request build and never an ad hoc
+    #    workflow_dispatch (that trigger exists so the job can be re-run against main
+    #    deliberately, and the condition below still refuses it -- change it here,
+    #    knowingly, if that is ever wanted);
+    # 2. vars.PIGROCRM_DEPLOY_ENABLED == 'true' -- a repository Actions *variable*
+    #    that does not exist on a fresh repository and is empty by default, so this
+    #    whole expression is false and the job reports "skipped" until a human
+    #    deliberately creates it. That is the actual arming switch: nothing else in
+    #    this file makes a deploy possible.
+    #
+    # `environment: production` below is a second, optional gate: it does nothing on
+    # its own, but once an admin adds required reviewers to an environment of that
+    # name in Settings -> Environments, every run waits for a human too.
+    if: |
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      vars.PIGROCRM_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Refuse to deploy a commit CI has not passed
+        # The previous workflow got this for free by putting deploy in the same file
+        # behind `needs:`. Split into its own workflow, that guarantee has to be
+        # re-established explicitly, or a red trunk deploys itself.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            run=$(gh api "repos/${REPO}/actions/workflows/ci.yml/runs?head_sha=${SHA}&per_page=10" \
+              --jq '.workflow_runs | sort_by(.created_at) | last // empty')
+            if [ -n "$run" ]; then
+              status=$(printf '%s' "$run" | jq -r .status)
+              conclusion=$(printf '%s' "$run" | jq -r .conclusion)
+              url=$(printf '%s' "$run" | jq -r .html_url)
+              echo "ci.yml for ${SHA}: status=${status} conclusion=${conclusion} (${url})"
+              if [ "$status" = completed ]; then
+                [ "$conclusion" = success ] && exit 0
+                echo "::error::CI concluded ${conclusion} for ${SHA}. See ${url}. Refusing to deploy."
+                exit 1
+              fi
+            fi
+            sleep 30
+          done
+          echo "::error::No completed ci.yml run for ${SHA} after 30 minutes. Refusing to deploy an unverified commit."
+          exit 1
+
+      - name: Verify deploy secrets are configured
+        # Arming the workflow and configuring the target server are two separate,
+        # deliberate steps -- someone can flip PIGROCRM_DEPLOY_ENABLED on before the
+        # four secrets exist. Failing here with a plain list of what is missing beats
+        # letting ssh-keyscan and rsync stumble into it with a cryptic error.
+        env:
+          DEPLOY_HOST: ${{ secrets.PIGROCRM_HOST }}
+          DEPLOY_USER: ${{ secrets.PIGROCRM_USER }}
+          DEPLOY_PATH: ${{ secrets.PIGROCRM_DEPLOY_PATH }}
+          DEPLOY_KEY: ${{ secrets.PIGROCRM_SSH_PRIVATE_KEY }}
+        run: |
+          missing=()
+          [ -z "$DEPLOY_HOST" ] && missing+=(PIGROCRM_HOST)
+          [ -z "$DEPLOY_USER" ] && missing+=(PIGROCRM_USER)
+          [ -z "$DEPLOY_PATH" ] && missing+=(PIGROCRM_DEPLOY_PATH)
+          [ -z "$DEPLOY_KEY" ] && missing+=(PIGROCRM_SSH_PRIVATE_KEY)
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf '::error::PIGROCRM_DEPLOY_ENABLED is true but these secrets are missing: %s\n' "${missing[*]}"
+            exit 1
+          fi
+
+      - name: Configure SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.PIGROCRM_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.PIGROCRM_SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+      - name: Sync sources
+        # Still the whole repository, not just projects/pigrocrm: the uv and pnpm
+        # workspace roots live at the top and the image builds need them. The server's
+        # own data directories (data/, var/) are excluded so a --delete never reaches
+        # the register or the documents -- they sit exactly where PIGROCRM_DATA_DIR
+        # and PIGROCRM_DOCUMENTS_DIR point, which by default is the repository root.
+        env:
+          DEPLOY_HOST: ${{ secrets.PIGROCRM_HOST }}
+          DEPLOY_USER: ${{ secrets.PIGROCRM_USER }}
+          DEPLOY_PATH: ${{ secrets.PIGROCRM_DEPLOY_PATH }}
+        run: |
+          ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p \"${DEPLOY_PATH}\""
+          rsync -az --delete \
+            --exclude '.git' --exclude '.github' \
+            --exclude '.env' --exclude '.reference-acme' \
+            --exclude 'node_modules' --exclude 'dist' --exclude '.venv' \
+            --exclude 'data' --exclude 'var' \
+            ./ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}"
+
+      - name: Deploy
+        env:
+          DEPLOY_HOST: ${{ secrets.PIGROCRM_HOST }}
+          DEPLOY_USER: ${{ secrets.PIGROCRM_USER }}
+          DEPLOY_PATH: ${{ secrets.PIGROCRM_DEPLOY_PATH }}
+        run: |
+          ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "DEPLOY_PATH='${DEPLOY_PATH}' bash -s" <<'SSH'
+            set -e
+            # The compose file moved into the project; its build context is still the
+            # repository root, which is why this cd goes down rather than the context
+            # coming up.
+            cd "${DEPLOY_PATH}/projects/pigrocrm"
+            if docker compose version >/dev/null 2>&1; then
+              COMPOSE="docker compose"
+            elif command -v docker-compose >/dev/null 2>&1; then
+              COMPOSE="docker-compose"
+            else
+              echo "Docker Compose non trovato" >&2
+              exit 1
+            fi
+            $COMPOSE up -d --build
+          SSH
+
+      - name: Configure nginx
+        # setup-server.sh needs root (see that script's own header and the project
+        # README's "Deploy" section) -- PIGROCRM_USER, over plain SSH with no sudo in
+        # between, therefore has to already be root or equivalent on the target host.
+        # That is a property of how the server is provisioned, not something this
+        # workflow can satisfy, and it is documented rather than papered over with a
+        # non-interactive `sudo` this file cannot confirm is even configured.
+        env:
+          DEPLOY_HOST: ${{ secrets.PIGROCRM_HOST }}
+          DEPLOY_USER: ${{ secrets.PIGROCRM_USER }}
+          DEPLOY_PATH: ${{ secrets.PIGROCRM_DEPLOY_PATH }}
+        run: ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "bash \"${DEPLOY_PATH}/projects/pigrocrm/deploy/setup-server.sh\""
