@@ -75,8 +75,13 @@ Copia `.env.example` nella radice del repository **sul server** (non solo in loc
 ### 2. Avvia lo stack
 
 ```
-docker compose up -d --build
+cd projects/pigrocrm
+docker compose --env-file ../../.env up -d --build
 ```
+
+Il file compose sta nella cartella del progetto, ma il `.env` resta nella radice del
+repository (passo 1): senza `--env-file` compose lo cercherebbe accanto a sé, non
+troverebbe `POSTGRES_PASSWORD` e si rifiuterebbe di partire.
 
 Porta su `db` (Postgres), `api` (migra da solo all'avvio) e `web` (nginx con la SPA compilata,
 in ascolto solo su `127.0.0.1:8080` — non ancora raggiungibile da internet).

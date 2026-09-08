@@ -147,7 +147,12 @@ jobs:
               echo "Docker Compose non trovato" >&2
               exit 1
             fi
-            $COMPOSE up -d --build
+            # The server's `.env` stays at the repository root (README §1, and rsync
+            # above never touches it), but compose reads `.env` from the directory of
+            # its own file, which is now two levels down: name it, or every
+            # `${POSTGRES_PASSWORD}` interpolation comes up empty and compose refuses
+            # to start.
+            $COMPOSE --env-file "${DEPLOY_PATH}/.env" up -d --build
           SSH
 
       - name: Configure nginx
