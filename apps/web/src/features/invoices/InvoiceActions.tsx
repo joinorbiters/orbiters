@@ -34,9 +34,10 @@ export function InvoiceActions({ invoice }: { invoice: Invoice }) {
   const isProformaReady = invoice.tipo === 'proforma' && invoice.stato === 'confermata'
   const canIssue = isDraftFattura || isProformaReady
   const isIssued = invoice.tipo === 'fattura' && invoice.stato === 'emessa'
-  // An invoice pigroCRM imported from Acme never had its own XML rendered here: the
-  // one on file is whatever was transmitted at the time, so offering to regenerate it
-  // would silently replace a legally-filed document with a reconstruction.
+  // An invoice pigroCRM imported never had its own XML rendered here: the one on file is
+  // whatever the system that issued it transmitted at the time, so offering to
+  // regenerate it would silently replace a legally-filed document with a
+  // reconstruction. The flag is the column's presence, never its value.
   const isImported = invoice.importata_da != null
 
   /**

@@ -191,9 +191,10 @@ def register(
     @mcp.tool()
     @guard
     def import_issued_invoice(dati: dict[str, Any]) -> dict[str, Any]:
-        """Registra una fattura **gia' emessa dal gestionale precedente** (Acme) con il
-        suo numero e la sua data: il contatore dell'anno sale fino a quel numero e non
-        viene prodotto nessun XML, perche' quello e' gia' stato trasmesso allo SdI.
+        """Registra una fattura **gia' emessa da un sistema esterno** -- il gestionale
+        precedente -- con il suo numero e la sua data: il contatore dell'anno sale fino a
+        quel numero e non viene prodotto nessun XML, perche' quello e' gia' stato
+        trasmesso allo SdI.
 
         `dati` ha la forma di `InvoiceImport`, campo per campo: `anno`, `numero`,
         `data_emissione`, `data_scadenza` (opzionale, altrimenti calcolata dal regime),
@@ -205,19 +206,20 @@ def register(
         {document_id} (un documento gia' caricato nel CRM) e {drive_file_id} (il PDF
         originale su una cartella Drive configurata: l'import lo scarica e lo archivia
         da se', quindi non serve passare da `import_drive_file`) -- `note_interne` e
-        `importata_da` (fisso a `"acme"`, l'unica provenienza che questa fetta importa).
+        `importata_da` (fisso a `"esterno"`: il CRM registra che il documento e' stato
+        emesso fuori, non da quale strumento).
         I totali devono tornare al centesimo: `imponibile` uguale alla somma dei
         `prezzo_totale` di riga e `imponibile + imposta` uguale a `totale`. Il `bollo` si
         dichiara a parte e **non** entra nel totale (lo assolve l'emittente in modo
         virtuale), esattamente come per una fattura emessa da PigroCRM. La descrizione
-        libera di Acme (es.
-        "207571/0426/...") va in `causale` e nella `descrizione` della riga, mai in un
-        campo a se stante: `InvoiceImport` non ha un `riferimento`, riservato alle
-        proforma.
+        libera stampata sul documento originale (es. "207571/0426/...") va in `causale` e
+        nella `descrizione` della riga, mai in un campo a se stante: `InvoiceImport` non
+        ha un `riferimento`, riservato alle proforma.
 
         La riga entra nel registro gia' **emessa**, con il suo numero, e **l'import non
         si disfa**: se `trasmessa_esternamente_il` e' valorizzato -- come per una fattura
-        gia' trasmessa allo SdI da Acme, cioe' il caso normale qui -- nemmeno
+        gia' trasmessa allo SdI dal sistema di provenienza, cioe' il caso normale qui --
+        nemmeno
         `annul_invoice` la annulla, perche' da quel punto la correzione e' una nota di
         credito che PigroCRM non emette. Verifica i dati **prima** di chiamare.
         La risposta elenca in `buchi_non_dichiarati` i numeri che mancano fra

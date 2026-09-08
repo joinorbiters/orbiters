@@ -1078,7 +1078,7 @@ class InvoiceService:
                 invoice.pdf_document_id = self.documents.import_bytes(
                     customer_id=data.customer_id,
                     tipo="fattura",
-                    titolo=f"Fattura {numero_completo(data.anno, data.numero)} (originale Acme)",
+                    titolo=f"Fattura {numero_completo(data.anno, data.numero)} (originale)",
                     data=pdf_sorgente.contenuto,
                     content_type=PDF_MIME,
                     actor=actor,
@@ -1859,8 +1859,8 @@ class InvoiceService:
         if invoice.importata_da is not None:
             raise Conflict(
                 ENTITY,
-                f"fattura importata da {invoice.importata_da}: l'XML e' quello gia' trasmesso "
-                "allo SdI dal gestionale precedente, questo CRM non ne produce un secondo",
+                "fattura importata: l'XML e' quello gia' trasmesso allo SdI dal sistema "
+                "che l'ha emessa, questo CRM non ne produce un secondo",
                 anno=invoice.anno,
                 numero=invoice.numero,
             )
@@ -1917,8 +1917,7 @@ class InvoiceService:
         if invoice.importata_da is not None:
             raise Conflict(
                 ENTITY,
-                f"fattura importata da {invoice.importata_da}: il PDF e' l'originale caricato, "
-                "non si rigenera",
+                "fattura importata: il PDF e' l'originale caricato, non si rigenera",
                 anno=invoice.anno,
                 numero=invoice.numero,
             )
