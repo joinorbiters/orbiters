@@ -1,0 +1,60 @@
+# The Node gate, once, for every project in the monorepo. Same reasoning as
+# _python-gate.yml: a second Node app should cost a dozen lines in ci.yml, not a
+# second copy of this file. Nothing here names PigroCRM.
+name: node gate
+
+on:
+  workflow_call:
+    inputs:
+      filter:
+        description: >-
+          pnpm filter selecting the package under test. Written without the trailing
+          "..." by the caller; this file appends it where the dependency closure is
+          what should be installed.
+        required: true
+        type: string
+      build:
+        description: run the package's build script (and its landing build, if any)
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  gate:
+    name: lint · unit · build · typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # No version pinned here: pnpm/action-setup reads `packageManager` from the
+      # root package.json, which is the single place the version is decided.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile --filter ${{ inputs.filter }}...
+
+      - name: Lint
+        run: pnpm --filter ${{ inputs.filter }} lint
+
+      # Order is load-bearing, and was learned the hard way in this repository's
+      # first workflow. A bare `tsc --noEmit` needs src/routeTree.gen.ts to exist:
+      # main.tsx imports it, it is gitignored, and no postinstall generates it.
+      # Nothing but a Vite run writes it -- @tanstack/router-plugin does, as a side
+      # effect of both `vitest run` and `vite build`. On a clean checkout, which is
+      # exactly what a runner has and a developer's machine never is, running the
+      # standalone typecheck first fails every route file with TS2307.
+      - name: Unit tests
+        run: pnpm --filter ${{ inputs.filter }} test
+
+      - name: Build
+        if: inputs.build
+        run: pnpm --filter ${{ inputs.filter }} build && pnpm --filter ${{ inputs.filter }} build:landing
+
+      - name: Type check
+        run: pnpm --filter ${{ inputs.filter }} exec tsc --noEmit

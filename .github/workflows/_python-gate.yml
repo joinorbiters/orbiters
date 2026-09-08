@@ -1,0 +1,81 @@
+# The Python gate, once, for every project in the monorepo.
+#
+# This file exists so that adding a second Python project costs a dozen lines in
+# ci.yml instead of a second copy of everything below. Everything project-specific
+# arrives as an input; nothing in here names PigroCRM.
+name: python gate
+
+on:
+  workflow_call:
+    inputs:
+      sources:
+        description: space-separated source roots to type-check
+        required: true
+        type: string
+      tests:
+        description: space-separated test roots to run
+        required: true
+        type: string
+      lint-path:
+        description: directory ruff is pointed at
+        required: true
+        type: string
+      pytest-args:
+        description: extra pytest arguments, e.g. -m "not slow" on the PR path
+        required: false
+        default: ''
+        type: string
+      renderer:
+        description: >-
+          install Pandoc and Typst before running the tests. The document renderer
+          shells out to both, and roughly thirty tests fail without them with
+          "strumento di composizione non installato". Off by default because most
+          projects will not need it.
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  gate:
+    name: lint · typecheck · test
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: '0.9.24'
+          enable-cache: true
+
+      - run: uv sync --frozen
+
+      # Cheapest first, on purpose: lint and format are the checks most likely to
+      # fail, and the cheapest to have failed. A retry is a whole round trip.
+      - name: Lint
+        run: uv run ruff check ${{ inputs.lint-path }} && uv run ruff format --check ${{ inputs.lint-path }}
+
+      - name: Type check
+        run: uv run mypy ${{ inputs.sources }}
+
+      - name: Install the document renderer
+        if: inputs.renderer
+        # Pinned to the same pair projects/pigrocrm/Dockerfile.api installs and that
+        # the renderer was verified against. Typst's diagnostic format and the
+        # auto-typography workaround were both confirmed against 0.14.2 specifically,
+        # so a runner on some other version proves less than nothing.
+        env:
+          PANDOC_VERSION: 3.8.2.1
+          TYPST_VERSION: 0.14.2
+        run: |
+          set -euo pipefail
+          curl -fL "https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-linux-amd64.tar.gz" | tar -xz -C /tmp
+          sudo mv "/tmp/pandoc-${PANDOC_VERSION}/bin/pandoc" /usr/local/bin/pandoc
+          curl -fL "https://github.com/typst/typst/releases/download/v${TYPST_VERSION}/typst-x86_64-unknown-linux-musl.tar.xz" | tar -xJ -C /tmp
+          sudo mv /tmp/typst-x86_64-unknown-linux-musl/typst /usr/local/bin/typst
+          pandoc --version | head -1
+          typst --version
+
+      - name: Test
+        # testcontainers starts PostgreSQL itself; no service container needed.
+        run: uv run pytest -q ${{ inputs.pytest-args }} ${{ inputs.tests }}
