@@ -431,3 +431,12 @@ describe('soft shapes', () => {
     }
   })
 })
+
+describe('viewport height chain', () => {
+  // The shell sizes itself with `h-full`, so html, body and #root must each hand the
+  // viewport height down: a browser that mis-reports `100dvh` (an embedded webview
+  // behind a toolbar) otherwise grows the page and clips the sidebar's profile block.
+  it('hands the viewport height down to #root', () => {
+    expect(css).toMatch(/html,\s*body,\s*#root\s*\{[^}]*height:\s*100%/)
+  })
+})

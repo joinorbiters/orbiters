@@ -150,6 +150,29 @@ describe('DataTable', () => {
     fireEvent.keyDown(rowFor('Beta SpA'), { key: 'a' })
     expect(onRowClick).not.toHaveBeenCalled()
   })
+
+  /* Half behavioural, like every responsive assertion in this suite: jsdom does not load
+     the stylesheet and lays nothing out, so the classes are what can be read. They are
+     worth reading anyway, because the defect they guard was invisible *by construction* --
+     the row's only focus indicator used to be `--muted`, which since the Paper pass is the
+     same tint the hover paints, so a keyboard row and a hovered row were the same pixel.
+     `ring-inset` is load-bearing rather than stylistic: the scroll container above is
+     `overflow-y-hidden` and an outer ring on the last row would be clipped away. */
+  it('gives a clickable row a visible focus ring, drawn inside the clipping container', () => {
+    render(<DataTable columns={COLUMNS} data={DATA} onRowClick={vi.fn()} />)
+    const classes = rowFor('ACME Srl').className.split(/\s+/)
+    expect(classes).toContain('focus-visible:ring-2')
+    expect(classes).toContain('focus-visible:ring-ring')
+    expect(classes).toContain('focus-visible:ring-inset')
+    expect(classes).not.toContain('focus-visible:bg-muted')
+  })
+
+  it('leaves a non-clickable row without a focus ring -- there is nothing to focus', () => {
+    render(<DataTable columns={COLUMNS} data={DATA} />)
+    const classes = rowFor('ACME Srl').className.split(/\s+/)
+    expect(classes).not.toContain('focus-visible:ring-2')
+    expect(classes).not.toContain('focus-visible:ring-inset')
+  })
 })
 
 /**

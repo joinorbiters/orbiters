@@ -1,8 +1,8 @@
 /**
  * Where the sidebar remembers which groups you left open.
  *
- * Its own module rather than a second export from `AppShell.tsx`, for the reason
- * `breadcrumb.ts` is one: a component file that also exports plain values trips
+ * Its own module rather than a second export from `AppShell.tsx`, for the same reason
+ * `features/settings/tabs.ts` is one: a component file that also exports plain values trips
  * `react-refresh/only-export-components`, and this is the kind of value a test wants to
  * name (`SIDEBAR_GROUPS_KEY`) rather than retype as a string literal.
  *

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { QueryErrorBanner } from '@/components/QueryErrorBanner'
+import { RowActions } from '@/components/RowActions'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -37,7 +38,6 @@ export function PeriodsPanel() {
   const close = useClosePeriod()
   const reopen = useReopenPeriod()
   const [problem, setProblem] = useState<ProblemDetail | null>(null)
-  const [pending, setPending] = useState<{ anno: number; mese: number } | null>(null)
   // `toIsoMonth`, never `toISOString().slice(0, 7)`: on the last evening of a month east
   // of Greenwich the UTC route opens the picker on the month that has not started yet.
   const [mese, setMese] = useState(() => toIsoMonth(new Date()))
@@ -112,38 +112,34 @@ export function PeriodsPanel() {
                 {lock.chiuso_da ? ` da ${names.get(lock.chiuso_da) ?? lock.chiuso_da}` : ''}
               </p>
             </div>
-            {pending?.anno === lock.anno && pending?.mese === lock.mese ? (
-              <div className="flex gap-2">
-                <Button variant="ghost" onClick={() => setPending(null)}>
-                  Annulla
-                </Button>
-                <Button
-                  variant="destructive"
-                  disabled={reopen.isPending}
-                  onClick={() => {
+            {/* Behind the «⋯» like every other row action (§4), destructive, and it keeps
+                its confirmation in the caller -- the house pattern `PipelinePanel`
+                already uses. The confirmation used to be a second button that swapped
+                itself into the row; a `window.confirm` says the same thing without an
+                item that comes and goes. It is confirmed and it leaves a trace: a
+                period is not reopened by accident and not reopened in silence -- the
+                service writes an activity. */}
+            <RowActions
+              label={`Azioni per ${label(lock.anno, lock.mese)}`}
+              items={[
+                {
+                  label: 'Riapri',
+                  destructive: true,
+                  disabled: reopen.isPending,
+                  onSelect: () => {
+                    const confirmed = window.confirm(
+                      `Riaprire ${label(lock.anno, lock.mese)}? Le ore e i costi di quel mese tornano modificabili, e la riapertura viene registrata.`,
+                    )
+                    if (!confirmed) return
                     setProblem(null)
                     reopen.mutate(
                       { anno: lock.anno, mese: lock.mese },
-                      {
-                        onSuccess: () => setPending(null),
-                        onError: (error) => setProblem(toProblem(error)),
-                      },
+                      { onError: (error) => setProblem(toProblem(error)) },
                     )
-                  }}
-                >
-                  Conferma
-                </Button>
-              </div>
-            ) : (
-              // Confirmed, and it leaves a trace: a period is not reopened by accident
-              // and is not reopened in silence -- the service writes an activity.
-              <Button
-                variant="outline"
-                onClick={() => setPending({ anno: lock.anno, mese: lock.mese })}
-              >
-                Riapri
-              </Button>
-            )}
+                  },
+                },
+              ]}
+            />
           </li>
         ))}
         {locks.data?.length === 0 && !locks.isLoading && (

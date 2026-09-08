@@ -1,7 +1,6 @@
 import { useState } from 'react'
-import { Download, RefreshCw } from 'lucide-react'
 import { QueryErrorBanner } from '@/components/QueryErrorBanner'
-import { Button } from '@/components/ui/button'
+import { RowActions } from '@/components/RowActions'
 import { toProblem, type ProblemDetail } from '@/lib/api'
 import { downloadDocument, useDocumentVersions, useRegenerateVersion } from './queries'
 
@@ -74,38 +73,36 @@ export function VersionHistory({ documentId }: { documentId: string }) {
               <span className="flex-1 text-sm text-muted-foreground">
                 {formatDateTime(version.created_at)} · {formatSize(version.dimensione)}
               </span>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={`Scarica la versione ${version.numero}`}
-                onClick={() => {
-                  setProblem(null)
-                  void downloadDocument(documentId, version.numero).catch((error: unknown) =>
-                    setProblem(toProblem(error)),
-                  )
-                }}
-              >
-                <Download className="h-4 w-4" />
-              </Button>
-              {/* Only a version generated from a template can be regenerated: an
-                  uploaded scan has no template and no variables to rebuild it from,
-                  and the server refuses that call by name. */}
-              {version.template_id !== null && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`Rigenera la versione ${version.numero}`}
-                  disabled={regenerate.isPending}
-                  onClick={() => {
-                    setProblem(null)
-                    regenerate.mutate(version.numero, {
-                      onError: (error: unknown) => setProblem(toProblem(error)),
-                    })
-                  }}
-                >
-                  <RefreshCw className="h-4 w-4" />
-                </Button>
-              )}
+              {/* Behind the «⋯» like every other row action (§4), where the two lone
+                  icons at the end of the row used to be. Only a version generated from
+                  a template can be regenerated: an uploaded scan has no template and no
+                  variables to rebuild it from, and the server refuses that call by name
+                  -- so the item is disabled rather than dropped, since an item that
+                  vanishes from one row to the next is a menu nobody learns. */}
+              <RowActions
+                label={`Azioni per la versione ${version.numero}`}
+                items={[
+                  {
+                    label: 'Scarica',
+                    onSelect: () => {
+                      setProblem(null)
+                      void downloadDocument(documentId, version.numero).catch(
+                        (error: unknown) => setProblem(toProblem(error)),
+                      )
+                    },
+                  },
+                  {
+                    label: 'Rigenera',
+                    disabled: version.template_id === null || regenerate.isPending,
+                    onSelect: () => {
+                      setProblem(null)
+                      regenerate.mutate(version.numero, {
+                        onError: (error: unknown) => setProblem(toProblem(error)),
+                      })
+                    },
+                  },
+                ]}
+              />
             </li>
           ))}
         </ul>

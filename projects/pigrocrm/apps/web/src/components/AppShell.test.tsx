@@ -104,6 +104,14 @@ beforeEach(() => {
 })
 
 describe('AppShell', () => {
+  it('is exactly as tall as its parent, never as tall as the page', () => {
+    const { container } = renderShell()
+    const root = container.firstElementChild as HTMLElement
+    expect(root.className).toMatch(/\bh-full\b/)
+    expect(root.className).toMatch(/\boverflow-hidden\b/)
+    expect(root.className).not.toMatch(/\bh-dvh\b/)
+  })
+
   it('shows the top-level entries and the group headers in Italian', () => {
     renderShell()
     const nav = sidebar()
@@ -146,6 +154,19 @@ describe('AppShell', () => {
     mockRoute.search = '?q=acme'
     renderShell()
     expect(sidebar().getByRole('link', { name: 'Clienti' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+  })
+
+  it('keeps «Analisi» marked on each of its three tabs, not only on the first', () => {
+    // The entry used to point at `/app/analisi/margini`, so the prefix match covered
+    // `margini` and nothing else: on the fiscal and estimate-versus-actual tabs no
+    // sidebar entry at all was marked. It points at the layout route instead, whose
+    // index still redirects to `margini`, so the click behaves as before.
+    mockRoute.pathname = '/app/analisi/fiscale'
+    renderShell()
+    expect(sidebar().getByRole('link', { name: 'Analisi' })).toHaveAttribute(
       'aria-current',
       'page',
     )

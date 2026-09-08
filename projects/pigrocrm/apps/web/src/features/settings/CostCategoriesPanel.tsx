@@ -2,6 +2,8 @@ import { Plus, Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { QueryErrorBanner } from '@/components/QueryErrorBanner'
+import { RowActions, type RowAction } from '@/components/RowActions'
+import { StatusPill } from '@/components/StatusPill'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -44,6 +46,57 @@ function CategoryRow({
   const unarchive = useUnarchiveCostCategory()
   const dirty = nome.trim() !== category.nome
 
+  /* Behind the «⋯» like every other row action (§4). «Salva» is *disabled* rather than
+     absent when there is nothing to save, which is `RowActions`' own rule: an item that
+     appears and disappears from row to row is a menu nobody learns, and «nothing to
+     save yet» is a state of this row, not the absence of an action.
+
+     Archiving and restoring are the same toggle, so exactly one of the two is ever
+     offered and neither is marked destructive -- the inverse is always one more click
+     away in this same menu, unlike a token revoke or a stage delete. */
+  const save: RowAction = {
+    label: 'Salva',
+    disabled: !dirty || rename.isPending,
+    onSelect: () => {
+      // Clear first, then attempt: without this the banner from a refused attempt
+      // survives the retry that fixed it, and the screen shows a success toast over a
+      // red "esiste già una categoria con questo nome". Every other panel in this
+      // folder already does exactly this.
+      onProblem(null)
+      rename.mutate(
+        { nome: nome.trim() },
+        {
+          onSuccess: () => toast.success('Categoria rinominata'),
+          onError: (error) => onProblem(toProblem(error).detail),
+        },
+      )
+    },
+  }
+  const toggle: RowAction = category.archiviata
+    ? {
+        label: 'Ripristina',
+        disabled: unarchive.isPending,
+        onSelect: () => {
+          onProblem(null)
+          unarchive.mutate(category.id, {
+            onSuccess: () => toast.success('Categoria ripristinata'),
+            onError: (error) => onProblem(toProblem(error).detail),
+          })
+        },
+      }
+    : {
+        label: 'Archivia',
+        disabled: archive.isPending,
+        onSelect: () => {
+          onProblem(null)
+          archive.mutate(category.id, {
+            onSuccess: () => toast.success('Categoria archiviata'),
+            onError: (error) => onProblem(toProblem(error).detail),
+          })
+        },
+      }
+  const items = [save, toggle]
+
   return (
     <li className="flex flex-wrap items-center gap-3 p-3">
       <Input
@@ -56,61 +109,14 @@ function CategoryRow({
           identity, the thing a report or an import keys on, and the reason renaming is
           safe at all. A seeded category has one; one created here does not. */}
       <code className="text-xs text-muted-foreground">{category.code ?? '—'}</code>
-      {category.archiviata && <span className="text-xs text-muted-foreground">archiviata</span>}
-      <div className="ml-auto flex gap-2">
-        {dirty && (
-          <Button
-            size="sm"
-            disabled={rename.isPending}
-            onClick={() => {
-              // Clear first, then attempt: without this the banner from a refused
-              // attempt survives the retry that fixed it, and the screen shows a
-              // success toast over a red "esiste già una categoria con questo nome".
-              // Every other panel in this folder already does exactly this.
-              onProblem(null)
-              rename.mutate(
-                { nome: nome.trim() },
-                {
-                  onSuccess: () => toast.success('Categoria rinominata'),
-                  onError: (error) => onProblem(toProblem(error).detail),
-                },
-              )
-            }}
-          >
-            Salva
-          </Button>
-        )}
-        {category.archiviata ? (
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={unarchive.isPending}
-            onClick={() => {
-              onProblem(null)
-              unarchive.mutate(category.id, {
-                onSuccess: () => toast.success('Categoria ripristinata'),
-                onError: (error) => onProblem(toProblem(error).detail),
-              })
-            }}
-          >
-            Ripristina
-          </Button>
-        ) : (
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={archive.isPending}
-            onClick={() => {
-              onProblem(null)
-              archive.mutate(category.id, {
-                onSuccess: () => toast.success('Categoria archiviata'),
-                onError: (error) => onProblem(toProblem(error).detail),
-              })
-            }}
-          >
-            Archivia
-          </Button>
-        )}
+      {/* The state through the one pill every state in the product goes through
+          (design spec §4): `muted`, because archiving claims nothing and the other
+          half of the pair is one click away in the row's own menu. Only on an archived
+          row -- «attiva» is what a configured category is, and a list where every row
+          repeats it says nothing while costing a line of noise on each one. */}
+      {category.archiviata && <StatusPill tone="muted">Archiviata</StatusPill>}
+      <div className="ml-auto">
+        <RowActions label={`Azioni per ${category.nome}`} items={items} />
       </div>
     </li>
   )
