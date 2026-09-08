@@ -1,9 +1,4 @@
-line-length = 100
-target-version = "py313"
-exclude = ["docs", ".superpowers"]
-
-[lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "TID"]
+extend = "../../ruff.toml"
 
 [lint.isort]
 known-first-party = ["pigrocrm", "pigrocrm_api", "pigrocrm_mcp"]
