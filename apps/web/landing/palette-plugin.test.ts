@@ -9,7 +9,7 @@ describe('extractSharedTokens', () => {
   it('extracts exactly the fifteen tokens the two stylesheets share', () => {
     expect(Object.keys(extractSharedTokens(tokensCss)).sort()).toEqual([
       '--color-charcoal-blue',
-      '--color-mint-cream',
+      '--color-paper',
       '--color-prussian-blue',
       '--color-royal-gold',
       '--color-watermelon',

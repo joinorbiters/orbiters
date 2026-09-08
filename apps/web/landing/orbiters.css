@@ -2,7 +2,7 @@
    (grid line, tile, glyph, contrast guard), exactly as for landing.css. What is left
    here is this page's own layout: the field over the whole viewport and one box. */
 :root {
-  --orb-ground: var(--color-mint-cream);
+  --orb-ground: var(--color-paper);
   --orb-ink: var(--color-prussian-blue);
   --orb-ink-quiet: var(--color-charcoal-blue);
   --orb-grid: var(--system-grid);

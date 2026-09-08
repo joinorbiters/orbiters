@@ -56,7 +56,10 @@
      the brand colour for every accent/border/icon/non-text use. */
   --color-watermelon-strong: #e5133e;
   --color-royal-gold: #f9dc5c;
-  --color-mint-cream: #f4fffd;
+  /* The page's ground: a neutral light grey (was Mint Cream #f4fffd until 2026-09-08,
+     a tint of cyan that read as "azzurrino" and made white cards and text sit less
+     well). Neutral, so the four coloured tokens are the only colour on the page. */
+  --color-paper: #f1f2f3;
   --color-prussian-blue: #011936;
   --color-charcoal-blue: #465362;
 
@@ -68,7 +71,7 @@
 }
 
 :root {
-  --background: var(--color-mint-cream);
+  --background: var(--color-paper);
   --foreground: var(--color-prussian-blue);
   --card: #ffffff;
   --card-foreground: var(--color-prussian-blue);
@@ -134,26 +137,26 @@
 
 .dark {
   --background: var(--color-prussian-blue);
-  --foreground: var(--color-mint-cream);
+  --foreground: var(--color-paper);
   --card: #0a2547;
-  --card-foreground: var(--color-mint-cream);
+  --card-foreground: var(--color-paper);
   --popover: #0a2547;
-  --popover-foreground: var(--color-mint-cream);
+  --popover-foreground: var(--color-paper);
   --primary: var(--color-watermelon-strong);
   --primary-foreground: #ffffff;
   --secondary: #14304f;
-  --secondary-foreground: var(--color-mint-cream);
+  --secondary-foreground: var(--color-paper);
   --muted: #14304f;
   --muted-foreground: #9fb0c0;
   --accent: var(--color-royal-gold);
   --accent-foreground: var(--color-prussian-blue);
   --destructive: var(--color-watermelon-strong);
   --destructive-foreground: #ffffff;
-  --border: color-mix(in oklab, var(--color-mint-cream) 22%, var(--color-prussian-blue));
-  --input: color-mix(in oklab, var(--color-mint-cream) 30%, var(--color-prussian-blue));
+  --border: color-mix(in oklab, var(--color-paper) 22%, var(--color-prussian-blue));
+  --input: color-mix(in oklab, var(--color-paper) 30%, var(--color-prussian-blue));
   --ring: var(--color-royal-gold);
-  --grid-line: color-mix(in oklab, var(--color-mint-cream) 7%, transparent);
-  --step: var(--color-mint-cream);
+  --grid-line: color-mix(in oklab, var(--color-paper) 7%, transparent);
+  --step: var(--color-paper);
 
   --sidebar: var(--card);
   --sidebar-foreground: var(--card-foreground);
@@ -197,7 +200,7 @@
    resolves to this palette instead of its own defaults. */
 @theme inline {
   /* Shadows are offsets, never blurs: the surface is lifted off the grid by a whole
-     number of pixels and casts a step the colour of the ink (`--step`, mint in dark
+     number of pixels and casts a step the colour of the ink (`--step`, paper in dark
      mode). `shadow-sm/md/lg` in the generated components -- popovers, dialogs,
      dropdowns -- all resolve here. */
   --shadow-xs: 1px 1px 0 0 var(--step);

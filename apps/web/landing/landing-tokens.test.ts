@@ -55,7 +55,7 @@ function resolveLandingColour(token: string): string {
 
 describe('landing tokens', () => {
   it('resolves every --landing-* colour out of the shared palette', () => {
-    expect(resolveLandingColour('--landing-surface')).toBe('#f4fffd')
+    expect(resolveLandingColour('--landing-surface')).toBe('#f1f2f3')
     expect(resolveLandingColour('--landing-ink')).toBe('#011936')
     expect(resolveLandingColour('--landing-ink-quiet')).toBe('#465362')
     expect(resolveLandingColour('--landing-cta')).toBe('#e5133e')
