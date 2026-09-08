@@ -229,3 +229,28 @@ def test_an_attribution_longer_than_the_column_is_a_422_not_a_500(
         "/api/orbiters/signups", json=_body("ada@studio.it", utm={"utm_source": "x" * 201})
     )
     assert response.status_code == 422
+
+
+def test_the_rate_limit_key_is_the_address_nginx_saw_not_the_one_the_client_wrote() -> None:
+    """`X-Forwarded-For` is `client-supplied, proxy-appended`: the FIRST hop is whatever the
+    visitor typed, the LAST is what nginx observed. Keying on the first let a script mint
+    a fresh bucket per request by changing the header; `X-Real-IP` (set by nginx too) is
+    the same observed address and wins when present."""
+    from starlette.requests import Request
+
+    from pigrocrm_api.routers.orbiters import _client_key
+
+    def req(headers: dict[str, str], client: tuple[str, int] | None = ("127.0.0.1", 1)) -> Request:
+        raw = [(k.lower().encode(), v.encode()) for k, v in headers.items()]
+        return Request(
+            {"type": "http", "headers": raw, "client": client, "method": "POST", "path": "/"}
+        )
+
+    assert (
+        _client_key(req({"X-Real-IP": "203.0.113.9", "X-Forwarded-For": "1.1.1.1, 203.0.113.9"}))
+        == "203.0.113.9"
+    )
+    assert _client_key(req({"X-Forwarded-For": "1.1.1.1, 203.0.113.9"})) == "203.0.113.9"
+    assert _client_key(req({"X-Forwarded-For": "forged-value, 203.0.113.9"})) == "203.0.113.9"
+    assert _client_key(req({})) == "127.0.0.1"
+    assert _client_key(req({}, client=None)) == "sconosciuto"
