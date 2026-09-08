@@ -5,6 +5,9 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from pigrocrm.core.db.base import PrimaryKeyMixin
 
+UTM_MAX_LENGTH = 200
+UTM_COLUMNS = ("utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term", "utm_id")
+
 
 class OrbitersBase(DeclarativeBase):
     """Its own metadata, on purpose: nothing here may ever join `Base.metadata`, or the
@@ -21,5 +24,16 @@ class Signup(OrbitersBase, PrimaryKeyMixin):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    # Where the signup came from, as the URL said it: the five standard UTM keys plus
+    # `utm_id`, which LinkedIn fills with the ad set. All optional, all written once --
+    # the first attribution of an address is the one that stays (see `SignupService`).
+    # Added to a table that already existed in production, so `ensure_orbiters_database`
+    # adds them with `ADD COLUMN IF NOT EXISTS` after `create_all` (UTM_COLUMNS below).
+    utm_source: Mapped[str | None] = mapped_column(String(UTM_MAX_LENGTH), default=None)
+    utm_medium: Mapped[str | None] = mapped_column(String(UTM_MAX_LENGTH), default=None)
+    utm_campaign: Mapped[str | None] = mapped_column(String(UTM_MAX_LENGTH), default=None)
+    utm_content: Mapped[str | None] = mapped_column(String(UTM_MAX_LENGTH), default=None)
+    utm_term: Mapped[str | None] = mapped_column(String(UTM_MAX_LENGTH), default=None)
+    utm_id: Mapped[str | None] = mapped_column(String(UTM_MAX_LENGTH), default=None)
 
     __table_args__ = (Index("uq_orbiters_signups_email_lower", func.lower(email), unique=True),)

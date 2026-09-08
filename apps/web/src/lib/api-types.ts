@@ -4981,6 +4981,7 @@ export interface components {
              * Format: email
              */
             email: string;
+            utm?: components["schemas"]["SignupUtm"] | null;
         };
         /** SignupRead */
         SignupRead: {
@@ -4996,8 +4997,43 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
-            /** Nuova */
+            /**
+             * Nuova
+             * @default false
+             */
             nuova: boolean;
+            /** Utm Source */
+            utm_source?: string | null;
+            /** Utm Medium */
+            utm_medium?: string | null;
+            /** Utm Campaign */
+            utm_campaign?: string | null;
+            /** Utm Content */
+            utm_content?: string | null;
+            /** Utm Term */
+            utm_term?: string | null;
+            /** Utm Id */
+            utm_id?: string | null;
+        };
+        /**
+         * SignupUtm
+         * @description The attribution the landing read from its own URL, if any. Every key optional and
+         *     bounded: an ad platform's macro left unexpanded (`{{AD_SET_ID}}`) is stored as the
+         *     literal it arrived as, because that is what happened.
+         */
+        SignupUtm: {
+            /** Utm Source */
+            utm_source?: string | null;
+            /** Utm Medium */
+            utm_medium?: string | null;
+            /** Utm Campaign */
+            utm_campaign?: string | null;
+            /** Utm Content */
+            utm_content?: string | null;
+            /** Utm Term */
+            utm_term?: string | null;
+            /** Utm Id */
+            utm_id?: string | null;
         };
         /** SollecitiPage */
         SollecitiPage: {

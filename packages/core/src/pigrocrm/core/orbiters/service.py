@@ -26,7 +26,10 @@ class SignupService:
         if existing is not None:
             return _read(existing, nuova=False)
 
-        row = Signup(email=email)
+        # The first attribution of an address is the one that stays: a person who comes
+        # back through another ad and types the same email is the same person.
+        utm = data.utm.model_dump() if data.utm is not None and not data.utm.is_empty() else {}
+        row = Signup(email=email, **utm)
         self.session.add(row)
         try:
             self.session.commit()
@@ -59,4 +62,4 @@ class SignupService:
 
 
 def _read(row: Signup, *, nuova: bool) -> SignupRead:
-    return SignupRead(id=row.id, email=row.email, created_at=row.created_at, nuova=nuova)
+    return SignupRead.model_validate(row, from_attributes=True).model_copy(update={"nuova": nuova})

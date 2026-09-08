@@ -70,3 +70,34 @@ def test_the_list_never_lands_in_the_crm_database(
 ) -> None:
     orbiters_client.post("/api/orbiters/signups", json={"email": "ada@studio.it"})
     assert api_session.execute(text("SELECT to_regclass('signups')")).scalar() is None
+
+
+def test_the_attribution_travels_with_the_email_and_comes_back(orbiters_client: TestClient) -> None:
+    response = orbiters_client.post(
+        "/api/orbiters/signups",
+        json={
+            "email": "ada@studio.it",
+            "utm": {
+                "utm_source": "linkedin",
+                "utm_medium": "paid-social",
+                "utm_id": "{{AD_SET_ID}}",
+            },
+        },
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert (body["utm_source"], body["utm_medium"], body["utm_id"]) == (
+        "linkedin",
+        "paid-social",
+        "{{AD_SET_ID}}",
+    )
+    assert body["utm_campaign"] is None
+
+
+def test_an_attribution_longer_than_the_column_is_a_422_not_a_500(
+    orbiters_client: TestClient,
+) -> None:
+    response = orbiters_client.post(
+        "/api/orbiters/signups", json={"email": "ada@studio.it", "utm": {"utm_source": "x" * 201}}
+    )
+    assert response.status_code == 422
