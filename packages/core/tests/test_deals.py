@@ -1,8 +1,10 @@
 from decimal import Decimal
+from typing import Any
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
@@ -953,3 +955,62 @@ def test_restoring_the_customer_first_then_the_deal_works(
     service.restore(deal.id, ADMIN)
 
     assert service.get(deal.id, ADMIN).id == deal.id
+
+
+def test_every_read_path_names_the_deal_s_customer(
+    db_session: Session, customer_id, stages
+) -> None:
+    """The deal list's first column is the deal; the line under it is who it is for.
+
+    `customer_id` alone made that a second lookup per row that no screen did -- the same
+    gap `PersonRead.customer_ragione_sociale` closed for Persone. Asserted on all four
+    read paths at once because they must agree: a deal's customer cannot depend on which
+    endpoint asked for the deal.
+    """
+    service = DealService(db_session)
+
+    created = service.create(DealCreate(nome="Progetto X", customer_id=customer_id), ADMIN)
+    assert created.customer_ragione_sociale == "ACME"
+    assert service.get(created.id, ADMIN).customer_ragione_sociale == "ACME"
+
+    updated = service.update(created.id, DealUpdate(note="una nota"), ADMIN)
+    assert updated.customer_ragione_sociale == "ACME"
+
+    moved = service.move_stage(created.id, stages["Vinto"].id, ADMIN)
+    assert moved.customer_ragione_sociale == "ACME"
+
+    page = service.list(DealListQuery(), ADMIN)
+    assert [deal.customer_ragione_sociale for deal in page.items] == ["ACME"]
+
+
+def test_the_customer_name_costs_one_query_for_the_whole_page(db_session: Session, stages) -> None:
+    """The reason the name is resolved in one batched lookup and not per row: a page of
+    50 deals across 50 customers must not become 51 queries. Counted, not reasoned
+    about -- an N+1 reintroduced by a later refactor is invisible to every other
+    assertion in this file. Same shape as `test_people.py`'s own counting test."""
+    customers = CustomerService(db_session)
+    service = DealService(db_session)
+    for index in range(3):
+        customer = customers.create(CustomerCreate(ragione_sociale=f"ACME {index}"), ADMIN)
+        service.create(DealCreate(nome=f"Progetto {index}", customer_id=customer.id), ADMIN)
+
+    statements: list[str] = []
+
+    def record(conn: Any, cursor: Any, statement: str, *args: Any) -> None:
+        statements.append(statement)
+
+    connection = db_session.connection()
+    event.listen(connection, "after_cursor_execute", record)
+    try:
+        page = service.list(DealListQuery(), ADMIN)
+    finally:
+        event.remove(connection, "after_cursor_execute", record)
+
+    assert len(page.items) == 3
+    # The list itself, plus exactly one lookup for the three customer names.
+    assert len(statements) == 2, statements
+    assert sorted(d.customer_ragione_sociale or "" for d in page.items) == [
+        "ACME 0",
+        "ACME 1",
+        "ACME 2",
+    ]
