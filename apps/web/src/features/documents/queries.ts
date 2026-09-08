@@ -125,18 +125,24 @@ export function useCreateFromTemplate(owner: DocumentOwner) {
 
 /**
  * `openapi-fetch` cannot send a `FormData` body for a multipart route, so this one
- * mutation uses `fetch` directly -- the single documented exception to "no fetch
- * outside the generated client", and it is still inside a hook, never in a component.
- * `credentials: 'include'` matches the shared client so the httpOnly session cookie
- * travels; no `Content-Type` is set by hand, because the browser must append its own
- * multipart boundary.
+ * mutation goes outside the generated client -- the single documented exception, and
+ * it is still inside a hook, never in a component.
+ *
+ * Through `fetchWithRefresh` rather than a bare `fetch`, for the two reasons every
+ * other caller outside the client uses it (lib/api.ts): the session cookie travels
+ * (`credentials: 'include'`, set there), and an upload attempted after the
+ * fifteen-minute access cookie expired renews the session and retries instead of
+ * failing with «Autenticazione richiesta» -- the drop that quietly did nothing after
+ * a quiet spell. It also applies `tenantPrefix`, which this absolute-from-root
+ * `/api/...` was missing: inside a space, the upload was addressing the *root*
+ * installation. No `Content-Type` is set by hand, because the browser must append its
+ * own multipart boundary.
  */
 async function putVersion(documentId: string, file: File): Promise<DocumentVersion> {
   const body = new FormData()
   body.append('file', file)
-  const response = await fetch(`/api/documents/${documentId}/versions`, {
+  const response = await fetchWithRefresh(`/api/documents/${documentId}/versions`, {
     method: 'POST',
-    credentials: 'include',
     body,
   })
   const payload: unknown = await response.json().catch(() => null)
