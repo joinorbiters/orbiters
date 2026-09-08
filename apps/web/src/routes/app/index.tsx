@@ -1,4 +1,6 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { LayoutDashboard } from 'lucide-react'
+import { PageHeader } from '@/components/PageHeader'
 import { DashboardPage } from '@/features/dashboard/DashboardPage'
 import { validateDashboardSearch, type DashboardSearch } from '@/features/dashboard/search'
 
@@ -17,14 +19,20 @@ function DashboardRoute() {
   const search = Route.useSearch()
   const navigate = useNavigate({ from: Route.fullPath })
   return (
-    <DashboardPage
-      search={search}
-      // Merged into the existing search rather than replacing it, so changing the tab keeps
-      // the period and changing the period keeps the tab.
-      onSearchChange={(next: Partial<DashboardSearch>) =>
-        void navigate({ search: (previous) => ({ ...previous, ...next }) })
-      }
-    />
+    <>
+      {/* The shell has no top bar since the 2026-09-08 revision, so the title of the
+          screen is the page's own. The tabs and the period stay inside `DashboardPage`,
+          which owns the URL round trip they drive. */}
+      <PageHeader icon={LayoutDashboard} title="Home" />
+      <DashboardPage
+        search={search}
+        // Merged into the existing search rather than replacing it, so changing the tab
+        // keeps the period and changing the period keeps the tab.
+        onSearchChange={(next: Partial<DashboardSearch>) =>
+          void navigate({ search: (previous) => ({ ...previous, ...next }) })
+        }
+      />
+    </>
   )
 }
 
