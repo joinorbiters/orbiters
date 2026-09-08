@@ -5,6 +5,8 @@ import { GmailBanner } from '@/components/GmailBanner'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
 
+const PUBLIC_ROUTES = new Set(['/app/login', '/app/registrati'])
+
 function AppLayout() {
   const { user, isLoading } = useAuth()
   const navigate = useNavigate()
@@ -19,7 +21,9 @@ function AppLayout() {
   // redirected FROM would be the same gate, chosen forever. The login route is
   // the one child of this layout that must render unconditionally, with no
   // redirect and no AppShell chrome around it.
-  const isLoginRoute = pathname === '/app/login'
+  // The two pages a visitor reaches without a session: the login, and the signup that
+  // makes a space (spec 2026-09-08). Everything else under /app bounces to the login.
+  const isLoginRoute = PUBLIC_ROUTES.has(pathname)
 
   useEffect(() => {
     if (!isLoginRoute && !isLoading && !user) void navigate({ to: '/app/login' })
