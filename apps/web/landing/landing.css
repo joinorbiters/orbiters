@@ -11,7 +11,7 @@
    Every colour below is a var() of a shared token. #ffffff appears only as the fill
    of the opaque surfaces the text sits on. */
 :root {
-  --landing-surface: var(--color-mint-cream);
+  --landing-surface: var(--color-paper);
   /* Text. 17.3:1 and 7.7:1 on --landing-surface respectively. */
   --landing-ink: var(--color-prussian-blue);
   --landing-ink-quiet: var(--color-charcoal-blue);

@@ -127,7 +127,7 @@ describe('design tokens', () => {
     ['watermelon', '#ed254e'],
     ['watermelon-strong', '#e5133e'],
     ['royal-gold', '#f9dc5c'],
-    ['mint-cream', '#f4fffd'],
+    ['paper', '#f1f2f3'],
     ['prussian-blue', '#011936'],
     ['charcoal-blue', '#465362'],
   ])('defines %s as %s', (name, hex) => {
@@ -240,7 +240,7 @@ describe('design tokens', () => {
     //
     // What is still asserted, because it must hold for decoration too: each colour is a
     // real mark against at least one surface, and never sinks into either one.
-    const light = tokenHex('mint-cream')
+    const light = tokenHex('paper')
     const dark = tokenHex('prussian-blue')
     for (const [token, hex] of Object.entries(CHART_HEX)) {
       const onLight = contrastRatio(hex, light)
