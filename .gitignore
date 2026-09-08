@@ -25,3 +25,6 @@ dist/
 var/
 # Postgres data when PIGROCRM_DATA_DIR is left at its default
 data/
+
+# Playwright MCP snapshots and console logs written while I look at pages
+.playwright-mcp/
