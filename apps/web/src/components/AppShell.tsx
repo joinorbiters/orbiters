@@ -286,7 +286,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   )
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-background">
+    <div className="flex h-full overflow-hidden bg-background">
       {overlay && (
         <>
           {/* A real button, not an `aria-hidden` div: dismissing an overlay is something a
@@ -306,8 +306,9 @@ export function AppShell({ children }: { children: ReactNode }) {
         className={cn(
           // As tall as the viewport, never as tall as the page: the profile at the bottom
           // is reachable without scrolling, and the navigation scrolls on its own if it
-          // ever outgrows the window.
-          'flex h-dvh shrink-0 flex-col bg-sidebar text-sidebar-foreground transition-[width] duration-200 ease-linear',
+          // ever outgrows the window. `h-full` of the shell (itself `h-full` of #root),
+          // not `100dvh`: see the html/body/#root rule in tokens.css.
+          'flex h-full shrink-0 flex-col bg-sidebar text-sidebar-foreground transition-[width] duration-200 ease-linear',
           rail ? 'w-[4.5rem]' : 'w-[17rem]',
           // Below `lg` the expanded sidebar is an overlay over the content, not a column
           // beside it: 272px of the 390px a phone has is not a layout, it is a menu.
