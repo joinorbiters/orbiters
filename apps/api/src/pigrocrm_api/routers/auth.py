@@ -186,14 +186,17 @@ def refresh(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Refresh token non valido")
 
     refresh_tokens = RefreshTokenService(session)
-    # Consumed before anything else: this is what makes rotation real. Once this call
+    # Rotated before anything else: this is what makes rotation real. Once this call
     # returns, the token just presented can never be used again -- if it had already
-    # been consumed by an earlier request, this raises and, as a side effect, revokes
-    # every other still-valid refresh token this user holds (see consume()'s
-    # docstring): that earlier request was the legitimate rotation, so this one
-    # presenting the same token again is a replay.
+    # been consumed by an earlier request, this either hands back that request's own
+    # successor (the two-tabs case, inside refresh_service.REFRESH_GRACE_SECONDS)
+    # or raises and, as a side effect, revokes every other still-valid refresh token
+    # this user holds: that earlier request was the legitimate rotation, so this one
+    # presenting the same token again long afterwards is a replay. See
+    # `RefreshTokenService.rotate` for where that line is drawn -- this router does
+    # not know, and must not know, which of the two branches answered it.
     try:
-        refresh_tokens.consume(payload.jti, payload.sub)
+        rotation = refresh_tokens.rotate(payload.jti, payload.sub, settings)
     except DomainError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Refresh token non valido") from exc
 
@@ -202,20 +205,29 @@ def refresh(
     except DomainError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Utente non attivo") from exc
 
+    # One cookie-setting path for both branches, deliberately: a grace-window answer
+    # that differed from an ordinary rotation in any observable way -- a header, a
+    # max-age, an order -- would tell a caller how long ago some other tab refreshed,
+    # and would be a second code path on the endpoint that must never fail.
+    #
+    # `issued_at` is the rotation's own instant, not "now": signing the access token
+    # from it is what makes the second tab's pair identical to the first's rather than
+    # merely equivalent (see `issue_access_token`). For an ordinary rotation the two
+    # are the same instant anyway, microseconds apart at worst.
     _set_cookie(
         response,
         ACCESS_COOKIE,
-        issue_access_token(user.id, user.ruolo, settings),
+        issue_access_token(user.id, user.ruolo, settings, issued_at=rotation.issued_at),
         settings.access_token_minutes * 60,
         secure=settings.cookie_secure,
         path=cookie_path(request),
     )
     # A fresh token with its own row -- not a re-signing of the same claims -- because
-    # the one just consumed above can never be honoured again.
+    # the one just rotated above can never be honoured again.
     _set_cookie(
         response,
         REFRESH_COOKIE,
-        refresh_tokens.issue(user.id, settings),
+        rotation.refresh_token,
         settings.refresh_token_days * 86400,
         secure=settings.cookie_secure,
         path=cookie_path(request),

@@ -1,6 +1,10 @@
+from datetime import datetime, timedelta
+
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+import pigrocrm.core.auth.refresh_service as refresh_service
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.auth.schemas import UserCreate, UserUpdate
 from pigrocrm.core.auth.service import UserService
@@ -149,11 +153,38 @@ def test_refresh_with_an_invalid_refresh_token_is_401(client: TestClient) -> Non
     assert response.status_code == 401
 
 
-def test_refresh_rotation_makes_the_old_token_unusable(logged_in: TestClient) -> None:
+def _past_the_grace_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Move the refresh service's clock beyond REFRESH_GRACE_SECONDS.
+
+    The service reads the wall clock through its module-level `datetime` -- the single
+    point `packages/core/tests/test_refresh_tokens.py` already freezes -- and the app
+    under `TestClient` runs in this same process, so shifting it here shifts what the
+    endpoint sees. The alternative is a test that sleeps for eleven seconds.
+    """
+    real_datetime = refresh_service.datetime
+
+    class _Shifted(real_datetime):  # type: ignore[valid-type,misc]
+        @classmethod
+        def now(cls, tz: object = None) -> datetime:
+            return real_datetime.now(tz) + timedelta(
+                seconds=refresh_service.REFRESH_GRACE_SECONDS + 1
+            )
+
+    monkeypatch.setattr(refresh_service, "datetime", _Shifted)
+
+
+def test_refresh_rotation_makes_the_old_token_unusable(
+    logged_in: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The whole point of rotation: if the old refresh token still worked after being
     used once, a copy of it -- taken at any point before rotation -- would stay usable
-    for the rest of its 30-day life no matter how many times the legitimate user
-    rotated past it."""
+    for the rest of its 180-day life no matter how many times the legitimate user
+    rotated past it.
+
+    The clock is moved past the grace window first, because inside it the same token
+    presented again is answered instead of rejected (see the two tests below): that
+    window is measured in seconds and this is the case it deliberately does not
+    cover -- a copy resurfacing later, which is the actual shape of theft."""
     old_refresh_token = logged_in.cookies.get(REFRESH_COOKIE)
     assert old_refresh_token is not None
 
@@ -162,9 +193,55 @@ def test_refresh_rotation_makes_the_old_token_unusable(logged_in: TestClient) ->
 
     # Simulate presenting the token again after it has already been rotated away --
     # e.g. a copy an attacker made before rotation happened.
+    _past_the_grace_window(monkeypatch)
     logged_in.cookies.set(REFRESH_COOKIE, old_refresh_token)
     replay = logged_in.post("/api/auth/refresh")
     assert replay.status_code == 401
+
+
+def test_a_refresh_replayed_within_the_grace_window_answers_exactly_as_the_first_did(
+    logged_in: TestClient,
+) -> None:
+    """Two tabs, one cookie jar. The refresh cookie belongs to the browser, not to a
+    tab, so two tabs waking up past the fifteen-minute access cookie both POST here
+    with the same token -- and the second one used to revoke the whole family and drop
+    the owner on the login screen, in every tab at once. It reported as "it logs me out
+    when I have two tabs open".
+
+    The assertion is on the `Set-Cookie` headers themselves, not merely on the status:
+    the second tab has to end up holding *the same* pair as the first, or the two tabs
+    disagree about which refresh cookie is current and the next rotation kills one of
+    them. Identical headers is also what makes the two branches indistinguishable from
+    outside -- a response that advertised "this was a grace answer" would leak how long
+    ago another tab refreshed."""
+    old_refresh_token = logged_in.cookies.get(REFRESH_COOKIE)
+    assert old_refresh_token is not None
+
+    first = logged_in.post("/api/auth/refresh")
+    assert first.status_code == 200
+
+    logged_in.cookies.set(REFRESH_COOKIE, old_refresh_token)
+    second = logged_in.post("/api/auth/refresh")
+
+    assert second.status_code == 200
+    assert second.headers.get_list("set-cookie") == first.headers.get_list("set-cookie")
+    assert second.json() == first.json()
+
+
+def test_the_grace_window_leaves_the_rest_of_the_session_alive(logged_in: TestClient) -> None:
+    """The damage the window exists to prevent was never the 401 on the replay itself --
+    it was `_revoke_all_valid` firing behind it and killing every other token the user
+    held. So the tell is the *third* request: the pair the tabs now share still works,
+    and the next rotation still rotates."""
+    old_refresh_token = logged_in.cookies.get(REFRESH_COOKIE)
+    assert old_refresh_token is not None
+
+    assert logged_in.post("/api/auth/refresh").status_code == 200
+    logged_in.cookies.set(REFRESH_COOKIE, old_refresh_token)
+    assert logged_in.post("/api/auth/refresh").status_code == 200
+
+    assert logged_in.get("/api/auth/me").status_code == 200
+    assert logged_in.post("/api/auth/refresh").status_code == 200
 
 
 def test_logout_invalidates_the_refresh_token_server_side(logged_in: TestClient) -> None:
