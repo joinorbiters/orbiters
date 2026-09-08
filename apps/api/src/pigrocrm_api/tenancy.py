@@ -16,6 +16,7 @@ from typing import Any
 
 from fastapi import Request
 
+from pigrocrm.core.config import get_settings
 from pigrocrm.core.tenants import RESERVED_SLUGS, SLUG_PATTERN
 
 Scope = MutableMapping[str, Any]
@@ -27,14 +28,20 @@ ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
 _PREFIXED = re.compile(r"^/([a-z0-9][a-z0-9-]{1,30}[a-z0-9])(/(?:api|health)(?:/.*)?)$")
 
 
-def split_tenant_prefix(path: str) -> tuple[str | None, str]:
+def split_tenant_prefix(path: str, root_slug: str = "") -> tuple[str | None, str]:
     """`("studio", "/api/customers")` for `/studio/api/customers`; `(None, path)` when
     there is no prefix, or when the would-be slug is a reserved word -- `/api/...` is
-    never anybody's space, and `/app/...` never reaches the API at all."""
+    never anybody's space, and `/app/...` never reaches the API at all.
+
+    `root_slug` is the root installation's own name (`PIGROCRM_ROOT_SLUG`): its prefix
+    is stripped like a space's, but the request stays the root's -- `(None, rest)` --
+    so it opens the root database with the root's settings, Gmail and Drive included."""
     match = _PREFIXED.match(path)
     if not match:
         return None, path
     slug, rest = match.group(1), match.group(2)
+    if root_slug and slug == root_slug:
+        return None, rest
     if slug in RESERVED_SLUGS or not SLUG_PATTERN.match(slug):
         return None, path
     return slug, rest
@@ -46,10 +53,14 @@ class TenantPrefixMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http":
-            slug, rest = split_tenant_prefix(scope["path"])
-            if slug is not None:
+            # Read per request rather than captured at construction: `get_settings` is
+            # cached, so this costs nothing, and a test that clears the cache after
+            # setting PIGROCRM_ROOT_SLUG is honoured.
+            slug, rest = split_tenant_prefix(scope["path"], get_settings().root_slug)
+            if rest != scope["path"]:
                 scope["path"] = rest
                 scope["raw_path"] = rest.encode("utf-8")
+            if slug is not None:
                 scope.setdefault("state", {})["tenant"] = slug
         await self.app(scope, receive, send)
 

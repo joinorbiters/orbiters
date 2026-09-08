@@ -69,8 +69,16 @@ class TenantService:
             raise NotFound("tenant", slug)
         return tenant
 
-    def availability(self, slug: str) -> TenantAvailability:
+    def _reason(self, slug: str) -> str | None:
+        """`validate_slug`, plus the one name only this installation knows is taken: the
+        root's own (`PIGROCRM_ROOT_SLUG`)."""
         reason = validate_slug(slug)
+        if reason is None and self.settings.root_slug and slug == self.settings.root_slug:
+            return "questo nome è riservato"
+        return reason
+
+    def availability(self, slug: str) -> TenantAvailability:
+        reason = self._reason(slug)
         if reason is not None:
             return TenantAvailability(slug=slug, disponibile=False, motivo=reason)
         taken = self.session.scalar(select(Tenant.id).where(Tenant.slug == slug)) is not None
@@ -83,6 +91,9 @@ class TenantService:
     def provision(self, data: TenantSignup) -> TenantRead:
         """The registry row first, so the unique index decides who gets the name; then
         the database, its schema, its admin. Any failure after the row undoes the row."""
+        reason = self._reason(data.slug)
+        if reason is not None:
+            raise ValidationFailed("tenant", "slug", reason)
         db_name = tenant_database_name(data.slug)
         tenant = Tenant(slug=data.slug, db_name=db_name, owner_email=data.email.lower())
         self.session.add(tenant)

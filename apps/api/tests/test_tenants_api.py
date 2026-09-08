@@ -140,3 +140,37 @@ def test_the_root_still_answers_without_a_prefix(spaces_client: TestClient) -> N
     assert spaces_client.get("/api/auth/me").status_code == 401
     # The root fixture client still works on its own, overridden session.
     assert get_session is not None
+
+
+def test_the_root_slug_is_the_root_itself_and_nobody_elses_name(
+    container_settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`PIGROCRM_ROOT_SLUG=humancraft`: `/humancraft/api/...` is the root database with the
+    root's settings, not a space, and the name is refused to signups."""
+    assert split_tenant_prefix("/humancraft/api/auth/me", "humancraft") == (None, "/api/auth/me")
+    assert split_tenant_prefix("/humancraft/health", "humancraft") == (None, "/health")
+    assert split_tenant_prefix("/altro/api/x", "humancraft") == ("altro", "/api/x")
+
+    monkeypatch.setenv("PIGROCRM_ROOT_SLUG", "humancraft")
+    monkeypatch.setenv("PIGROCRM_DATABASE_URL", container_settings.database_url)
+    monkeypatch.setenv("PIGROCRM_JWT_SECRET", container_settings.jwt_secret)
+    get_settings.cache_clear()
+    reset_session_factories()
+    rooted = container_settings.model_copy(update={"root_slug": "humancraft"})
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: rooted
+    registry = ensure_tenants_database(rooted)
+    try:
+        with TestClient(app, base_url="https://testserver") as client:
+            assert client.get("/humancraft/health").json() == {"status": "ok"}
+            # The root's own login answers here, and the cookie is the root's (`Path=/`).
+            assert client.get("/humancraft/api/auth/me").status_code == 401
+            assert client.get("/api/tenants/humancraft/disponibile").json()["motivo"] == (
+                "questo nome è riservato"
+            )
+            refused = client.post("/api/tenants/", json={**SIGNUP, "slug": "humancraft"})
+            assert refused.status_code == 422, refused.text
+    finally:
+        registry.dispose()
+        reset_session_factories()
+        get_settings.cache_clear()
