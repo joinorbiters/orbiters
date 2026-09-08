@@ -1,4 +1,5 @@
-import { isValidElement } from 'react'
+import { render, screen } from '@testing-library/react'
+import { isValidElement, type ReactElement } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { buildPersonColumns, displayNative } from './columns'
 import type { FieldDefinition } from '@/lib/schema'
@@ -184,5 +185,48 @@ describe('displayNative', () => {
 
   it('renders a present value as itself', () => {
     expect(displayNative('Rossi')).toBe('Rossi')
+  })
+})
+
+/**
+ * The first cell of a person's row: initials, the full name, and the company under it
+ * when the row brought one (design spec §4). The accessor stays the bare `nome`, which
+ * is what the tests above read; this is the other half.
+ */
+describe('the person as an entity in the first cell', () => {
+  function renderName(person: Person) {
+    const column = buildPersonColumns([])[0]
+    if (column === undefined || typeof column.cell !== 'function') {
+      throw new Error('la colonna Nome non ha un cell renderer')
+    }
+    return render(column.cell({ row: { original: person } } as never) as ReactElement)
+  }
+
+  it('shows the whole name, not only the first name the accessor carries', () => {
+    renderName({ ...BASE_PERSON, nome: 'Mario', cognome: 'Rossi' })
+    expect(screen.getByText('Mario Rossi')).toBeInTheDocument()
+  })
+
+  it('takes the initials from both names, which is the whole point of a chip', () => {
+    renderName({ ...BASE_PERSON, nome: 'Mario', cognome: 'Rossi' })
+    expect(screen.getByText('MR')).toBeInTheDocument()
+  })
+
+  /** A surname that is `null` or the explicit `""` a cleared column leaves behind must
+   *  not produce a trailing space, nor a second initial taken from nothing. */
+  it('reads a person with no surname as just their name, with one initial', () => {
+    renderName({ ...BASE_PERSON, nome: 'Mario', cognome: '' })
+    expect(screen.getByText('Mario')).toBeInTheDocument()
+    expect(screen.getByText('M')).toBeInTheDocument()
+  })
+
+  it('puts the company on the quiet second line when the row carries one', () => {
+    renderName({ ...BASE_PERSON, nome: 'Mario', cognome: 'Rossi', customer_ragione_sociale: 'ACME Srl' })
+    expect(screen.getByText('ACME Srl')).toBeInTheDocument()
+  })
+
+  it('shows no second line, and no dash standing in for one, when there is no company', () => {
+    renderName({ ...BASE_PERSON, nome: 'Mario', cognome: 'Rossi' })
+    expect(screen.queryByText('—')).not.toBeInTheDocument()
   })
 })

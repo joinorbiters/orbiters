@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, fetchWithRefresh, toProblem, unwrap } from '@/lib/api'
+import type { StatusTone } from '@/components/StatusPill'
 import type { components } from '@/lib/api-types'
 import { queryKeys } from '@/lib/query'
 
@@ -40,6 +41,26 @@ export const OFFER_STATE_LABELS: Record<OfferState, string> = {
   inviata: 'Inviata',
   accettata: 'Accettata',
   rifiutata: 'Rifiutata',
+}
+
+/**
+ * The tone each offer state reads as in a `StatusPill` (design spec §4), beside the
+ * labels and total over `OfferState` for the same reason `OFFER_TRANSITIONS` is -- which
+ * means the compile breaks when that hand-written union is widened, not when the server
+ * grows a state.
+ *
+ * `accettata` is `ink`, not gold: an accepted offer is the settled, ordinary outcome --
+ * the thing every offer is trying to become -- and gold in this product means "waiting
+ * on somebody", which an accepted offer no longer is. `inviata` is also `ink` because
+ * it is a real, correct state and a table of sent offers must not read as a table of
+ * warnings; `bozza` claims nothing yet, and `rifiutata` is the one that has gone the
+ * wrong way.
+ */
+export const OFFER_STATE_TONE: Record<OfferState, StatusTone> = {
+  bozza: 'muted',
+  inviata: 'ink',
+  accettata: 'ink',
+  rifiutata: 'danger',
 }
 
 export const DOCUMENT_TYPE_LABELS: Record<string, string> = {

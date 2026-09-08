@@ -1,5 +1,15 @@
+import { render, screen } from '@testing-library/react'
+import type { ReactElement } from 'react'
 import { describe, expect, it } from 'vitest'
-import { formatHoursValue, formatMoneyValue, formatRateValue } from './columns'
+import {
+  buildTimeEntryColumns,
+  formatHoursValue,
+  formatMoneyValue,
+  formatRateValue,
+  statoOf,
+  TIME_ENTRY_STATE_TONE,
+} from './columns'
+import type { TimeEntry } from './queries'
 
 // `Intl.NumberFormat` separates an amount from its currency symbol with U+00A0, never
 // an ordinary space -- a price must not wrap between its digits and its sign. Built
@@ -29,5 +39,124 @@ describe('the three formatters', () => {
     // whole reason the third scale exists. The unit is appended with an ordinary space:
     // "€/h" is a label this code writes itself, not part of what ICU formatted.
     expect(formatRateValue('33.333333')).toBe('33,333333 €/h')
+  })
+})
+
+
+const ENTRY: TimeEntry = {
+  id: 't1',
+  deal_id: 'd1',
+  user_id: 'u1',
+  data: '2026-03-05',
+  ore: '7.50',
+  descrizione: 'Sviluppo',
+  fatturabile: true,
+  tariffa_applicata: '80.00',
+  costo_applicato: null,
+  tariffa_origine: 'deal',
+  costo_origine: 'assente',
+  valore_riga: '600.00',
+  costo_riga: null,
+  invoice_line_id: null,
+  note_interne: null,
+  custom_fields: {},
+  created_at: '2026-03-05T00:00:00Z',
+  updated_at: '2026-03-05T00:00:00Z',
+}
+
+/**
+ * Reads a column's rendered cell, not only its accessor: the accessor keeps the plain
+ * text value the timesheet can sort or export, while `cell` carries what the design
+ * revision adds -- the calendar icon, right-aligned figures, the state as a dotted pill
+ * (design spec §4). Only `row.original` is consulted, so the cast supplies exactly that.
+ */
+function renderCell(id: string, entry: TimeEntry) {
+  const column = buildTimeEntryColumns([]).find((candidate) => candidate.id === id)
+  if (column === undefined || typeof column.cell !== 'function') {
+    throw new Error(`la colonna ${id} non ha un cell renderer`)
+  }
+  return render(column.cell({ row: { original: entry } } as never) as ReactElement)
+}
+
+function column(id: string) {
+  const found = buildTimeEntryColumns([]).find((candidate) => candidate.id === id)
+  if (found === undefined) throw new Error(`nessuna colonna con id ${id}`)
+  return found
+}
+
+describe('how an hour reads', () => {
+  it('puts a calendar icon before the date', () => {
+    const { container } = renderCell('data', ENTRY)
+    expect(screen.getByText('05/03/2026')).toBeInTheDocument()
+    expect(container.querySelector('svg')).not.toBeNull()
+  })
+
+  /** The header has to sit over the digits it labels, which only the column can say. */
+  it('declares hours, rate and value right-aligned columns', () => {
+    expect(column('ore').meta).toEqual({ align: 'right' })
+    expect(column('tariffa_applicata').meta).toEqual({ align: 'right' })
+    expect(column('valore_riga').meta).toEqual({ align: 'right' })
+  })
+
+  it('aligns hours on tabular digits, through the number cell rather than the money one', () => {
+    renderCell('ore', ENTRY)
+    const cell = screen.getByText('7,5')
+    expect(cell.className).toContain('text-right')
+    expect(cell.className).toContain('tabular-nums')
+  })
+
+  it('keeps the rate beside where it came from, right-aligned', () => {
+    renderCell('tariffa_applicata', ENTRY)
+    expect(screen.getByText(/dal deal/).className).toContain('text-right')
+  })
+
+  it('shows an unpriced rate as the dash rather than as zero', () => {
+    renderCell('tariffa_applicata', { ...ENTRY, tariffa_applicata: null })
+    expect(screen.getByText('—')).toBeInTheDocument()
+  })
+})
+
+/**
+ * The one status in the product that is *derived* rather than stored: `invoice_line_id`
+ * and `fatturabile` together are what the three readings mean.
+ */
+describe("an hour's state", () => {
+  it('reads an hour with an invoice line as invoiced, whatever fatturabile says', () => {
+    expect(statoOf({ ...ENTRY, invoice_line_id: 'l1', fatturabile: false })).toBe('fatturata')
+  })
+
+  it('reads a billable hour with no line as still to be invoiced', () => {
+    expect(statoOf({ ...ENTRY, fatturabile: true })).toBe('da_fatturare')
+  })
+
+  it('reads a non-billable hour as such, not as pending', () => {
+    expect(statoOf({ ...ENTRY, fatturabile: false })).toBe('non_fatturabile')
+  })
+
+  it('shows an hour still to invoice in the waiting-on-somebody tone', () => {
+    renderCell('stato', ENTRY)
+    expect(screen.getByText('Da fatturare').closest('[data-slot="badge"]')).toHaveAttribute(
+      'data-tone',
+      'gold',
+    )
+  })
+
+  it('shows an invoiced hour as settled', () => {
+    renderCell('stato', { ...ENTRY, invoice_line_id: 'l1' })
+    expect(screen.getByText('Fatturata').closest('[data-slot="badge"]')).toHaveAttribute(
+      'data-tone',
+      'ink',
+    )
+  })
+
+  /** Most non-billable hours are deliberate (internal work), so the column must not
+   *  read as a table of problems. */
+  it('keeps a non-billable hour quiet rather than tinting it as a warning', () => {
+    renderCell('stato', { ...ENTRY, fatturabile: false })
+    expect(screen.getByText('Non fatturabile').closest('[data-slot="badge"]')).toHaveAttribute(
+      'data-tone',
+      'muted',
+    )
+    expect(TIME_ENTRY_STATE_TONE.non_fatturabile).not.toBe('danger')
   })
 })

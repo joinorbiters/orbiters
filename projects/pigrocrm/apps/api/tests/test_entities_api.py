@@ -126,6 +126,27 @@ def test_deal_lifecycle_including_the_kanban_move(logged_in: TestClient) -> None
     assert moved.json()["pipeline_stage_id"] == offerta["id"]
 
 
+def test_a_deal_carries_the_name_of_its_customer(logged_in: TestClient) -> None:
+    """Over HTTP, on both read shapes: the deal list prints the customer under the deal's
+    own name, and the detail page reads the single deal. A `customer_id` alone would make
+    the list fetch one customer per row just to print a name -- the same gap
+    `customer_ragione_sociale` closed for Persone."""
+    _seed_pipeline(logged_in)
+    customer_id = logged_in.post("/api/customers", json={"ragione_sociale": "ACME Srl"}).json()[
+        "id"
+    ]
+    created = logged_in.post(
+        "/api/deals", json={"nome": "Progetto X", "customer_id": customer_id}
+    ).json()
+    assert created["customer_ragione_sociale"] == "ACME Srl"
+
+    deal_id = created["id"]
+    assert logged_in.get(f"/api/deals/{deal_id}").json()["customer_ragione_sociale"] == "ACME Srl"
+
+    page = logged_in.get("/api/deals", params={"customer_id": customer_id}).json()
+    assert [d["customer_ragione_sociale"] for d in page["items"]] == ["ACME Srl"]
+
+
 def test_timeline_endpoint_reports_what_happened(logged_in: TestClient) -> None:
     customer_id = logged_in.post("/api/customers", json={"ragione_sociale": "ACME"}).json()["id"]
     logged_in.patch(f"/api/customers/{customer_id}", json={"telefono": "02"})

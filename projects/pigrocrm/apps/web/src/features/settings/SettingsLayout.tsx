@@ -1,25 +1,10 @@
 import { Link, Outlet, useRouterState } from '@tanstack/react-router'
 import { ShieldAlert } from 'lucide-react'
 import { defaultDashboardSearch } from '@/features/dashboard/search'
+import { SETTINGS_TABS } from '@/features/settings/tabs'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useIsAdmin } from '@/lib/auth'
-
-const TABS = [
-  { value: 'spazio', label: 'Spazio' },
-  { value: 'campi', label: 'Campi' },
-  { value: 'pipeline', label: 'Pipeline' },
-  { value: 'template', label: 'Template' },
-  { value: 'emittente', label: 'Emittente' },
-  { value: 'fiscale', label: 'Fiscale' },
-  { value: 'utenti', label: 'Utenti' },
-  { value: 'categorie-costo', label: 'Categorie costo' },
-  { value: 'tariffe', label: 'Tariffe' },
-  { value: 'periodi', label: 'Periodi' },
-  { value: 'gmail', label: 'Gmail' },
-  { value: 'drive', label: 'Google Drive' },
-  { value: 'automazioni', label: 'Automazioni' },
-] as const
 
 /**
  * Campi/Pipeline/Template/Emittente/Utenti are admin-only at the service layer
@@ -84,14 +69,15 @@ export function SettingsLayout() {
     )
   }
 
-  const active = TABS.find((tab) => location.pathname.endsWith(tab.value))?.value ?? 'campi'
+  const active =
+    SETTINGS_TABS.find((tab) => location.pathname.endsWith(tab.value))?.value ?? 'campi'
 
   return (
     <div className="p-8">
       <h1 className="mb-6 text-2xl font-semibold tracking-tight">Impostazioni</h1>
       <Tabs value={active}>
         <TabsList>
-          {TABS.map((tab) => (
+          {SETTINGS_TABS.map((tab) => (
             <TabsTrigger key={tab.value} value={tab.value} asChild>
               <Link to={`/app/impostazioni/${tab.value}`}>{tab.label}</Link>
             </TabsTrigger>

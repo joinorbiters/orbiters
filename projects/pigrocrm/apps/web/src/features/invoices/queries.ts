@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, fetchWithRefresh, toProblem, unwrap } from '@/lib/api'
+import type { StatusTone } from '@/components/StatusPill'
 import type { components } from '@/lib/api-types'
 import { queryKeys } from '@/lib/query'
 
@@ -58,6 +59,41 @@ export const INVOICE_STATE_LABELS: Record<InvoiceStato, string> = {
 export const PAYMENT_STATE_LABELS: Record<StatoPagamento, string> = {
   da_incassare: 'Da incassare',
   incassato: 'Incassato',
+}
+
+/**
+ * The tone each fiscal state reads as in a `StatusPill` (design spec §4). Next to the
+ * labels, and a total `Record`, so a state added to `InvoiceStato` fails to compile here
+ * rather than rendering as a default nobody chose. Note what that does and does not buy:
+ * `InvoiceStato` is a union written by hand a few lines above, not a generated type, so
+ * the compile breaks when somebody widens *it* -- adding a state to `STATO_TRANSITIONS`
+ * on the server does not by itself reach this file.
+ *
+ * `emessa` and `confermata` are settled: a number is assigned, or a proforma is ready to
+ * become one, and neither is a problem to be looked at. `bozza` and `consumata` are
+ * quiet because neither claims anything about money -- a draft is not a document and a
+ * consumed proforma has already become the invoice beside it. `annullata` is the one
+ * state that has to read as a warning: an annulled invoice keeps its number and stays in
+ * the register, so a row that looked ordinary would be read as a live document.
+ */
+export const INVOICE_STATE_TONE: Record<InvoiceStato, StatusTone> = {
+  bozza: 'muted',
+  confermata: 'ink',
+  emessa: 'ink',
+  consumata: 'muted',
+  annullata: 'danger',
+}
+
+/**
+ * Collection is the one place gold is right: «Da incassare» is not an error and not a
+ * finished state -- it is money waiting on somebody, which is exactly what Royal Gold
+ * says everywhere else in this product. Overdue is not a state of its own on the server
+ * (it is `da_incassare` plus a date in the past, the `scadute` filter); the day the list
+ * renders it as its own pill it reads `danger`, per the design spec.
+ */
+export const PAYMENT_STATE_TONE: Record<StatoPagamento, StatusTone> = {
+  da_incassare: 'gold',
+  incassato: 'ink',
 }
 
 /**

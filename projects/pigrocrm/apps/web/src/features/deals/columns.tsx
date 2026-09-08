@@ -1,4 +1,5 @@
 import type { ColumnDef } from '@tanstack/react-table'
+import { DateCell, EntityCell, MoneyCell } from '@/components/cells'
 import type { DataTableFeatures } from '@/components/DataTable'
 import { renderFieldValue } from '@/components/DynamicFieldRenderer'
 import { formatIsoDateItalian } from '@/lib/dates'
@@ -113,17 +114,42 @@ export function sumValorePrevisto(deals: Deal[]): string {
  */
 export function buildDealColumns(customFields: FieldDefinition[]): ColumnDef<DataTableFeatures, Deal>[] {
   const native: ColumnDef<DataTableFeatures, Deal>[] = [
-    { header: 'Nome', accessorKey: 'nome' },
+    {
+      header: 'Nome',
+      accessorKey: 'nome',
+      // The first cell carries the deal's identity as a chip (design spec §4). No
+      // second line under it yet: the reference puts the customer there, and `DealRead`
+      // (packages/core/.../deals/schemas.py) carries only `customer_id` -- no
+      // `customer_ragione_sociale`, the way `PersonRead` does -- so the name is not in
+      // this response at all. Reading it would mean one request per row; the field
+      // belongs on `DealRead` first, and the sub-line follows for free the day it is
+      // there.
+      cell: ({ row }) => <EntityCell name={row.original.nome} />,
+    },
     {
       header: 'Valore previsto',
       id: 'valore_previsto',
       accessorFn: (row) => formatMoney(row.valore_previsto),
+      // `meta.align` right-aligns the header over the digits too; `MoneyCell` alone
+      // could only align what is inside the cell.
+      meta: { align: 'right' },
+      cell: ({ row }) => <MoneyCell>{formatMoney(row.original.valore_previsto)}</MoneyCell>,
     },
-    { header: 'Probabilità', id: 'probabilita', accessorFn: (row) => `${row.probabilita}%` },
+    {
+      header: 'Probabilità',
+      id: 'probabilita',
+      accessorFn: (row) => `${row.probabilita}%`,
+      // A percentage is a number: it belongs on the right with the money, so a column
+      // of them can be scanned down the units digit.
+      meta: { align: 'right' },
+    },
     {
       header: 'Chiusura prevista',
       id: 'data_chiusura_prevista',
+      // `DateCell` formats the raw ISO value through the same `lib/dates.ts`
+      // `formatDate` above calls, and adds the calendar icon.
       accessorFn: (row) => formatDate(row.data_chiusura_prevista),
+      cell: ({ row }) => <DateCell value={row.original.data_chiusura_prevista} />,
     },
   ]
 
