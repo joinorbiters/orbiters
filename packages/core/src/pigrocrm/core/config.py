@@ -36,6 +36,16 @@ class Settings(BaseSettings):
     # put that list somewhere else. `orbiters.database.ensure_orbiters_database` creates
     # the database if it is missing, which needs CREATE DATABASE on the server.
     orbiters_database_url: str = ""
+    # The registry of spaces -- which slug maps to which database; see
+    # docs/superpowers/specs/2026-09-08-spazi-un-database-per-tenant-design.md. Same rule
+    # as `orbiters_database_url`: empty means the CRM's own server and credentials,
+    # database `pigrocrm_tenants`. Each space's own database is created beside it by
+    # `tenants.service.TenantService.provision`.
+    tenants_database_url: str = ""
+    # Where `alembic.ini` lives, for migrating a freshly created space's database with
+    # the same env.py production runs. Empty resolves to packages/core/alembic.ini next
+    # to this package, which is where both the checkout and the API image keep it.
+    tenants_alembic_ini: str = ""
     jwt_secret: str = "change-me-in-production-please-set-a-real-secret"
     access_token_minutes: int = 15
     # Six months, sliding: `/api/auth/refresh` consumes the old jti and issues a new row

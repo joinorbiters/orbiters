@@ -1,9 +1,10 @@
 import threading
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
-from sqlalchemy import Engine
+from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from pigrocrm.core.actor import Actor, Role
@@ -14,7 +15,10 @@ from pigrocrm.core.config import Settings, get_settings
 from pigrocrm.core.db import create_engine_from_settings, session_factory
 from pigrocrm.core.errors import DomainError
 from pigrocrm.core.orbiters import ensure_orbiters_database
-from pigrocrm.core.storage import DocumentStorage, storage_from_settings
+from pigrocrm.core.storage import DocumentStorage, LocalFileStorage, storage_from_settings
+from pigrocrm.core.tenants import TenantService, ensure_tenants_database
+from pigrocrm.core.tenants.database import tenant_database_url
+from pigrocrm_api.tenancy import tenant_slug
 
 ACCESS_COOKIE = "pigrocrm_access"
 REFRESH_COOKIE = "pigrocrm_refresh"
@@ -37,18 +41,113 @@ _storage: DocumentStorage | None = None
 _storage_lock = threading.Lock()
 
 
-def _get_session_factory() -> sessionmaker[Session]:
+def _get_session_factory(settings: Settings | None = None) -> sessionmaker[Session]:
+    """The root's engine, built once from the first caller's settings. Callers with a
+    request pass the settings dependency through, so a test's override of
+    `get_settings` decides the server; callers without one (`_fresh_session`) get the
+    process settings, which in production are the same object."""
     global _engine, _factory
     if _factory is None:
         with _engine_lock:
             if _factory is None:  # a concurrent caller may have just finished building it
-                _engine = create_engine_from_settings(get_settings())
+                _engine = create_engine_from_settings(settings or get_settings())
                 _factory = session_factory(_engine)
     return _factory
 
 
-def get_session() -> Iterator[Session]:
-    session = _get_session_factory()()
+def reset_session_factories() -> None:
+    """Forgets the root's engine along with every space's (`reset_tenant_caches`), for a
+    test that points the whole process at another server through `get_settings`."""
+    global _engine, _factory
+    with _engine_lock:
+        if _engine is not None:
+            _engine.dispose()
+        _engine = None
+        _factory = None
+    reset_tenant_caches()
+
+
+# --- Spaces (spec 2026-09-08). One engine per space per process, built on first use and
+# kept, exactly like the root's above; the registry that says which database a slug
+# owns is a sidecar of its own, opened the same way.
+_tenant_factories: dict[str, sessionmaker[Session]] = {}
+_tenants_registry: sessionmaker[Session] | None = None
+# Re-entrant, and it has to be: building a space's engine (`_tenant_session_factory`)
+# holds this lock while it asks the registry, and the registry's own first build
+# (`_registry_factory`) takes the same lock. A plain Lock deadlocks the first request a
+# space ever receives -- found the hard way, with a test suite that never finished.
+_tenants_lock = threading.RLock()
+
+
+def _registry_factory(settings: Settings) -> sessionmaker[Session]:
+    global _tenants_registry
+    if _tenants_registry is None:
+        with _tenants_lock:
+            if _tenants_registry is None:
+                _tenants_registry = session_factory(ensure_tenants_database(settings))
+    return _tenants_registry
+
+
+def get_tenants_registry_session(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> Iterator[Session]:
+    """A session on the registry database -- the list of spaces, never a space.
+
+    `settings` arrives as a dependency rather than a `get_settings()` call so a test's
+    override of `get_settings` decides which server the registry lives on."""
+    session = _registry_factory(settings)()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+TenantsRegistryDep = Annotated[Session, Depends(get_tenants_registry_session)]
+
+
+def _tenant_session_factory(slug: str, settings: Settings) -> sessionmaker[Session]:
+    factory = _tenant_factories.get(slug)
+    if factory is None:
+        with _tenants_lock:
+            factory = _tenant_factories.get(slug)
+            if factory is None:
+                registry = _registry_factory(settings)()
+                try:
+                    # `NotFound` -> 404 «spazio non trovato» through the domain handler:
+                    # a slug nobody registered is a wrong address, not a server fault.
+                    tenant = TenantService(registry, settings).get(slug)
+                finally:
+                    registry.close()
+                engine = create_engine(
+                    tenant_database_url(settings, tenant.db_name), pool_pre_ping=True, future=True
+                )
+                factory = session_factory(engine)
+                _tenant_factories[slug] = factory
+    return factory
+
+
+def _factory_for(request: Request, settings: Settings) -> sessionmaker[Session]:
+    slug = tenant_slug(request)
+    return _tenant_session_factory(slug, settings) if slug else _get_session_factory(settings)
+
+
+def reset_tenant_caches() -> None:
+    """Forgets every space's engine and the registry, for tests that provision spaces
+    against a container and must not leak engines across settings."""
+    global _tenants_registry
+    with _tenants_lock:
+        for factory in _tenant_factories.values():
+            bind = factory.kw.get("bind")
+            if isinstance(bind, Engine):
+                bind.dispose()
+        _tenant_factories.clear()
+        _tenants_registry = None
+
+
+def get_session(
+    request: Request, settings: Annotated[Settings, Depends(get_settings)]
+) -> Iterator[Session]:
+    session = _factory_for(request, settings)()
     try:
         yield session
     finally:
@@ -58,7 +157,9 @@ def get_session() -> Iterator[Session]:
 SessionDep = Annotated[Session, Depends(get_session)]
 
 
-def get_snapshot_session() -> Iterator[Session]:
+def get_snapshot_session(
+    request: Request, settings: Annotated[Settings, Depends(get_settings)]
+) -> Iterator[Session]:
     """A second session per request, untouched by anything else in the request.
 
     Only the dashboards use it, and they need it. A dashboard is one transaction in
@@ -79,7 +180,7 @@ def get_snapshot_session() -> Iterator[Session]:
     cache: a route asking for both gets two sessions, deliberately. The cost is one extra
     pooled connection for the life of the request, paid only by the routes that ask.
     """
-    session = _get_session_factory()()
+    session = _factory_for(request, settings)()
     try:
         yield session
     finally:
@@ -87,7 +188,35 @@ def get_snapshot_session() -> Iterator[Session]:
 
 
 SnapshotSessionDep = Annotated[Session, Depends(get_snapshot_session)]
-SettingsDep = Annotated[Settings, Depends(get_settings)]
+
+
+def get_request_settings(
+    request: Request, settings: Annotated[Settings, Depends(get_settings)]
+) -> Settings:
+    """The installation's settings as *this request* may see them.
+
+    A space has no Google: the OAuth callback is one per installation and would come
+    back to the root, so for a space the client id is blank -- `gmail_configured` is
+    false, the UI hides the sections, the endpoints answer 409, the MCP tools are not
+    registered -- and documents go to disk under the space's own folder. The root sees
+    the settings untouched. Chained on `get_settings` so a test's override of that one
+    dependency still reaches every route.
+    """
+    if tenant_slug(request) is None:
+        return settings
+    return settings.model_copy(
+        update={
+            "google_client_id": "",
+            "google_client_secret": "",
+            "google_token_key": "",
+            "public_url": "",
+            "google_app_unverified": False,
+            "storage_backend": "local",
+        }
+    )
+
+
+SettingsDep = Annotated[Settings, Depends(get_request_settings)]
 
 _orbiters_factory: sessionmaker[Session] | None = None
 _orbiters_lock = threading.Lock()
@@ -135,7 +264,10 @@ def _fresh_session() -> Session:
     return _get_session_factory()()
 
 
-def get_storage(settings: SettingsDep) -> DocumentStorage:
+_tenant_storages: dict[str, DocumentStorage] = {}
+
+
+def get_storage(request: Request, settings: SettingsDep) -> DocumentStorage:
     """One backend per process, chosen from settings and built once behind a lock.
 
     Once, and cached: the two Drive backends hold a token cache that only earns its keep
@@ -164,6 +296,21 @@ def get_storage(settings: SettingsDep) -> DocumentStorage:
     here at all: `local` touches a `Path`, and the titolare's-own-Drive route reads
     nothing until its first operation (`LazyUserDriveStorage`).
     """
+    slug = tenant_slug(request)
+    if slug is not None:
+        # A space's documents live on disk beside the root's, in their own folder: the
+        # root's Drive account is the root's, and `_fresh_session` opens the root's
+        # database, so neither may serve a space.
+        storage = _tenant_storages.get(slug)
+        if storage is None:
+            with _storage_lock:
+                storage = _tenant_storages.get(slug)
+                if storage is None:
+                    root = Path(settings.storage_local_root) / "tenants" / slug
+                    storage = LocalFileStorage(root)
+                    _tenant_storages[slug] = storage
+        return storage
+
     global _storage
     if _storage is None:
         with _storage_lock:

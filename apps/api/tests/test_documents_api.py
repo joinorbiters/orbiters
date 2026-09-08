@@ -4,6 +4,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 
 # The in-memory Drive and the in-memory Google token endpoint live with the core tests,
@@ -465,9 +466,11 @@ def test_the_api_builds_one_storage_for_the_whole_process_and_opens_nothing_to_d
     """
     monkeypatch.setattr(deps, "_factory", None)
     settings = gmail_settings(storage_backend="gdrive")
+    # A root request: a space would get its own on-disk storage instead (deps.get_storage).
+    request = Request({"type": "http", "path": "/api/documents", "headers": [], "state": {}})
 
-    first = deps.get_storage(settings)
-    second = deps.get_storage(settings)
+    first = deps.get_storage(request, settings)
+    second = deps.get_storage(request, settings)
 
     assert isinstance(first, LazyUserDriveStorage)
     assert first is second

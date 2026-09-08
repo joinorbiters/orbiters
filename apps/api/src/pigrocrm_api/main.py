@@ -30,10 +30,12 @@ from pigrocrm_api.routers import (
     schema,
     search,
     templates,
+    tenants,
     time_entries,
     tokens,
     users,
 )
+from pigrocrm_api.tenancy import TenantPrefixMiddleware
 
 
 def create_app() -> FastAPI:
@@ -90,6 +92,8 @@ def create_app() -> FastAPI:
         automations,
         # Orbiters (2026-09-07). Public, and on its own database: see routers/orbiters.py.
         orbiters,
+        # Spaces (2026-09-08). Public signup, on the registry database: routers/tenants.py.
+        tenants,
     ):
         app.include_router(module.router)
 
@@ -111,6 +115,11 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["meta"])
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    # Outermost, so `/<slug>/api/...` is `/api/...` by the time CORS, the routers and
+    # every dependency see it (tenancy.py). Added after the routes so FastAPI's own
+    # middleware stack is complete; `add_middleware` wraps what is already there.
+    app.add_middleware(TenantPrefixMiddleware)
 
     return app
 

@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { toProblem } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { tenantPrefix } from '@/lib/tenant'
 
 function LoginPage() {
   const { user, login } = useAuth()
@@ -97,6 +98,18 @@ function LoginPage() {
             <Button type="submit" className="w-full" disabled={busy}>
               {busy ? 'Accesso in corso…' : 'Accedi'}
             </Button>
+            {/* Only the root offers to create a space: a space creating spaces is not a
+                thing this product means (spec 2026-09-08 §6). */}
+            {tenantPrefix === '' && (
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={() => void navigate({ to: '/app/registrati' })}
+              >
+                Crea il tuo spazio
+              </Button>
+            )}
           </form>
         </CardContent>
       </Card>

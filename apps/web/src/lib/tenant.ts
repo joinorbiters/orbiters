@@ -1,0 +1,75 @@
+/**
+ * Which space this page belongs to, read from the URL once at start-up.
+ *
+ * The SPA is one bundle served at `/app/` and, for a space, at `/<slug>/app/` by the
+ * same nginx (deploy/nginx/spa.conf). Everything that builds a URL -- the router's
+ * basepath, the API client's baseUrl -- takes the prefix from here, so the rest of the
+ * application never spells a tenant. The root installation has the empty prefix.
+ *
+ * The grammar mirrors `pigrocrm.core.tenants.schemas.SLUG_PATTERN` and its reserved
+ * words: `/app/...` is the root, never a space called "app".
+ */
+
+export const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/
+export const SLUG_MAX = 32
+
+export const RESERVED_SLUGS = new Set([
+  'app',
+  'api',
+  'health',
+  'assets',
+  'privacy',
+  'termini',
+  'orbiters',
+  'pigrocrm',
+  'pigro',
+  'login',
+  'www',
+  'admin',
+  'static',
+  'registrati',
+])
+
+/** `"/studio"` for `/studio/app/clienti`, `""` for `/app/clienti` or anything else. */
+export function tenantPrefixFrom(pathname: string): string {
+  const match = /^\/([a-z0-9][a-z0-9-]{1,30}[a-z0-9])\/app(?:\/|$)/.exec(pathname)
+  if (!match) return ''
+  const slug = match[1] ?? ''
+  return RESERVED_SLUGS.has(slug) ? '' : `/${slug}`
+}
+
+/** Same rule as `pigrocrm.core.tenants.schemas.slugify`, so the page's preview is what
+ *  the server will accept: accents stripped, runs of anything else become one hyphen,
+ *  trimmed, lowercased, cut to 32. */
+export function slugify(nome: string): string {
+  const ascii = nome
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\u0020-\u007e]/g, '')
+  return ascii
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, SLUG_MAX)
+    .replace(/-+$/g, '')
+}
+
+/** Why a slug would be refused, in the words the server uses, or null when it is fine.
+ *  Checked here first so the person sees it while typing, and checked again by the API. */
+export function slugProblem(slug: string): string | null {
+  if (slug.length < 3) return 'il nome deve avere almeno 3 caratteri'
+  if (slug.length > SLUG_MAX) return `il nome può avere al massimo ${SLUG_MAX} caratteri`
+  if (!SLUG_PATTERN.test(slug))
+    return "solo lettere minuscole, cifre e trattini, senza trattini all'inizio o alla fine"
+  if (RESERVED_SLUGS.has(slug)) return 'questo nome è riservato'
+  return null
+}
+
+export const tenantPrefix: string =
+  typeof window === 'undefined' ? '' : tenantPrefixFrom(window.location.pathname)
+
+/** Where a space logs in, as a full-page destination: a different basepath is a
+ *  different application instance, so it is a navigation, not a router push. */
+export function spaceLoginUrl(slug: string): string {
+  return `/${slug}/app/login`
+}

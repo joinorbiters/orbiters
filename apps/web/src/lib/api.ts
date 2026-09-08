@@ -1,5 +1,6 @@
 import createClient from 'openapi-fetch'
 import type { paths } from './api-types'
+import { tenantPrefix } from './tenant'
 
 export const api = createClient<paths>({
   // Empty, not '/api': every router (apps/api/src/pigrocrm_api/routers/*.py) already
@@ -8,7 +9,9 @@ export const api = createClient<paths>({
   // "/auth/me". Vite's dev proxy (vite.config.ts) matches the same "/api" prefix and
   // forwards it unmodified, so the exact same full path also reaches the right
   // route in production, behind whatever serves this build there.
-  baseUrl: '',
+  // A space prepends its `/<slug>` here and nowhere else (lib/tenant.ts); the root's
+  // prefix is empty, so every `/api/...` key stays absolute-from-root as before.
+  baseUrl: tenantPrefix,
   // The JWT lives in an httpOnly cookie: JavaScript never sees it, and every
   // request carries it automatically.
   credentials: 'include',

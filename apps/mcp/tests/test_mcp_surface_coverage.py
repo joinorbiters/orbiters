@@ -422,6 +422,20 @@ _BYTE: dict[Method, str] = {
 #    category is for the ones that survive being asked why, and the only way to keep that
 #    true is to delete the ones that do not the moment the tool is written.
 _COPERTE_O_UMANE: dict[Method, str] = {
+    ("TenantService", "provision"): (
+        "e' la persona che crea il *proprio* spazio dal login pubblico (spec 2026-09-08): "
+        "una scelta su di se', come l'iscrizione a Orbiters, non un'operazione che un "
+        "agente compie per conto del titolare. Il registro degli spazi e' un database di "
+        "servizio, non il CRM, e l'unico adapter che vi arriva e' `POST /api/tenants`"
+    ),
+    ("TenantService", "availability"): (
+        "la domanda che la pagina di iscrizione fa mentre la persona scrive il nome: senza "
+        "actor, sul registro degli spazi, non sul CRM"
+    ),
+    ("TenantService", "get"): (
+        "lettura interna del registro: e' come `deps.py` traduce il prefisso dell'URL nel "
+        "database dello spazio, prima che esista un actor"
+    ),
     ("SignupService", "subscribe"): (
         "e' il visitatore della pagina pubblica /orbiters che lascia il *proprio* "
         "indirizzo per la community (spec 2026-09-07): un atto della persona su di se', "
