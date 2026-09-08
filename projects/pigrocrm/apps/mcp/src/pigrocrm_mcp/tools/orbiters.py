@@ -43,10 +43,12 @@ def register(
     @mcp.tool()
     @guard
     def list_orbiters_signups(limit: int = LIST_LIMIT_DEFAULT) -> dict[str, Any]:
-        """Chi ha lasciato l'email su joinorbiters.com per entrare nella community Orbiters,
-        dal più recente. Solo lettura, solo per un admin: sono indirizzi di altre
-        persone, e l'unica cosa da farne è decidere quando scrivere. `totale` conta
-        tutta la lista anche quando `limit` ne restituisce una parte.
+        """Chi ha lasciato nome, cognome ed email su joinorbiters.com per entrare nella
+        community Orbiters, dal più recente, con il profilo LinkedIn quando l'ha dato.
+        Solo lettura, solo per un admin: sono dati di altre persone, e l'unica cosa da
+        farne è decidere quando scrivere. `nome` e `cognome` sono vuoti solo per le
+        iscrizioni raccolte quando il form chiedeva la sola email. `totale` conta tutta
+        la lista anche quando `limit` ne restituisce una parte.
         """
         session = session_factory(_engine())()
         try:

@@ -47,7 +47,14 @@ def seeded(settings: Settings) -> Iterator[list[str]]:
     session = session_factory(engine)()
     addresses = ["uno@studio.it", "due@studio.it"]
     for address in addresses:
-        SignupService(session).subscribe(SignupCreate(email=address))
+        SignupService(session).subscribe(
+            SignupCreate(
+                email=address,
+                nome="Ada",
+                cognome="Lovelace",
+                linkedin_url="https://www.linkedin.com/in/ada",
+            )
+        )
     try:
         yield addresses
     finally:
@@ -74,6 +81,18 @@ async def test_an_admin_reads_the_list_newest_first(
     body = _payload(result)
     assert body["totale"] == 2
     assert [item["email"] for item in body["iscrizioni"]] == list(reversed(seeded))
+
+
+async def test_the_list_carries_the_name_and_the_profile_it_was_given(
+    mcp_engine: Engine, settings: Settings, seeded: list[str], tmp_path: Path
+) -> None:
+    """Whoever reads this list writes to these people: the name is what an assistant
+    needs in order to draft that message, and the profile is who they are."""
+    async with Client(_server(mcp_engine, settings, ADMIN, tmp_path)) as client:
+        result = await client.call_tool("list_orbiters_signups", {})
+    item = _payload(result)["iscrizioni"][0]
+    assert (item["nome"], item["cognome"]) == ("Ada", "Lovelace")
+    assert item["linkedin_url"] == "https://www.linkedin.com/in/ada"
 
 
 async def test_limit_pages_the_list_but_not_the_total(

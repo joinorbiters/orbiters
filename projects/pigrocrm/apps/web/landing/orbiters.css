@@ -104,12 +104,20 @@ h1 {
   max-width: 34ch;
 }
 
-/* --- The form: one row that becomes two on a narrow screen. */
+/* --- The form: nome and cognome share a row, everything else takes the full width.
+   The labels are `.sr-only`, so absolutely positioned and out of the grid entirely --
+   the cells are the four inputs and the button, nothing else. One column on a phone. */
 .signup {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr 1fr;
   gap: 0.5rem;
   margin-top: 0.5rem;
+}
+
+.signup input[type='email'],
+.signup input[type='url'],
+.signup button {
+  grid-column: 1 / -1;
 }
 
 @media (max-width: 26rem) {
