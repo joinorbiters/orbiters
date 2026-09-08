@@ -132,7 +132,8 @@ PigroCRM non riprende a emettere e `issue` risponde `Conflict` elencando i numer
 ### 5. Verifiche post-import
 
 - `list_invoices` (filtro `anno = 2026`, o senza filtro) deve mostrare le 14 fatture
-  importate, tutte con `importata_da = "the previous system"`.
+  importate, tutte con `importata_da = "esterno"` (il valore era `"the previous system"` fino
+  alla migrazione 0029: nessun nome di prodotto arriva all'utente).
 - Il contatore dell'anno deve essere avanzato al numero più alto importato più i buchi
   dichiarati: `SELECT * FROM invoice_counters WHERE anno = 2026` deve dare
   `ultimo_numero = 17`.

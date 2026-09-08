@@ -56,7 +56,7 @@ dal chiamante** e non dal contatore, e una nuova colonna:
 
 | Colonna | Tipo | Significato |
 |---|---|---|
-| `importata_da` | `String(20)` null | `'the previous system'` per questo slice. `NULL` = emessa da PigroCRM. È il campo che dice «di questa fattura il CRM non ha prodotto né XML né PDF» |
+| `importata_da` | `String(20)` null | `'esterno'` per questo slice (era `'the previous system'`, rinominato dalla migrazione 0029: il valore raggiunge API e schermo, quindi non nomina nessun prodotto). `NULL` = emessa da PigroCRM. È il campo che dice «di questa fattura il CRM non ha prodotto né XML né PDF» |
 
 Tutto il resto è il modello dello slice 3: `imponibile`, `imposta`, `bollo`, `totale`,
 `data_emissione`, `data_scadenza`, `stato_pagamento`, `data_incasso`, `causale`,
@@ -108,7 +108,7 @@ imponibile, imposta, bollo, totale,           # dichiarati, non ricalcolati (ved
 stato_pagamento, data_incasso?,
 trasmessa_esternamente_il?,                    # data di trasmissione SdI da the previous system
 pdf_sorgente?: {drive_file_id} | {upload_key}, # §3.5
-note_interne?, importata_da: "the previous system"
+note_interne?, importata_da: "esterno"
 ```
 
 `riferimento` non c'è, di proposito: sulla tabella `invoices` è il riferimento di una **proforma**
@@ -318,7 +318,7 @@ produrrebbe un secondo consenso da rifare ogni settimana.
 2. **Totali.** `imponibile + imposta + bollo ≠ totale` è rifiutato al centesimo, con i due valori
    nel messaggio.
 3. **XML.** `export_xml` su una fattura importata è `Conflict`; `list_invoices` la mostra con
-   `importata_da = "the previous system"`.
+   `importata_da = "esterno"`.
 4. **Drive, relevance.** Il fake trasporto registra ogni richiesta: ogni `files.list` porta
    `'<id> in parents'` con un id fra le radici configurate e **nessun** `name contains`, `fullText
    contains` o `q` privo di `in parents`. Un `read_drive_file` su un id fuori radice è `NotFound`
