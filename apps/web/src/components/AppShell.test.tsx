@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { SETTINGS_TABS } from '@/features/settings/tabs'
 import { AppShell } from './AppShell'
 import { SIDEBAR_GROUPS_KEY } from './sidebarGroups'
 
@@ -19,16 +20,19 @@ vi.mock('@tanstack/react-router', () => ({
     to,
     className,
     activeProps,
+    activeOptions,
   }: {
     children: React.ReactNode
     to: string
     className?: string
     activeProps?: Record<string, unknown>
+    activeOptions?: { exact?: boolean }
   }) => {
-    // `activeOptions` is deliberately dropped: the shell asks for an exact match only on
-    // "/app", which this substitute gets right by never treating "/app" as a prefix.
-    const active =
-      mockRoute.pathname === to || (to !== '/app' && mockRoute.pathname.startsWith(`${to}/`))
+    // `activeOptions.exact` is honoured, because the shell relies on it: without it "/app"
+    // is a prefix of every other route and Home would be the current page everywhere.
+    const active = activeOptions?.exact
+      ? mockRoute.pathname === to
+      : mockRoute.pathname === to || mockRoute.pathname.startsWith(`${to}/`)
     return (
       <a href={to} className={className} {...(active ? activeProps : {})}>
         {children}
@@ -53,11 +57,33 @@ vi.mock('@/lib/auth', () => ({
  */
 function renderShell(children: React.ReactNode = <div />) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(
+  // A fresh element on every call: re-rendering the *same* element object is a React
+  // bail-out, which would make `refresh()` (the stand-in for a navigation) do nothing.
+  const tree = () => (
     <QueryClientProvider client={client}>
       <AppShell>{children}</AppShell>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   )
+  const result = render(tree())
+  return { ...result, refresh: () => result.rerender(tree()) }
+}
+
+/**
+ * jsdom has no layout, so the breakpoint the shell reads has to be stated. Desktop is the
+ * default here because it is the layout most of these assertions are about; the two
+ * below-`lg` tests set it themselves.
+ */
+function setViewport(desktop: boolean) {
+  window.matchMedia = ((query: string) => ({
+    matches: desktop && query.includes('min-width'),
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia
 }
 
 function sidebar() {
@@ -65,6 +91,7 @@ function sidebar() {
 }
 
 beforeEach(() => {
+  setViewport(true)
   mockAuth.ruolo = 'admin'
   mockRoute.pathname = '/app/clienti'
   localStorage.clear()
@@ -167,13 +194,18 @@ describe('AppShell', () => {
     )
   })
 
-  it('lists the settings tabs as the sub-items of Impostazioni', async () => {
+  it('lists one sub-item per settings tab, in the same order', async () => {
+    // Against the shared `SETTINGS_TABS` and not against a handful of labels typed out
+    // here: a tab added to the settings page and forgotten in the sidebar is exactly the
+    // drift this list exists to prevent.
     renderShell()
     await userEvent.click(sidebar().getByRole('button', { name: 'Impostazioni' }))
-    const nav = sidebar()
-    for (const label of ['Spazio', 'Campi', 'Pipeline', 'Utenti', 'Google Drive']) {
-      expect(nav.getByRole('link', { name: label })).toBeInTheDocument()
-    }
+    const subItems = sidebar()
+      .getAllByRole('link')
+      .filter((link) => link.getAttribute('href')?.startsWith('/app/impostazioni/'))
+    expect(subItems.map((link) => link.textContent)).toEqual(
+      SETTINGS_TABS.map((tab) => tab.label),
+    )
   })
 
   it('opens Impostazioni when the current route is one of its tabs', () => {
@@ -219,6 +251,52 @@ describe('AppShell', () => {
     expect(nav.getByRole('link', { name: 'Impostazioni' })).toBeInTheDocument()
     expect(nav.queryByRole('link', { name: 'Campi' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Espandi il menu' })).toBeInTheDocument()
+  })
+
+  it('draws a focus ring the dark sidebar can actually show', () => {
+    // shadcn's Button sets `outline-none` and a Watermelon/50 ring, which over Prussian
+    // Blue is 1.73:1 -- i.e. no visible focus at all. Every control in here asks for
+    // `--sidebar-ring` (Paper) instead.
+    renderShell()
+    expect(sidebar().getByRole('link', { name: 'Home' })).toHaveClass(
+      'focus-visible:ring-sidebar-ring',
+    )
+    expect(screen.getByRole('button', { name: 'Comprimi il menu' })).toHaveClass(
+      'focus-visible:ring-sidebar-ring',
+    )
+  })
+
+  it('is a rail below lg, whose expanded form is an overlay you can dismiss', async () => {
+    // 272px of the 390px a phone has is not a layout, it is a menu.
+    setViewport(false)
+    renderShell()
+    expect(sidebar().queryByRole('button', { name: 'Vendite' })).not.toBeInTheDocument()
+    expect(sidebar().getByRole('link', { name: 'Clienti' })).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Espandi il menu' }))
+    expect(sidebar().getByRole('button', { name: 'Vendite' })).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Chiudi il menu' }))
+    expect(sidebar().queryByRole('button', { name: 'Vendite' })).not.toBeInTheDocument()
+  })
+
+  it('closes the overlay when the route changes, so it never covers the page you asked for', async () => {
+    setViewport(false)
+    const { refresh } = renderShell()
+    await userEvent.click(screen.getByRole('button', { name: 'Espandi il menu' }))
+    expect(sidebar().getByRole('button', { name: 'Vendite' })).toBeInTheDocument()
+
+    mockRoute.pathname = '/app/ore'
+    refresh()
+    expect(sidebar().queryByRole('button', { name: 'Vendite' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Chiudi il menu' })).not.toBeInTheDocument()
+  })
+
+  it('has no overlay on a desktop viewport: the sidebar is a column beside the page', async () => {
+    renderShell()
+    await userEvent.click(screen.getByRole('button', { name: 'Comprimi il menu' }))
+    expect(screen.queryByRole('button', { name: 'Chiudi il menu' })).not.toBeInTheDocument()
+    expect(sidebar().getByRole('link', { name: 'Impostazioni' })).toBeInTheDocument()
   })
 
   it('renders its children inside the content panel', () => {

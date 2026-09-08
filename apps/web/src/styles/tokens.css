@@ -147,7 +147,10 @@
   --sidebar-accent: color-mix(in oklab, #ffffff 10%, var(--color-prussian-blue));
   --sidebar-accent-foreground: #ffffff;
   --sidebar-border: color-mix(in oklab, #ffffff 12%, var(--color-prussian-blue));
-  --sidebar-ring: var(--ring);
+  /* Paper, not --ring: the focus ring is drawn *on the sidebar*, where Watermelon at
+     50% over Prussian Blue is 1.73:1 and effectively invisible. Paper is the same ink
+     the sidebar's own text uses, so a focused control is unmistakable. */
+  --sidebar-ring: var(--color-paper);
 }
 
 .dark {
@@ -187,7 +190,10 @@
   --sidebar-accent: color-mix(in oklab, #ffffff 10%, var(--color-prussian-blue));
   --sidebar-accent-foreground: #ffffff;
   --sidebar-border: color-mix(in oklab, #ffffff 12%, var(--color-prussian-blue));
-  --sidebar-ring: var(--ring);
+  /* Paper, not --ring: the focus ring is drawn *on the sidebar*, where Watermelon at
+     50% over Prussian Blue is 1.73:1 and effectively invisible. Paper is the same ink
+     the sidebar's own text uses, so a focused control is unmistakable. */
+  --sidebar-ring: var(--color-paper);
 }
 
 @layer base {
