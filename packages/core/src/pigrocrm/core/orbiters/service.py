@@ -24,12 +24,18 @@ class SignupService:
         email = data.email.strip().lower()
         existing = self._find(email)
         if existing is not None:
-            return _read(existing, nuova=False)
+            return _read(self._fill_in_what_is_missing(existing, data), nuova=False)
 
         # The first attribution of an address is the one that stays: a person who comes
         # back through another ad and types the same email is the same person.
         utm = data.utm.model_dump() if data.utm is not None and not data.utm.is_empty() else {}
-        row = Signup(email=email, **utm)
+        row = Signup(
+            email=email,
+            nome=data.nome,
+            cognome=data.cognome,
+            linkedin_url=data.linkedin_url,
+            **utm,
+        )
         self.session.add(row)
         try:
             self.session.commit()
@@ -56,6 +62,23 @@ class SignupService:
             totale=totale,
             iscrizioni=[SignupListItem.model_validate(row) for row in rows],
         )
+
+    def _fill_in_what_is_missing(self, row: Signup, data: SignupCreate) -> Signup:
+        """Writes only into columns that are empty, never over one that already says
+        something -- the same rule the attribution follows, applied to what the earlier
+        form never asked. The rows collected before this form had a name field have
+        `nome` NULL, and somebody signing up again is how they get one; a profile left
+        out the first time and given the second is the same case.
+        """
+        changed = False
+        for field in ("nome", "cognome", "linkedin_url"):
+            value = getattr(data, field)
+            if value is not None and not (getattr(row, field) or "").strip():
+                setattr(row, field, value)
+                changed = True
+        if changed:
+            self.session.commit()
+        return row
 
     def _find(self, email: str) -> Signup | None:
         return self.session.scalar(select(Signup).where(func.lower(Signup.email) == email))
