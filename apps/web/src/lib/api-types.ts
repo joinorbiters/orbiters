@@ -2346,6 +2346,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/settings/space": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read */
+        get: operations["read_api_settings_space_get"];
+        /** Update */
+        put: operations["update_api_settings_space_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -5126,6 +5144,70 @@ export interface components {
             prossimo_livello: number;
             /** Ultima Risposta Il */
             ultima_risposta_il: string | null;
+        };
+        /**
+         * SpaceSettingsRead
+         * @description What the page shows: the effective values, which of them come from this
+         *     database rather than the environment, and the two URLs Google has to know.
+         */
+        SpaceSettingsRead: {
+            /** Spazio */
+            spazio: string | null;
+            /** Public Url */
+            public_url: string;
+            /** Google Client Id */
+            google_client_id: string;
+            /** Google Client Secret Impostato */
+            google_client_secret_impostato: boolean;
+            /** Google Token Key Impostata */
+            google_token_key_impostata: boolean;
+            /** Google App Unverified */
+            google_app_unverified: boolean;
+            /** Gmail Configurato */
+            gmail_configurato: boolean;
+            /** Redirect Uri Gmail */
+            redirect_uri_gmail: string;
+            /** Redirect Uri Drive */
+            redirect_uri_drive: string;
+            /** Storage Backend */
+            storage_backend: string;
+            /** Mcp Full Access */
+            mcp_full_access: boolean;
+            /** Solleciti Grace Days */
+            solleciti_grace_days: number;
+            /** Solleciti Min Interval Days */
+            solleciti_min_interval_days: number;
+            /** Solleciti Max Reminders */
+            solleciti_max_reminders: number;
+            /** Gmail Backfill Days */
+            gmail_backfill_days: number;
+            /** Sovrascritte */
+            sovrascritte: string[];
+        };
+        /**
+         * SpaceSettingsUpdate
+         * @description Every field optional: absent means "leave as it is", an empty string clears the
+         *     override so the environment's value shows through again.
+         */
+        SpaceSettingsUpdate: {
+            /** Google Client Id */
+            google_client_id?: string | null;
+            /** Google Client Secret */
+            google_client_secret?: string | null;
+            /** Google App Unverified */
+            google_app_unverified?: boolean | null;
+            /** Storage Backend */
+            storage_backend?: ("local" | "gdrive") | null;
+            /** Mcp Full Access */
+            mcp_full_access?: boolean | null;
+            /** Solleciti Grace Days */
+            solleciti_grace_days?: number | null;
+            /** Solleciti Min Interval Days */
+            solleciti_min_interval_days?: number | null;
+            /** Solleciti Max Reminders */
+            solleciti_max_reminders?: number | null;
+            /** Gmail Backfill Days */
+            gmail_backfill_days?: number | null;
         };
         /**
          * SyncReport
@@ -24717,6 +24799,244 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TenantRead"];
+                };
+            };
+            /** @description Permesso negato: l'actor non ha il ruolo richiesto. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La risorsa richiesta non esiste o è stata rimossa. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La richiesta è in conflitto con lo stato attuale della risorsa. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Una regola di dominio non è stata rispettata (application/problem+json), oppure il corpo, i parametri o il path della richiesta non hanno la forma attesa e non hanno mai raggiunto l'endpoint (application/json). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_api_settings_space_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpaceSettingsRead"];
+                };
+            };
+            /** @description Permesso negato: l'actor non ha il ruolo richiesto. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La risorsa richiesta non esiste o è stata rimossa. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La richiesta è in conflitto con lo stato attuale della risorsa. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Una regola di dominio non è stata rispettata (application/problem+json), oppure il corpo, i parametri o il path della richiesta non hanno la forma attesa e non hanno mai raggiunto l'endpoint (application/json). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_api_settings_space_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpaceSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpaceSettingsRead"];
                 };
             };
             /** @description Permesso negato: l'actor non ha il ruolo richiesto. */

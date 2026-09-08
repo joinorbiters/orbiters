@@ -56,10 +56,15 @@ class TenantPrefixMiddleware:
             # Read per request rather than captured at construction: `get_settings` is
             # cached, so this costs nothing, and a test that clears the cache after
             # setting PIGROCRM_ROOT_SLUG is honoured.
-            slug, rest = split_tenant_prefix(scope["path"], get_settings().root_slug)
+            root_slug = get_settings().root_slug
+            slug, rest = split_tenant_prefix(scope["path"], root_slug)
             if rest != scope["path"]:
                 scope["path"] = rest
                 scope["raw_path"] = rest.encode("utf-8")
+                # The prefix the request wore, space or root alias: what cookies are
+                # scoped to, so two spaces in one browser never share a session and the
+                # root under its own name is no exception.
+                scope.setdefault("state", {})["prefix"] = slug or root_slug
             if slug is not None:
                 scope.setdefault("state", {})["tenant"] = slug
         await self.app(scope, receive, send)
@@ -72,7 +77,8 @@ def tenant_slug(request: Request) -> str | None:
 
 
 def cookie_path(request: Request) -> str:
-    """Session cookies live under the space's prefix, so two spaces in one browser
-    never see each other's session; the root keeps `/` as it always did."""
-    slug = tenant_slug(request)
-    return f"/{slug}/" if slug else "/"
+    """Session cookies live under the prefix the request wore -- a space's, or the
+    root's own name -- so two spaces in one browser never see each other's session.
+    Only the bare, unprefixed root keeps `/`."""
+    prefix = getattr(request.state, "prefix", None)
+    return f"/{prefix}/" if isinstance(prefix, str) and prefix else "/"
