@@ -16,7 +16,27 @@
     shared.mount(canvas, { cell: cell || 16, animate: true })
   }
 
-  function signup(form, note) {
+  /* The attribution the URL carries -- `?utm_source=linkedin&utm_medium=paid-social&
+     utm_id=...` -- read once, when the page loads, so it survives however long the
+     person takes to type. Only the six utm_ keys, each cut to what the API stores. An
+     ad platform's macro left unexpanded (`{{AD_SET_ID}}`) is sent as the literal it
+     arrived as: that is what happened, and hiding it would hide a broken campaign. */
+  var UTM_KEYS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'utm_id']
+  function utmFrom(search) {
+    var params = new URLSearchParams(search || '')
+    var utm = null
+    for (var i = 0; i < UTM_KEYS.length; i += 1) {
+      var value = params.get(UTM_KEYS[i])
+      if (value === null) continue
+      value = value.trim().slice(0, 200)
+      if (value === '') continue
+      utm = utm || {}
+      utm[UTM_KEYS[i]] = value
+    }
+    return utm
+  }
+
+  function signup(form, note, utm) {
     var input = form.querySelector('input[name="email"]')
     var button = form.querySelector('button')
 
@@ -39,7 +59,7 @@
       fetch('/api/orbiters/signups', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email }),
+        body: JSON.stringify(utm ? { email: email, utm: utm } : { email: email }),
       })
         .then(function (response) {
           if (response.status === 422) {
@@ -65,8 +85,10 @@
     if (canvas && typeof canvas.getContext === 'function') field(canvas)
     var form = doc.getElementById('signup')
     var note = doc.getElementById('note')
-    if (form && note) signup(form, note)
+    if (form && note) signup(form, note, utmFrom(window.location.search))
   }
+
+  window.__orbiters = { utmFrom: utmFrom }
 
   if (doc.readyState === 'loading') {
     doc.addEventListener('DOMContentLoaded', start)

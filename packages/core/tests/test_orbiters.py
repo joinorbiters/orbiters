@@ -127,3 +127,68 @@ def test_only_an_admin_may_read_the_list(orbiters_session: Session) -> None:
         SignupService(orbiters_session).list_recent(
             Actor(id=None, type="mcp", role="collaboratore")
         )
+
+
+def test_the_attribution_is_stored_with_the_first_signup_and_never_overwritten(
+    orbiters_session: Session,
+) -> None:
+    from pigrocrm.core.orbiters import SignupUtm
+
+    service = SignupService(orbiters_session)
+    first = service.subscribe(
+        SignupCreate(
+            email="ada@studio.it",
+            utm=SignupUtm(utm_source="linkedin", utm_medium="paid-social", utm_id="{{AD_SET_ID}}"),
+        )
+    )
+    assert (first.utm_source, first.utm_medium, first.utm_id) == (
+        "linkedin",
+        "paid-social",
+        "{{AD_SET_ID}}",
+    )
+    assert first.utm_campaign is None
+    again = service.subscribe(
+        SignupCreate(email="ada@studio.it", utm=SignupUtm(utm_source="newsletter"))
+    )
+    assert again.nuova is False
+    assert again.utm_source == "linkedin"
+
+
+def test_no_attribution_is_stored_as_nothing(orbiters_session: Session) -> None:
+    from pigrocrm.core.actor import Actor
+
+    service = SignupService(orbiters_session)
+    service.subscribe(SignupCreate(email="bob@studio.it"))
+    item = service.list_recent(Actor(id=None, type="mcp", role="admin")).iscrizioni[0]
+    assert item.email == "bob@studio.it"
+    assert item.utm_source is None and item.utm_id is None
+
+
+def test_ensuring_the_database_adds_the_utm_columns_to_an_older_table(
+    db_engine: Engine,
+) -> None:
+    """The production table predates the columns: drop them, re-run the ensure, and they
+    are back -- which is the whole migration this sidecar has."""
+    from pigrocrm.core.orbiters.models import UTM_COLUMNS
+
+    engine = ensure_orbiters_database(_settings_for(db_engine))
+    try:
+        with engine.begin() as connection:
+            for column in UTM_COLUMNS:
+                connection.execute(text(f"ALTER TABLE signups DROP COLUMN IF EXISTS {column}"))
+        again = ensure_orbiters_database(_settings_for(db_engine))
+        try:
+            with again.connect() as connection:
+                columns = set(
+                    connection.execute(
+                        text(
+                            "select column_name from information_schema.columns "
+                            "where table_name = 'signups'"
+                        )
+                    ).scalars()
+                )
+            assert set(UTM_COLUMNS) <= columns
+        finally:
+            again.dispose()
+    finally:
+        engine.dispose()

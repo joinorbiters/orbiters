@@ -98,7 +98,7 @@ describe('orbiters.js', () => {
   it('stays small', () => {
     // Commented source; Vite ships it at about 2.6 KB. The whole page, font aside,
     // sits under 10 KB against the landing's 40 KB budget (e2e/landing.spec.ts).
-    expect(Buffer.byteLength(js, 'utf-8')).toBeLessThan(6 * 1024)
+    expect(Buffer.byteLength(js, 'utf-8')).toBeLessThan(7 * 1024)
   })
 
   it('carries no colour of its own', () => {
@@ -112,6 +112,31 @@ describe('orbiters.js', () => {
 
   it('asks the field to drift; the field decides about reduced motion', () => {
     expect(js).toMatch(/animate:\s*true/)
+  })
+
+  describe('the attribution', () => {
+    function load() {
+      new Function(js)()
+      const api = (window as unknown as { __orbiters?: { utmFrom: (s: string) => unknown } })
+        .__orbiters
+      if (!api) throw new Error('orbiters.js did not expose window.__orbiters')
+      return api.utmFrom
+    }
+
+    it('reads only the six utm_ keys, trimmed and bounded', () => {
+      const utmFrom = load()
+      expect(
+        utmFrom('?utm_id=%7B%7BAD_SET_ID%7D%7D&utm_source=linkedin&utm_medium=paid-social&gclid=x&foo=1'),
+      ).toEqual({ utm_source: 'linkedin', utm_medium: 'paid-social', utm_id: '{{AD_SET_ID}}' })
+      expect(utmFrom('?utm_source=' + 'a'.repeat(300))).toEqual({ utm_source: 'a'.repeat(200) })
+      expect(utmFrom('?utm_source=%20%20&utm_medium=')).toBeNull()
+    })
+
+    it('is nothing when the URL says nothing, so the body stays the bare email', () => {
+      expect(load()('')).toBeNull()
+      expect(load()('?ref=abc')).toBeNull()
+      expect(js).toMatch(/utm \? \{ email: email, utm: utm \} : \{ email: email \}/)
+    })
   })
 
   it('paints its field through the shared field.js, loaded first', () => {
