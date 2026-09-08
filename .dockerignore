@@ -1,43 +1,53 @@
-# Both Dockerfile.api and Dockerfile.web build with `context: .` (the repo root,
-# see docker-compose.yml) and then COPY only the specific paths they need -- so
-# this file is not what keeps unwanted files out of the final images. It exists
-# for one load-bearing reason and one speed reason:
+# Every image in this monorepo builds with `context: ../..` (the repository root, see
+# each project's docker-compose.yml) and then COPYs only the specific paths it needs --
+# so this file is not what keeps unwanted files out of the final images. It exists for
+# one load-bearing reason and one speed reason:
 #
-# Load-bearing: Dockerfile.web runs `pnpm install --frozen-lockfile` for a Linux
-# target *inside* the build stage, then `COPY apps/web ./`. Without excluding
-# node_modules here, that second COPY would pull in whatever apps/web/node_modules
-# already exists on the machine running `docker build` (e.g. this repo, right now,
-# has one from local development) and overwrite the freshly-installed Linux one
-# with it. On a Mac or with a different pnpm store, that silently breaks the build
-# on native-binary packages (esbuild, rollup, lightningcss, ...) with the wrong
+# Load-bearing: projects/pigrocrm/Dockerfile.web runs `pnpm install --frozen-lockfile`
+# for a Linux target *inside* the build stage, then COPYs the app directory. Without
+# excluding node_modules here, that second COPY would pull in whatever node_modules
+# already exists on the machine running `docker build` (this repository, right now,
+# very likely has one from local development) and overwrite the freshly-installed
+# Linux one with it. On a Mac or with a different pnpm store, that silently breaks the
+# build on native-binary packages (esbuild, rollup, lightningcss, ...) with the wrong
 # platform underneath -- confirmed by building without this exclusion first.
 #
 # Speed: everything else here just shrinks what gets sent to the Docker daemon as
-# build context (uv/pnpm caches, virtualenvs, git history, other apps' local caches).
+# build context. That matters more now than it did before the monorepo, because the
+# context is the whole repository and not one project.
 
 .git
 .env
 .env.local
+**/.env
+**/.env.local
 
 # Python
 .venv/
+**/.venv/
 **/__pycache__/
 **/*.py[cod]
-.pytest_cache/
 **/.pytest_cache/
 .mypy_cache/
-.ruff_cache/
 **/.ruff_cache/
+.ruff_cache/
 .coverage
 
 # Node (see "Load-bearing" above)
 **/node_modules/
-apps/web/dist/
-apps/web/dist-landing/
-apps/web/.tanstack/
+**/dist/
+**/dist-landing/
+**/.tanstack/
 **/*.tsbuildinfo
 
-# Editor / tooling noise not needed inside any image
+# Runtime state that lives beside the checkout when PIGROCRM_DATA_DIR and
+# PIGROCRM_DOCUMENTS_DIR are left at their defaults. Never wanted in an image, and
+# large.
+data/
+var/
+
+# Editor / tooling noise, and documentation no image reads
 .superpowers/
 .claude/
 docs/
+projects/*/docs/

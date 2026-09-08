@@ -1,0 +1,85 @@
+[project]
+name = "orbiters"
+version = "0.1.0"
+requires-python = ">=3.13,<3.14"
+# Every Python package of every project in the monorepo. One environment, one
+# resolution, one `uv.lock`: that is the whole point of a single workspace, and it is
+# what stops two projects installing two copies of SQLAlchemy at two versions. A new
+# project adds its packages here and to `[tool.uv.workspace] members` below.
+dependencies = ["pigrocrm-core", "pigrocrm-api", "pigrocrm-mcp"]
+
+[tool.uv.workspace]
+# Listed one by one rather than globbed. `projects/*/apps/*` would also match
+# `projects/pigrocrm/apps/web`, which is a Vite app with no `pyproject.toml`, and uv
+# refuses to start on a member that has none ("Workspace member ... is missing a
+# pyproject.toml"). An explicit list also means the error you get after adding a
+# project and forgetting this line names the package instead of a glob.
+members = [
+  "projects/pigrocrm/packages/core",
+  "projects/pigrocrm/apps/api",
+  "projects/pigrocrm/apps/mcp",
+]
+
+[tool.uv.sources]
+pigrocrm-core = { workspace = true }
+pigrocrm-api = { workspace = true }
+pigrocrm-mcp = { workspace = true }
+
+[dependency-groups]
+dev = [
+  "pytest==9.1.1",
+  "pytest-cov==7.1.0",
+  "pytest-asyncio==1.4.0",
+  "testcontainers[postgres]==4.15.0",
+  "httpx==0.28.1",
+  "ruff==0.16.1",
+  "mypy==2.3.0",
+  "lxml-stubs==0.5.1",
+  # openpyxl ships no inline types, so under `strict` every `from openpyxl import ...`
+  # is an `import-untyped` error and the whole workbook builder degrades to `Any` --
+  # which is exactly where a wrong `number_format` or a misspelled attribute would
+  # hide. Same reason `lxml-stubs` is here. Only a dev dependency: stubs are read by
+  # mypy, never imported at runtime, so they have no business in core's own
+  # `[project].dependencies` (and the architecture test reads that list literally).
+  "types-openpyxl==3.1.5.20260807",
+]
+
+# Both tables below name one project's paths explicitly, and grow by a few lines per
+# project. That is deliberate: pytest resolves `testpaths` and mypy resolves `files`
+# against the current working directory, not against the file they are written in, so
+# a per-project config file that only works when you happen to `cd` into that project
+# is a trap. Everything runs from the repository root; CI narrows to one project by
+# passing that project's paths as arguments, which override both lists.
+[tool.pytest.ini_options]
+testpaths = [
+  "projects/pigrocrm/packages/core/tests",
+  "projects/pigrocrm/apps/api/tests",
+  "projects/pigrocrm/apps/mcp/tests",
+]
+asyncio_mode = "auto"
+# Nothing skips on this marker by default. It exists so a developer can say
+# `-m "not slow"` while iterating, and so CI's own `uv run pytest -q` still runs it: a
+# plan assertion that CI skips is a plan assertion that does not exist.
+markers = [
+  "slow: builds the 50 000-row inflated corpus; minutes, not seconds",
+]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+mypy_path = [
+  "projects/pigrocrm/packages/core/src",
+  "projects/pigrocrm/apps/api/src",
+  "projects/pigrocrm/apps/mcp/src",
+]
+explicit_package_bases = true
+# Matches what .github/workflows/ci.yml passes on the command line exactly, so the
+# bare `uv run mypy` this repository's own task briefs name actually passes instead of
+# failing on "Missing target module, package, files, or command" every time -- a gate
+# that always fails trains people to read failure as normal, and read a real one as
+# more of the same.
+files = [
+  "projects/pigrocrm/packages/core/src",
+  "projects/pigrocrm/apps/api/src",
+  "projects/pigrocrm/apps/mcp/src",
+]

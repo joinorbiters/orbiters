@@ -1,0 +1,48 @@
+packages:
+  - 'projects/*/apps/*'
+  - 'projects/*/packages/*'
+  # Cross-project TypeScript libraries and shared build/lint configuration. Neither
+  # directory exists yet -- there is one Node project so far and nothing to share --
+  # and a glob matching nothing is not an error. They are declared here so that the
+  # first shared package lands in the place docs/adding-a-project.md already names,
+  # instead of wherever it is invented.
+  - 'shared/ts/*'
+  - 'tooling/*'
+
+# The single source of truth for build- and test-toolchain versions across every Node
+# project in the monorepo. A package writes `"typescript": "catalog:"` and the version
+# lives here once, so two projects cannot quietly drift onto two TypeScript majors and
+# two ESLint configurations that disagree.
+#
+# The rule, stated once: everything a project needs in order to be *built, linted and
+# tested* belongs in this catalog. What a project ships to its users -- its runtime
+# dependencies -- stays in that project's own package.json, because that is a product
+# choice and not a monorepo policy.
+catalog:
+  '@axe-core/playwright': ^4.13.0
+  '@eslint/js': ^9.39.1
+  '@playwright/test': 1.62.1
+  '@testing-library/jest-dom': ^7.0.0
+  '@testing-library/react': ^16.3.2
+  '@testing-library/user-event': ^14.6.3
+  '@types/node': ^24.10.1
+  '@types/react': ^19.2.5
+  '@types/react-dom': ^19.2.3
+  '@vitejs/plugin-react': ^5.1.1
+  eslint: ^9.39.1
+  eslint-plugin-react-hooks: ^7.0.1
+  eslint-plugin-react-refresh: ^0.4.24
+  globals: ^16.5.0
+  jsdom: ^30.0.1
+  openapi-typescript: 7.13.0
+  typescript: '5.9'
+  typescript-eslint: ^8.46.4
+  vite: ^8.2.0
+  vitest: ^4.1.10
+
+# esbuild compiles a native binary in its install script. Without this it is skipped,
+# and pnpm 11 makes that a hard error (ERR_PNPM_IGNORED_BUILDS) rather than a warning,
+# so `pnpm install --frozen-lockfile` fails on a clean machine for a reason that reads
+# like a broken lockfile.
+allowBuilds:
+  esbuild: true

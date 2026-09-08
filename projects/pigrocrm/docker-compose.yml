@@ -23,8 +23,16 @@ services:
     # a Docker Desktop reset or a reinstall must not be able to take the register with
     # them (decision of 2026-09-04, after a daemon reset scared everyone). Set
     # PIGROCRM_DATA_DIR to a directory outside the repository, e.g. ~/pigrocrm-data/postgres.
+    #
+    # The default is written `../../data/postgres` rather than `./data/postgres`
+    # because compose resolves a relative volume against the directory of this file,
+    # and this file moved down two levels when the repository became a monorepo. The
+    # two dots keep the default pointing at exactly the same directory on an existing
+    # server as before the move -- an installation that never set PIGROCRM_DATA_DIR
+    # would otherwise come back up against an empty data directory, with a working
+    # Postgres, no error anywhere, and its register apparently gone.
     volumes:
-      - ${PIGROCRM_DATA_DIR:-./data/postgres}:/var/lib/postgresql/data
+      - ${PIGROCRM_DATA_DIR:-../../data/postgres}:/var/lib/postgresql/data
     ports:
       - '${PIGROCRM_DB_PORT:-127.0.0.1:55432}:5432'
     healthcheck:
@@ -34,8 +42,11 @@ services:
 
   api:
     build:
-      context: .
-      dockerfile: Dockerfile.api
+      # The repository root, because both the uv workspace (pyproject.toml, uv.lock)
+      # and the pnpm workspace (package.json, pnpm-lock.yaml) live there and the
+      # image needs the lockfile it is pinned by.
+      context: ../..
+      dockerfile: projects/pigrocrm/Dockerfile.api
     restart: unless-stopped
     depends_on:
       db:
@@ -77,14 +88,15 @@ services:
       # without `Secure`.
     # Where `PIGROCRM_STORAGE_BACKEND=local` writes documents (config.py's
     # `storage_local_root`, ./var/documents under the image's WORKDIR /app). On the
-    # host, like the database above, so a rebuilt container keeps every PDF.
+    # host, like the database above, so a rebuilt container keeps every PDF -- and
+    # written `../../` for the same reason as the database volume above.
     volumes:
-      - ${PIGROCRM_DOCUMENTS_DIR:-./var/documents}:/app/var/documents
+      - ${PIGROCRM_DOCUMENTS_DIR:-../../var/documents}:/app/var/documents
 
   web:
     build:
-      context: .
-      dockerfile: Dockerfile.web
+      context: ../..
+      dockerfile: projects/pigrocrm/Dockerfile.web
     restart: unless-stopped
     depends_on: [api]
     ports:

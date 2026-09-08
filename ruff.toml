@@ -1,0 +1,11 @@
+# The monorepo-wide Python style. Every project's own `ruff.toml` extends this one
+# and adds only what is true of that project (its first-party module names, its
+# import boundaries). Ruff resolves configuration per file by walking up to the
+# nearest config, so a file under projects/pigrocrm/ is checked with that project's
+# settings layered on top of these, with no per-invocation flags.
+line-length = 100
+target-version = "py313"
+exclude = ["docs", ".superpowers"]
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "TID"]
