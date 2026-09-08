@@ -48,6 +48,17 @@ describe('DataTable', () => {
     expect(screen.queryByText('Nessun risultato.')).not.toBeInTheDocument()
   })
 
+  /** A different shape, deliberately -- but not a different *size*: bars shorter than
+   *  the rows they stand in for, in no container, made the table jump the moment the
+   *  request landed. */
+  it('loads inside the same container as the table, at the height of a real row', () => {
+    render(<DataTable columns={COLUMNS} data={[]} isLoading />)
+    const container = screen.getByRole('status')
+    expect(container.className).toContain('rounded-xl')
+    expect(container.className).toContain('border-border')
+    expect(container.querySelector('.h-14')).not.toBeNull()
+  })
+
   it('shows an honest empty state -- the full table chrome, one row saying so -- once loading is over', () => {
     render(<DataTable columns={COLUMNS} data={[]} />)
     expect(screen.getByRole('table')).toBeInTheDocument()
@@ -138,5 +149,55 @@ describe('DataTable', () => {
     render(<DataTable columns={COLUMNS} data={DATA} onRowClick={onRowClick} />)
     fireEvent.keyDown(rowFor('Beta SpA'), { key: 'a' })
     expect(onRowClick).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * Numeric alignment is a property of the *column*, not of each cell: the header has to
+ * sit over the digits it labels, and a `cell` renderer that right-aligned itself would
+ * leave its own header on the left. So the column says `meta.align: 'right'` once and
+ * both ends read it -- see `DataTableColumnMeta`'s own docstring for why `meta` is typed
+ * through `tableFeatures({ columnMeta })` rather than by global declaration merging.
+ */
+describe('DataTable column meta', () => {
+  const ALIGNED: ColumnDef<DataTableFeatures, Riga>[] = [
+    { accessorKey: 'nome', header: 'Nome' },
+    { accessorKey: 'id', header: 'Totale', meta: { align: 'right' } },
+  ]
+
+  it('right-aligns both the header and the cells of a numeric column', () => {
+    render(<DataTable columns={ALIGNED} data={DATA} />)
+    expect(screen.getByRole('columnheader', { name: 'Totale' }).className).toContain('text-right')
+    const cell = screen.getByText('1').closest('td')
+    expect(cell?.className).toContain('text-right')
+  })
+
+  it('leaves a column with no alignment of its own where it was', () => {
+    render(<DataTable columns={ALIGNED} data={DATA} />)
+    expect(screen.getByRole('columnheader', { name: 'Nome' }).className).not.toContain('text-right')
+    expect(screen.getByText('ACME Srl').closest('td')?.className).not.toContain('text-right')
+  })
+
+  it('passes a column width through to the header, so the «⋯» column can stay narrow', () => {
+    const sized: ColumnDef<DataTableFeatures, Riga>[] = [
+      { accessorKey: 'nome', header: 'Nome' },
+      { id: 'azioni', header: '', meta: { width: '3rem' } /* jsdom resolves rem against a 16px root */, cell: () => null },
+    ]
+    render(<DataTable columns={sized} data={DATA} />)
+    const headers = screen.getAllByRole('columnheader')
+    expect(headers[1]).toHaveStyle({ width: '48px' })
+  })
+})
+
+describe('the table container', () => {
+  /** Design spec §4: the table lives in a white rounded container with a hairline
+   *  border, and nothing may bleed out of its rounded corners. */
+  it('is a rounded, hairline-bordered card that clips its own corners, at the radius the spec names', () => {
+    render(<DataTable columns={COLUMNS} data={DATA} />)
+    const container = screen.getByRole('table').closest('[data-slot="data-table"]')
+    expect(container?.className).toContain('rounded-xl')
+    expect(container?.className).toContain('border-border')
+    expect(container?.className).toContain('bg-card')
+    expect(container?.className).toContain('overflow-hidden')
   })
 })

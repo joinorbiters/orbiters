@@ -137,6 +137,23 @@ class DealRead(BaseModel):
     # Derived, never supplied: on no Create or Update schema, because a caller who could
     # set it could claim a closure that never happened, straight into the conversion rate.
     chiuso_il: date | None
+    # The customer's `ragione_sociale`, denormalised onto the read shape exactly as
+    # `PersonRead.customer_ragione_sociale` is (see that field's own comment): the name
+    # lives on `customers` and renaming a customer must not need a second write here.
+    # `DealService` fills it from one batched lookup per page
+    # (`DealRepository.customer_names`), which is why the default is `None` -- a bare
+    # `model_validate(deal)` reads a `Deal` that has no such attribute at all, so without
+    # a default every read path would raise.
+    #
+    # Typed `str | None` although `deals.customer_id` is NOT NULL: the *association*
+    # always exists, but this schema validates whatever the lookup found, and a name that
+    # could not be resolved must read as absent rather than crash the whole page.
+    #
+    # Present on `DealRead` and on no write schema: a caller sets `customer_id`, never
+    # the name. Also absent from `native_fields` (schema_registry.py derives that list
+    # from `DealCreate`), which is correct twice over -- it is not writable, and it is not
+    # a column an administrator could collide with by slugifying a custom field into it.
+    customer_ragione_sociale: str | None = None
     custom_fields: dict[str, Any]
     created_at: datetime
     updated_at: datetime

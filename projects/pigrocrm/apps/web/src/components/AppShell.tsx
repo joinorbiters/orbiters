@@ -23,6 +23,8 @@ import { useState, type ReactNode } from 'react'
 import { BrandMark } from '@/components/BrandMark'
 import { readSidebarGroups, writeSidebarGroups } from '@/components/sidebarGroups'
 import { CommandPalette } from '@/features/search/CommandPalette'
+import { SETTINGS_TABS, type SettingsTabValue } from '@/features/settings/tabs'
+import { useMediaQuery } from '@/hooks/use-media-query'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import {
@@ -50,6 +52,11 @@ import { cn } from '@/lib/utils'
  *
  * Home is the dashboard, `/app`. Analisi is one link and not a group on purpose: its
  * three screens are tabs of one page, so the sidebar points at the first of them.
+ *
+ * Below `lg` the sidebar is the icon rail by default and its expanded form is an overlay
+ * over the page, dismissed by a backdrop or by navigating: 272px of the 390px a phone has
+ * would leave the content about 118px, which is not a layout. Above `lg` it is the column
+ * beside the page, collapsible to the same rail as before.
  */
 
 // Token is a top-level entry, not one of the settings sub-items below: a personal access
@@ -101,39 +108,42 @@ const GROUPS = [
 ] as const
 
 /**
- * «Impostazioni», whose sub-items are the tabs of `features/settings/SettingsLayout.tsx`.
- *
- * The labels are repeated here rather than imported from that module for two reasons: a
- * `<Link to>` needs a literal path to typecheck against the generated route tree, and
- * `SettingsLayout.tsx` is a component file, where a second export would trip
- * `react-refresh/only-export-components`. `SettingsLayout` remains the thing that renders
- * the tabs; this is the sidebar's way in to each of them.
+ * «Impostazioni», whose sub-items are the settings tabs -- one per entry of the shared
+ * `SETTINGS_TABS`, so the sidebar cannot drift from the page that renders them.
  *
  * Its own constant, separate from `GROUPS`, because it behaves differently in two ways:
  * it is admin-only (every service behind these tabs calls `actor.require_admin` on every
  * write), and in the collapsed rail it becomes a single icon link -- thirteen icons for
  * the tabs of one page would be a rail of settings and nothing else.
  */
+/**
+ * One literal path per settings tab. `satisfies Record<SettingsTabValue, ...>` is what
+ * makes this exhaustive: adding a tab to `SETTINGS_TABS` without a route here is a
+ * compile error, which is the whole point of keeping the labels in one place and the
+ * paths in the place that can typecheck them.
+ */
+const SETTINGS_PATHS = {
+  spazio: '/app/impostazioni/spazio',
+  campi: '/app/impostazioni/campi',
+  pipeline: '/app/impostazioni/pipeline',
+  template: '/app/impostazioni/template',
+  emittente: '/app/impostazioni/emittente',
+  fiscale: '/app/impostazioni/fiscale',
+  utenti: '/app/impostazioni/utenti',
+  'categorie-costo': '/app/impostazioni/categorie-costo',
+  tariffe: '/app/impostazioni/tariffe',
+  periodi: '/app/impostazioni/periodi',
+  gmail: '/app/impostazioni/gmail',
+  drive: '/app/impostazioni/drive',
+  automazioni: '/app/impostazioni/automazioni',
+} as const satisfies Record<SettingsTabValue, string>
+
 const SETTINGS = {
   id: 'impostazioni',
   label: 'Impostazioni',
   icon: Settings,
   base: '/app/impostazioni',
-  items: [
-    { to: '/app/impostazioni/spazio', label: 'Spazio' },
-    { to: '/app/impostazioni/campi', label: 'Campi' },
-    { to: '/app/impostazioni/pipeline', label: 'Pipeline' },
-    { to: '/app/impostazioni/template', label: 'Template' },
-    { to: '/app/impostazioni/emittente', label: 'Emittente' },
-    { to: '/app/impostazioni/fiscale', label: 'Fiscale' },
-    { to: '/app/impostazioni/utenti', label: 'Utenti' },
-    { to: '/app/impostazioni/categorie-costo', label: 'Categorie costo' },
-    { to: '/app/impostazioni/tariffe', label: 'Tariffe' },
-    { to: '/app/impostazioni/periodi', label: 'Periodi' },
-    { to: '/app/impostazioni/gmail', label: 'Gmail' },
-    { to: '/app/impostazioni/drive', label: 'Google Drive' },
-    { to: '/app/impostazioni/automazioni', label: 'Automazioni' },
-  ],
+  items: SETTINGS_TABS.map((tab) => ({ to: SETTINGS_PATHS[tab.value], label: tab.label })),
 } as const
 
 /**
@@ -144,7 +154,7 @@ const SETTINGS = {
 type LinkTo =
   | (typeof TOP_LEVEL)[number]['to']
   | (typeof GROUPS)[number]['items'][number]['to']
-  | (typeof SETTINGS)['items'][number]['to']
+  | (typeof SETTINGS_PATHS)[SettingsTabValue]
 
 // `metaKey` on Apple platforms, `ctrlKey` elsewhere. Read once at module scope from the
 // platform hint rather than sniffing the user agent string: this only decides which glyph
@@ -152,12 +162,27 @@ type LinkTo =
 const IS_APPLE =
   typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform ?? '')
 
+/**
+ * The focus ring of every control in here, on every one of them.
+ *
+ * `--sidebar-ring` is Paper (see `tokens.css`), not the app-wide `--ring`: Watermelon at
+ * 50% over Prussian Blue is 1.73:1, which is a ring nobody can see -- and shadcn's
+ * `Button` sets `outline-none`, so an invisible ring is *no* visible focus at all. The
+ * `cn()` here is `twMerge`, so this overrides the ring colour the button variant sets.
+ */
+const FOCUS =
+  'outline-none focus-visible:ring-[3px] focus-visible:ring-sidebar-ring focus-visible:ring-offset-0'
+
 const ITEM = 'flex items-center gap-3 rounded-[10px] px-3 py-2 text-sm transition-colors'
 // The active pill: a lighter, translucent fill on the dark sidebar rather than the solid
 // Watermelon the flat list used -- with grouped navigation there are two things to mark at
 // once (the group and the item inside it), and two solid fills would fight.
-const ACTIVE = 'data-[status=active]:bg-sidebar-accent data-[status=active]:font-medium'
+const ACTIVE =
+  'data-[status=active]:bg-sidebar-accent data-[status=active]:text-sidebar-accent-foreground data-[status=active]:font-medium'
 const QUIET = 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground'
+
+/** Below this the sidebar is a rail whose expanded form is an overlay, not a column. */
+const DESKTOP = '(min-width: 1024px)'
 
 /** Is `pathname` this entry, or a page below it (a detail route, a tab)? */
 function matches(pathname: string, to: string, exact = false) {
@@ -168,11 +193,21 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth()
   const isAdmin = useIsAdmin()
   const { location } = useRouterState()
+  // Below `lg` a 272px sidebar leaves ~118px of page on a 390px phone, so there the
+  // sidebar is the rail by default and its expanded form is an overlay over the content.
+  // The breakpoint has to be read in JS and not only in CSS because the two are different
+  // *structures*, not two widths of one.
+  const isDesktop = useMediaQuery(DESKTOP)
   // Local, unpersisted UI state -- collapsing to an icon rail is a per-visit
   // convenience, not a setting worth a round trip or a storage key. Which groups are
   // open *is* stored (see `sidebarGroups.ts`): it is a standing preference about the
   // shape of your own navigation.
   const [collapsed, setCollapsed] = useState(false)
+  // The overlay, stored as *where* it was opened rather than as a boolean: navigating
+  // closes it, with no effect to synchronise, because the pathname it was opened at is no
+  // longer the current one. A menu that stays open over the page you just asked for is
+  // the classic mobile-drawer bug.
+  const [openedAt, setOpenedAt] = useState<string | null>(null)
   // The palette is mounted here, once, rather than inside the search field: it owns the
   // Cmd/Ctrl+K listener, so it has to be alive even while the field has never been
   // clicked.
@@ -186,19 +221,30 @@ export function AppShell({ children }: { children: ReactNode }) {
   )?.id
 
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(readSidebarGroups)
-  // The group holding the current route opens by itself, whatever you last left it as:
-  // the alternative is a page whose own entry in the sidebar is not on screen. You can
-  // still close it -- that is what this remembers, and why the header is a live toggle
-  // rather than a chevron that does nothing while you stay inside the group. Not stored:
-  // the preference is what you chose deliberately, not what one route did on your behalf.
+  // The group holding the current route opens by itself unless you dismissed it in this
+  // session: the alternative is a page whose own entry in the sidebar is not on screen,
+  // and the alternative to *that* -- nailing it open -- is a chevron that does nothing.
+  // The dismissal is deliberately not stored: what gets written is the preference you
+  // chose, not what one route did on your behalf, so a reload of the same page opens the
+  // group again.
   const [dismissed, setDismissed] = useState<string | undefined>(undefined)
   const isOpen = (id: string) =>
     openGroups[id] === true || (id === activeGroup && dismissed !== id)
 
   const toggleGroup = (id: string) => {
+    const next = { ...openGroups, [id]: !isOpen(id) }
     if (id === activeGroup) setDismissed(isOpen(id) ? id : undefined)
-    setOpenGroups((previous) => writeSidebarGroups({ ...previous, [id]: !isOpen(id) }))
+    setOpenGroups(writeSidebarGroups(next))
   }
+
+  // What the sidebar is showing right now, and what the one toggle does to it.
+  const overlay = !isDesktop && openedAt === location.pathname
+  const expanded = isDesktop ? !collapsed : overlay
+  const rail = !expanded
+  const toggleSidebar = () =>
+    isDesktop
+      ? setCollapsed((value) => !value)
+      : setOpenedAt(overlay ? null : location.pathname)
 
   const initials = (user?.nome ?? '?')
     .split(' ')
@@ -224,34 +270,52 @@ export function AppShell({ children }: { children: ReactNode }) {
       to={to}
       activeOptions={{ exact }}
       activeProps={{ 'aria-current': 'page' }}
-      className={cn(ITEM, QUIET, ACTIVE, collapsed && 'justify-center px-0')}
+      className={cn(ITEM, QUIET, ACTIVE, FOCUS, rail && 'justify-center px-0')}
     >
       <Icon className="size-4 shrink-0" aria-hidden="true" />
-      <span className={cn('truncate', collapsed && 'sr-only')}>{label}</span>
+      <span className={cn('truncate', rail && 'sr-only')}>{label}</span>
     </Link>
   )
 
   return (
     <div className="flex h-dvh overflow-hidden bg-background">
+      {overlay && (
+        <>
+          {/* A real button, not an `aria-hidden` div: dismissing an overlay is something a
+              keyboard has to be able to do, and this is the control that does it. */}
+          <button
+            type="button"
+            aria-label="Chiudi il menu"
+            onClick={() => setOpenedAt(null)}
+            className="fixed inset-0 z-30 bg-[var(--color-prussian-blue)]/50"
+          />
+          {/* The rail's own width, kept in the flow while the sidebar itself is out of it,
+              so the page underneath does not shift as the overlay opens and closes. */}
+          <div aria-hidden="true" className="w-[4.5rem] shrink-0" />
+        </>
+      )}
       <aside
         className={cn(
           // As tall as the viewport, never as tall as the page: the profile at the bottom
           // is reachable without scrolling, and the navigation scrolls on its own if it
           // ever outgrows the window.
           'flex h-dvh shrink-0 flex-col bg-sidebar text-sidebar-foreground transition-[width] duration-200 ease-linear',
-          collapsed ? 'w-[4.5rem]' : 'w-[17rem]',
+          rail ? 'w-[4.5rem]' : 'w-[17rem]',
+          // Below `lg` the expanded sidebar is an overlay over the content, not a column
+          // beside it: 272px of the 390px a phone has is not a layout, it is a menu.
+          overlay && 'fixed inset-y-0 left-0 z-40 shadow-2xl',
         )}
       >
         <div
           className={cn(
             'flex items-center gap-2 px-4 pt-5 pb-3',
-            collapsed ? 'justify-center' : 'justify-between',
+            rail ? 'justify-center' : 'justify-between',
           )}
         >
           <span
             className={cn(
               'inline-flex items-center truncate text-lg font-medium tracking-tight',
-              collapsed && 'sr-only',
+              rail && 'sr-only',
             )}
           >
             <BrandMark className="mr-2.5" />
@@ -262,9 +326,12 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Button
             variant="ghost"
             size="icon-sm"
-            className="shrink-0 text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
-            onClick={() => setCollapsed((value) => !value)}
-            aria-label={collapsed ? 'Espandi il menu' : 'Comprimi il menu'}
+            className={cn(
+              'shrink-0 text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground',
+              FOCUS,
+            )}
+            onClick={toggleSidebar}
+            aria-label={rail ? 'Espandi il menu' : 'Comprimi il menu'}
           >
             <PanelLeftIcon className="size-4" />
           </Button>
@@ -280,15 +347,16 @@ export function AppShell({ children }: { children: ReactNode }) {
             aria-label="Cerca in tutto il CRM"
             className={cn(
               'flex w-full items-center gap-2 rounded-[10px] border border-sidebar-border bg-sidebar-accent/50 px-3 py-2 text-sm text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground',
-              collapsed && 'justify-center px-0',
+              FOCUS,
+              rail && 'justify-center px-0',
             )}
           >
             <Search className="size-4 shrink-0" aria-hidden="true" />
-            <span className={cn('flex-1 text-left', collapsed && 'sr-only')}>Cerca</span>
+            <span className={cn('flex-1 text-left', rail && 'sr-only')}>Cerca</span>
             <kbd
               className={cn(
                 'rounded border border-sidebar-border px-1.5 py-0.5 text-xs font-medium',
-                collapsed && 'sr-only',
+                rail && 'sr-only',
               )}
             >
               {IS_APPLE ? '⌘' : 'Ctrl'} K
@@ -305,13 +373,17 @@ export function AppShell({ children }: { children: ReactNode }) {
         >
           {leaf(TOP_LEVEL[0])}
 
-          {collapsed
+          {rail
             ? // The rail: no headers, no indentation, every section one click away. The
               // settings tabs are the exception -- one link to the page that owns them.
               [
                 ...GROUPS.flatMap((group) => group.items.map((item) => leaf(item))),
                 ...TOP_LEVEL.slice(1).map((item) => leaf(item)),
-                isAdmin ? leaf({ ...SETTINGS.items[0], label: SETTINGS.label, icon: Settings }) : null,
+                // The first tab, under the group's own name: in the rail the label is the
+                // accessible name, and «Spazio» would say nothing about where it goes.
+                isAdmin
+                  ? leaf({ to: SETTINGS_PATHS.spazio, label: SETTINGS.label, icon: Settings })
+                  : null,
               ]
             : [
                 ...GROUPS.map((group) => (
@@ -349,7 +421,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                 type="button"
                 className={cn(
                   'flex w-full items-center gap-3 rounded-[10px] px-2 py-2 text-left transition-colors hover:bg-sidebar-accent',
-                  collapsed && 'justify-center px-0',
+                  FOCUS,
+                  rail && 'justify-center px-0',
                 )}
                 aria-label="Menu del profilo"
               >
@@ -358,12 +431,12 @@ export function AppShell({ children }: { children: ReactNode }) {
                     {initials}
                   </AvatarFallback>
                 </Avatar>
-                <div className={cn('min-w-0 flex-1', collapsed && 'sr-only')}>
+                <div className={cn('min-w-0 flex-1', rail && 'sr-only')}>
                   <p className="truncate text-sm font-medium">{user?.nome}</p>
                   <p className="truncate text-xs text-sidebar-foreground/70">{user?.ruolo}</p>
                 </div>
                 <ChevronsUpDown
-                  className={cn('size-4 shrink-0 text-sidebar-foreground/70', collapsed && 'hidden')}
+                  className={cn('size-4 shrink-0 text-sidebar-foreground/70', rail && 'hidden')}
                   aria-hidden="true"
                 />
               </button>
@@ -431,7 +504,7 @@ function NavGroup({
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className={cn(ITEM, QUIET, 'w-full')}
+        className={cn(ITEM, QUIET, FOCUS, 'w-full')}
       >
         <Icon className="size-4 shrink-0" aria-hidden="true" />
         <span className="flex-1 truncate text-left">{label}</span>
@@ -460,6 +533,7 @@ function subItem({ to, label }: { to: LinkTo; label: string }) {
           'block truncate rounded-[10px] px-3 py-1.5 text-sm transition-colors',
           QUIET,
           ACTIVE,
+          FOCUS,
         )}
       >
         {label}

@@ -37,14 +37,103 @@ export const api = createClient<paths>({
  */
 let refreshing: Promise<boolean> | null = null
 
-/** Whether the session could be renewed. Never throws: a failed refresh is an answer
- *  ("no"), and the caller's own original response is what gets reported. */
-function refreshSession(): Promise<boolean> {
-  refreshing ??= fetch(`${tenantPrefix}/api/auth/refresh`, {
+/**
+ * The name every tab of this application agrees on for the right to refresh.
+ *
+ * One string, not one per space, and a Web Lock is scoped to the origin. Not because the
+ * cookie is: session cookies are path-scoped per space (`cookie_path`,
+ * apps/api/src/pigrocrm_api/tenancy.py), so a tab in `/studio/app/` and a tab in `/app/`
+ * genuinely hold different refresh cookies. But a root cookie at `Path=/` is sent into a
+ * space's paths too, so the jars overlap and two tabs can still be rotating the very
+ * same token -- and a per-prefix name would let exactly that pair refresh at once, which
+ * is the whole thing being prevented. The cost of the conservative name is that a stalled
+ * tab in one space makes another space's tab wait, which is why that wait is bounded
+ * (`LOCK_WAIT_MS`) rather than left to the lock's own default of forever.
+ */
+const REFRESH_LOCK = 'pigrocrm-refresh'
+
+/**
+ * How long a tab waits for another tab's refresh before giving up on the lock.
+ *
+ * `LockManager.request` is otherwise an *unbounded* wait, and `fetch` has no timeout of
+ * its own: one tab whose refresh POST stalls on a hung proxy, a captive portal or a
+ * sleeping connection holds this lock for as long as its socket stays open, and every
+ * other tab of the origin sits inside `await refreshSession()` with its own request
+ * unsettled -- a spinner that never resolves and never errors. Before the lock existed
+ * each tab failed on its own; a lock that can hang them all together is worse than no
+ * lock at all.
+ *
+ * Ten seconds, and the abort is safe rather than merely bounded: a request aborted while
+ * *waiting* never runs its callback, so the fallback below refreshes unlocked -- which
+ * the server's own ten-second grace window now absorbs
+ * (`RefreshTokenService.REFRESH_GRACE_SECONDS`) instead of reading as a replay.
+ */
+const LOCK_WAIT_MS = 10_000
+
+/** The refresh request itself. Never throws: a failed refresh is an answer ("no"), and
+ *  the caller's own original response is what gets reported. */
+function postRefresh(): Promise<boolean> {
+  return fetch(`${tenantPrefix}/api/auth/refresh`, {
     method: 'POST',
     credentials: 'include',
   })
     .then((response) => response.ok)
+    .catch(() => false)
+}
+
+/**
+ * The same refresh, but at most one across every tab of this origin at a time.
+ *
+ * `refreshing` above covers one tab's own concurrent requests. It cannot cover two
+ * tabs, and two tabs is the ordinary case: the refresh cookie belongs to the browser,
+ * not to a tab, so two tabs (or one browser restoring a window of them) that wake up
+ * past the same fifteen-minute access cookie both post the same rotating token within
+ * milliseconds. Serialised by this lock, the second tab's request goes out *after* the
+ * first one's response has already replaced the cookie in the shared jar, so it is an
+ * ordinary rotation of a current token rather than a simultaneous replay of a dead one.
+ *
+ * The server no longer punishes the race either -- `RefreshTokenService.rotate` answers
+ * a second presentation inside ten seconds with the same successor -- and both halves
+ * are wanted: this lock is what keeps the pair of them from *needing* the grace window
+ * on every quiet quarter of an hour, and the grace window is what covers what a lock in
+ * one browser cannot (a request already in flight when the lock was taken, a second
+ * browser profile, `navigator.locks` missing).
+ *
+ * Missing is a real case, not a hypothetical: `navigator.locks` is undefined in a
+ * non-secure context, in older Safari, and in this test suite's jsdom, and
+ * `AbortSignal.timeout` is missing in browsers old enough that an unbounded lock is the
+ * worse of the two risks. In any of those cases -- and if the lock manager refuses the
+ * request, or the wait times out -- the refresh still happens, unlocked, as it did
+ * before. A session that cannot be renewed is the fifteen-minute bug this whole
+ * mechanism exists to fix; a lock is worth having, never worth failing over.
+ */
+async function refreshUnderCrossTabLock(): Promise<boolean> {
+  const locks = globalThis.navigator?.locks
+  // No bound available means no lock: an unbounded wait on another tab is the one
+  // failure mode worse than refreshing without the lock at all (see `LOCK_WAIT_MS`).
+  const bounded = typeof AbortSignal?.timeout === 'function'
+  if (locks === undefined || !bounded) return postRefresh()
+  try {
+    // Awaited, not returned: `LockManager.request` is typed as resolving to whatever
+    // the callback returns *or* a promise of it, and awaiting is what flattens the
+    // `boolean | Promise<boolean>` that comes back.
+    //
+    // The signal only ever cancels the *wait*: a granted lock ignores it, so this can
+    // never abort a refresh already in flight, only stop this tab queueing behind one.
+    return await locks.request(
+      REFRESH_LOCK,
+      { signal: AbortSignal.timeout(LOCK_WAIT_MS) },
+      postRefresh,
+    )
+  } catch {
+    return postRefresh()
+  }
+}
+
+/** Whether the session could be renewed -- one answer per tab, and one refresh at a
+ *  time across tabs. Never throws, for the reason `postRefresh` does not. */
+function refreshSession(): Promise<boolean> {
+  refreshing ??= refreshUnderCrossTabLock()
     .catch(() => false)
     .finally(() => {
       refreshing = null

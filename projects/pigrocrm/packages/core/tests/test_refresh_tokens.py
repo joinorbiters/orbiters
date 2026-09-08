@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 import pigrocrm.core.auth.refresh_service as refresh_service_module
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.auth.refresh_models import RefreshToken
-from pigrocrm.core.auth.refresh_service import RefreshTokenService
+from pigrocrm.core.auth.refresh_service import REFRESH_GRACE_SECONDS, RefreshTokenService
 from pigrocrm.core.auth.repository import UserRepository
 from pigrocrm.core.auth.schemas import UserCreate, UserUpdate
 from pigrocrm.core.auth.service import UserService
@@ -306,3 +306,141 @@ def test_two_concurrent_consumes_of_the_same_jti_do_not_both_succeed(
             RefreshTokenService(verify_session).consume(jti_b, user.id)
     finally:
         verify_session.close()
+
+
+def _shifted_by(monkeypatch: pytest.MonkeyPatch, seconds: float) -> None:
+    """Move the service's own clock forward without waiting for it.
+
+    The service reads the wall clock through its module-level `datetime`, which is the
+    single point every other test in this file already freezes (see
+    `test_two_concurrent_consumes_of_the_same_jti_do_not_both_succeed`), so the grace
+    window can be crossed in a test that runs in milliseconds. A real `time.sleep(11)`
+    would prove the same thing eleven seconds slower, once per assertion.
+    """
+    real_datetime = refresh_service_module.datetime
+
+    class _Shifted(real_datetime):  # type: ignore[valid-type,misc]
+        @classmethod
+        def now(cls, tz: object = None) -> datetime:
+            return real_datetime.now(tz) + timedelta(seconds=seconds)
+
+    monkeypatch.setattr(refresh_service_module, "datetime", _Shifted)
+
+
+def test_rotating_consumes_the_presented_token_and_records_its_successor(
+    db_session: Session,
+) -> None:
+    user = _make_user(db_session)
+    service = RefreshTokenService(db_session)
+    token = service.issue(user.id, SETTINGS)
+    jti = decode_token(token, SETTINGS, expected_type="refresh").jti
+    assert jti is not None
+
+    rotation = service.rotate(jti, user.id, SETTINGS)
+
+    successor_jti = decode_token(rotation.refresh_token, SETTINGS, expected_type="refresh").jti
+    assert successor_jti is not None and successor_jti != jti
+    record = db_session.execute(select(RefreshToken).where(RefreshToken.jti == jti)).scalar_one()
+    assert record.consumed_at is not None
+    # The successor reference is what makes the grace window below possible at all: on a
+    # second presentation there is otherwise nothing left on the row that says which
+    # token the first presentation handed out.
+    assert record.successor_jti == successor_jti
+
+
+def test_a_replay_within_the_grace_window_returns_the_very_same_successor(
+    db_session: Session,
+) -> None:
+    """Two tabs, one refresh cookie. Both wake up past the fifteen-minute access cookie
+    and both POST /api/auth/refresh with the same rotating token: the second is not an
+    attacker, it is the same browser, and treating it as a replay logged the owner out
+    of every tab at once. Within ten seconds the answer is the pair the first
+    presentation already produced -- byte for byte, so the second tab's cookie jar ends
+    up holding exactly what the first tab's does."""
+    user = _make_user(db_session)
+    service = RefreshTokenService(db_session)
+    token = service.issue(user.id, SETTINGS)
+    jti = decode_token(token, SETTINGS, expected_type="refresh").jti
+    assert jti is not None
+
+    first = service.rotate(jti, user.id, SETTINGS)
+    second = service.rotate(jti, user.id, SETTINGS)
+
+    assert second.refresh_token == first.refresh_token
+    assert second.issued_at == first.issued_at
+    # No third row: the grace path hands back the successor, it does not mint another.
+    rows = db_session.execute(select(RefreshToken).where(RefreshToken.user_id == user.id)).scalars()
+    assert len(list(rows)) == 2
+    # And the successor is still unconsumed, so the next genuine rotation works.
+    successor_jti = decode_token(first.refresh_token, SETTINGS, expected_type="refresh").jti
+    assert successor_jti is not None
+    assert service.rotate(successor_jti, user.id, SETTINGS).refresh_token != first.refresh_token
+
+
+def test_a_replay_within_the_grace_window_does_not_revoke_the_family(
+    db_session: Session,
+) -> None:
+    user = _make_user(db_session)
+    service = RefreshTokenService(db_session)
+    token_a = service.issue(user.id, SETTINGS)  # the session being rotated
+    token_b = service.issue(user.id, SETTINGS)  # another device, untouched
+    jti_a = decode_token(token_a, SETTINGS, expected_type="refresh").jti
+    jti_b = decode_token(token_b, SETTINGS, expected_type="refresh").jti
+    assert jti_a is not None and jti_b is not None
+
+    service.rotate(jti_a, user.id, SETTINGS)
+    service.rotate(jti_a, user.id, SETTINGS)  # the second tab, inside the window
+
+    # The other device's token is the tell: mass revocation would have killed it.
+    service.rotate(jti_b, user.id, SETTINGS)
+
+
+def test_a_replay_after_the_grace_window_revokes_the_family(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Past the window the old reading stands: a consumed token turning up again is the
+    signal it was stolen, and the whole family dies. The window forgives the ordinary
+    race between two tabs, not a token resurfacing minutes or days later."""
+    user = _make_user(db_session)
+    service = RefreshTokenService(db_session)
+    token_a = service.issue(user.id, SETTINGS)
+    token_b = service.issue(user.id, SETTINGS)
+    jti_a = decode_token(token_a, SETTINGS, expected_type="refresh").jti
+    jti_b = decode_token(token_b, SETTINGS, expected_type="refresh").jti
+    assert jti_a is not None and jti_b is not None
+
+    service.rotate(jti_a, user.id, SETTINGS)
+
+    _shifted_by(monkeypatch, REFRESH_GRACE_SECONDS + 1)
+    with pytest.raises(ValidationFailed):
+        service.rotate(jti_a, user.id, SETTINGS)
+
+    with pytest.raises(ValidationFailed):
+        service.rotate(jti_b, user.id, SETTINGS)
+
+
+def test_a_replay_whose_successor_is_already_consumed_revokes_the_family(
+    db_session: Session,
+) -> None:
+    """The grace window returns a *live* successor or nothing. Once the successor has
+    itself been used -- rotated on by the tab that received it, or killed by a logout --
+    there is no same-pair answer left to give, and a token presented after that is a
+    replay like any other, inside ten seconds or not."""
+    user = _make_user(db_session)
+    service = RefreshTokenService(db_session)
+    token_a = service.issue(user.id, SETTINGS)
+    token_b = service.issue(user.id, SETTINGS)
+    jti_a = decode_token(token_a, SETTINGS, expected_type="refresh").jti
+    jti_b = decode_token(token_b, SETTINGS, expected_type="refresh").jti
+    assert jti_a is not None and jti_b is not None
+
+    first = service.rotate(jti_a, user.id, SETTINGS)
+    successor_jti = decode_token(first.refresh_token, SETTINGS, expected_type="refresh").jti
+    assert successor_jti is not None
+    service.consume(successor_jti, user.id)  # e.g. the logout of the tab that got it
+
+    with pytest.raises(ValidationFailed):
+        service.rotate(jti_a, user.id, SETTINGS)
+
+    with pytest.raises(ValidationFailed):
+        service.rotate(jti_b, user.id, SETTINGS)

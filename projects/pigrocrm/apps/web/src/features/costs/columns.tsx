@@ -1,4 +1,5 @@
 import type { ColumnDef } from '@tanstack/react-table'
+import { DateCell, MoneyCell } from '@/components/cells'
 import type { DataTableFeatures } from '@/components/DataTable'
 import { renderFieldValue } from '@/components/DynamicFieldRenderer'
 import { formatMoneyValue } from '@/features/time/columns'
@@ -14,7 +15,14 @@ export function buildCostColumns(
 ): ColumnDef<DataTableFeatures, Cost>[] {
   const names = new Map(categories.map((category) => [category.id, category.nome]))
   const native: ColumnDef<DataTableFeatures, Cost>[] = [
-    { header: 'Data', id: 'data', accessorFn: (row) => formatIsoDateItalian(row.data) },
+    {
+      header: 'Data',
+      id: 'data',
+      accessorFn: (row) => formatIsoDateItalian(row.data),
+      // `DateCell` formats the raw ISO value through the same `lib/dates.ts` this
+      // accessor uses, and adds the calendar icon (design spec §4).
+      cell: ({ row }) => <DateCell value={row.original.data} />,
+    },
     {
       header: 'Categoria',
       id: 'category_id',
@@ -34,6 +42,13 @@ export function buildCostColumns(
       // received (§4.4), so it is labelled rather than treated as an error.
       accessorFn: (row) =>
         `${formatMoneyValue(row.importo)}${row.importo.startsWith('-') ? ' (rimborso)' : ''}`,
+      meta: { align: 'right' },
+      cell: ({ row }) => (
+        <MoneyCell>
+          {formatMoneyValue(row.original.importo)}
+          {row.original.importo.startsWith('-') ? ' (rimborso)' : ''}
+        </MoneyCell>
+      ),
     },
     {
       header: 'Giustificativo',

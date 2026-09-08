@@ -34,7 +34,7 @@ export function PageHeader({
 }) {
   return (
     <header className={cn('shrink-0', className)}>
-      <div className="flex items-start gap-4 px-6 pt-6 pb-5">
+      <div className="flex items-start gap-4 px-8 pt-6 pb-5">
         {/* Paper square, 40px, radius 10: the one piece of colour in the header, and a
             fixed anchor the eye finds at the same spot on every page. Decorative -- it
             says what the title already says, so it is hidden from a screen reader. */}
@@ -51,7 +51,7 @@ export function PageHeader({
         {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
       </div>
 
-      {tabs && <div className="border-b px-6">{tabs}</div>}
+      {tabs && <div className="border-b px-8">{tabs}</div>}
       {children}
     </header>
   )

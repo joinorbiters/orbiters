@@ -29,8 +29,9 @@ def _issue(
     settings: Settings,
     *,
     jti: UUID | None = None,
+    issued_at: datetime | None = None,
 ) -> str:
-    now = datetime.now(UTC)
+    now = issued_at if issued_at is not None else datetime.now(UTC)
     claims: dict[str, Any] = {
         "sub": str(user_id),
         "role": role,
@@ -43,19 +44,45 @@ def _issue(
     return jwt.encode(claims, settings.jwt_secret, algorithm=ALGORITHM)
 
 
-def issue_access_token(user_id: UUID, role: str, settings: Settings) -> str:
+def issue_access_token(
+    user_id: UUID, role: str, settings: Settings, *, issued_at: datetime | None = None
+) -> str:
+    """`issued_at` is what lets the same access token be signed twice and come out
+    identical. HS256 over identical claims with the same key is deterministic, so the
+    only thing that would otherwise differ between two signings a few seconds apart is
+    `iat` (and the `exp` derived from it) -- which is exactly what the refresh grace
+    window needs to pin down: two tabs presenting the same refresh cookie within ten
+    seconds get the *same* pair back, not two pairs (see
+    `RefreshTokenService.rotate`). Left None -- every other caller -- this reads the
+    clock as before."""
     return _issue(
-        user_id, role, "access", timedelta(minutes=settings.access_token_minutes), settings
+        user_id,
+        role,
+        "access",
+        timedelta(minutes=settings.access_token_minutes),
+        settings,
+        issued_at=issued_at,
     )
 
 
-def issue_refresh_token(user_id: UUID, settings: Settings, *, jti: UUID | None = None) -> str:
+def issue_refresh_token(
+    user_id: UUID,
+    settings: Settings,
+    *,
+    jti: UUID | None = None,
+    issued_at: datetime | None = None,
+) -> str:
     """`jti` identifies this exact token: two refresh tokens issued in the same second
     would otherwise carry identical `iat`/`exp` claims, and HS256 over identical claims
     with the same key is deterministic -- byte-for-byte the same token, which defeats
     rotation entirely. A fresh random `jti` is generated whenever the caller does not
     supply one, so two tokens can never collide; `RefreshTokenService.issue` supplies
-    its own so the same value can be persisted for later revocation/consumption."""
+    its own so the same value can be persisted for later revocation/consumption.
+
+    `issued_at`, like `issue_access_token`'s, makes the signature reproducible: the same
+    `jti` re-signed at the same instant is the same token, byte for byte, which is what
+    `RefreshTokenService.rotate` returns to a second tab inside the grace window
+    instead of minting a second successor."""
     return _issue(
         user_id,
         None,
@@ -63,6 +90,7 @@ def issue_refresh_token(user_id: UUID, settings: Settings, *, jti: UUID | None =
         timedelta(days=settings.refresh_token_days),
         settings,
         jti=jti if jti is not None else uuid4(),
+        issued_at=issued_at,
     )
 
 

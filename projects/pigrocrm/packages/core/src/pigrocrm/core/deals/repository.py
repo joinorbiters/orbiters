@@ -1,3 +1,4 @@
+from collections.abc import Collection
 from datetime import date
 from decimal import Decimal
 from uuid import UUID
@@ -5,6 +6,7 @@ from uuid import UUID
 from sqlalchemy import Numeric, and_, case, func, literal, select
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.dashboard.schemas import ClosedInPeriod, PipelineStageSummary
 from pigrocrm.core.db import decode_cursor, escape_like, keyset_predicate, order_by
 from pigrocrm.core.deals.models import Deal
@@ -28,6 +30,33 @@ class DealRepository:
         if deal.deleted_at is not None and not include_deleted:
             return None
         return deal
+
+    def customer_names(self, customer_ids: Collection[UUID]) -> dict[UUID, str]:
+        """The `ragione_sociale` of each given customer, in one query.
+
+        The same method, for the same reason, as `PersonRepository.customer_names`: one
+        statement for a whole page rather than one per row, so a 50-row deal list costs
+        two queries and never fifty-one. A label lookup for rows already chosen, run
+        after the limit.
+
+        No `deleted_at` filter, deliberately -- and here it costs nothing, because a live
+        deal's customer is always live: `CustomerService.soft_delete` refuses while the
+        customer has active deals, `DealService.create` rejects an archived customer, and
+        `DealService.restore` raises a conflict ("il cliente e' archiviato") rather than
+        handing back a deal whose customer is gone. Filtering would therefore only add a
+        way for the name to come back empty on a row that has one, and
+        `deals.customer_id` is NOT NULL, so an empty name there reads as a data error
+        rather than as "no customer". Mirrors `PersonRepository.customer_names`, which
+        omits the filter for the neighbouring reason.
+
+        An empty input short-circuits: `IN ()` is a query with no possible rows.
+        """
+        if not customer_ids:
+            return {}
+        rows = self.session.execute(
+            select(Customer.id, Customer.ragione_sociale).where(Customer.id.in_(customer_ids))
+        ).all()
+        return {row[0]: row[1] for row in rows}
 
     def add(self, deal: Deal) -> Deal:
         self.session.add(deal)

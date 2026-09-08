@@ -1,9 +1,11 @@
 import { useBlocker } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
-import { Copy, Plus, Trash2 } from 'lucide-react'
+import { Copy, KeyRound, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { Badge } from '@/components/ui/badge'
+import { DateCell } from '@/components/cells'
+import { PageHeader } from '@/components/PageHeader'
+import { StatusPill, type StatusTone } from '@/components/StatusPill'
 import { Button } from '@/components/ui/button'
 import { DataTable, type DataTableFeatures } from '@/components/DataTable'
 import {
@@ -28,8 +30,30 @@ const ROLE_LABELS: Record<string, string> = {
 
 const dateFormatter = new Intl.DateTimeFormat('it-IT', { dateStyle: 'medium', timeStyle: 'short' })
 
+/** «mai», not the em dash every other absent value shows: a token that has never been
+ *  used is a fact about the token, not a missing field, and it is the fact somebody is
+ *  looking for before revoking one. `DateCell` renders the same word through `absent`. */
 function formatUsed(value: string | null): string {
   return value === null ? 'mai' : dateFormatter.format(new Date(value))
+}
+
+/**
+ * A token's two states, derived from whether `revoked_at` is set. Named -- rather than
+ * left as a pair of inline ternaries -- so the label and the tone have one key to agree
+ * on, the same shape the four stored enums use.
+ *
+ * `attivo` is the ordinary, settled state. `revocato` stays quiet rather than reading as
+ * a warning: revoking is something the owner *did*, deliberately, and a list of old
+ * tokens all in the destructive tint would say something went wrong when nothing did.
+ */
+type TokenStato = 'attivo' | 'revocato'
+
+const TOKEN_STATE_LABELS: Record<TokenStato, string> = { attivo: 'Attivo', revocato: 'Revocato' }
+
+const TOKEN_STATE_TONE: Record<TokenStato, StatusTone> = { attivo: 'ink', revocato: 'muted' }
+
+function statoOf(token: TokenRecord): TokenStato {
+  return token.revoked_at ? 'revocato' : 'attivo'
 }
 
 const LEAVE_WARNING =
@@ -108,15 +132,22 @@ export function TokensPanel() {
       header: 'Ultimo uso',
       id: 'last_used_at',
       accessorFn: (row) => formatUsed(row.last_used_at),
+      // `DateCell` keeps the time of day for a timestamp, which is the whole point on a
+      // token: "used at 03:12" is the answer somebody is looking for, and it renders the
+      // same string `formatUsed` does above.
+      cell: (info) => <DateCell value={info.row.original.last_used_at} absent="mai" />,
     },
     {
       header: 'Stato',
       id: 'revoked_at',
-      cell: (info) => (
-        <Badge variant={info.row.original.revoked_at ? 'secondary' : 'default'}>
-          {info.row.original.revoked_at ? 'Revocato' : 'Attivo'}
-        </Badge>
-      ),
+      // The accessor carries the word, so the column has one plain text value; the pill
+      // is the same dotted one every other state in the product wears (design spec §4),
+      // not the filled badge this column used to show.
+      accessorFn: (row) => TOKEN_STATE_LABELS[statoOf(row)],
+      cell: (info) => {
+        const stato = statoOf(info.row.original)
+        return <StatusPill tone={TOKEN_STATE_TONE[stato]}>{TOKEN_STATE_LABELS[stato]}</StatusPill>
+      },
     },
     {
       header: '',
@@ -141,37 +172,39 @@ export function TokensPanel() {
   const roleLabel = user ? (ROLE_LABELS[user.ruolo] ?? user.ruolo) : null
 
   return (
-    <div className="p-8">
-      <header className="mb-6 flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Token di accesso</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Servono a far usare PigroCRM a un agente (per esempio Claude, tramite il server MCP)
-            con le credenziali di questo account. Imposta il token nella variabile
-            d&apos;ambiente <code>PIGROCRM_TOKEN</code> di chi lo userà.
-          </p>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Un token eredita <strong>l&apos;intero ruolo di chi lo crea</strong>, senza possibilità
-            di limitarne l&apos;ambito e senza scadenza: chiunque lo possieda può fare, tramite
-            l&apos;API, tutto ciò che puoi fare tu — un token creato da un amministratore può
-            anche creare altri amministratori. Trattalo come una password: non condividerlo e
-            revocalo subito se sospetti che sia stato esposto.
-          </p>
-        </div>
-        <Button onClick={openDialog}>
-          <Plus className="mr-2 size-4" />
-          Nuovo token
-        </Button>
-      </header>
-
-      <DataTable
-        columns={columns}
-        data={tokens.data ?? []}
-        isLoading={tokens.isLoading}
-        isError={tokens.isError}
-        error={tokens.error}
-        emptyMessage="Nessun token creato."
+    <>
+      <PageHeader
+        icon={KeyRound}
+        title="Token di accesso"
+        description="Servono a far usare PigroCRM a un agente (per esempio Claude, tramite il server MCP) con le credenziali di questo account. Imposta il token nella variabile d'ambiente PIGROCRM_TOKEN di chi lo userà."
+        actions={
+          <Button onClick={openDialog}>
+            <Plus className="mr-2 size-4" />
+            Nuovo token
+          </Button>
+        }
       />
+
+      <div className="space-y-4 px-8 pb-8">
+        {/* Stays on the page rather than folding into the header's own description: it
+            is the warning, not the explanation, and the two read differently. */}
+        <p className="text-sm text-muted-foreground">
+          Un token eredita <strong>l&apos;intero ruolo di chi lo crea</strong>, senza possibilità
+          di limitarne l&apos;ambito e senza scadenza: chiunque lo possieda può fare, tramite
+          l&apos;API, tutto ciò che puoi fare tu — un token creato da un amministratore può
+          anche creare altri amministratori. Trattalo come una password: non condividerlo e
+          revocalo subito se sospetti che sia stato esposto.
+        </p>
+
+        <DataTable
+          columns={columns}
+          data={tokens.data ?? []}
+          isLoading={tokens.isLoading}
+          isError={tokens.isError}
+          error={tokens.error}
+          emptyMessage="Nessun token creato."
+        />
+      </div>
 
       <Dialog open={creating} onOpenChange={setCreating}>
         <DialogContent>
@@ -249,6 +282,6 @@ export function TokensPanel() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   )
 }

@@ -1,4 +1,5 @@
 import type { ColumnDef } from '@tanstack/react-table'
+import { DateCell, MoneyCell, NumberCell } from '@/components/cells'
 import type { DataTableFeatures } from '@/components/DataTable'
 import { Button } from '@/components/ui/button'
 import { formatMoneyValue } from '@/features/time/columns'
@@ -35,17 +36,24 @@ export function sollecitiColumns(
       id: 'giorni_di_ritardo',
       header: 'Giorni di ritardo',
       accessorFn: (row) => String(row.giorni_di_ritardo),
+      // A count, so it goes on the right with the amount: this table is read by
+      // scanning down the two numeric columns for the worst row.
+      meta: { align: 'right' },
+      cell: ({ row }) => <NumberCell>{row.original.giorni_di_ritardo}</NumberCell>,
     },
     {
       id: 'importo',
       header: 'Importo',
       accessorFn: (row) => formatMoneyValue(row.importo),
+      meta: { align: 'right' },
+      cell: ({ row }) => <MoneyCell>{formatMoneyValue(row.original.importo)}</MoneyCell>,
     },
     {
       id: 'ultimo_sollecito_il',
       header: 'Ultimo sollecito',
       accessorFn: (row) =>
         row.ultimo_sollecito_il === null ? EMPTY : formatIsoDateItalian(row.ultimo_sollecito_il),
+      cell: ({ row }) => <DateCell value={row.original.ultimo_sollecito_il} />,
     },
     {
       id: 'prossimo_livello',

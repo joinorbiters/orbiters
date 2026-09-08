@@ -24,7 +24,28 @@ import { cn } from '@/lib/utils'
 // optional features (sorting, filtering, pagination, grouping, ...) switched on --
 // exactly what every list this product has today needs, and the same shape
 // TanStack's own "Quick Start" guide uses for this exact case.
-const features = tableFeatures({})
+/**
+ * What a column may declare about its own presentation, typed through v9's own
+ * `columnMeta` slot on `tableFeatures` rather than by declaration-merging the global
+ * `ColumnMeta` interface. Both are supported (see `ExtractColumnMeta` in
+ * @tanstack/table-core's ColumnDef.d.ts); the slot is chosen because declaration
+ * merging would type `meta` for *every* table anywhere in the app, including a future
+ * one built on different features, from a file nobody importing `ColumnDef` has any
+ * reason to open. The phantom value is stripped at runtime -- only its type is used.
+ *
+ * `align` exists because numeric alignment belongs to the column, not the cell: the
+ * header has to sit over the digits it labels, and a `cell` renderer that right-aligned
+ * itself would leave its own header on the left. `width` is a plain CSS length passed
+ * to the header cell, which is enough to keep the «⋯» column from taking a fair share
+ * of the table's width -- v9's real column sizing is a feature (`columnSizingFeature`)
+ * this table deliberately does not register.
+ */
+export interface DataTableColumnMeta {
+  align?: 'left' | 'right'
+  width?: string
+}
+
+const features = tableFeatures({ columnMeta: {} as DataTableColumnMeta })
 
 /**
  * The `TFeatures` every `DataTable` column array is parameterised with: no
@@ -99,10 +120,22 @@ export function DataTable<T extends RowData>({
 
   if (isLoading) {
     return (
-      <div className="space-y-2" role="status" aria-label="Caricamento">
-        {Array.from({ length: LOADING_ROW_COUNT }, (_, index) => (
-          <Skeleton key={index} className="h-12 w-full" />
-        ))}
+      /* The same container, and bars the height of the rows they stand in for (`h-14`,
+         `ui/table.tsx`), so the table does not visibly jump the moment the request
+         lands. It is still a deliberately different *shape* -- animated bars, no header
+         -- because "something is happening" is not "here is your data"; what it stops
+         being is a different size. */
+      <div
+        data-slot="data-table"
+        className="overflow-hidden rounded-xl border border-border bg-card p-2"
+        role="status"
+        aria-label="Caricamento"
+      >
+        <div className="space-y-2">
+          {Array.from({ length: LOADING_ROW_COUNT }, (_, index) => (
+            <Skeleton key={index} className="h-14 w-full" />
+          ))}
+        </div>
       </div>
     )
   }
@@ -124,16 +157,28 @@ export function DataTable<T extends RowData>({
   }
 
   return (
-    <div className="rounded-md border bg-card">
+    /* Design spec §4, to the letter: a white container, a hairline border (the ink at
+       12%, `--border`) and a radius of 14 -- which is `rounded-xl`, `--radius * 1.4`,
+       and not `rounded-2xl`'s 18. And `overflow-hidden`, which is what keeps the first
+       row's hover tint and the header's own bottom rule inside those corners instead of
+       squaring them off. */
+    <div data-slot="data-table" className="overflow-hidden rounded-xl border border-border bg-card">
       <Table>
         <TableHeader>
           {table.getHeaderGroups().map((group) => (
             <TableRow key={group.id}>
-              {group.headers.map((header) => (
-                <TableHead key={header.id}>
-                  {header.isPlaceholder ? null : <table.FlexRender header={header} />}
-                </TableHead>
-              ))}
+              {group.headers.map((header) => {
+                const meta = header.column.columnDef.meta
+                return (
+                  <TableHead
+                    key={header.id}
+                    className={cn(meta?.align === 'right' && 'text-right')}
+                    style={meta?.width === undefined ? undefined : { width: meta.width }}
+                  >
+                    {header.isPlaceholder ? null : <table.FlexRender header={header} />}
+                  </TableHead>
+                )
+              })}
             </TableRow>
           ))}
         </TableHeader>
@@ -156,7 +201,10 @@ export function DataTable<T extends RowData>({
                 )}
               >
                 {row.getAllCells().map((cell) => (
-                  <TableCell key={cell.id}>
+                  <TableCell
+                    key={cell.id}
+                    className={cn(cell.column.columnDef.meta?.align === 'right' && 'text-right')}
+                  >
                     <table.FlexRender cell={cell} />
                   </TableCell>
                 ))}

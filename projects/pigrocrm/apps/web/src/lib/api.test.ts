@@ -322,6 +322,13 @@ describe('the typed client', () => {
     attivo: true,
   }
 
+  /** A second, *differently shaped* payload, so a test asserting on the response of
+   *  the second call in a burst cannot pass by accident on the first call's. */
+  const CUSTOMERS = {
+    items: [{ id: '22222222-2222-2222-2222-222222222222', ragione_sociale: 'Rossi SRL' }],
+    next_cursor: null,
+  }
+
   it('refreshes once on a 401 and returns the data the retry produced', async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -354,7 +361,8 @@ describe('the typed client', () => {
         refreshes += 1
         return Promise.resolve(new Response(null, { status: 200 }))
       }
-      return Promise.resolve(refreshes === 0 ? unauthenticated() : json(ME))
+      if (refreshes === 0) return Promise.resolve(unauthenticated())
+      return Promise.resolve(json(url.endsWith('/api/customers') ? CUSTOMERS : ME))
     })
     vi.stubGlobal('fetch', fetchMock)
 
@@ -365,7 +373,39 @@ describe('the typed client', () => {
 
     expect(refreshes).toBe(1)
     expect(a).toMatchObject({ email: 'titolare@studio.it' })
-    expect(b).toBeTruthy()
+    // Both callers must get *their own* retried payload, not merely something
+    // truthy: a shared refresh that returned the first caller's response to the
+    // second would satisfy `toBeTruthy()` and be a bug in every screen at once.
+    expect(b).toMatchObject({ items: [{ ragione_sociale: 'Rossi SRL' }], next_cursor: null })
+  })
+
+  it('refreshes once for a burst that mixes the typed client and fetchWithRefresh', async () => {
+    // The ordinary shape of a page opening after a quiet quarter of an hour: a screen
+    // loads through the typed client while a PDF button (or a document upload) goes out
+    // through `fetchWithRefresh`. They share one in-flight refresh or they do not, and
+    // nothing else in this file exercises the two together -- a second refresh here is
+    // the same replayed token that used to log the owner out.
+    let refreshes = 0
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const url = input instanceof Request ? input.url : String(input)
+      if (url.endsWith('/api/auth/refresh')) {
+        refreshes += 1
+        return Promise.resolve(new Response(null, { status: 200 }))
+      }
+      if (refreshes === 0) return Promise.resolve(unauthenticated())
+      return Promise.resolve(url.endsWith('/pdf') ? new Response('%PDF', { status: 200 }) : json(ME))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const [me, pdf] = await Promise.all([
+      unwrap(api.GET('/api/auth/me', { baseUrl: BASE })),
+      fetchWithRefresh('/api/documents/d1/pdf'),
+    ])
+
+    expect(refreshes).toBe(1)
+    expect(me).toMatchObject({ email: 'titolare@studio.it' })
+    expect(pdf.status).toBe(200)
+    expect(await pdf.text()).toBe('%PDF')
   })
 
   it('gives up after a failed refresh, surfacing "unauthenticated" and no retry', async () => {
@@ -428,12 +468,21 @@ describe('the typed client', () => {
 
   it('replays the same method and body, byte for byte, on the retry', async () => {
     // `fetch` consumes a request's body stream, so the retry cannot re-send the
-    // request that already went out: a copy has to be taken while it is intact.
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(unauthenticated())
-      .mockResolvedValueOnce(new Response(null, { status: 200 }))
-      .mockResolvedValueOnce(json({ id: 'c1' }))
+    // request that already went out: a copy has to be taken while it is intact --
+    // which means *before* the first attempt, not after its 401 has come back.
+    //
+    // Each mocked attempt reads its own request's body here, exactly as a real
+    // `fetch` does. That is what makes the ordering bite: a clone taken after the
+    // first send would throw «body stream already read», where a mock that never
+    // touches the stream leaves both orders passing and pins nothing. The bodies are
+    // asserted from what the mock actually received, since after this the streams
+    // are legitimately gone.
+    const sent: string[] = []
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      if (!(input instanceof Request)) return new Response(null, { status: 200 }) // the refresh
+      sent.push(await input.text())
+      return sent.length === 1 ? unauthenticated() : json({ id: 'c1' })
+    })
     vi.stubGlobal('fetch', fetchMock)
 
     const body = { ragione_sociale: 'Rossi SRL', nazione: 'IT', custom_fields: {} }
@@ -443,8 +492,7 @@ describe('the typed client', () => {
     expect(retried?.method).toBe('POST')
     expect(retried?.url).toBe(first?.url)
     expect(retried?.headers.get('Content-Type')).toBe('application/json')
-    expect(await retried!.text()).toBe(JSON.stringify(body))
-    expect(await first!.text()).toBe(JSON.stringify(body))
+    expect(sent).toEqual([JSON.stringify(body), JSON.stringify(body)])
   })
 })
 
@@ -473,5 +521,263 @@ describe('fetchWithRefresh with a FormData body', () => {
 
     expect(response.status).toBe(201)
     expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({ method: 'POST', body: form })
+  })
+})
+
+/**
+ * Two tabs are two module instances, not two calls into one.
+ *
+ * The in-flight promise above is per tab by construction -- it is a module-level
+ * variable -- and the refresh cookie is per *browser*, so two tabs waking up past the
+ * same fifteen-minute access cookie both post the same rotating token. The server
+ * treats a replayed refresh token as a stolen one, so that pair used to revoke every
+ * token the owner held and drop them on the login screen in both tabs at once (now
+ * softened by `RefreshTokenService`'s ten-second grace window, which this lock is what
+ * keeps from being needed every quarter of an hour).
+ *
+ * `vi.resetModules()` before each import is what makes the two tabs real: each gets its
+ * own `refreshing`, sees the other only through the shared fake `navigator.locks`, and
+ * so the serialisation being asserted is the lock's doing and nothing else. Every other
+ * test in this file runs with no `navigator.locks` at all -- jsdom does not implement it
+ * -- which is the fallback path, already covered by all of them passing.
+ */
+describe('one session refresh across tabs', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.resetModules()
+  })
+
+  function unauthenticated() {
+    return new Response(JSON.stringify({ detail: 'Autenticazione richiesta' }), { status: 401 })
+  }
+
+  /** A fresh instance of `lib/api`: one tab's worth of module state. */
+  async function openTab() {
+    vi.resetModules()
+    return await import('./api')
+  }
+
+  it('serialises two tabs through one named lock instead of racing them', async () => {
+    // A `navigator.locks` that actually queues, which is the only property of the real
+    // one this depends on: the second `request` for a name waits for the first to
+    // release before its callback runs.
+    const timeline: string[] = []
+    let queue: Promise<unknown> = Promise.resolve()
+    const request = vi.fn(
+      (name: string, _options: LockOptions, callback: () => Promise<boolean>) => {
+        const granted = queue.then(async () => {
+          timeline.push(`held ${name}`)
+          try {
+            return await callback()
+          } finally {
+            timeline.push('released')
+          }
+        })
+        queue = granted.then(
+          () => undefined,
+          () => undefined,
+        )
+        return granted
+      },
+    )
+    vi.stubGlobal('navigator', { locks: { request } })
+
+    let refreshes = 0
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const url = input instanceof Request ? input.url : String(input)
+      if (url.endsWith('/api/auth/refresh')) {
+        refreshes += 1
+        timeline.push('refresh')
+        return Promise.resolve(new Response(null, { status: 200 }))
+      }
+      return Promise.resolve(
+        refreshes === 0 ? unauthenticated() : new Response('ok', { status: 200 }),
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const tabA = await openTab()
+    const tabB = await openTab()
+    const [a, b] = await Promise.all([
+      tabA.fetchWithRefresh('/api/a'),
+      tabB.fetchWithRefresh('/api/b'),
+    ])
+
+    expect([a.status, b.status]).toEqual([200, 200])
+    // Twice, because two tabs really do have two sessions' worth of state to renew --
+    // and one at a time, which is the whole point: the second request goes out after
+    // the first response has already replaced the cookie in the shared jar, so it
+    // rotates a current token instead of replaying a dead one.
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(request.mock.calls.map(([name]) => name)).toEqual([
+      'pigrocrm-refresh',
+      'pigrocrm-refresh',
+    ])
+    // Every wait is bounded, including the ordinary one nobody has to wait long for.
+    for (const [, options] of request.mock.calls) {
+      expect(options.signal).toBeInstanceOf(AbortSignal)
+      expect(options.signal?.aborted).toBe(false)
+    }
+    expect(timeline).toEqual([
+      'held pigrocrm-refresh',
+      'refresh',
+      'released',
+      'held pigrocrm-refresh',
+      'refresh',
+      'released',
+    ])
+  })
+
+  it('gives up on the lock when the tab holding it never lets go', async () => {
+    // The failure a lock introduces that no lock had: `LockManager.request` waits
+    // forever by default and `fetch` has no timeout, so one tab whose refresh POST
+    // stalls on a hung proxy holds this lock for as long as its socket lives -- and
+    // every other tab sits inside `await refreshSession()` with its own request
+    // unsettled, a spinner that never resolves and never errors. This tab must renew
+    // its session anyway, unlocked, which the server's own grace window absorbs.
+    // The callback the production code passes as the third argument is deliberately
+    // not even a parameter here: this fake could not run it if it wanted to.
+    const request = vi.fn(
+      (_name: string, options: LockOptions) =>
+        new Promise<boolean>((_resolve, reject) => {
+          // The lock is held elsewhere and never released, so the callback is never
+          // invoked and the only way out of this promise is the signal -- exactly as
+          // the real LockManager rejects a request aborted while still waiting.
+          options.signal?.addEventListener('abort', () =>
+            reject(options.signal?.reason ?? new Error('AbortError')),
+          )
+        }),
+    )
+    vi.stubGlobal('navigator', { locks: { request } })
+
+    // The ten-second bound, shortened to a macrotask: the production code asks for
+    // `AbortSignal.timeout(LOCK_WAIT_MS)` and this is what answers it, so the test
+    // proves the wait ends without waiting ten seconds for it to.
+    const asked: number[] = []
+    vi.stubGlobal('AbortSignal', {
+      timeout: (ms: number) => {
+        asked.push(ms)
+        const controller = new AbortController()
+        setTimeout(() => controller.abort(), 0)
+        return controller.signal
+      },
+    })
+
+    let refreshes = 0
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const url = input instanceof Request ? input.url : String(input)
+      if (url.endsWith('/api/auth/refresh')) {
+        refreshes += 1
+        return Promise.resolve(new Response(null, { status: 200 }))
+      }
+      return Promise.resolve(
+        refreshes === 0 ? unauthenticated() : new Response('ok', { status: 200 }),
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const tab = await openTab()
+    const response = await tab.fetchWithRefresh('/api/x')
+
+    // Resolved at all is half the assertion: an unbounded wait hangs this line.
+    expect(response.status).toBe(200)
+    expect(asked).toEqual([10_000])
+    expect(request).toHaveBeenCalledTimes(1)
+    // Renewed regardless, and necessarily through the unlocked fallback: this fake
+    // never invokes the callback the lock was requested with.
+    expect(refreshes).toBe(1)
+  })
+
+  it('skips the lock entirely where the wait cannot be bounded', async () => {
+    // A browser with Web Locks but no `AbortSignal.timeout` would only be offered an
+    // unbounded wait, which is the one failure worse than no lock at all: refresh
+    // unlocked instead, the same path jsdom and older Safari take.
+    const request = vi.fn()
+    vi.stubGlobal('navigator', { locks: { request } })
+    vi.stubGlobal('AbortSignal', {})
+
+    let refreshes = 0
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const url = input instanceof Request ? input.url : String(input)
+      if (url.endsWith('/api/auth/refresh')) {
+        refreshes += 1
+        return Promise.resolve(new Response(null, { status: 200 }))
+      }
+      return Promise.resolve(
+        refreshes === 0 ? unauthenticated() : new Response('ok', { status: 200 }),
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const tab = await openTab()
+    const response = await tab.fetchWithRefresh('/api/x')
+
+    expect(response.status).toBe(200)
+    expect(refreshes).toBe(1)
+    expect(request).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * A space's SPA is served under `/<slug>/app/` and its API lives under `/<slug>/api/...`
+ * (lib/tenant.ts): `tenantPrefix` is read from `window.location.pathname` once, at
+ * module load, so under jsdom's own `/` every other test in this file exercises the
+ * root installation and nothing exercises a space at all. A prefix dropped from the
+ * refresh URL would send a space's renewal to the *root* installation -- a 401 there,
+ * and the owner logged out inside their own space; a prefix dropped from the exclusion
+ * comparison would make the client refresh around its own refresh call and recurse.
+ *
+ * Hence `vi.resetModules()` plus a stubbed `location` *before* the import: the constant
+ * is derived at load time, so it cannot be changed afterwards -- which is exactly why
+ * it needs its own module instance.
+ */
+describe("a tab inside a space carries the space's prefix", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.resetModules()
+  })
+
+  function unauthenticated() {
+    return new Response(JSON.stringify({ detail: 'Autenticazione richiesta' }), { status: 401 })
+  }
+
+  async function openTabAt(pathname: string) {
+    vi.resetModules()
+    vi.stubGlobal('location', { pathname })
+    return await import('./api')
+  }
+
+  it('refreshes at the space’s own /api/auth/refresh, not the root one', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(unauthenticated())
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(new Response('%PDF', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const tab = await openTabAt('/spazio-x/app/documenti/d1')
+    const response = await tab.fetchWithRefresh('/api/documents/d1/pdf')
+
+    expect(response.status).toBe(200)
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      '/spazio-x/api/documents/d1/pdf',
+      '/spazio-x/api/auth/refresh',
+      '/spazio-x/api/documents/d1/pdf',
+    ])
+  })
+
+  it('excludes the session endpoints by their prefixed path, not the bare one', async () => {
+    // `/spazio-x/api/auth/refresh` is the refresh endpoint of this space. Compared
+    // against the bare `/api/auth/refresh` it matches nothing, the 401 looks like an
+    // expired access cookie, and the client refreshes around its own refresh.
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(unauthenticated())
+    vi.stubGlobal('fetch', fetchMock)
+
+    const tab = await openTabAt('/spazio-x/app/login')
+    const response = await tab.fetchWithRefresh('/api/auth/refresh')
+
+    expect(response.status).toBe(401)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/spazio-x/api/auth/refresh')
   })
 })

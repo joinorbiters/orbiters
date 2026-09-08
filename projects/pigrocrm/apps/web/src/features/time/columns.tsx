@@ -1,6 +1,8 @@
 import type { ColumnDef } from '@tanstack/react-table'
+import { DateCell, MoneyCell, NumberCell } from '@/components/cells'
 import type { DataTableFeatures } from '@/components/DataTable'
 import { renderFieldValue } from '@/components/DynamicFieldRenderer'
+import { StatusPill, type StatusTone } from '@/components/StatusPill'
 import { formatIsoDateItalian } from '@/lib/dates'
 import type { FieldDefinition } from '@/lib/schema'
 import type { TimeEntry } from './queries'
@@ -57,25 +59,81 @@ const ORIGIN_LABELS: Record<string, string> = {
   assente: 'assente',
 }
 
+/**
+ * The rate with where it came from: «80,00 €/h (dal deal)».
+ *
+ * The origin next to the value, because "80 €/h" and "80 €/h, dal deal" answer two
+ * different questions, and the second is the one somebody asks when the number looks
+ * wrong. Extracted from the column so the accessor and the cell read the same figure
+ * from one place instead of repeating the expression.
+ */
+function rateWithOrigin(entry: TimeEntry): string {
+  if (entry.tariffa_applicata === null) return EMPTY
+  const origin = ORIGIN_LABELS[entry.tariffa_origine] ?? entry.tariffa_origine
+  return `${formatRateValue(entry.tariffa_applicata)} (${origin})`
+}
+
+/**
+ * What an hour's «Stato» column can say. Unlike every other status in the product this
+ * one is *derived*, not stored: the API sends `invoice_line_id` and `fatturabile`, and
+ * the three readings below are what those two fields mean together. Naming the three
+ * gives the label and the tone one key to agree on, the way the stored enums have.
+ */
+export type TimeEntryStato = 'fatturata' | 'da_fatturare' | 'non_fatturabile'
+
+export const TIME_ENTRY_STATE_LABELS: Record<TimeEntryStato, string> = {
+  fatturata: 'Fatturata',
+  da_fatturare: 'Da fatturare',
+  non_fatturabile: 'Non fatturabile',
+}
+
+/**
+ * `da_fatturare` is gold for the same reason «Da incassare» is on the invoices table:
+ * it is not an error and not a finished state, it is money waiting on somebody. An hour
+ * already invoiced is settled (`ink`); one nobody will ever bill claims nothing about
+ * money at all, so it stays quiet rather than reading as a problem -- most of these are
+ * deliberate (internal work), not mistakes.
+ */
+export const TIME_ENTRY_STATE_TONE: Record<TimeEntryStato, StatusTone> = {
+  fatturata: 'ink',
+  da_fatturare: 'gold',
+  non_fatturabile: 'muted',
+}
+
+/** The two wire fields read as one of the three states. `fatturabile` is optional on
+ *  the wire, and an absent value is not a billable hour -- the same reading the
+ *  previous inline ternary had. */
+export function statoOf(entry: TimeEntry): TimeEntryStato {
+  if (entry.invoice_line_id !== null) return 'fatturata'
+  return entry.fatturabile ? 'da_fatturare' : 'non_fatturabile'
+}
+
 export function buildTimeEntryColumns(
   customFields: FieldDefinition[],
 ): ColumnDef<DataTableFeatures, TimeEntry>[] {
   const native: ColumnDef<DataTableFeatures, TimeEntry>[] = [
-    { header: 'Data', id: 'data', accessorFn: (row) => formatIsoDateItalian(row.data) },
-    { header: 'Ore', id: 'ore', accessorFn: (row) => formatHoursValue(row.ore) },
+    {
+      header: 'Data',
+      id: 'data',
+      accessorFn: (row) => formatIsoDateItalian(row.data),
+      cell: ({ row }) => <DateCell value={row.original.data} />,
+    },
+    {
+      header: 'Ore',
+      id: 'ore',
+      accessorFn: (row) => formatHoursValue(row.ore),
+      // Hours are a figure, not money: right-aligned on tabular digits so a week of
+      // them can be read down the units column, but through `NumberCell`.
+      meta: { align: 'right' },
+      cell: ({ row }) => <NumberCell>{formatHoursValue(row.original.ore)}</NumberCell>,
+    },
     { header: 'Descrizione', accessorKey: 'descrizione' },
     {
       header: 'Tariffa',
       id: 'tariffa_applicata',
-      // The origin next to the value, because "80 €/h" and "80 €/h, dal deal" answer
-      // two different questions, and the second is the one somebody asks when the
-      // number looks wrong.
-      accessorFn: (row) =>
-        row.tariffa_applicata === null
-          ? EMPTY
-          : `${formatRateValue(row.tariffa_applicata)} (${
-              ORIGIN_LABELS[row.tariffa_origine] ?? row.tariffa_origine
-            })`,
+      accessorFn: (row) => rateWithOrigin(row),
+      meta: { align: 'right' },
+      cell: ({ row }) => <MoneyCell>{rateWithOrigin(row.original)}</MoneyCell>,
     },
     {
       header: 'Valore',
@@ -85,16 +143,18 @@ export function buildTimeEntryColumns(
       // `?? null` because the field is optional on the wire, and an absent value means
       // the same thing an explicit `null` does: nobody has priced this hour.
       accessorFn: (row) => formatMoneyValue(row.valore_riga ?? null),
+      meta: { align: 'right' },
+      cell: ({ row }) => <MoneyCell>{formatMoneyValue(row.original.valore_riga ?? null)}</MoneyCell>,
     },
     {
       header: 'Stato',
       id: 'stato',
-      accessorFn: (row) =>
-        row.invoice_line_id !== null
-          ? 'Fatturata'
-          : row.fatturabile
-            ? 'Da fatturare'
-            : 'Non fatturabile',
+      // Both maps are total over `TimeEntryStato`, so neither read takes a fallback.
+      accessorFn: (row) => TIME_ENTRY_STATE_LABELS[statoOf(row)],
+      cell: ({ row }) => {
+        const stato = statoOf(row.original)
+        return <StatusPill tone={TIME_ENTRY_STATE_TONE[stato]}>{TIME_ENTRY_STATE_LABELS[stato]}</StatusPill>
+      },
     },
   ]
 

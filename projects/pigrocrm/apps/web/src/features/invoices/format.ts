@@ -48,7 +48,12 @@ export function formatRate(value: string | null): string {
  * in the other direction, and on an invoice it shows the wrong fiscal year.
  */
 export function formatDate(value: string | null): string {
-  if (value === null) return EMPTY
+  // `''` is absent, not a date: a cleared native date column holds the empty string,
+  // and `''.split('-')` has one element, so without this guard the function fell through
+  // to "return the raw value" and rendered a *blank* cell -- while `DateCell`, which the
+  // same column renders through, showed the em dash. Two halves of one column disagreeing
+  // about what nothing looks like.
+  if (value === null || value === '') return EMPTY
   const [year, month, day] = value.split('-').map(Number)
   if (year === undefined || month === undefined || day === undefined) return value
   return italianDate.format(new Date(year, month - 1, day))
