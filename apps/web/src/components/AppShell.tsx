@@ -81,7 +81,10 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="flex min-h-screen">
       <aside
         className={cn(
-          'flex flex-col border-r bg-card transition-[width] duration-200 ease-linear',
+          // Sticky and as tall as the viewport, never as tall as the page: the profile
+          // at the bottom is reachable without scrolling, and the navigation scrolls
+          // on its own if it ever outgrows the window.
+          'sticky top-0 flex h-dvh flex-col border-r bg-card transition-[width] duration-200 ease-linear',
           collapsed ? 'w-[4.5rem]' : 'w-60',
         )}
       >
@@ -116,7 +119,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         {/* Labelled because the header's breadcrumb is a second <nav> landmark on the
             same page, and two unlabelled ones are indistinguishable to a screen reader
             (and to `getByRole('navigation')`). */}
-        <nav aria-label="Navigazione principale" className="flex-1 space-y-1 px-3">
+        <nav aria-label="Navigazione principale" className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3">
           {NAV.map(({ to, label, icon: Icon }) => (
             <Link
               key={to}
