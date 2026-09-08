@@ -1,8 +1,10 @@
+from collections.abc import Collection
 from uuid import UUID
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.db import decode_cursor, escape_like, keyset_predicate, order_by
 from pigrocrm.core.people.models import Person
 from pigrocrm.core.people.schemas import PERSON_SORTS, PersonListQuery
@@ -19,6 +21,32 @@ class PersonRepository:
         if person.deleted_at is not None and not include_deleted:
             return None
         return person
+
+    def customer_names(self, customer_ids: Collection[UUID]) -> dict[UUID, str]:
+        """The `ragione_sociale` of each given customer, in one query.
+
+        One statement for a whole page, not one per row: `PersonService` reads this
+        once with every distinct `customer_id` on the page it is about to return, so a
+        50-row list costs two queries and never fifty-one. The same shape, and the same
+        reason, as `SearchRepository._with_customer_names` -- a label lookup for rows
+        already chosen, run after the limit.
+
+        No `deleted_at` filter, deliberately: a soft-deleted customer is still the
+        company the person belongs to, and archiving it did not dissolve the
+        association. Blanking the name would make an archived customer read exactly
+        like a person who never had one -- and it is `PersonService.restore`'s own
+        conflict ("il cliente e' archiviato") that reports the customer is gone, not an
+        empty cell in the Persone list.
+
+        An empty input short-circuits: `IN ()` is a query with no possible rows, and the
+        common case (see `Person`'s docstring) is a page where nobody has a customer.
+        """
+        if not customer_ids:
+            return {}
+        rows = self.session.execute(
+            select(Customer.id, Customer.ragione_sociale).where(Customer.id.in_(customer_ids))
+        ).all()
+        return {row[0]: row[1] for row in rows}
 
     def add(self, person: Person) -> Person:
         self.session.add(person)

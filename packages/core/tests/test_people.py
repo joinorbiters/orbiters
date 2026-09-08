@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
@@ -607,3 +608,94 @@ def test_restoring_a_person_with_no_customer_at_all_is_unaffected(db_session: Se
 
     service.restore(person.id, ADMIN)
     assert service.get(person.id, ADMIN).id == person.id
+
+
+def test_every_read_path_names_the_person_s_company(db_session: Session) -> None:
+    """L'"azienda di riferimento" is the linked customer, and the list is the screen the
+    owner actually reads: `customer_id` alone forces every caller to look the name up
+    again, one request per row. Asserted on all four read paths at once because they
+    must agree -- a person's company cannot depend on which endpoint asked."""
+    customer = CustomerService(db_session).create(CustomerCreate(ragione_sociale="ACME Srl"), ADMIN)
+    service = PersonService(db_session)
+
+    created = service.create(PersonCreate(nome="Mario", customer_id=customer.id), ADMIN)
+    assert created.customer_ragione_sociale == "ACME Srl"
+    assert service.get(created.id, ADMIN).customer_ragione_sociale == "ACME Srl"
+    updated = service.update(created.id, PersonUpdate(ruolo="CTO"), ADMIN)
+    assert updated.customer_ragione_sociale == "ACME Srl"
+
+    page = service.list(PersonListQuery(customer_id=customer.id), ADMIN)
+    assert [p.customer_ragione_sociale for p in page.items] == ["ACME Srl"]
+
+
+def test_a_person_with_no_customer_has_no_company_name(db_session: Session) -> None:
+    """The common case (see `Person`'s own docstring): `None`, not "" and not a dash --
+    how an absent company is *rendered* is the reading surface's decision, not this
+    schema's."""
+    service = PersonService(db_session)
+    person = service.create(PersonCreate(nome="Mario"), ADMIN)
+    assert person.customer_ragione_sociale is None
+    assert service.get(person.id, ADMIN).customer_ragione_sociale is None
+    assert service.list(PersonListQuery(), ADMIN).items[0].customer_ragione_sociale is None
+
+
+def test_detaching_a_person_clears_the_company_name_too(db_session: Session) -> None:
+    customer = CustomerService(db_session).create(CustomerCreate(ragione_sociale="ACME Srl"), ADMIN)
+    service = PersonService(db_session)
+    person = service.create(PersonCreate(nome="Mario", customer_id=customer.id), ADMIN)
+
+    detached = service.update(person.id, PersonUpdate(detach=True), ADMIN)
+    assert detached.customer_id is None
+    assert detached.customer_ragione_sociale is None
+
+
+def test_an_archived_customer_still_names_the_company(db_session: Session) -> None:
+    """A soft-deleted customer is still the company this person belongs to: the
+    association is not what was archived. Blanking the name instead would make an
+    archived customer read as "no company at all" -- the same claim a person who never
+    had one makes -- and it is `PersonService.restore`'s conflict ("il cliente e'
+    archiviato") that tells the owner the customer is gone, not an empty cell in the
+    Persone list. Mirrors `SearchRepository._with_customer_names`, whose own join
+    carries no `deleted_at` filter for the identical reason."""
+    customers = CustomerService(db_session)
+    customer = customers.create(CustomerCreate(ragione_sociale="ACME Srl"), ADMIN)
+    service = PersonService(db_session)
+    person = service.create(PersonCreate(nome="Mario", customer_id=customer.id), ADMIN)
+
+    customers.soft_delete(customer.id, ADMIN)
+
+    assert service.get(person.id, ADMIN).customer_ragione_sociale == "ACME Srl"
+    page = service.list(PersonListQuery(customer_id=customer.id), ADMIN)
+    assert [p.customer_ragione_sociale for p in page.items] == ["ACME Srl"]
+
+
+def test_the_company_name_costs_one_query_for_the_whole_page(db_session: Session) -> None:
+    """The reason the name is resolved in one batched lookup and not per row: a page of
+    50 people from 50 different companies must not become 51 queries. Counted, not
+    reasoned about -- an N+1 reintroduced by a later refactor is invisible to every
+    other assertion in this file."""
+    customers = CustomerService(db_session)
+    service = PersonService(db_session)
+    for index in range(3):
+        customer = customers.create(CustomerCreate(ragione_sociale=f"ACME {index}"), ADMIN)
+        service.create(PersonCreate(nome=f"Mario {index}", customer_id=customer.id), ADMIN)
+
+    statements: list[str] = []
+
+    def record(conn: Any, cursor: Any, statement: str, *args: Any) -> None:
+        statements.append(statement)
+
+    connection = db_session.connection()
+    event.listen(connection, "after_cursor_execute", record)
+    try:
+        page = service.list(PersonListQuery(), ADMIN)
+    finally:
+        event.remove(connection, "after_cursor_execute", record)
+
+    assert len(page.items) == 3
+    assert sorted(p.customer_ragione_sociale or "" for p in page.items) == [
+        "ACME 0",
+        "ACME 1",
+        "ACME 2",
+    ]
+    assert sum(1 for statement in statements if "FROM customers" in statement) == 1
