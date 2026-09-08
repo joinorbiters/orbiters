@@ -42,18 +42,52 @@ def orbiters_client(client: TestClient, orbiters_engine: Engine) -> Iterator[Tes
         session.close()
 
 
+def _body(email: str, **extra: object) -> dict[str, object]:
+    """What the landing posts: the three required answers, plus whatever the test adds."""
+    return {"email": email, "nome": "Ada", "cognome": "Lovelace", **extra}
+
+
 def test_a_visitor_with_no_account_can_sign_up(orbiters_client: TestClient) -> None:
-    response = orbiters_client.post("/api/orbiters/signups", json={"email": "Ada@Studio.it"})
+    response = orbiters_client.post("/api/orbiters/signups", json=_body("Ada@Studio.it"))
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["email"] == "ada@studio.it"
+    assert (body["nome"], body["cognome"]) == ("Ada", "Lovelace")
+    assert body["linkedin_url"] is None
     assert body["nuova"] is True
     assert "id" in body and "created_at" in body
 
 
+def test_the_profile_travels_with_the_name(orbiters_client: TestClient) -> None:
+    response = orbiters_client.post(
+        "/api/orbiters/signups",
+        json=_body("ada@studio.it", linkedin_url="https://www.linkedin.com/in/ada"),
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["linkedin_url"] == "https://www.linkedin.com/in/ada"
+
+
+def test_a_signup_without_a_name_is_a_422(orbiters_client: TestClient) -> None:
+    response = orbiters_client.post("/api/orbiters/signups", json={"email": "ada@studio.it"})
+    assert response.status_code == 422
+    # FastAPI's own request-validation shape, the one the form's field highlighting
+    # reads (see `errors.py`, `_domain_and_request_validation_response`).
+    missing = {error["loc"][-1] for error in response.json()["detail"]}
+    assert {"nome", "cognome"} <= missing
+
+
+def test_a_profile_that_is_not_on_linkedin_is_a_422_not_a_row(
+    orbiters_client: TestClient,
+) -> None:
+    response = orbiters_client.post(
+        "/api/orbiters/signups", json=_body("ada@studio.it", linkedin_url="https://example.com/ada")
+    )
+    assert response.status_code == 422
+
+
 def test_the_same_address_again_answers_200_not_an_error(orbiters_client: TestClient) -> None:
-    first = orbiters_client.post("/api/orbiters/signups", json={"email": "ada@studio.it"})
-    second = orbiters_client.post("/api/orbiters/signups", json={"email": "ADA@studio.it"})
+    first = orbiters_client.post("/api/orbiters/signups", json=_body("ada@studio.it"))
+    second = orbiters_client.post("/api/orbiters/signups", json=_body("ADA@studio.it"))
     assert first.status_code == 201
     assert second.status_code == 200, second.text
     assert second.json()["nuova"] is False
@@ -61,28 +95,28 @@ def test_the_same_address_again_answers_200_not_an_error(orbiters_client: TestCl
 
 
 def test_an_address_that_is_not_one_is_a_422(orbiters_client: TestClient) -> None:
-    response = orbiters_client.post("/api/orbiters/signups", json={"email": "ciao"})
+    response = orbiters_client.post("/api/orbiters/signups", json=_body("ciao"))
     assert response.status_code == 422
 
 
 def test_the_list_never_lands_in_the_crm_database(
     orbiters_client: TestClient, api_session: Session
 ) -> None:
-    orbiters_client.post("/api/orbiters/signups", json={"email": "ada@studio.it"})
+    orbiters_client.post("/api/orbiters/signups", json=_body("ada@studio.it"))
     assert api_session.execute(text("SELECT to_regclass('signups')")).scalar() is None
 
 
 def test_the_attribution_travels_with_the_email_and_comes_back(orbiters_client: TestClient) -> None:
     response = orbiters_client.post(
         "/api/orbiters/signups",
-        json={
-            "email": "ada@studio.it",
-            "utm": {
+        json=_body(
+            "ada@studio.it",
+            utm={
                 "utm_source": "linkedin",
                 "utm_medium": "paid-social",
                 "utm_id": "{{AD_SET_ID}}",
             },
-        },
+        ),
     )
     assert response.status_code == 201, response.text
     body = response.json()
@@ -98,6 +132,6 @@ def test_an_attribution_longer_than_the_column_is_a_422_not_a_500(
     orbiters_client: TestClient,
 ) -> None:
     response = orbiters_client.post(
-        "/api/orbiters/signups", json={"email": "ada@studio.it", "utm": {"utm_source": "x" * 201}}
+        "/api/orbiters/signups", json=_body("ada@studio.it", utm={"utm_source": "x" * 201})
     )
     assert response.status_code == 422
