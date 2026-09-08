@@ -17,6 +17,73 @@ export const api = createClient<paths>({
   credentials: 'include',
 })
 
+/**
+ * The refresh in flight, if any -- shared by every caller that meets a 401 at the same
+ * moment.
+ *
+ * Not a nicety: `POST /api/auth/refresh` rotates the refresh token, and
+ * `RefreshTokenService.consume` treats a *replayed* one as a compromised credential
+ * and revokes every token the user holds (see `apps/api/src/pigrocrm_api/routers/
+ * auth.py`). Two downloads whose cookies expired together would send the same token
+ * twice and log the owner out -- a worse outcome than the 401 this whole mechanism
+ * exists to absorb. One promise, awaited by both.
+ */
+let refreshing: Promise<boolean> | null = null
+
+/** Whether the session could be renewed. Never throws: a failed refresh is an answer
+ *  ("no"), and the caller's own original response is what gets reported. */
+function refreshSession(): Promise<boolean> {
+  refreshing ??= fetch(`${tenantPrefix}/api/auth/refresh`, {
+    method: 'POST',
+    credentials: 'include',
+  })
+    .then((response) => response.ok)
+    .catch(() => false)
+    .finally(() => {
+      refreshing = null
+    })
+  return refreshing
+}
+
+/**
+ * `fetch` with the one thing every request through the typed `api` client above gets
+ * for free and a raw `fetch` does not: a second chance after the fifteen-minute access
+ * cookie has expired.
+ *
+ * Two callers cannot use `openapi-fetch` at all -- `downloadInvoiceArtifact`
+ * (features/invoices/queries.ts) and `downloadDocument` (features/documents/
+ * queries.ts) want a `Blob` and the server's own `Content-Disposition` filename, which
+ * the typed client has no way to express. They were plain `fetch(..., {credentials:
+ * 'include'})` calls, so after any quiet quarter of an hour the owner pressed "PDF"
+ * and was told «Autenticazione richiesta» -- with a perfectly good refresh cookie in
+ * the jar -- until some other request happened to renew the session.
+ *
+ * A 401 is retried exactly once, and only after a refresh that actually succeeded.
+ * When the refresh fails the **original** response is returned untouched (its body
+ * still unread), because what failed from the user's point of view is the download,
+ * not a mechanism they never asked for: the caller parses that body and gets
+ * `code: 'unauthenticated'` from `toProblem`, which is the honest "your session is
+ * gone".
+ *
+ * `tenantPrefix` is applied here for the same reason `api`'s `baseUrl` applies it: a
+ * space's SPA is served under `/<slug>/app/` and its API lives under `/<slug>/api/...`
+ * (lib/tenant.ts). The two raw fetches spelled `/api/...` absolute-from-root and so
+ * addressed the *root* installation from inside a space.
+ *
+ * A raw `fetch` on purpose, looked up at call time rather than captured at module
+ * load: that is what lets a test stub `globalThis.fetch` and actually intercept this,
+ * which `openapi-fetch`'s client (`fetch: baseFetch = globalThis.fetch`, captured once
+ * at `createClient()`) does not allow.
+ */
+export async function fetchWithRefresh(path: string, init?: RequestInit): Promise<Response> {
+  const url = `${tenantPrefix}${path}`
+  const send = () => fetch(url, { credentials: 'include', ...init })
+  const first = await send()
+  if (first.status !== 401) return first
+  if (!(await refreshSession())) return first
+  return send()
+}
+
 export interface ProblemDetail {
   type: string
   title: string

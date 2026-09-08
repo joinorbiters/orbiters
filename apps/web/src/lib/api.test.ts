@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { fieldErrorFrom, toProblem, unwrap } from './api'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { fetchWithRefresh, fieldErrorFrom, toProblem, unwrap } from './api'
 
 // The domain problem document: an RFC 9457 body `domain_error_handler` renders for
 // any DomainError (apps/api/src/pigrocrm_api/errors.py) -- application/problem+json,
@@ -179,5 +179,92 @@ describe('unwrap', () => {
     await expect(unwrap(Promise.reject(new TypeError('Failed to fetch')))).rejects.toMatchObject({
       code: 'unknown',
     })
+  })
+})
+
+/**
+ * `fetchWithRefresh` exists because two callers cannot use `openapi-fetch` at all:
+ * `downloadInvoiceArtifact` and `downloadDocument` want a `Blob` and the server's own
+ * `Content-Disposition`, which the typed client has no way to express. They were raw
+ * `fetch(..., {credentials:'include'})` calls, and the fifteen-minute access cookie
+ * meant the PDF button answered «Autenticazione richiesta» after any quiet spell.
+ */
+describe('fetchWithRefresh', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function unauthenticated() {
+    return new Response(JSON.stringify({ detail: 'Autenticazione richiesta' }), { status: 401 })
+  }
+
+  it('sends the session cookie and passes a 2xx straight through', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response('ok', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = await fetchWithRefresh('/api/x')
+
+    expect(response.status).toBe(200)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ credentials: 'include' })
+  })
+
+  it('refreshes once and retries the original request on a 401', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(unauthenticated())
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(new Response('ok', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = await fetchWithRefresh('/api/x')
+
+    expect(response.status).toBe(200)
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      '/api/x',
+      '/api/auth/refresh',
+      '/api/x',
+    ])
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: 'POST', credentials: 'include' })
+  })
+
+  it('returns the original 401 when the refresh fails, so the caller says "session gone"', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(unauthenticated())
+      .mockResolvedValueOnce(unauthenticated())
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = await fetchWithRefresh('/api/x')
+
+    expect(response.status).toBe(401)
+    // The original response's body is untouched and still readable: the caller parses
+    // it into a problem document.
+    expect(await response.json()).toEqual({ detail: 'Autenticazione richiesta' })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('refreshes once for two requests that expire together', async () => {
+    // A rotating refresh token is single-use, and `RefreshTokenService.consume`
+    // treats a replay as a compromise and revokes *every* token the user holds
+    // (apps/api/src/pigrocrm_api/routers/auth.py). Two downloads that both meet a
+    // 401 must therefore share one refresh, or the pair logs the owner out.
+    let refreshes = 0
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const url = String(input)
+      if (url.endsWith('/api/auth/refresh')) {
+        refreshes += 1
+        return Promise.resolve(new Response(null, { status: 200 }))
+      }
+      return Promise.resolve(
+        refreshes === 0 ? unauthenticated() : new Response('ok', { status: 200 }),
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const [a, b] = await Promise.all([fetchWithRefresh('/api/a'), fetchWithRefresh('/api/b')])
+
+    expect([a.status, b.status]).toEqual([200, 200])
+    expect(refreshes).toBe(1)
   })
 })
