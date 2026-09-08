@@ -137,7 +137,12 @@ function CustomerPicker({
 
   return (
     <div className="space-y-2">
-      <Label htmlFor="customer">Cliente</Label>
+      {/* «Azienda (cliente)» and not «Cliente»: what this picker sets is the person's
+          company -- their "azienda di riferimento", the same thing the Persone list now
+          shows in its «Azienda» column -- and it is a *customer* record that holds it,
+          which is why the parenthesis stays rather than the word being replaced. The
+          value written is still `customer_id`; only the label changed. */}
+      <Label htmlFor="customer">Azienda (cliente)</Label>
       <Select
         value={value ?? NO_CUSTOMER}
         onValueChange={(next) => onChange(next === NO_CUSTOMER ? null : next)}

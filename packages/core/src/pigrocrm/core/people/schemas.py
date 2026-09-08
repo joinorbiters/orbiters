@@ -104,6 +104,19 @@ class PersonRead(BaseModel):
     linkedin: str | None
     note: str | None
     customer_id: UUID | None
+    # The person's "azienda di riferimento", denormalised onto the read shape: it is not
+    # a column on `people` and never becomes one -- the name lives on `customers` and
+    # renaming a customer must not need a second write here. `PersonService` fills it
+    # from one batched lookup per page (`PersonRepository.customer_names`), which is why
+    # the default is `None`: `model_validate(person)` reads a `Person` that has no such
+    # attribute at all, so without a default every read path would raise.
+    #
+    # Present on `PersonRead` and on no write schema: a caller sets the *association*
+    # (`customer_id`, or `PersonUpdate.detach`), never the name. Also absent from
+    # `native_fields` (schema_registry.py derives that list from `PersonCreate`), which
+    # is correct twice over -- it is not writable, and it is not a column an
+    # administrator could collide with by slugifying a custom field into it.
+    customer_ragione_sociale: str | None = None
     custom_fields: dict[str, Any]
     created_at: datetime
     updated_at: datetime

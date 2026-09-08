@@ -126,6 +126,39 @@ class PersonService:
         merged.update(validated)
         return merged
 
+    def _read(self, person: Person) -> PersonRead:
+        """One person's read shape, company name included.
+
+        Every read path in this class goes through here rather than calling
+        `PersonRead.model_validate` directly, so a person's "azienda di riferimento"
+        cannot depend on which method the caller happened to use -- `create` and
+        `update` return the same shape the list and the detail page do.
+        """
+        return self._reads([person])[0]
+
+    def _reads(self, people: list[Person]) -> list[PersonRead]:
+        """The batched form, and the reason `customer_ragione_sociale` is resolved here
+        and not inside `PersonRead` itself: one lookup for the whole page (see
+        `PersonRepository.customer_names`), so a 50-row list costs two queries rather
+        than fifty-one. A schema-level validator or a lazy ORM relationship would both
+        put the lookup on the row, which is exactly the N+1 this avoids.
+
+        `model_copy` and not a second `model_validate`: the name is not an attribute of
+        `Person` at all, so there is nothing on the ORM object for `from_attributes` to
+        read -- and the value comes from a `String` column, already the right type.
+        """
+        names = self.repo.customer_names(
+            {person.customer_id for person in people if person.customer_id is not None}
+        )
+        return [
+            PersonRead.model_validate(person).model_copy(
+                update={"customer_ragione_sociale": names.get(person.customer_id)}
+                if person.customer_id is not None
+                else {}
+            )
+            for person in people
+        ]
+
     def create(self, data: PersonCreate, actor: Actor) -> PersonRead:
         actor.require_write("create_person")
         payload = data.model_dump()
@@ -136,7 +169,7 @@ class PersonService:
         person = self.repo.add(Person(**payload))
         self.activities.record(ENTITY, person.id, "created", actor, {"nome": person.nome})
         self.session.commit()
-        return PersonRead.model_validate(person)
+        return self._read(person)
 
     def update(self, person_id: UUID, data: PersonUpdate, actor: Actor) -> PersonRead:
         actor.require_write("update_person")
@@ -189,13 +222,13 @@ class PersonService:
 
         self.activities.record(ENTITY, person.id, "updated", actor, {"changed": sorted(changes)})
         self.session.commit()
-        return PersonRead.model_validate(person)
+        return self._read(person)
 
     def get(self, person_id: UUID, actor: Actor) -> PersonRead:
         person = self.repo.get(person_id)
         if person is None:
             raise NotFound(ENTITY, person_id)
-        return PersonRead.model_validate(person)
+        return self._read(person)
 
     def soft_delete(self, person_id: UUID, actor: Actor) -> None:
         """Sets deleted_at. No physical delete exists in this slice: a misread
@@ -239,7 +272,7 @@ class PersonService:
         if was_deleted:
             self.activities.record(ENTITY, person.id, "restored", actor)
         self.session.commit()
-        return PersonRead.model_validate(person)
+        return self._read(person)
 
     # `list` must stay the last method defined in this class -- an unconditional
     # project rule (see `FieldDefinitionService.specs_for`'s docstring and
@@ -264,6 +297,6 @@ class PersonService:
             else None
         )
         return PersonPage(
-            items=[PersonRead.model_validate(p) for p in items],
+            items=self._reads(items),
             next_cursor=next_cursor,
         )

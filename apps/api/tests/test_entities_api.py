@@ -182,6 +182,26 @@ def test_a_person_can_be_created_without_a_customer(logged_in: TestClient) -> No
     response = logged_in.post("/api/people", json={"nome": "Mario"})
     assert response.status_code == 201
     assert response.json()["customer_id"] is None
+    assert response.json()["customer_ragione_sociale"] is None
+
+
+def test_a_person_carries_the_name_of_the_company_they_belong_to(logged_in: TestClient) -> None:
+    """Over HTTP, on both read shapes: the Persone screen renders the list, the detail
+    page reads the single person, and a `customer_id` alone would make the list fetch
+    one customer per row just to print a name."""
+    customer_id = logged_in.post("/api/customers", json={"ragione_sociale": "ACME Srl"}).json()[
+        "id"
+    ]
+    person_id = logged_in.post(
+        "/api/people", json={"nome": "Mario", "customer_id": customer_id}
+    ).json()["id"]
+
+    assert (
+        logged_in.get(f"/api/people/{person_id}").json()["customer_ragione_sociale"] == "ACME Srl"
+    )
+
+    page = logged_in.get("/api/people", params={"customer_id": customer_id}).json()
+    assert [p["customer_ragione_sociale"] for p in page["items"]] == ["ACME Srl"]
 
 
 # --- Final review item 10 (MINOR): *ListQuery.custom was implemented, GIN-indexed --
