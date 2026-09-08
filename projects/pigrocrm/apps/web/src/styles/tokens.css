@@ -220,6 +220,16 @@
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
   }
+  /* The viewport height, handed down the old-fashioned way. The shell is `h-full` of
+     #root rather than `100dvh`: in an embedded webview or a browser that mis-reports
+     dynamic viewport units the page grew past the window and the sidebar's profile
+     block was cut off at the bottom (seen live on 2026-09-08). A percentage chain
+     from html cannot disagree with what the browser actually shows. */
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
 }
 
 /* Registers the semantic slots above as Tailwind theme colours (bg-background,

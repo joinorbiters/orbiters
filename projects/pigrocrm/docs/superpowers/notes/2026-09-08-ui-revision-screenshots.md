@@ -142,3 +142,32 @@ esattamente ciò che il controllo Playwright rilegge.
   «Campi», che a 390 non esce dal pannello ma stringe il paragrafo. Vanno guardate con
   uno screenshot prima di toccarle.
 - Le pagine Persone, Ore, Solleciti, Analisi e Documenti non sono in questo giro.
+
+## Dopo le correzioni
+
+Il giro a 390 è stato rieseguito su `8b6abe7`, cioè *dopo* le quattordici correzioni
+sopra, sulle quattro pagine che la spec §6 nomina (Home, Fatture, Impostazioni) più Deal
+lista, che è quella con più colonne e quindi il caso peggiore per la tabella:
+
+| Pagina | File |
+|---|---|
+| Home | `.playwright-mcp/ui-rev/home-390-v2.png` |
+| Fatture | `.playwright-mcp/ui-rev/fatture-390-v2.png` |
+| Deal lista | `.playwright-mcp/ui-rev/deal-lista-390-v2.png` |
+| Impostazioni | `.playwright-mcp/ui-rev/impostazioni-390-v2.png` |
+
+**La misura che chiude il ciclo:** su tutte e quattro `document.scrollWidth` vale **390**,
+uguale al viewport. È il numero che dimostra le correzioni 9–14 tutte insieme: nessuna
+pagina sfonda più di lato, quindi né l'intestazione, né la riga di tab, né la tabella, né
+i campi data, né la barra di «Campi» spingono il documento oltre lo schermo. Prima delle
+correzioni era quello a sfondare, ed era il difetto per cui l'intera pagina scorreva
+invece del solo elemento troppo largo.
+
+I PNG stanno, come i precedenti, in `.playwright-mcp/` e non sono committati: il fatto
+verificabile che resta scritto qui è la misura, non l'immagine.
+
+**Cosa questo giro non ha fotografato**, detto per chiarezza e non implicito: **Persone,
+Ore, Solleciti, Analisi e Documenti** non sono state riprese, né prima né dopo — di
+nessuna delle due esiste uno screenshot a nessuna larghezza. Restano coperte solo dai
+test sulle classi, e vanno guardate al prossimo passaggio insieme alle altre tab delle
+impostazioni.
