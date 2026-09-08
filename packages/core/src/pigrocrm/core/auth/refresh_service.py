@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -16,22 +17,142 @@ from pigrocrm.core.errors import ValidationFailed
 # exact token is dead" apart from "this user's whole session family was just revoked."
 INVALID_REFRESH_TOKEN = "sessione non valida o scaduta"
 
+# How long after a rotation the token just rotated away is still answered with the pair
+# that rotation produced, instead of being treated as a replay.
+#
+# The case this exists for is not exotic: the refresh cookie is one cookie per browser,
+# not per tab, so two tabs left open past the fifteen-minute access cookie
+# (`access_token_minutes`) both meet a 401 on their first request and both POST
+# /api/auth/refresh with the *same* token. The web client already shares one refresh
+# across a tab's own concurrent requests and now takes a `navigator.locks` lock across
+# tabs (`apps/web/src/lib/api.ts`), but a lock in the browser cannot cover a second
+# browser window restored from a session, a client with locks unavailable, or a request
+# already in flight when the lock was taken -- and the cost of getting it wrong is the
+# owner logged out of everything at once, which is precisely what was reported.
+#
+# Ten seconds is the width of that race and not much more: it is longer than any
+# plausible round trip plus retry, and short enough that a token resurfacing later --
+# the actual signal of theft -- still burns the family. It is deliberately not a
+# setting: a knob here is a knob that turns rotation off.
+REFRESH_GRACE_SECONDS = 10
+
+
+@dataclass(frozen=True)
+class Rotation:
+    """What a successful rotation hands its caller.
+
+    `issued_at` travels with the refresh token because the *access* token has to be
+    signed at the same instant to come out identical on a second presentation (see
+    `issue_access_token`'s `issued_at`): the router signs it from this value, so the
+    grace path and the ordinary path are the same code and produce the same two
+    cookies. Nothing in the response says which of the two happened -- a client that
+    could tell them apart could probe how long ago somebody else's tab refreshed."""
+
+    refresh_token: str
+    issued_at: datetime
+
 
 class RefreshTokenService:
     def __init__(self, session: Session) -> None:
         self.session = session
 
     def issue(self, user_id: UUID, settings: Settings) -> str:
-        """Creates the row this token's `jti` points at, then signs the token. Order
-        matters only in that both must share the same `jti` and roughly the same
-        expiry -- computed independently here and inside `issue_refresh_token`, a
-        handful of microseconds apart, never far enough apart to matter."""
-        jti = uuid4()
-        token = issue_refresh_token(user_id, settings, jti=jti)
-        expires_at = datetime.now(UTC) + timedelta(days=settings.refresh_token_days)
-        self.session.add(RefreshToken(jti=jti, user_id=user_id, expires_at=expires_at))
+        """Creates the row this token's `jti` points at, then signs the token. Both share
+        one `jti` and one instant -- the row's `expires_at` and the token's `exp` claim
+        are the same arithmetic on the same `now`, which is what lets `rotate` below
+        recover a successor's issuance instant from its row and re-sign it byte for
+        byte."""
+        token, _ = self._mint(user_id, settings, datetime.now(UTC))
         self.session.commit()
         return token
+
+    def _mint(self, user_id: UUID, settings: Settings, now: datetime) -> tuple[str, RefreshToken]:
+        """One new token and its row, uncommitted, from a single instant.
+
+        The instant is the caller's, not this method's: `rotate` needs the *same* `now`
+        it used to mark the predecessor consumed, so that the two writes describe one
+        event, and needs to keep it to sign the access token with.
+        """
+        jti = uuid4()
+        expires_at = now + timedelta(days=settings.refresh_token_days)
+        record = RefreshToken(jti=jti, user_id=user_id, expires_at=expires_at)
+        self.session.add(record)
+        return issue_refresh_token(user_id, settings, jti=jti, issued_at=now), record
+
+    def rotate(self, jti: UUID, user_id: UUID, settings: Settings) -> Rotation:
+        """Consumes the token presented and returns its successor -- the whole of what
+        `POST /api/auth/refresh` does to the session.
+
+        This is `consume` plus one forgiveness. A refresh token presented twice is
+        normally a stolen one (see `consume`'s docstring, which is still the rule), but
+        there is one shape of double presentation that is not theft at all and used to
+        be punished as if it were: the refresh cookie belongs to the *browser*, not to a
+        tab, so two tabs past the fifteen-minute access cookie both send the same token
+        within milliseconds of each other and the second one revoked the family. The
+        owner's report was "it logs me out when I have two tabs open".
+
+        So: inside `REFRESH_GRACE_SECONDS` of the consumption that rotated it away, and
+        only while the successor that consumption produced is itself still live, the
+        second presentation is answered with that same successor -- the same refresh
+        token, the same issuance instant, therefore the same access token, therefore two
+        tabs that agree on which cookie they hold. Outside the window, or once the
+        successor has been consumed or revoked or has expired, nothing has changed: it
+        is a replay, and the family dies.
+
+        What the window does *not* do is let a token be spent twice: the grace path
+        mints nothing, marks nothing consumed and creates no row. It is a read of a
+        decision already taken.
+        """
+        now = datetime.now(UTC)
+        record = self._locked(jti, user_id, now)
+        if record.consumed_at is not None:
+            already = self._successor_within_grace(record, user_id, now, settings)
+            if already is not None:
+                # Nothing was written, but the row lock this transaction took is still
+                # held; releasing it here is what keeps a burst of tabs from queueing
+                # behind each other on the database.
+                self.session.commit()
+                return already
+            self._revoke_all_valid(user_id, now)
+            raise ValidationFailed("refresh_token", "jti", INVALID_REFRESH_TOKEN)
+        token, successor = self._mint(user_id, settings, now)
+        record.consumed_at = now
+        record.successor_jti = successor.jti
+        self.session.commit()
+        return Rotation(refresh_token=token, issued_at=now)
+
+    def _successor_within_grace(
+        self, record: RefreshToken, user_id: UUID, now: datetime, settings: Settings
+    ) -> Rotation | None:
+        """The pair `record`'s own consumption produced, if that was moments ago and the
+        pair is still good -- otherwise None, which means "this is a replay".
+
+        The successor's issuance instant is recovered from its row rather than stored
+        twice: `_mint` computes `expires_at` as exactly `issued_at + refresh_token_days`
+        from one `now`, and `timestamptz` round-trips a Python `datetime` to the
+        microsecond, so subtracting the same offset gives the same instant back and
+        re-signing gives the same token back. That identity is what
+        `test_a_replay_within_the_grace_window_returns_the_very_same_successor` pins,
+        so a future change to how `expires_at` is derived cannot quietly break it.
+        """
+        if record.successor_jti is None or record.consumed_at is None:
+            return None
+        if now - record.consumed_at > timedelta(seconds=REFRESH_GRACE_SECONDS):
+            return None
+        successor = self.session.execute(
+            select(RefreshToken).where(
+                RefreshToken.jti == record.successor_jti, RefreshToken.user_id == user_id
+            )
+        ).scalar_one_or_none()
+        if successor is None or successor.consumed_at is not None or successor.expires_at < now:
+            return None
+        issued_at = successor.expires_at - timedelta(days=settings.refresh_token_days)
+        return Rotation(
+            refresh_token=issue_refresh_token(
+                user_id, settings, jti=successor.jti, issued_at=issued_at
+            ),
+            issued_at=issued_at,
+        )
 
     def consume(self, jti: UUID, user_id: UUID) -> None:
         """Marks a refresh token used up so it can never be presented again. Reusing an
@@ -49,21 +170,35 @@ class RefreshTokenService:
         for the first's commit and then see the state that commit actually produced,
         which is what makes the two branches below mutually exclusive for the same
         row. It stays held until this method's own commit or the caller's -- there is
-        no commit between the SELECT and the write in either branch, on purpose."""
+        no commit between the SELECT and the write in either branch, on purpose.
+
+        This is the path `logout` uses, and the path `rotate` above is the refresh
+        endpoint's: a token consumed here has no recorded successor, so a later
+        presentation of it is a replay even within the grace window -- which is right,
+        because logging out is a decision to end the session, not a rotation."""
+        now = datetime.now(UTC)
+        record = self._locked(jti, user_id, now)
+        if record.consumed_at is not None:
+            self._revoke_all_valid(user_id, now)
+            raise ValidationFailed("refresh_token", "jti", INVALID_REFRESH_TOKEN)
+        record.consumed_at = now
+        self.session.commit()
+
+    def _locked(self, jti: UUID, user_id: UUID, now: datetime) -> RefreshToken:
+        """The row for this jti, locked for the rest of the transaction, or a rejection.
+
+        See `consume`'s docstring for why the lock is not optional. An unknown jti and
+        an expired row raise the same message as everything else here, on purpose.
+        """
         stmt = (
             select(RefreshToken)
             .where(RefreshToken.jti == jti, RefreshToken.user_id == user_id)
             .with_for_update()
         )
         record = self.session.execute(stmt).scalar_one_or_none()
-        now = datetime.now(UTC)
         if record is None or record.expires_at < now:
             raise ValidationFailed("refresh_token", "jti", INVALID_REFRESH_TOKEN)
-        if record.consumed_at is not None:
-            self._revoke_all_valid(user_id, now)
-            raise ValidationFailed("refresh_token", "jti", INVALID_REFRESH_TOKEN)
-        record.consumed_at = now
-        self.session.commit()
+        return record
 
     def _revoke_all_valid(self, user_id: UUID, now: datetime) -> None:
         # `order_by(id)` is not decorative: without it, this UPDATEs whatever order
