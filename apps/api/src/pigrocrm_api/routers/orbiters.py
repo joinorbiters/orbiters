@@ -59,16 +59,21 @@ def reset_signup_rate_limit() -> None:
 def _client_key(request: Request) -> str:
     """The visitor's address as far as it can be known.
 
-    nginx sets `X-Forwarded-For` for this route (deploy/nginx/orbiters-proxy.conf) and
-    the API sees the proxy's own address, so without reading the header every visitor
-    would share one bucket and five signups a minute would be the whole world's budget.
-    The header is trivially forged by anyone who wants to, which is exactly why this is
-    described above as a speed bump against floods and double clicks rather than a
-    security control.
+    nginx sets `X-Real-IP` and appends to `X-Forwarded-For` for this route
+    (deploy/nginx/orbiters-proxy.conf) and the API sees the proxy's own address, so
+    without reading a header every visitor would share one bucket and five signups a
+    minute would be the whole world's budget. `X-Real-IP` is what nginx observed; in
+    `X-Forwarded-For` only the LAST hop is — the first is whatever the visitor typed,
+    and keying on it let a script mint a fresh bucket per request by changing the
+    header. Still a speed bump against floods and double clicks, not a security
+    control: a real cap is nginx's `limit_req`.
     """
+    real_ip = request.headers.get("x-real-ip", "").strip()
+    if real_ip:
+        return real_ip
     forwarded = request.headers.get("x-forwarded-for", "")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        return forwarded.split(",")[-1].strip()
     return request.client.host if request.client else "sconosciuto"
 
 
