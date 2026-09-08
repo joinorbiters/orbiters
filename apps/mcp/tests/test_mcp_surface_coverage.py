@@ -246,6 +246,11 @@ _INTERNE: dict[Method, str] = {
 #    servizio che invii: il divieto strutturale sui nomi degli strumenti vive in
 #    `test_mcp_invoice_ban.py`, che possiede i divieti per costruzione.
 _CREDENZIALI: dict[Method, str] = {
+    ("UserService", "reset_password"): (
+        "cambia la credenziale di una persona: e' l'operatore al terminale del server "
+        "(`pigrocrm resetpassword`) a farlo, mai un agente, per la stessa ragione per cui "
+        "`create` non e' un tool"
+    ),
     ("GmailOAuthService", "start"): "il consenso Google si da' da un browser, non da "
     "un tool: l'URL di autorizzazione non e' percorribile da un agente",
     ("GmailOAuthService", "complete"): "il `code` esiste solo dentro il redirect di "

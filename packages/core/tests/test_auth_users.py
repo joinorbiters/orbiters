@@ -324,3 +324,45 @@ def test_a_nul_byte_in_nome_is_rejected_not_stored(db_session: Session) -> None:
     a native string column reaches Postgres raw unless SafeStr catches it first."""
     with pytest.raises(ValidationError):
         UserCreate(email="y@example.it", password="supersegreta1", nome="Mario\x00Rossi")
+
+
+def test_reset_password_replaces_the_hash_and_records_only_that_it_happened(
+    db_session: Session,
+) -> None:
+    from pigrocrm.core.auth.service import UserService
+
+    service = UserService(db_session)
+    admin = Actor.system()
+    user = service.create(
+        UserCreate(email="reset@studio.it", password="vecchia-password-1", nome="R", ruolo="admin"),
+        admin,
+    )
+    service.reset_password("Reset@Studio.it", "nuova-password-2026", admin)
+    row = db_session.get(User, user.id)
+    assert row is not None
+    assert verify_password("nuova-password-2026", row.password_hash)
+    assert not verify_password("vecchia-password-1", row.password_hash)
+    entry = db_session.execute(
+        text(
+            "select kind, payload::text from activities where entity_id = :id "
+            "order by occurred_at desc limit 1"
+        ),
+        {"id": str(user.id)},
+    ).first()
+    assert entry is not None and entry[0] == "password_reset"
+    assert "nuova-password-2026" not in entry[1]
+
+
+def test_reset_password_refuses_a_short_password_and_an_unknown_email(db_session: Session) -> None:
+    from pigrocrm.core.auth.service import UserService
+    from pigrocrm.core.errors import NotFound, ValidationFailed
+
+    service = UserService(db_session)
+    with pytest.raises(NotFound):
+        service.reset_password("nessuno@studio.it", "lunghissima-1", Actor.system())
+    service.create(
+        UserCreate(email="corta@studio.it", password="vecchia-password-1", nome="C", ruolo="admin"),
+        Actor.system(),
+    )
+    with pytest.raises(ValidationFailed):
+        service.reset_password("corta@studio.it", "corta", Actor.system())

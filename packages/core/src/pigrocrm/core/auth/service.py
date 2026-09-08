@@ -117,6 +117,27 @@ class UserService:
         self.session.commit()
         return UserRead.model_validate(user)
 
+    def reset_password(self, email: str, password: str, actor: Actor) -> UserRead:
+        """A new password for an existing account, set by an admin -- in practice by the
+        operator at the server's terminal (`pigrocrm resetpassword`), since the product has
+        no e-mail flow to hand a link to anyone. Same floor as `create`; the timeline
+        records that it happened and for whom, never what was set."""
+        actor.require_admin("reset_password")
+        if len(password) < MIN_PASSWORD_LENGTH:
+            raise ValidationFailed(
+                "user",
+                "password",
+                f"deve avere almeno {MIN_PASSWORD_LENGTH} caratteri",
+                expected=f">= {MIN_PASSWORD_LENGTH} caratteri",
+            )
+        user = self.repo.get_by_email(email)
+        if user is None:
+            raise NotFound("user", email)
+        user.password_hash = hash_password(password)
+        self.activities.record(ENTITY, user.id, "password_reset", actor, {"email": user.email})
+        self.session.commit()
+        return UserRead.model_validate(user)
+
     def list(self, actor: Actor) -> list[UserRead]:
         actor.require_admin("list_users")
         return [UserRead.model_validate(u) for u in self.repo.list_all()]
