@@ -1,3 +1,5 @@
+import { LayoutDashboard } from 'lucide-react'
+import { PageHeader } from '@/components/PageHeader'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { CommercialTab } from './CommercialTab'
 import { EconomicTab } from './EconomicTab'
@@ -26,10 +28,17 @@ export function DashboardPage({
 }) {
   const { tab, da, a } = search
 
+  // The page owns its own intestazione since the 2026-09-08 revision: §4 draws the tabs
+  // as part of the header, closed by its rule, and the period picker is the one control
+  // this screen puts top right. The route above only supplies the search object and
+  // pushes the changed one into the URL, so there is exactly one `<h1>` on the home page.
   return (
-    <div className="space-y-6 p-8">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <Tabs value={tab} onValueChange={(next) => onSearchChange({ tab: next as typeof tab })}>
+    <Tabs value={tab} onValueChange={(next) => onSearchChange({ tab: next as typeof tab })}>
+      <PageHeader
+        icon={LayoutDashboard}
+        title="Home"
+        actions={<PeriodPicker periodo={{ da, a }} onChange={(next) => onSearchChange(next)} />}
+        tabs={
           <TabsList>
             {DASHBOARD_TABS.map((candidate) => (
               <TabsTrigger key={candidate.id} value={candidate.id}>
@@ -37,17 +46,18 @@ export function DashboardPage({
               </TabsTrigger>
             ))}
           </TabsList>
-        </Tabs>
-        <PeriodPicker periodo={{ da, a }} onChange={(next) => onSearchChange(next)} />
-      </div>
+        }
+      />
 
-      {/* One tab is mounted at a time, deliberately. Rendering all three and hiding two
-          would issue three requests -- three snapshot transactions, each holding two
-          pooled connections on the API side -- to draw one screen. §17's placeholders that
-          stood here until 6C landed are gone: both dashboards exist now, so a paragraph
-          explaining their absence would be the untrue thing on the page. */}
-      {tab === 'commerciale' && <CommercialTab periodo={{ da, a }} />}
-      {tab === 'economica' && <EconomicTab periodo={{ da, a }} />}
-    </div>
+      <div className="px-8 py-6">
+        {/* One tab is mounted at a time, deliberately. Rendering all three and hiding two
+            would issue three requests -- three snapshot transactions, each holding two
+            pooled connections on the API side -- to draw one screen. §17's placeholders that
+            stood here until 6C landed are gone: both dashboards exist now, so a paragraph
+            explaining their absence would be the untrue thing on the page. */}
+        {tab === 'commerciale' && <CommercialTab periodo={{ da, a }} />}
+        {tab === 'economica' && <EconomicTab periodo={{ da, a }} />}
+      </div>
+    </Tabs>
   )
 }

@@ -1,5 +1,5 @@
 import { Link, createFileRoute, useNavigate, useParams } from '@tanstack/react-router'
-import { Pencil, Trash2 } from 'lucide-react'
+import { Handshake, Pencil, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { renderFieldValue } from '@/components/DynamicFieldRenderer'
@@ -125,6 +125,7 @@ export function DealDetail() {
   return (
     <>
       <EntityDetailLayout
+        icon={Handshake}
         title={deal.nome}
         subtitle="Deal"
         entityType="deal"

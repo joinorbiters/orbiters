@@ -1,5 +1,5 @@
 import type { ColumnDef } from '@tanstack/react-table'
-import { DateCell, EntityCell, MoneyCell } from '@/components/cells'
+import { DateCell, EntityCell, MoneyCell, NumberCell } from '@/components/cells'
 import type { DataTableFeatures } from '@/components/DataTable'
 import { renderFieldValue } from '@/components/DynamicFieldRenderer'
 import { formatIsoDateItalian } from '@/lib/dates'
@@ -96,6 +96,20 @@ export function sumValorePrevisto(deals: Deal[]): string {
 }
 
 /**
+ * `Deal` plus the one read field `lib/api-types.ts` does not carry yet.
+ *
+ * `DealRead.customer_ragione_sociale` exists in
+ * packages/core/src/pigrocrm/core/deals/schemas.py as of this change, but the generated
+ * types come from `npm run generate:api` against the API running on :8000, which is not
+ * this code -- regenerating here would write the file from a *stale* server and delete
+ * fields other features rely on. So the field is declared here, next to its only
+ * consumer, and optionally: a `Deal` decoded from the current generated schema simply
+ * does not have it. Exactly the interim `PersonRow` alias a411d24 used, which 6c3dd06
+ * then deleted by regenerating -- this one goes the same way on the next regeneration.
+ */
+type DealRow = Deal & { customer_ragione_sociale?: string | null }
+
+/**
  * TanStack Table v9 (pinned exactly in package.json): `ColumnDef` takes
  * `<TFeatures, TData, TValue>`, not v8's `<TData, TValue>` -- see `features/
  * customers/columns.tsx`'s identical comment for how this was confirmed against
@@ -112,19 +126,21 @@ export function sumValorePrevisto(deals: Deal[]): string {
  * "Preventivo" card (`routes/app/deal/$dealId.tsx`): they are written now but
  * not read until the slice 4 estimate-vs-actual report.
  */
-export function buildDealColumns(customFields: FieldDefinition[]): ColumnDef<DataTableFeatures, Deal>[] {
-  const native: ColumnDef<DataTableFeatures, Deal>[] = [
+export function buildDealColumns(
+  customFields: FieldDefinition[],
+): ColumnDef<DataTableFeatures, DealRow>[] {
+  const native: ColumnDef<DataTableFeatures, DealRow>[] = [
     {
       header: 'Nome',
       accessorKey: 'nome',
-      // The first cell carries the deal's identity as a chip (design spec §4). No
-      // second line under it yet: the reference puts the customer there, and `DealRead`
-      // (packages/core/.../deals/schemas.py) carries only `customer_id` -- no
-      // `customer_ragione_sociale`, the way `PersonRead` does -- so the name is not in
-      // this response at all. Reading it would mean one request per row; the field
-      // belongs on `DealRead` first, and the sub-line follows for free the day it is
-      // there.
-      cell: ({ row }) => <EntityCell name={row.original.nome} />,
+      // The first cell carries the deal's identity as a chip, with the customer on the
+      // line under it (design spec §4) -- which is what turns a list of project names
+      // into a list of work. It costs no request per row: `DealRead` carries
+      // `customer_ragione_sociale`, filled by one batched lookup per page, precisely so
+      // this cell could exist (see `DealService._reads`).
+      cell: ({ row }) => (
+        <EntityCell name={row.original.nome} sub={row.original.customer_ragione_sociale ?? null} />
+      ),
     },
     {
       header: 'Valore previsto',
@@ -140,8 +156,11 @@ export function buildDealColumns(customFields: FieldDefinition[]): ColumnDef<Dat
       id: 'probabilita',
       accessorFn: (row) => `${row.probabilita}%`,
       // A percentage is a number: it belongs on the right with the money, so a column
-      // of them can be scanned down the units digit.
+      // of them can be scanned down the units digit. `meta.align` right-aligns the
+      // header over the digits; `NumberCell` gives the digits themselves the tabular
+      // figures that make a column of them line up.
       meta: { align: 'right' },
+      cell: ({ row }) => <NumberCell>{row.original.probabilita}%</NumberCell>,
     },
     {
       header: 'Chiusura prevista',
@@ -157,7 +176,7 @@ export function buildDealColumns(customFields: FieldDefinition[]): ColumnDef<Dat
   // native column's own id -- identical reasoning (and identical residual gap:
   // `FieldDefinitionService.create` does not itself guard against this) as
   // `features/customers/columns.tsx`/`features/people/columns.tsx`.
-  const custom: ColumnDef<DataTableFeatures, Deal>[] = customFields.map((field) => ({
+  const custom: ColumnDef<DataTableFeatures, DealRow>[] = customFields.map((field) => ({
     header: field.label,
     id: `custom_${field.key}`,
     accessorFn: (row) => renderFieldValue(field, row.custom_fields[field.key]),

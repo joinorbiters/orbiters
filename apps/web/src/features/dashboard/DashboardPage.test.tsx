@@ -133,6 +133,23 @@ describe('DashboardPage', () => {
 
 })
 
+describe('DashboardPage, the page intestazione', () => {
+  /**
+   * Since the 2026-09-08 revision the dashboard owns its own header rather than being
+   * given one by the route: the tabs are part of the intestazione (§4, «Sotto, quando
+   * servono, le tab»), and the period picker is this screen's one header control. A
+   * route that kept drawing its own `PageHeader` above this one would put two `<h1>`s
+   * on the home page.
+   */
+  it('draws its own header, with the tabs and the period under it', () => {
+    renderPage()
+    expect(screen.getByRole('heading', { level: 1, name: 'Home' })).toBeInTheDocument()
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+    expect(screen.getByRole('tab', { name: 'Commerciale' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Dal')).toBeInTheDocument()
+  })
+})
+
 describe('DashboardPage, two tabs', () => {
   it('offers exactly the commercial and economic tabs, and marks the current one', () => {
     renderPage({ ...SEARCH, tab: 'economica' })
