@@ -36,8 +36,11 @@ describe.each(PAGES)('%s', (name) => {
 
   it('requests nothing from another origin', () => {
     for (const [, url] of page.matchAll(/(?:href|src)="(https?:\/\/[^"]+)"/g)) {
-      // An href to a repository the reader clicks is fine; a subresource is not.
-      expect(url, 'external subresource').toMatch(/^https:\/\/github\.com\//)
+      // An href the reader clicks -- the repository, or the hosted signup -- is fine;
+      // a subresource is not.
+      expect(url, 'external subresource').toMatch(
+        /^https:\/\/(?:github\.com|pigro\.joinorbiters\.com)\//,
+      )
     }
     expect(page).not.toMatch(/fonts\.googleapis\.com|fonts\.gstatic\.com/)
     expect(page).not.toMatch(/<link[^>]+href="https?:/)
@@ -63,15 +66,25 @@ describe.each(PAGES)('%s', (name) => {
 describe('index.html', () => {
   const page = html['index.html']
 
-  it('sends the visitor to the only action that exists', () => {
-    // There is no public signup and the product stays single-tenant self-hosted.
-    // A CTA promising a registration that does not exist is worse than no CTA.
-    expect(page).toContain('Installala sul tuo server')
-    expect(page).not.toMatch(/Prova gratis|Registrati|Iscriviti/i)
+  it('opens with the community and its claim, then presents the CRM as the perk', () => {
+    // Since 2026-09-08 PigroCRM is what a member of Orbiters gets: the page says what
+    // Orbiters is first, in its own words, and only then what the CRM does.
+    const claim = page.indexOf('La prima community per freelancer costruita da freelancer.')
+    const perk = page.indexOf('PigroCRM, il perk')
+    expect(claim).toBeGreaterThan(0)
+    expect(perk).toBeGreaterThan(claim)
+    expect(page).toContain('Gratis per chi è in community.')
+  })
+
+  it('sends the visitor into the community first, and to their space second', () => {
+    expect(page).toMatch(/<a class="cta" href="\/orbiters">Entra in Orbiters<\/a>/)
+    expect(page).toContain('href="https://pigro.joinorbiters.com/app/registrati"')
+    // No invented plan or trial: the one price is "be in the community".
+    expect(page).not.toMatch(/Prova gratis|abbonamento|piano (Pro|Business)/i)
   })
 
   it('says who it is for, in the words that qualify a reader in fifteen seconds', () => {
-    for (const word of ['freelance', 'forfettario', 'self-hosted']) {
+    for (const word of ['freelance', 'forfettario', 'self-hosted', 'gratis']) {
       expect(page.toLowerCase()).toContain(word)
     }
   })
