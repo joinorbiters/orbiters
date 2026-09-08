@@ -286,3 +286,113 @@ describe('design tokens', () => {
     }
   })
 })
+
+/* --- The soft-shape system (2026-09-08 app UI revision, design spec §3) ---
+   Until 2026-09-07 the app shared Orbiters' pixel system: zero radius, a 24% line, a
+   step shadow of solid ink, a grid on the body. The app now has its own shapes -- 10px
+   radius, a 12% line, low-opacity blurred shadows, no grid -- while the landing and
+   Orbiters keep the pixel system in their own stylesheets. These assertions pin the
+   numbers so a future edit has to mean it. */
+describe('soft shapes', () => {
+  /** The declarations of one rule of tokens.css, by exact selector. */
+  function block(selector: string): string {
+    const escaped = selector.replace(/[.[\]*+?^${}()|\\]/g, '\\$&')
+    const body = css.match(new RegExp(`(?:^|\\n)${escaped}\\s*\\{([\\s\\S]*?)\\n\\}`))?.[1]
+    if (!body) throw new Error(`rule "${selector}" not found in tokens.css`)
+    return body
+  }
+
+  it('derives every radius from a single 10px --radius', () => {
+    // 10px keeps the buttons at 10 and the derived scale where the reference sits:
+    // --radius-lg 10, --radius-xl 14, --radius-2xl 18.
+    expect(css).toMatch(/--radius:\s*10px/)
+    expect(css).toMatch(/--radius-lg:\s*var\(--radius\)/)
+    expect(css).toMatch(/--radius-xl:\s*calc\(var\(--radius\) \* 1\.4\)/)
+    expect(css).toMatch(/--radius-2xl:\s*calc\(var\(--radius\) \* 1\.8\)/)
+  })
+
+  it('draws lines at 12% of the ink and input borders at 20%', () => {
+    // The reference separates with near-invisible lines and with space. 24%/32% was
+    // the pixel system's hard edge.
+    expect(block(':root')).toMatch(
+      /--border:\s*color-mix\(in oklab, var\(--color-prussian-blue\) 12%, #ffffff\)/,
+    )
+    expect(block(':root')).toMatch(
+      /--input:\s*color-mix\(in oklab, var\(--color-prussian-blue\) 20%, #ffffff\)/,
+    )
+    // Dark mode fades the paper into the ink by the same two steps.
+    expect(block('.dark')).toMatch(/--border:\s*color-mix\(in oklab, var\(--color-paper\) 12%,/)
+    expect(block('.dark')).toMatch(/--input:\s*color-mix\(in oklab, var\(--color-paper\) 20%,/)
+  })
+
+  const SHADOWS = ['xs', 'sm', 'md', 'lg', 'xl', '2xl']
+
+  it('casts soft ink shadows, never a step', () => {
+    for (const step of SHADOWS) {
+      const declaration = css.match(new RegExp(`--shadow-${step}:\\s*([^;]+);`))
+      expect(declaration, `--shadow-${step}`).not.toBeNull()
+      const value = declaration![1]!.trim()
+      // `0 <y> <blur> var(--shadow-ink*)`: no horizontal offset (the step's signature),
+      // a real blur radius, and the colour read from one of the three ink tokens.
+      expect(value, `--shadow-${step}`).toMatch(
+        /^0 \d+px \d+px var\(--shadow-ink(?:-weak|-strong)?\)$/,
+      )
+    }
+  })
+
+  it('keeps the shadow ink a low-opacity tint of the ink itself', () => {
+    // 6-12% in light mode: the reference lifts a menu off the page, it does not
+    // draw it a border of shadow. Dark mode needs more ink to read at all.
+    const light = block(':root')
+    expect(light).toMatch(/--shadow-ink-weak:\s*color-mix\(in oklab, var\(--color-prussian-blue\) 6%, transparent\)/)
+    expect(light).toMatch(/--shadow-ink:\s*color-mix\(in oklab, var\(--color-prussian-blue\) 8%, transparent\)/)
+    expect(light).toMatch(/--shadow-ink-strong:\s*color-mix\(in oklab, var\(--color-prussian-blue\) 12%, transparent\)/)
+    for (const name of ['--shadow-ink-weak', '--shadow-ink', '--shadow-ink-strong']) {
+      expect(block('.dark'), name).toContain(`${name}: color-mix(`)
+    }
+    // The step colour token the pixel system cast its shadows in is gone with it.
+    expect(css).not.toMatch(/--step:/)
+  })
+
+  it('points the sidebar at the Prussian Blue menu of the reference', () => {
+    const light = block(':root')
+    expect(light).toMatch(/--sidebar:\s*var\(--color-prussian-blue\)/)
+    expect(light).toMatch(/--sidebar-foreground:\s*var\(--color-paper\)/)
+    expect(light).toMatch(/--sidebar-accent:\s*color-mix\(in oklab, #ffffff 10%, var\(--color-prussian-blue\)\)/)
+    expect(light).toMatch(/--sidebar-accent-foreground:\s*#ffffff/)
+    expect(light).toMatch(/--sidebar-border:\s*color-mix\(in oklab, #ffffff 12%, var\(--color-prussian-blue\)\)/)
+    // Watermelon-strong, not raw Watermelon: the sidebar now renders white on it.
+    expect(light).toMatch(/--sidebar-primary:\s*var\(--color-watermelon-strong\)/)
+  })
+
+  it('carries Paper text on the menu at AA', () => {
+    // The one contrast pair the dark menu introduces.
+    expect(contrastRatio(tokenHex('paper'), tokenHex('prussian-blue'))).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio('#ffffff', tokenHex('watermelon-strong'))).toBeGreaterThanOrEqual(4.5)
+  })
+
+  it('no longer draws the grid on the app body', () => {
+    // The white content panel covers the page, and the grid was the tie to Orbiters.
+    // system.css stays the single declaration of the line and tile, for the landing
+    // and Orbiters, which do not change (landing/landing-style.test.ts).
+    expect(css).not.toMatch(/--grid-line/)
+    expect(css).not.toMatch(/background-image:/)
+    expect(css).not.toMatch(/background-size:/)
+  })
+
+  it('mixes only the five tints, white and transparent, everywhere in the file', () => {
+    // The chart tokens had this rule; the border, input, sidebar and shadow tokens
+    // are color-mix()es too now, so it applies to every mix in the file. A sixth
+    // colour cannot enter through one of them.
+    const mixes = [...css.matchAll(/color-mix\(in oklab,([^;]*?)\)\s*(?:;|,)/g)].map((m) => m[1]!)
+    expect(mixes.length).toBeGreaterThan(10)
+    for (const mix of mixes) {
+      for (const hex of mix.match(/#[0-9a-fA-F]{3,8}/g) ?? []) {
+        expect(hex.toLowerCase(), `hex inside color-mix(${mix})`).toBe('#ffffff')
+      }
+      for (const [, name] of mix.matchAll(/var\(--([a-z0-9-]+)\)/g)) {
+        expect(name, `var inside color-mix(${mix})`).toMatch(/^color-/)
+      }
+    }
+  })
+})

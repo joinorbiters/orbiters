@@ -32,9 +32,16 @@ describe('the landing shares the product system', () => {
     expect(orbiters).not.toMatch(/color-mix\([^)]*7%/)
   })
 
-  it('the app restates the same line and tile, because Tailwind cannot import system.css', () => {
-    expect(appTokens).toMatch(/--grid-line:\s*color-mix\(in oklab, var\(--color-prussian-blue\) 7%, transparent\)/)
-    expect(appTokens).toMatch(/background-size:\s*16px 16px/)
+  it('draws the grid on these two surfaces only: the app stopped', () => {
+    // This assertion used to read the other way round -- the app restated the same
+    // line and tile, because Tailwind cannot import system.css. The app UI revision
+    // (2026-09-08, docs/superpowers/specs/2026-09-08-ui-revision-design.md §3) removed
+    // the grid from the app body: its white content panel covers the page, and the
+    // grid was the one thing tying the app's shapes to Orbiters'. The landing and
+    // Orbiters are unchanged and keep it, so system.css is now its single declaration
+    // and there is nothing left in the app to drift from it.
+    expect(appTokens).not.toMatch(/--grid-line/)
+    expect(appTokens).not.toMatch(/background-image:/)
   })
 
   it('has hard edges: no radius, no blur, no soft shadow, no grain', () => {

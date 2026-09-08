@@ -21,7 +21,10 @@ function TableHeader({ className, ...props }: React.ComponentProps<"thead">) {
   return (
     <thead
       data-slot="table-header"
-      className={cn("[&_tr]:border-b", className)}
+      /* The header row is shorter than the data rows it labels (40px against 56px),
+         as in the reference. A descendant selector, so it beats TableRow's own `h-14`
+         on specificity without TableRow having to know it is in a header. */
+      className={cn("[&_tr]:h-10 [&_tr]:border-b", className)}
       {...props}
     />
   )
@@ -55,7 +58,10 @@ function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
     <tr
       data-slot="table-row"
       className={cn(
-        "border-b transition-colors hover:bg-muted/50 has-aria-expanded:bg-muted/50 data-[state=selected]:bg-muted",
+        /* 56px, a separator at 12% of the ink (`--border`, via `border-border`) and a
+           Paper hover: the reference's table breathes and separates with almost
+           nothing. */
+        "h-14 border-b border-border transition-colors hover:bg-muted/40 has-aria-expanded:bg-muted/40 data-[state=selected]:bg-muted",
         className
       )}
       {...props}
@@ -68,7 +74,10 @@ function TableHead({ className, ...props }: React.ComponentProps<"th">) {
     <th
       data-slot="table-head"
       className={cn(
-        "h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0",
+        /* The one place in the app where a heading is smaller and quieter than the
+           content under it: 12px Charcoal Blue with a little tracking, per the
+           reference (design spec §4, and §5's exception for table headers). */
+        "px-2 text-left align-middle text-xs font-medium tracking-wide whitespace-nowrap text-muted-foreground [&:has([role=checkbox])]:pr-0",
         className
       )}
       {...props}
@@ -81,7 +90,7 @@ function TableCell({ className, ...props }: React.ComponentProps<"td">) {
     <td
       data-slot="table-cell"
       className={cn(
-        "p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0",
+        "px-2 py-3 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0",
         className
       )}
       {...props}
