@@ -36,8 +36,22 @@
     return utm
   }
 
+  /* The four fields, in the order the form reads them: the first one that is wrong is
+     the one the note talks about and the one that gets the focus. */
+  var FIELDS = ['nome', 'cognome', 'email', 'linkedin_url']
+
+  /* A profile, not any URL: the scheme is fixed and the host has to be LinkedIn's.
+     A bare `linkedin.com/in/ada` and someone else's site are both refused here, so
+     nobody discovers it from a 422 they cannot read. */
+  function isProfile(value) {
+    return value.slice(0, 8) === 'https://' && value.toLowerCase().indexOf('linkedin.com/') > 0
+  }
+
   function signup(form, note, utm) {
-    var input = form.querySelector('input[name="email"]')
+    var inputs = {}
+    for (var i = 0; i < FIELDS.length; i += 1) {
+      inputs[FIELDS[i]] = form.querySelector('input[name="' + FIELDS[i] + '"]')
+    }
     var button = form.querySelector('button')
 
     function say(text, tone) {
@@ -45,26 +59,41 @@
       note.setAttribute('data-tone', tone)
     }
 
+    function refuse(input, message) {
+      input.setAttribute('aria-invalid', 'true')
+      say(message, 'error')
+      input.focus()
+    }
+
     form.addEventListener('submit', function (event) {
       event.preventDefault()
-      var email = input.value.trim()
-      if (!input.checkValidity() || email.indexOf('@') < 1) {
-        input.setAttribute('aria-invalid', 'true')
-        say("Controlla l'indirizzo e riprova.", 'error')
-        input.focus()
-        return
+      var value = {}
+      for (var j = 0; j < FIELDS.length; j += 1) {
+        value[FIELDS[j]] = inputs[FIELDS[j]].value.trim()
+        inputs[FIELDS[j]].removeAttribute('aria-invalid')
       }
-      input.removeAttribute('aria-invalid')
+      if (value.nome === '') return refuse(inputs.nome, 'Scrivi il tuo nome e riprova.')
+      if (value.cognome === '') return refuse(inputs.cognome, 'Scrivi il tuo cognome e riprova.')
+      if (!inputs.email.checkValidity() || value.email.indexOf('@') < 1) {
+        return refuse(inputs.email, "Controlla l'indirizzo e riprova.")
+      }
+      if (value.linkedin_url !== '' && !isProfile(value.linkedin_url)) {
+        return refuse(inputs.linkedin_url, 'Controlla il profilo LinkedIn e riprova.')
+      }
+      var payload = { email: value.email, nome: value.nome, cognome: value.cognome }
+      if (value.linkedin_url !== '') payload.linkedin_url = value.linkedin_url
+      if (utm) payload.utm = utm
       button.disabled = true
       fetch('/api/orbiters/signups', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(utm ? { email: email, utm: utm } : { email: email }),
+        body: JSON.stringify(payload),
       })
         .then(function (response) {
           if (response.status === 422) {
-            input.setAttribute('aria-invalid', 'true')
-            say("Controlla l'indirizzo e riprova.", 'error')
+            /* Everything else on this form was checked above, so the field the API can
+               still refuse is the address: `a@b` passes the checks here. */
+            refuse(inputs.email, "Controlla l'indirizzo e riprova.")
             return
           }
           if (!response.ok) throw new Error(String(response.status))
