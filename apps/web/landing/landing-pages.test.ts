@@ -39,7 +39,7 @@ describe.each(PAGES)('%s', (name) => {
       // An href the reader clicks -- the repository, or the hosted signup -- is fine;
       // a subresource is not.
       expect(url, 'external subresource').toMatch(
-        /^https:\/\/(?:github\.com|pigro\.joinorbiters\.com)\//,
+        /^https:\/\/(?:github\.com|pigro\.joinorbiters\.com|humancraft\.tech)\//,
       )
     }
     expect(page).not.toMatch(/fonts\.googleapis\.com|fonts\.gstatic\.com/)

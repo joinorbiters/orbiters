@@ -125,11 +125,14 @@ body {
   border-width: 2px;
   box-shadow: var(--landing-step) var(--landing-step) 0 var(--landing-ink);
   padding: clamp(1.75rem, 4vw, 3rem);
-  /* About seven tenths of the 72rem measure: the headline sits on two lines and the box
-     carries the hero, with the field showing to its right rather than behind it. */
-  max-width: 52rem;
+  /* The full measure, aligned with the cards below; the text inside keeps a readable
+     line through .measure-tight and .measure, the field shows above and below. */
   display: grid;
   gap: 1.25rem;
+}
+
+.measure-tight {
+  max-width: 24ch;
 }
 
 .card {
