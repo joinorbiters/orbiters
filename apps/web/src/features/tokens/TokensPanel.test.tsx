@@ -96,6 +96,20 @@ describe('TokensPanel', () => {
     expect(screen.getByText(/creare altri amministratori/i)).toBeInTheDocument()
   })
 
+  /**
+   * The variable name is something you have to type into a shell, character for
+   * character, so it is set in monospace like every other literal in the product. It lost
+   * its `<code>` when the header moved into `PageHeader`, whose `description` is a plain
+   * string: the sentence belongs in the body, where it can carry markup.
+   */
+  it('sets the environment variable in monospace, in the body and not in the header', async () => {
+    vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([])))
+    renderPanel()
+    const name = await screen.findByText('PIGROCRM_TOKEN')
+    expect(name.tagName).toBe('CODE')
+    expect(name.closest('header')).toBeNull()
+  })
+
   it('shows only the prefix of an existing token, never the full secret', async () => {
     vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([EXISTING_TOKEN])))
     renderPanel()
@@ -239,12 +253,31 @@ describe('TokensPanel', () => {
   })
 
   describe('revoking a token', () => {
+    /** The «⋯» at the end of the row, and the one action behind it. Revoking is an
+     *  action of the row like every other in the product since the design revision
+     *  (spec §4), not an inline `Trash2` this one table kept to itself. */
+    async function chooseRevoke() {
+      await userEvent.click(await screen.findByRole('button', { name: 'Azioni per Claude' }))
+      await userEvent.click(await screen.findByRole('menuitem', { name: 'Revoca' }))
+    }
+
+    it('offers the revoke inside the row menu, in the destructive tone', async () => {
+      vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([EXISTING_TOKEN])))
+      renderPanel()
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Azioni per Claude' }))
+      expect(await screen.findByRole('menuitem', { name: 'Revoca' })).toHaveAttribute(
+        'data-variant',
+        'destructive',
+      )
+    })
+
     it('asks for confirmation before revoking, since it cannot be undone', async () => {
       vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([EXISTING_TOKEN])))
       vi.spyOn(window, 'confirm').mockReturnValue(false)
       renderPanel()
 
-      await userEvent.click(await screen.findByRole('button', { name: /revoca claude/i }))
+      await chooseRevoke()
       expect(api.DELETE).not.toHaveBeenCalled()
     })
 
@@ -254,7 +287,7 @@ describe('TokensPanel', () => {
       vi.spyOn(window, 'confirm').mockReturnValue(true)
       renderPanel()
 
-      await userEvent.click(await screen.findByRole('button', { name: /revoca claude/i }))
+      await chooseRevoke()
 
       await waitFor(() =>
         expect(api.DELETE).toHaveBeenCalledWith(
@@ -272,7 +305,9 @@ describe('TokensPanel', () => {
       renderPanel()
 
       expect(await screen.findByText('Revocato')).toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: /revoca claude/i })).not.toBeInTheDocument()
+      // No «⋯» at all, rather than a menu with one disabled item: the button is a promise
+      // that there is something behind it (`RowActions`).
+      expect(screen.queryByRole('button', { name: 'Azioni per Claude' })).not.toBeInTheDocument()
     })
   })
 

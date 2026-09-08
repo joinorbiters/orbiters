@@ -1,10 +1,11 @@
 import { useBlocker } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
-import { Copy, KeyRound, Plus, Trash2 } from 'lucide-react'
+import { Copy, KeyRound, Plus } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { DateCell } from '@/components/cells'
 import { PageHeader } from '@/components/PageHeader'
+import { RowActions } from '@/components/RowActions'
 import { StatusPill, type StatusTone } from '@/components/StatusPill'
 import { Button } from '@/components/ui/button'
 import { DataTable, type DataTableFeatures } from '@/components/DataTable'
@@ -20,13 +21,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { fieldErrorFrom, toProblem, type ProblemDetail } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { roleLabel } from '@/lib/roles'
 import { useCreateToken, useRevokeToken, useTokens, type CreatedToken, type TokenRecord } from './queries'
-
-const ROLE_LABELS: Record<string, string> = {
-  admin: 'amministratore',
-  collaboratore: 'collaboratore',
-  readonly: 'sola lettura',
-}
 
 const dateFormatter = new Intl.DateTimeFormat('it-IT', { dateStyle: 'medium', timeStyle: 'short' })
 
@@ -154,29 +150,30 @@ export function TokensPanel() {
       id: 'actions',
       cell: (info) => {
         const token = info.row.original
-        if (token.revoked_at) return null
+        // An already-revoked token has nothing left to do, so `RowActions` draws no «⋯»
+        // for it at all rather than a menu holding one disabled item.
         return (
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={`Revoca ${token.nome}`}
-            onClick={() => revokeToken(token)}
-          >
-            <Trash2 className="size-4" />
-          </Button>
+          <RowActions
+            label={`Azioni per ${token.nome}`}
+            items={
+              token.revoked_at
+                ? []
+                : [{ label: 'Revoca', destructive: true, onSelect: () => revokeToken(token) }]
+            }
+          />
         )
       },
     },
   ]
 
-  const roleLabel = user ? (ROLE_LABELS[user.ruolo] ?? user.ruolo) : null
+  const ruolo = user ? roleLabel(user.ruolo) : null
 
   return (
     <>
       <PageHeader
         icon={KeyRound}
         title="Token di accesso"
-        description="Servono a far usare PigroCRM a un agente (per esempio Claude, tramite il server MCP) con le credenziali di questo account. Imposta il token nella variabile d'ambiente PIGROCRM_TOKEN di chi lo userà."
+        description="Servono a far usare PigroCRM a un agente (per esempio Claude, tramite il server MCP) con le credenziali di questo account."
         actions={
           <Button onClick={openDialog}>
             <Plus className="mr-2 size-4" />
@@ -186,6 +183,15 @@ export function TokensPanel() {
       />
 
       <div className="space-y-4 px-8 pb-8">
+        {/* The variable name is something you type into a shell character for character,
+            so it is set in monospace like every other literal in the product. It cannot
+            live in the header: `PageHeader`'s description is a plain string, which is how
+            the `<code>` was lost when the header moved there. */}
+        <p className="text-sm text-muted-foreground">
+          Imposta il token nella variabile d&apos;ambiente <code>PIGROCRM_TOKEN</code> di chi lo
+          userà.
+        </p>
+
         {/* Stays on the page rather than folding into the header's own description: it
             is the warning, not the explanation, and the two read differently. */}
         <p className="text-sm text-muted-foreground">
@@ -212,7 +218,7 @@ export function TokensPanel() {
             <DialogTitle>Nuovo token</DialogTitle>
             <DialogDescription>
               Dai un nome riconoscibile, es. &quot;Claude sul portatile&quot;. Avrà lo stesso ruolo
-              di questo account ({roleLabel}) e non scadrà finché non lo revochi.
+              di questo account ({ruolo}) e non scadrà finché non lo revochi.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">

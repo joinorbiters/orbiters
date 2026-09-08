@@ -47,7 +47,11 @@ describe('Table', () => {
       expect(row.className).toContain('h-14')
       expect(row.className).toContain('border-b')
       expect(row.className).toContain('border-border')
-      expect(row.className).toContain('hover:bg-muted/40')
+      // Paper at full strength, not `hover:bg-muted/40`: since `--muted` became Paper
+      // itself (tokens.css, this pass) a 40% mix of it over the white panel is #f9fafa --
+      // a hover a pointer cannot see. The spec's «hover Paper» is the whole tint.
+      expect(row.className).toContain('hover:bg-muted')
+      expect(row.className).not.toContain('hover:bg-muted/')
     }
   })
 
