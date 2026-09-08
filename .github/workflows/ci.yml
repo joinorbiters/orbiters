@@ -103,12 +103,15 @@ jobs:
         projects/pigrocrm/packages/core/tests
         projects/pigrocrm/apps/api/tests
         projects/pigrocrm/apps/mcp/tests
-      # Two things a PR does not pay for. `slow` builds a fifty-thousand-row corpus.
-      # `planner` asserts an EXPLAIN output, and the winning plan there sits within a
-      # few percent of the loser, so it turns over on the runner's hardware rather than
-      # on the diff. Both run on the trunk and in preflight, which is where they were
-      # recorded and where they mean something.
-      pytest-args: ${{ github.event_name == 'pull_request' && '-m "not slow and not planner"' || '' }}
+      # `slow` builds a fifty-thousand-row corpus, so a PR does not pay for it and the
+      # trunk does. `planner` is a different thing and is deselected on both: it asserts
+      # which plan Postgres picks, the winning plan sits within a few percent of the
+      # loser at this row count, and a hosted runner picks the other one. It failed on
+      # the trunk run of the merge commit for exactly that reason, on code that had
+      # passed the same assertion on the devbox minutes earlier. It stays in preflight,
+      # which runs on one known machine, and ORB-9 tracks making the assertion say what
+      # it actually means instead of naming a plan.
+      pytest-args: ${{ github.event_name == 'pull_request' && '-m "not slow and not planner"' || '-m "not planner"' }}
       # Without Pandoc and Typst the document renderer shells out to nothing and
       # about thirty tests fail on "strumento di composizione non installato". They
       # had been failing on every run of the previous workflow, which is also why
