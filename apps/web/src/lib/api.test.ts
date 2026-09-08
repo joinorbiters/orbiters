@@ -563,21 +563,23 @@ describe('one session refresh across tabs', () => {
     // release before its callback runs.
     const timeline: string[] = []
     let queue: Promise<unknown> = Promise.resolve()
-    const request = vi.fn((name: string, callback: () => Promise<boolean>) => {
-      const granted = queue.then(async () => {
-        timeline.push(`held ${name}`)
-        try {
-          return await callback()
-        } finally {
-          timeline.push('released')
-        }
-      })
-      queue = granted.then(
-        () => undefined,
-        () => undefined,
-      )
-      return granted
-    })
+    const request = vi.fn(
+      (name: string, _options: LockOptions, callback: () => Promise<boolean>) => {
+        const granted = queue.then(async () => {
+          timeline.push(`held ${name}`)
+          try {
+            return await callback()
+          } finally {
+            timeline.push('released')
+          }
+        })
+        queue = granted.then(
+          () => undefined,
+          () => undefined,
+        )
+        return granted
+      },
+    )
     vi.stubGlobal('navigator', { locks: { request } })
 
     let refreshes = 0
@@ -611,6 +613,11 @@ describe('one session refresh across tabs', () => {
       'pigrocrm-refresh',
       'pigrocrm-refresh',
     ])
+    // Every wait is bounded, including the ordinary one nobody has to wait long for.
+    for (const [, options] of request.mock.calls) {
+      expect(options.signal).toBeInstanceOf(AbortSignal)
+      expect(options.signal?.aborted).toBe(false)
+    }
     expect(timeline).toEqual([
       'held pigrocrm-refresh',
       'refresh',
@@ -619,6 +626,95 @@ describe('one session refresh across tabs', () => {
       'refresh',
       'released',
     ])
+  })
+
+  it('gives up on the lock when the tab holding it never lets go', async () => {
+    // The failure a lock introduces that no lock had: `LockManager.request` waits
+    // forever by default and `fetch` has no timeout, so one tab whose refresh POST
+    // stalls on a hung proxy holds this lock for as long as its socket lives -- and
+    // every other tab sits inside `await refreshSession()` with its own request
+    // unsettled, a spinner that never resolves and never errors. This tab must renew
+    // its session anyway, unlocked, which the server's own grace window absorbs.
+    // The callback the production code passes as the third argument is deliberately
+    // not even a parameter here: this fake could not run it if it wanted to.
+    const request = vi.fn(
+      (_name: string, options: LockOptions) =>
+        new Promise<boolean>((_resolve, reject) => {
+          // The lock is held elsewhere and never released, so the callback is never
+          // invoked and the only way out of this promise is the signal -- exactly as
+          // the real LockManager rejects a request aborted while still waiting.
+          options.signal?.addEventListener('abort', () =>
+            reject(options.signal?.reason ?? new Error('AbortError')),
+          )
+        }),
+    )
+    vi.stubGlobal('navigator', { locks: { request } })
+
+    // The ten-second bound, shortened to a macrotask: the production code asks for
+    // `AbortSignal.timeout(LOCK_WAIT_MS)` and this is what answers it, so the test
+    // proves the wait ends without waiting ten seconds for it to.
+    const asked: number[] = []
+    vi.stubGlobal('AbortSignal', {
+      timeout: (ms: number) => {
+        asked.push(ms)
+        const controller = new AbortController()
+        setTimeout(() => controller.abort(), 0)
+        return controller.signal
+      },
+    })
+
+    let refreshes = 0
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const url = input instanceof Request ? input.url : String(input)
+      if (url.endsWith('/api/auth/refresh')) {
+        refreshes += 1
+        return Promise.resolve(new Response(null, { status: 200 }))
+      }
+      return Promise.resolve(
+        refreshes === 0 ? unauthenticated() : new Response('ok', { status: 200 }),
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const tab = await openTab()
+    const response = await tab.fetchWithRefresh('/api/x')
+
+    // Resolved at all is half the assertion: an unbounded wait hangs this line.
+    expect(response.status).toBe(200)
+    expect(asked).toEqual([10_000])
+    expect(request).toHaveBeenCalledTimes(1)
+    // Renewed regardless, and necessarily through the unlocked fallback: this fake
+    // never invokes the callback the lock was requested with.
+    expect(refreshes).toBe(1)
+  })
+
+  it('skips the lock entirely where the wait cannot be bounded', async () => {
+    // A browser with Web Locks but no `AbortSignal.timeout` would only be offered an
+    // unbounded wait, which is the one failure worse than no lock at all: refresh
+    // unlocked instead, the same path jsdom and older Safari take.
+    const request = vi.fn()
+    vi.stubGlobal('navigator', { locks: { request } })
+    vi.stubGlobal('AbortSignal', {})
+
+    let refreshes = 0
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const url = input instanceof Request ? input.url : String(input)
+      if (url.endsWith('/api/auth/refresh')) {
+        refreshes += 1
+        return Promise.resolve(new Response(null, { status: 200 }))
+      }
+      return Promise.resolve(
+        refreshes === 0 ? unauthenticated() : new Response('ok', { status: 200 }),
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const tab = await openTab()
+    const response = await tab.fetchWithRefresh('/api/x')
+
+    expect(response.status).toBe(200)
+    expect(refreshes).toBe(1)
+    expect(request).not.toHaveBeenCalled()
   })
 })
 
