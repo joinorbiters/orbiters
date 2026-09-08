@@ -61,7 +61,10 @@ function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
         /* 56px, a separator at 12% of the ink (`--border`, via `border-border`) and a
            Paper hover: the reference's table breathes and separates with almost
            nothing. */
-        "h-14 border-b border-border transition-colors hover:bg-muted/40 has-aria-expanded:bg-muted/40 data-[state=selected]:bg-muted",
+        // Paper at full strength: `--muted` is Paper itself, and 40% of it over the white
+        // panel (#f9fafa) is a hover nobody sees. `has-aria-expanded` keeps the row lit
+        // while its «⋯» menu is open, so the open menu still says which row it belongs to.
+        "h-14 border-b border-border transition-colors hover:bg-muted has-aria-expanded:bg-muted data-[state=selected]:bg-secondary",
         className
       )}
       {...props}

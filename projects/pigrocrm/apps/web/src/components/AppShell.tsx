@@ -36,6 +36,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useAuth, useIsAdmin } from '@/lib/auth'
+import { roleLabel } from '@/lib/roles'
 import { cn } from '@/lib/utils'
 
 /**
@@ -268,7 +269,11 @@ export function AppShell({ children }: { children: ReactNode }) {
     <Link
       key={to}
       to={to}
-      activeOptions={{ exact }}
+      // `includeSearch: false`, because TanStack defaults it to true: none of these links
+      // carries a search of its own, so with the default an entry stopped being active
+      // the moment its page put anything in the URL -- and Home, whose dashboard writes
+      // its tab and period there on load, was never highlighted at all.
+      activeOptions={{ exact, includeSearch: false }}
       activeProps={{ 'aria-current': 'page' }}
       className={cn(ITEM, QUIET, ACTIVE, FOCUS, rail && 'justify-center px-0')}
     >
@@ -340,7 +345,10 @@ export function AppShell({ children }: { children: ReactNode }) {
         {/* A button that looks like a field, not an <input>: the palette is a dialog, so a
             real text field here would take focus, accept typing, and then hand it over --
             two places to type the same query. One control, one place to type. */}
-        <div role="search" className="px-3 pb-3">
+        {/* Named, for the same reason the nav below is: a landmark whose accessible name
+            is only its role tells a screen-reader user nothing, and a page's own filter
+            row is entitled to a search landmark of its own. */}
+        <div role="search" aria-label="Ricerca globale" className="px-3 pb-3">
           <button
             type="button"
             onClick={() => setSearchOpen(true)}
@@ -433,7 +441,11 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </Avatar>
                 <div className={cn('min-w-0 flex-1', rail && 'sr-only')}>
                   <p className="truncate text-sm font-medium">{user?.nome}</p>
-                  <p className="truncate text-xs text-sidebar-foreground/70">{user?.ruolo}</p>
+                  {/* The role in words: «admin» is what the API stores, not what the
+                      product writes (spec §5.5). */}
+                  <p className="truncate text-xs text-sidebar-foreground/70">
+                    {user ? roleLabel(user.ruolo) : null}
+                  </p>
                 </div>
                 <ChevronsUpDown
                   className={cn('size-4 shrink-0 text-sidebar-foreground/70', rail && 'hidden')}
@@ -468,7 +480,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           inset and the radius drop to nothing and the panel simply is the page -- a 12px
           frame around a phone screen is 12px of nothing. */}
       <div className="flex min-w-0 flex-1 flex-col p-0 lg:p-3">
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden border-0 border-border bg-card lg:rounded-2xl lg:border">
+        {/* 16, the radius spec §4 draws the panel with -- not `rounded-2xl`, whose 18px
+            is the derived *card* radius (--radius × 1.8). */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden border-0 border-border bg-card lg:rounded-[16px] lg:border">
           <main className="min-h-0 flex-1 overflow-y-auto">{children}</main>
         </div>
       </div>
@@ -528,6 +542,9 @@ function subItem({ to, label }: { to: LinkTo; label: string }) {
     <li key={to}>
       <Link
         to={to}
+        // As on the leaves above: a list that puts its filter in the URL keeps its own
+        // entry marked.
+        activeOptions={{ includeSearch: false }}
         activeProps={{ 'aria-current': 'page' }}
         className={cn(
           'block truncate rounded-[10px] px-3 py-1.5 text-sm transition-colors',

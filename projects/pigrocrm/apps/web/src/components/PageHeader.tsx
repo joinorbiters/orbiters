@@ -34,24 +34,38 @@ export function PageHeader({
 }) {
   return (
     <header className={cn('shrink-0', className)}>
-      <div className="flex items-start gap-4 px-8 pt-6 pb-5">
-        {/* Paper square, 40px, radius 10: the one piece of colour in the header, and a
-            fixed anchor the eye finds at the same spot on every page. Decorative -- it
-            says what the title already says, so it is hidden from a screen reader. */}
-        <span
-          className="flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-background text-foreground"
-          aria-hidden="true"
-        >
-          <Icon className="size-5" aria-hidden="true" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate text-2xl font-semibold tracking-tight">{title}</h1>
-          {description && <p className="mt-1 text-sm text-muted-foreground">{description}</p>}
+      {/* One row from `md` up, three stacked below it. On a phone the icon, a 24px title
+          and a primary button cannot share a row: at 390 the title came out as «F…» and
+          the description as one word per line, because `actions` kept its width and the
+          text beside it gave up all of its own (screenshots of 2026-09-08). */}
+      <div className="flex flex-col gap-4 px-8 pt-6 pb-5 md:flex-row md:items-start">
+        <div className="flex min-w-0 flex-1 items-start gap-4">
+          {/* Paper square, 40px, radius 10: the one piece of colour in the header, and a
+              fixed anchor the eye finds at the same spot on every page. Decorative -- it
+              says what the title already says, so it is hidden from a screen reader. */}
+          <span
+            className="flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-background text-foreground"
+            aria-hidden="true"
+          >
+            <Icon className="size-5" aria-hidden="true" />
+          </span>
+          <div className="min-w-0 flex-1">
+            {/* Truncated only where it shares the row with the actions; below `md` it has
+                a line to itself and wraps instead of losing its own name. */}
+            <h1 className="text-2xl font-semibold tracking-tight md:truncate">{title}</h1>
+            {description && <p className="mt-1 text-sm text-muted-foreground">{description}</p>}
+          </div>
         </div>
-        {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+        {/* Wrapping, because on its own row a page may put two buttons and a period picker
+            here; `shrink-0` only from `md`, where there is a row to be pinned in. */}
+        {actions && (
+          <div className="flex flex-wrap items-center gap-2 md:shrink-0">{actions}</div>
+        )}
       </div>
 
-      {tabs && <div className="border-b px-8">{tabs}</div>}
+      {/* Scrolls sideways inside the panel: thirteen settings tabs are wider than a
+          phone, and the alternative is a page that scrolls horizontally as a whole. */}
+      {tabs && <div className="overflow-x-auto border-b px-8">{tabs}</div>}
       {children}
     </header>
   )
