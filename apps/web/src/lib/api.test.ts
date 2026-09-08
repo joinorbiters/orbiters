@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { fetchWithRefresh, fieldErrorFrom, toProblem, unwrap } from './api'
+import { api, fetchWithRefresh, fieldErrorFrom, toProblem, unwrap } from './api'
 
 // The domain problem document: an RFC 9457 body `domain_error_handler` renders for
 // any DomainError (apps/api/src/pigrocrm_api/errors.py) -- application/problem+json,
@@ -266,5 +266,212 @@ describe('fetchWithRefresh', () => {
 
     expect([a.status, b.status]).toEqual([200, 200])
     expect(refreshes).toBe(1)
+  })
+})
+
+/**
+ * The same second chance, for every request that goes through the typed client --
+ * which is all of them but the two downloads above.
+ *
+ * The bug this pins: the access cookie lasts fifteen minutes
+ * (`access_token_minutes`), the refresh cookie a hundred and eighty days, and a
+ * `POST /api/auth/refresh` renews the pair. Nothing in the client asked for that
+ * renewal, so after a quiet quarter of an hour *every* screen answered
+ * «Autenticazione richiesta» -- with a good refresh cookie in the jar -- until the
+ * owner reloaded the page. Reported from production.
+ *
+ * `baseUrl` is passed per call throughout: in a browser `new Request('/api/auth/me')`
+ * resolves against the document, but the `Request` this test environment provides is
+ * Node's, which rejects a relative URL outright. The production client keeps its own
+ * empty/`/<slug>` base (see `api` in lib/api.ts) -- only these tests need to spell an
+ * origin.
+ */
+describe('the typed client', () => {
+  const BASE = 'http://localhost:3000'
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function unauthenticated() {
+    return new Response(JSON.stringify({ detail: 'Autenticazione richiesta' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  function json(payload: unknown) {
+    return new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  /** Whatever each attempt actually addressed, Request or plain string alike. */
+  function urls(mock: ReturnType<typeof vi.fn<typeof fetch>>): string[] {
+    return mock.mock.calls.map(([input]) =>
+      input instanceof Request ? input.url : String(input),
+    )
+  }
+
+  const ME = {
+    id: '11111111-1111-1111-1111-111111111111',
+    email: 'titolare@studio.it',
+    nome: 'Titolare',
+    ruolo: 'admin',
+    attivo: true,
+  }
+
+  it('refreshes once on a 401 and returns the data the retry produced', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(unauthenticated())
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(json(ME))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const user = await unwrap(api.GET('/api/auth/me', { baseUrl: BASE }))
+
+    expect(user).toMatchObject({ email: 'titolare@studio.it' })
+    expect(urls(fetchMock)).toEqual([
+      `${BASE}/api/auth/me`,
+      '/api/auth/refresh',
+      `${BASE}/api/auth/me`,
+    ])
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: 'POST', credentials: 'include' })
+  })
+
+  it('refreshes exactly once for two calls whose cookie expired together', async () => {
+    // A rotating refresh token is single-use, and `RefreshTokenService.consume`
+    // treats a replay as a compromised credential and revokes every token the user
+    // holds (apps/api/src/pigrocrm_api/routers/auth.py). Two screens loading at the
+    // same moment is the ordinary case, not a corner one, so a second refresh here
+    // would log the owner out for real.
+    let refreshes = 0
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const url = input instanceof Request ? input.url : String(input)
+      if (url.endsWith('/api/auth/refresh')) {
+        refreshes += 1
+        return Promise.resolve(new Response(null, { status: 200 }))
+      }
+      return Promise.resolve(refreshes === 0 ? unauthenticated() : json(ME))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const [a, b] = await Promise.all([
+      unwrap(api.GET('/api/auth/me', { baseUrl: BASE })),
+      unwrap(api.GET('/api/customers', { baseUrl: BASE })),
+    ])
+
+    expect(refreshes).toBe(1)
+    expect(a).toMatchObject({ email: 'titolare@studio.it' })
+    expect(b).toBeTruthy()
+  })
+
+  it('gives up after a failed refresh, surfacing "unauthenticated" and no retry', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(unauthenticated())
+      .mockResolvedValueOnce(unauthenticated())
+    vi.stubGlobal('fetch', fetchMock)
+
+    // What AuthProvider's `me` query sees on the login page: it catches this and
+    // renders the login form. One refresh attempt, then the truth -- never a loop.
+    await expect(unwrap(api.GET('/api/auth/me', { baseUrl: BASE }))).rejects.toMatchObject({
+      code: 'unauthenticated',
+      status: 401,
+    })
+    expect(urls(fetchMock)).toEqual([`${BASE}/api/auth/me`, '/api/auth/refresh'])
+  })
+
+  it('surfaces a 401 from the retry itself instead of refreshing again', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(unauthenticated())
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(unauthenticated())
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(unwrap(api.GET('/api/auth/me', { baseUrl: BASE }))).rejects.toMatchObject({
+      code: 'unauthenticated',
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
+  it.each([
+    ['/api/auth/login' as const, { email: 'a@b.it', password: 'x' }],
+    ['/api/auth/logout' as const, undefined],
+    ['/api/auth/refresh' as const, undefined],
+  ])('never refreshes for %s, whose own 401 is the answer', async (path, body) => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(unauthenticated())
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      unwrap(api.POST(path, { baseUrl: BASE, body } as never)),
+    ).rejects.toMatchObject({ code: 'unauthenticated' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('never refreshes a request that carries its own Bearer credential', async () => {
+    // A personal access token is not the session cookie: there is nothing to
+    // renew, and the caller (a script, an integration) owns its own credential.
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(unauthenticated())
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      unwrap(
+        api.GET('/api/auth/me', { baseUrl: BASE, headers: { Authorization: 'Bearer pat_abc' } }),
+      ),
+    ).rejects.toMatchObject({ code: 'unauthenticated' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('replays the same method and body, byte for byte, on the retry', async () => {
+    // `fetch` consumes a request's body stream, so the retry cannot re-send the
+    // request that already went out: a copy has to be taken while it is intact.
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(unauthenticated())
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(json({ id: 'c1' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const body = { ragione_sociale: 'Rossi SRL', nazione: 'IT', custom_fields: {} }
+    await unwrap(api.POST('/api/customers', { baseUrl: BASE, body }))
+
+    const [first, , retried] = fetchMock.mock.calls.map(([input]) => input as Request)
+    expect(retried?.method).toBe('POST')
+    expect(retried?.url).toBe(first?.url)
+    expect(retried?.headers.get('Content-Type')).toBe('application/json')
+    expect(await retried!.text()).toBe(JSON.stringify(body))
+    expect(await first!.text()).toBe(JSON.stringify(body))
+  })
+})
+
+/** The one multipart upload cannot go through the typed client either (openapi-fetch
+ *  has no way to send a `FormData` body for a multipart route), so it shares the
+ *  downloads' `fetchWithRefresh` -- same fifteen-minute cliff, same fix. */
+describe('fetchWithRefresh with a FormData body', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('re-sends the very same FormData on the retry', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 201 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const form = new FormData()
+    form.append('file', new Blob(['contenuto']), 'contratto.pdf')
+    const response = await fetchWithRefresh('/api/documents/d1/versions', {
+      method: 'POST',
+      body: form,
+    })
+
+    expect(response.status).toBe(201)
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({ method: 'POST', body: form })
   })
 })
