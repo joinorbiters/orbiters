@@ -39,13 +39,36 @@ beforeEach(() => {
     })) as never)
 })
 
-function renderList(filters: { fatturato_non_vinto?: boolean; da_fatturare?: boolean } = {}) {
+function renderList(
+  filters: { fatturato_non_vinto?: boolean; da_fatturare?: boolean } = {},
+  initialSearch = '',
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <QueryClientProvider client={client}>
-      <DealsList initialSearch="" filters={filters} />
+      <DealsList initialSearch={initialSearch} filters={filters} />
     </QueryClientProvider>,
   )
+}
+
+/**
+ * What the page asks the router to make of the URL it is already on.
+ *
+ * The chips navigate with `search` as an *updater* rather than a literal object, which
+ * is the whole point of I3: a literal replaces the query string and silently drops the
+ * `?search=` term the command palette may have arrived with -- and `DealsListRoute`
+ * keys the component on that term, so losing it remounts the list with an empty search
+ * box. Applying the updater to a previous search is therefore the only way to assert
+ * what actually reaches the URL.
+ */
+function nextSearch(previous: Record<string, unknown>): Record<string, unknown> {
+  const call = navigate.mock.calls.at(-1)?.[0] as {
+    to: string
+    search: (prev: Record<string, unknown>) => Record<string, unknown>
+  }
+  expect(call.to).toBe('/app/deal/lista')
+  expect(typeof call.search).toBe('function')
+  return call.search(previous)
 }
 
 describe('the deal list', () => {
@@ -92,17 +115,45 @@ describe('the deal list', () => {
     renderList()
     const filters = await screen.findByRole('search')
     await userEvent.click(within(filters).getByRole('button', { name: 'Fatturato ma non vinto' }))
-    expect(navigate).toHaveBeenCalledWith({
-      to: '/app/deal/lista',
-      search: { fatturato_non_vinto: true },
-    })
+    expect(nextSearch({})).toEqual({ fatturato_non_vinto: true })
   })
 
   it('clears the filter when the pressed chip is pressed again', async () => {
     renderList({ fatturato_non_vinto: true })
     const filters = await screen.findByRole('search')
     await userEvent.click(within(filters).getByRole('button', { name: 'Fatturato ma non vinto' }))
-    expect(navigate).toHaveBeenCalledWith({ to: '/app/deal/lista', search: {} })
+    expect(nextSearch({ fatturato_non_vinto: true })).toEqual({})
+  })
+
+  /**
+   * The live defect this closes: the command palette's «vedi tutti» opens this list with
+   * `?search=acme`, and pressing a chip used to navigate with a literal `search` object
+   * that had no `search` key -- so the term vanished from the URL, `DealsListRoute`'s
+   * `key={search ?? ''}` remounted `DealsList`, and the search box came back empty. The
+   * user lost a filter they never removed, with nothing on screen saying so.
+   */
+  it('keeps the URL’s own search term when a chip is pressed', async () => {
+    renderList({}, 'acme')
+    const filters = await screen.findByRole('search')
+    await userEvent.click(within(filters).getByRole('button', { name: 'Vinto ma da fatturare' }))
+    expect(nextSearch({ search: 'acme' })).toEqual({ search: 'acme', da_fatturare: true })
+  })
+
+  it('keeps the search term when «Tutti» clears the drill-through', async () => {
+    renderList({ da_fatturare: true }, 'acme')
+    const filters = await screen.findByRole('search')
+    await userEvent.click(within(filters).getByRole('button', { name: 'Tutti' }))
+    expect(nextSearch({ search: 'acme', da_fatturare: true })).toEqual({ search: 'acme' })
+  })
+
+  /** One at a time: the two predicates are disjoint by construction (a deal cannot be
+   *  both not-won and won), so carrying the other one along would only ever produce an
+   *  empty list. */
+  it('replaces the other drill-through rather than adding to it', async () => {
+    renderList({ fatturato_non_vinto: true })
+    const filters = await screen.findByRole('search')
+    await userEvent.click(within(filters).getByRole('button', { name: 'Vinto ma da fatturare' }))
+    expect(nextSearch({ fatturato_non_vinto: true })).toEqual({ da_fatturare: true })
   })
 
   it('still states in words what an active filter is hiding', async () => {

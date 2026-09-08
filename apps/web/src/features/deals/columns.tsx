@@ -96,20 +96,6 @@ export function sumValorePrevisto(deals: Deal[]): string {
 }
 
 /**
- * `Deal` plus the one read field `lib/api-types.ts` does not carry yet.
- *
- * `DealRead.customer_ragione_sociale` exists in
- * packages/core/src/pigrocrm/core/deals/schemas.py as of this change, but the generated
- * types come from `npm run generate:api` against the API running on :8000, which is not
- * this code -- regenerating here would write the file from a *stale* server and delete
- * fields other features rely on. So the field is declared here, next to its only
- * consumer, and optionally: a `Deal` decoded from the current generated schema simply
- * does not have it. Exactly the interim `PersonRow` alias a411d24 used, which 6c3dd06
- * then deleted by regenerating -- this one goes the same way on the next regeneration.
- */
-type DealRow = Deal & { customer_ragione_sociale?: string | null }
-
-/**
  * TanStack Table v9 (pinned exactly in package.json): `ColumnDef` takes
  * `<TFeatures, TData, TValue>`, not v8's `<TData, TValue>` -- see `features/
  * customers/columns.tsx`'s identical comment for how this was confirmed against
@@ -128,8 +114,8 @@ type DealRow = Deal & { customer_ragione_sociale?: string | null }
  */
 export function buildDealColumns(
   customFields: FieldDefinition[],
-): ColumnDef<DataTableFeatures, DealRow>[] {
-  const native: ColumnDef<DataTableFeatures, DealRow>[] = [
+): ColumnDef<DataTableFeatures, Deal>[] {
+  const native: ColumnDef<DataTableFeatures, Deal>[] = [
     {
       header: 'Nome',
       accessorKey: 'nome',
@@ -176,7 +162,7 @@ export function buildDealColumns(
   // native column's own id -- identical reasoning (and identical residual gap:
   // `FieldDefinitionService.create` does not itself guard against this) as
   // `features/customers/columns.tsx`/`features/people/columns.tsx`.
-  const custom: ColumnDef<DataTableFeatures, DealRow>[] = customFields.map((field) => ({
+  const custom: ColumnDef<DataTableFeatures, Deal>[] = customFields.map((field) => ({
     header: field.label,
     id: `custom_${field.key}`,
     accessorFn: (row) => renderFieldValue(field, row.custom_fields[field.key]),

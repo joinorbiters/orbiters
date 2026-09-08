@@ -6,6 +6,11 @@ import { cn } from '@/lib/utils'
  * The «riga filtri» of the design spec (§4): the chips on the left, the search box and
  * the selects on the right, between a page's header and its table.
  *
+ * It goes in `PageHeader`'s `children` slot -- the slot's own docstring says «a filter
+ * row, most often» -- and not as a sibling after it: the row belongs *inside* the
+ * `<header>` it filters for, which is also what stops the next list page from having to
+ * guess where it went.
+ *
  * `role="search"` rather than a bare `div`: this row *is* the filtering of the list
  * below it, which is what the ARIA search landmark is for, and it gives a page test one
  * place to scope to (`within(screen.getByRole('search'))`) instead of matching a class

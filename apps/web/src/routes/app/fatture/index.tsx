@@ -79,30 +79,30 @@ export function InvoicesList({ scadute }: { scadute?: boolean }) {
         title="Fatture"
         description="Una fattura si emette da un deal, da un cliente o da qui, creando una proforma da confermare ed emettere. Le proforma si distinguono dal riferimento al posto del numero: non sono documenti fiscali finché non vengono emesse."
         actions={<NewProformaButton />}
-      />
+      >
+        <FilterRow>
+          <FilterChips
+            label="Filtra per stato"
+            allLabel="Tutte"
+            options={STATI}
+            value={stato}
+            onChange={setStato}
+          />
 
-      <FilterRow>
-        <FilterChips
-          label="Filtra per stato"
-          allLabel="Tutte"
-          options={STATI}
-          value={stato}
-          onChange={setStato}
-        />
-
-        <Select value={tipo} onValueChange={setTipo}>
-          <SelectTrigger className="w-48" aria-label="Filtra per tipo">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {TIPI.map((entry) => (
-              <SelectItem key={entry.value} value={entry.value}>
-                {entry.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </FilterRow>
+          <Select value={tipo} onValueChange={setTipo}>
+            <SelectTrigger className="w-48" aria-label="Filtra per tipo">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {TIPI.map((entry) => (
+                <SelectItem key={entry.value} value={entry.value}>
+                  {entry.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </FilterRow>
+      </PageHeader>
 
       <div className="px-8 pb-8">
         {scadute === true && (

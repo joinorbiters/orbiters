@@ -39,28 +39,49 @@ export function SollecitiPage() {
   const [reviewing, setReviewing] = useState<{ draftId: string; customerId: string } | null>(null)
   const [pendingId, setPendingId] = useState<string | null>(null)
 
+  // Hoisted, and rendered in all three of the branches below, the same way `WeekGrid`
+  // does it: a failed or still-loading read is a page with a title and a way off it, not
+  // a banner floating in an unnamed panel. There is no primary action in the header
+  // because preparing a reminder is a per-row act (see the «no bulk action» paragraph
+  // above), so the only button on this screen is the one in the row it belongs to.
+  const header = (
+    <PageHeader
+      icon={MailWarning}
+      title="Solleciti"
+      description="Fatture scadute da più di una settimana, non ancora saldate, senza un sollecito recente e sotto il tetto dei tre. Preparare il sollecito non lo invia: la bozza si apre per la revisione."
+    />
+  )
+
   // The failure branch first, always. On an error `isPending` is false while `data` is
   // still undefined, so a single `isPending || !data` guard answers a failed read with a
   // spinner that never resolves -- and an empty table and a request that never arrived
   // are two different claims about somebody's unpaid invoices.
   if (candidates.isError)
     return (
-      <div className="px-8 py-6">
-        <QueryErrorBanner error={candidates.error} />
-      </div>
+      <>
+        {header}
+        <div className="px-8 pb-8">
+          <QueryErrorBanner error={candidates.error} />
+        </div>
+      </>
     )
   if (candidates.isPending || !candidates.data)
-    return <p className="px-8 py-6 text-muted-foreground">Caricamento…</p>
+    return (
+      <>
+        {header}
+        <p className="px-8 pb-8 text-muted-foreground">Caricamento…</p>
+      </>
+    )
 
   const rows = candidates.data.items
 
   if (reviewing !== null) {
     return (
       <>
-        {/* Still the Solleciti page, and still says so: the title states what this
-            screen is *for* right now, which is reading a letter before it goes. There
-            is no primary action in the header because the action lives in the composer
-            -- «Invia» belongs next to the text it sends. */}
+        {/* Its own header rather than the hoisted one: the title states what this
+            screen is *for* right now, which is reading a letter before it goes. Still
+            no primary action -- «Invia» belongs inside the composer, next to the text
+            it sends. */}
         <PageHeader
           icon={MailWarning}
           title="Sollecito da rivedere"
@@ -86,14 +107,7 @@ export function SollecitiPage() {
 
   return (
     <>
-      {/* No primary action in the header, deliberately: preparing a reminder is a
-          per-row act (see the «no bulk action» paragraph above), so the only button on
-          this screen is the one in the row it belongs to. */}
-      <PageHeader
-        icon={MailWarning}
-        title="Solleciti"
-        description="Fatture scadute da più di una settimana, non ancora saldate, senza un sollecito recente e sotto il tetto dei tre. Preparare il sollecito non lo invia: la bozza si apre per la revisione."
-      />
+      {header}
 
       <div className="space-y-4 px-8 pb-8">
         {/* The mutation's own error, never copied into component state: a refused

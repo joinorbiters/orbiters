@@ -84,7 +84,7 @@ export function SettingsLayout() {
         icon={Settings}
         title="Impostazioni"
         tabs={
-          <TabsList>
+          <TabsList variant="line">
             {SETTINGS_TABS.map((tab) => (
               <TabsTrigger key={tab.value} value={tab.value} asChild>
                 <Link to={`/app/impostazioni/${tab.value}`}>{tab.label}</Link>

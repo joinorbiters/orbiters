@@ -39,7 +39,7 @@ export function DashboardPage({
         title="Home"
         actions={<PeriodPicker periodo={{ da, a }} onChange={(next) => onSearchChange(next)} />}
         tabs={
-          <TabsList>
+          <TabsList variant="line">
             {DASHBOARD_TABS.map((candidate) => (
               <TabsTrigger key={candidate.id} value={candidate.id}>
                 {candidate.label}

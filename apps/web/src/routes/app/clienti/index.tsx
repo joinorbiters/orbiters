@@ -53,22 +53,22 @@ export function CustomersPage({ initialSearch }: { initialSearch: string }) {
             </Button>
           )
         }
-      />
-
-      {/* No state chips: a customer has no state to filter by. The search box is the
-          one filter this list has ever had, and the revision moves it into the row
-          rather than inventing one to keep it company. */}
-      <FilterRow>
-        <div className="relative w-full max-w-sm">
-          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            className="pl-9"
-            placeholder="Cerca per ragione sociale, P.IVA, codice fiscale o email…"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-        </div>
-      </FilterRow>
+      >
+        {/* No state chips: a customer has no state to filter by. The search box is the
+            one filter this list has ever had, and the revision moves it into the row
+            rather than inventing one to keep it company. */}
+        <FilterRow>
+          <div className="relative w-full max-w-sm">
+            <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              className="pl-9"
+              placeholder="Cerca per ragione sociale, P.IVA, codice fiscale o email…"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </div>
+        </FilterRow>
+      </PageHeader>
 
       <div className="px-8 pb-8">
         <DataTable

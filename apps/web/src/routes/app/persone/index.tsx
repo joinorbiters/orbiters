@@ -53,21 +53,21 @@ export function PeoplePage({ initialSearch }: { initialSearch: string }) {
             </Button>
           )
         }
-      />
-
-      {/* Search only, like Clienti: a person has no state, and this revision adds no
-          filter a page did not already have. */}
-      <FilterRow>
-        <div className="relative w-full max-w-sm">
-          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            className="pl-9"
-            placeholder="Cerca per nome, cognome o email…"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-        </div>
-      </FilterRow>
+      >
+        {/* Search only, like Clienti: a person has no state, and this revision adds no
+            filter a page did not already have. */}
+        <FilterRow>
+          <div className="relative w-full max-w-sm">
+            <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              className="pl-9"
+              placeholder="Cerca per nome, cognome o email…"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </div>
+        </FilterRow>
+      </PageHeader>
 
       <div className="px-8 pb-8">
         <DataTable

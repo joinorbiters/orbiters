@@ -103,7 +103,7 @@ export function EntityDetailLayout({
         description={subtitle}
         actions={actions}
         tabs={
-          <TabsList>
+          <TabsList variant="line">
             <TabsTrigger value="panoramica">Panoramica</TabsTrigger>
             {documents && <TabsTrigger value="documenti">Documenti</TabsTrigger>}
             {invoices && <TabsTrigger value="fatture">Fatture</TabsTrigger>}
