@@ -4254,10 +4254,10 @@ export interface components {
             note_interne?: string | null;
             /**
              * Importata Da
-             * @default the previous system
+             * @default esterno
              * @constant
              */
-            importata_da: "the previous system";
+            importata_da: "esterno";
         };
         /**
          * InvoiceImportResult
@@ -4810,6 +4810,8 @@ export interface components {
             note: string | null;
             /** Customer Id */
             customer_id: string | null;
+            /** Customer Ragione Sociale */
+            customer_ragione_sociale?: string | null;
             /** Custom Fields */
             custom_fields: {
                 [key: string]: unknown;

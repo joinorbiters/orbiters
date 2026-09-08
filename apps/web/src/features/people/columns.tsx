@@ -41,7 +41,6 @@ export function displayNative(value: string | null): string {
  * `api-types.ts`, `Person` carries the field itself and this alias collapses back
  * to `Person`.
  */
-type PersonRow = Person & { customer_ragione_sociale?: string | null }
 
 /**
  * TanStack Table v9 (pinned exactly in package.json): `ColumnDef` takes
@@ -64,8 +63,8 @@ type PersonRow = Person & { customer_ragione_sociale?: string | null }
  */
 export function buildPersonColumns(
   customFields: FieldDefinition[],
-): ColumnDef<DataTableFeatures, PersonRow>[] {
-  const native: ColumnDef<DataTableFeatures, PersonRow>[] = [
+): ColumnDef<DataTableFeatures, Person>[] {
+  const native: ColumnDef<DataTableFeatures, Person>[] = [
     { header: 'Nome', accessorKey: 'nome' },
     { header: 'Cognome', id: 'cognome', accessorFn: (row) => displayNative(row.cognome) },
     {
@@ -106,7 +105,7 @@ export function buildPersonColumns(
   // native column's own id -- identical reasoning (and identical residual gap:
   // `FieldDefinitionService.create` does not itself guard against this) as
   // `features/customers/columns.tsx`.
-  const custom: ColumnDef<DataTableFeatures, PersonRow>[] = customFields.map((field) => ({
+  const custom: ColumnDef<DataTableFeatures, Person>[] = customFields.map((field) => ({
     header: field.label,
     id: `custom_${field.key}`,
     // `renderFieldValue`, not `value ?? EMPTY`: a custom field can be numeric,

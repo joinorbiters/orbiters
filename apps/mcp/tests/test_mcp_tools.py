@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
+from pigrocrm.core.config import Settings
 from pigrocrm.core.fields.schemas import FieldDefinitionCreate
 from pigrocrm.core.fields.service import FieldDefinitionService
 from pigrocrm.core.pipeline.service import PipelineService
@@ -144,7 +145,14 @@ async def test_a_permission_error_tells_the_agent_to_ask_the_user(mcp_session: S
     from pigrocrm_mcp.server import build_server
 
     readonly = Actor(id=None, type="mcp", role="readonly")
-    server = build_server(lambda: mcp_session, lambda: readonly)
+    # `_env_file=None`: this test is about the permission refusal, not about whatever
+    # document store the worktree's `.env` selects (a Drive backend without a service
+    # account would refuse at storage construction before the tool ever ran).
+    server = build_server(
+        lambda: mcp_session,
+        lambda: readonly,
+        settings=Settings(_env_file=None),  # type: ignore[call-arg]
+    )
 
     async with Client(server) as client:
         result = await client.call_tool("create_customer", {"ragione_sociale": "ACME"})
