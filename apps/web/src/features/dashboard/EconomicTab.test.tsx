@@ -1,19 +1,5 @@
-/**
- * §5's tab. Every figure comes from the API already summed; this file asserts on the four
- * things §5 and §5.1-5.3 say must be true of how they are *presented*, because that is the
- * half a backend test cannot reach.
- *
- * `vi.mock('@/lib/api')` and not a stubbed `globalThis.fetch`: `api` is an openapi-fetch
- * client built at import time, so replacing `fetch` afterwards changes nothing. `msw` is
- * not a dependency of this project.
- *
- * `@tanstack/react-router` is mocked with a `Link` that renders the `to` and `search` it
- * was given as a real `href`. That is not a tautology: what is asserted is the destination
- * *this component chose*, and the assertion is written against the string the server sent
- * in `collegamento`, so the two cannot drift apart without a failure here.
- */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { EconomicTab } from './EconomicTab'
 import { api } from '@/lib/api'
@@ -46,39 +32,74 @@ function failed(error: unknown, status: number) {
   return { error, response: new Response(null, { status }) } as never
 }
 
-const CLOSED = {
-  ricavi: '15000.00',
-  costi_diretti: '2000.00',
-  costo_lavoro: '6000.00',
-  margine_lordo: '7000.00',
-  margine_percentuale: '46.67',
-  deal: 4,
+function month(mese: number, incassato = '0.00', da_incassare = '0.00', bozze = '0.00', costi = '0.00') {
+  return {
+    anno: 2026,
+    mese,
+    incassato,
+    da_incassare,
+    bozze,
+    costi,
+    quote_andamento: { incassato: incassato === '0.00' ? 0 : 1, costi: costi === '0.00' ? 0 : 0.1 },
+    quote_proiezione: {
+      incassato: incassato === '0.00' ? 0 : 0.6,
+      da_incassare: da_incassare === '0.00' ? 0 : 0.3,
+      bozze: bozze === '0.00' ? 0 : 0.05,
+      costi: costi === '0.00' ? 0 : 0.05,
+    },
+  }
+}
+
+const MESI = [
+  month(1),
+  month(2),
+  month(3),
+  month(4, '3990.00', '0.00', '0.00', '100.00'),
+  month(5, '0.00', '0.00', '2500.00', '0.00'),
+  month(6, '1200.00'),
+  month(7, '6300.00', '0.00', '0.00', '97.50'),
+  month(8, '7458.62', '6954.03', '0.00', '100.00'),
+  month(9),
+  month(10),
+  month(11),
+  month(12),
+]
+
+const FISCALE = {
+  anno: 2026,
+  stima: true,
+  avvertenza: 'stima',
+  ricavi: '20628.62',
+  coefficiente_redditivita: '67.00',
+  imponibile: '13821.18',
+  aliquota_imposta_sostitutiva: '5.00',
+  imposta_sostitutiva: '691.06',
+  aliquota_inps: '26.07',
+  contributi: '3423.02',
+  reddito_netto_stimato: '16514.54',
+  totale_dovuto: '4114.08',
 }
 
 const RESPONSE = {
-  periodo: { da: '2026-03-01', a: '2026-03-31' },
-  calcolato_alle: '2026-03-15T10:00:00Z',
-  pnl: {
-    da: '2026-03-01',
-    a: '2026-03-31',
-    customer_id: null,
-    chiusi: CLOSED,
-    // A running column with no closed deal behind its percentage: `null`, which must read
-    // as a dash and never as 0%.
-    in_corso: { ...CLOSED, ricavi: '3000.00', margine_percentuale: null },
-    spese_generali: '900.00',
-    periodo_chiuso: false,
-    voci_scritte_in_ritardo: 2,
-    valore_maturato: '4500.00',
-    ore_fatturabili_non_fatturate: '90.00',
-    ore_senza_tariffa: 3,
+  calcolato_alle: '2026-09-08T10:00:00Z',
+  cassa: {
+    anno: 2026,
+    incassato: '20628.62',
+    da_incassare: '6954.03',
+    bozze: '2500.00',
+    proiettato: '30082.65',
+    costi: '297.50',
+    lordo_effettivo: '20331.12',
+    lordo_proiettato: '29785.15',
+    mesi: MESI,
   },
-  da_incassare: '12200.00',
-  scaduto: '3050.00',
-  fatture_emesse: 6,
+  fiscale: FISCALE,
+  fiscale_proiettato: { ...FISCALE, ricavi: '30082.65', imponibile: '20155.38', totale_dovuto: '5999.55' },
+  netto_effettivo: '16217.04',
+  netto_proiettato: '23785.60',
 }
 
-const PERIODO = { da: '2026-03-01', a: '2026-03-31' }
+const PERIODO = { da: '2026-09-01', a: '2026-09-30' }
 
 function renderTab(periodo = PERIODO) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -94,171 +115,85 @@ beforeEach(() => {
 })
 
 describe('EconomicTab', () => {
-  it('asks for the period it was given, so a shared link answers its own question', async () => {
+  it('asks for the year the period names, because cash and taxes are told by the year', async () => {
     vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
-    renderTab({ da: '2025-01-01', a: '2025-12-31' })
-    await screen.findByRole('table', { name: /conto economico/i })
-    expect(api.GET).toHaveBeenCalledWith('/api/dashboard/economica', {
-      params: { query: { da: '2025-01-01', a: '2025-12-31' } },
+    renderTab({ da: '2025-03-01', a: '2025-03-31' })
+    await screen.findByText(/Vista economica 2025/)
+    expect(api.GET).toHaveBeenCalledWith('/api/analytics/panoramica', {
+      params: { query: { anno: 2025 } },
     })
   })
 
-  it('labels revenue in full, never just "Fatturato"', async () => {
-    // §5.1: three extra words on a card are the price of not having two users read the
-    // same figure as two different things.
+  it('shows the money figures from the API strings, cents included', async () => {
     vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
     renderTab()
-    expect(await screen.findByText(/fatturato \(imponibile, emesso\)/i)).toBeInTheDocument()
-    // And the bare word appears nowhere on its own: a second, shorter label for the same
-    // figure is exactly the ambiguity the long one was chosen to remove.
-    expect(screen.queryByText('Fatturato')).not.toBeInTheDocument()
+    const incassati = await screen.findByRole('group', { name: 'Ricavi incassati' })
+    expect(incassati).toHaveTextContent('20.628,62 €')
+    expect(screen.getByRole('group', { name: 'Ricavi proiettati' })).toHaveTextContent('30.082,65 €')
+    expect(screen.getByRole('group', { name: 'Costi passivi' })).toHaveTextContent('297,50 €')
+    expect(screen.getByRole('group', { name: 'Totale lordo effettivo' })).toHaveTextContent(
+      '20.331,12 €',
+    )
   })
 
-  it('shows the margin in two columns and no box holding their sum', async () => {
-    // Slice 4 §7.4: adding a finished job's margin to a half-done one produces a figure
-    // that is neither, and that moves every week for reasons which are not performance.
+  it('shows the fiscal estimate on collected and projected revenue, and the link', async () => {
     vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
     renderTab()
-    expect(await screen.findByRole('columnheader', { name: /deal chiusi/i })).toBeInTheDocument()
-    expect(screen.getByRole('columnheader', { name: /deal in corso/i })).toBeInTheDocument()
-    expect(screen.queryByText(/margine totale/i)).not.toBeInTheDocument()
-    expect(screen.queryByText(/margine complessivo/i)).not.toBeInTheDocument()
-    // The two margins are rendered, each in its own cell, and there is no third one. The
-    // sum of 7000 and 7000 would be 14.000,00 €, and it must not be anywhere.
-    expect(screen.getAllByText('7.000,00 €')).toHaveLength(2)
-    expect(screen.queryByText('14.000,00 €')).not.toBeInTheDocument()
+    expect(await screen.findByRole('group', { name: 'Totale da saldare' })).toHaveTextContent(
+      '4.114,08 €',
+    )
+    expect(screen.getByRole('group', { name: 'Totale da saldare con proiezione' })).toHaveTextContent(
+      '5.999,55 €',
+    )
+    expect(screen.getByRole('group', { name: 'Totale netto ricavi' })).toHaveTextContent(
+      '16.217,04 €',
+    )
+    expect(screen.getByRole('group', { name: 'Imponibile forfettario stimato' })).toHaveTextContent(
+      '13.821,18 €',
+    )
+    expect(screen.getAllByRole('link', { name: /stima fiscale/i }).length).toBeGreaterThan(0)
+    expect(screen.getByText(/Stima basata sul regime forfettario/)).toHaveTextContent(/67,00/)
   })
 
-  it('marks the closed-deals column as the reportable one', async () => {
-    vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
-    renderTab()
-    expect(await screen.findByText(/cifra riportabile/i)).toBeInTheDocument()
-  })
-
-  it('renders a null margin percentage as a dash and never as 0%', async () => {
-    vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
-    renderTab()
-    // `in_corso.margine_percentuale` is null in the fixture; `chiusi`'s is not.
-    expect(await screen.findByText('46,67%')).toBeInTheDocument()
-    expect(screen.getByText('—')).toBeInTheDocument()
-    expect(screen.queryByText('0,00%')).not.toBeInTheDocument()
-  })
-
-  it('formats every money figure from the API string, cents included', async () => {
-    // `Number("0.29") * 100` is 28.999999999999996. Nothing here parses a money string at
-    // all, and this is the assertion that would notice if somebody reintroduced the parse.
+  it('shows cash alone, and the link, when the estimate is not available', async () => {
     vi.mocked(api.GET).mockResolvedValue(
-      ok({ ...RESPONSE, da_incassare: '12200.29', scaduto: '3050.01' }),
+      ok({ ...RESPONSE, fiscale: null, fiscale_proiettato: null, netto_effettivo: null, netto_proiettato: null }),
     )
     renderTab()
-    expect(await screen.findByText('12.200,29 €')).toBeInTheDocument()
-    // useGrouping: 'always' -- it-IT withholds the separator below five integer digits.
-    expect(screen.getByText('3.050,01 €')).toBeInTheDocument()
+    await screen.findByRole('group', { name: 'Ricavi incassati' })
+    expect(screen.queryByRole('group', { name: 'Totale da saldare' })).toBeNull()
+    expect(screen.getByText(/serve un profilo fiscale configurato/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /stima fiscale/i })).toBeInTheDocument()
   })
 
-  it('renders "Scaduto" as a subset indented under "Da incassare"', async () => {
-    // §5.2: a subset shown as one, never a second addable voice.
+  it('draws the two monthly charts with a legend and a table view each', async () => {
     vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
     renderTab()
-    const overdue = await screen.findByTestId('scaduto')
-    expect(overdue).toHaveAttribute('data-subset-of', 'da-incassare')
-    expect(overdue).toHaveTextContent(/di cui scaduto/i)
-    // Structural, not only a label: the overdue figure is rendered *inside* the receivable
-    // card, so no layout change can leave it standing beside it as a second line.
-    expect(overdue.closest('[data-testid="da-incassare"]')).not.toBeNull()
-    // And their sum -- 15.250,00 € -- appears nowhere.
-    expect(screen.queryByText('15.250,00 €')).not.toBeInTheDocument()
-  })
-
-  it('keeps "Da incassare" out of the P&L block', async () => {
-    vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
-    renderTab()
-    const receivable = await screen.findByTestId('da-incassare')
-    // A receivable is not revenue (§5.2): it is money owed, VAT included. Rendering it
-    // inside the P&L block would invite exactly the addition the label forbids.
-    expect(receivable.closest('[data-block="pnl"]')).toBeNull()
-    expect(screen.getByTestId('da-incassare')).toHaveTextContent(/non entra in nessun margine/i)
-  })
-
-  it('shows the informative rows under a heading that is not "ricavi"', async () => {
-    // §5: "Compaiono sotto un'intestazione diversa da «ricavi» e non entrano in nessun
-    // margine", and the label carries the scope.
-    vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
-    renderTab()
-    expect(await screen.findByText(/valore maturato non fatturato/i)).toBeInTheDocument()
-    const section = screen.getByTestId('maturato')
-    expect(section).toHaveTextContent(/nel periodo/i)
-    expect(section).toHaveTextContent(/non sono ricavi/i)
-    // The scope is on the heading, not in a footnote: this section is about the period,
-    // and the operational tab's backlog -- the same quantity without a period -- is not
-    // on this page at all.
-    expect(section.closest('[data-block="pnl"]')).toBeNull()
-  })
-
-  it('says whether the period can still move', async () => {
-    // Slice 4 §6.4, and §5: beside the total, not in a footnote.
-    vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
-    renderTab()
-    expect(await screen.findByText(/periodo non chiuso/i)).toBeInTheDocument()
-    expect(screen.getByText(/2 voci scritte in ritardo/i)).toBeInTheDocument()
-  })
-
-  it('says the period is closed when it is, and mentions no late entries when there are none', async () => {
-    // The negative of the assertion above, without which "Periodo non chiuso" could be a
-    // constant string and the test would not know.
-    vi.mocked(api.GET).mockResolvedValue(
-      ok({
-        ...RESPONSE,
-        pnl: { ...RESPONSE.pnl, periodo_chiuso: true, voci_scritte_in_ritardo: 0 },
-      }),
+    const andamento = await screen.findByRole('figure', { name: 'Andamento economico 2026' })
+    expect(within(andamento).getByRole('list', { name: 'Legenda' })).toHaveTextContent(
+      'Ricavi incassatiCosti passivi',
     )
-    renderTab()
-    expect(await screen.findByText(/periodo chiuso/i)).toBeInTheDocument()
-    expect(screen.queryByText(/periodo non chiuso/i)).not.toBeInTheDocument()
-    expect(screen.queryByText(/scritte in ritardo/i)).not.toBeInTheDocument()
-  })
-
-  it('links to the fiscal estimate instead of showing a number', async () => {
-    // §5.3: a dashboard is the screen most likely to end up in a screenshot.
-    vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
-    renderTab()
-    const link = await screen.findByRole('link', { name: /stima fiscale/i })
-    expect(link).toHaveAttribute('href', '/app/analisi/fiscale')
-    for (const forbidden of [/imposta sostitutiva/i, /contributi/i, /netto stimato/i]) {
-      expect(screen.queryByText(forbidden)).not.toBeInTheDocument()
-    }
-  })
-
-  it('shows no comparison with the same period last year', async () => {
-    // §5.3: the right behaviour when the prior period is partly written depends on
-    // period_locks in a way nobody has exercised. A wrong comparison is worse than none.
-    vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
-    renderTab()
-    await screen.findByText(/fatturato \(imponibile, emesso\)/i)
-    expect(screen.queryByText(/anno precedente/i)).not.toBeInTheDocument()
-    expect(screen.queryByText(/rispetto a/i)).not.toBeInTheDocument()
+    const proiezione = screen.getByRole('figure', { name: 'Proiezione economica 2026' })
+    expect(within(proiezione).getByRole('list', { name: 'Legenda' })).toHaveTextContent(
+      'Da incassare',
+    )
+    // The tallest month is labelled directly; the table carries every value.
+    expect(within(andamento).getAllByTestId('segment').length).toBeGreaterThan(0)
+    expect(within(andamento).getByRole('table')).toHaveTextContent('7.980,00 €')
   })
 
   it('shows how old the figures are', async () => {
     vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
     renderTab()
-    expect(await screen.findByText(/aggiornato/i)).toBeInTheDocument()
+    expect(await screen.findByText(/Aggiornato/)).toBeInTheDocument()
   })
 
   it('renders an error banner and no figures when the request fails', async () => {
     vi.mocked(api.GET).mockResolvedValue(
-      failed({ title: 'Errore', detail: 'Non disponibile', code: 'unavailable' }, 500),
+      failed({ type: 'x', title: 'Errore', status: 500, detail: 'boom', code: 'domain_error' }, 500),
     )
     renderTab()
-    expect(await screen.findByRole('alert')).toHaveTextContent('Non disponibile')
-    // The error branch is checked *before* the loading branch: on a failure `isPending` is
-    // false while `data` is still undefined, so a single `isPending || !data` guard answers
-    // a failed read with a spinner that never resolves. And no figures, no table, no
-    // freshness stamp -- a dashboard drawn empty after a failure says "there is nothing"
-    // when the truth is "I do not know".
-    expect(screen.queryByText(/fatturato/i)).not.toBeInTheDocument()
-    expect(screen.queryByRole('table')).not.toBeInTheDocument()
-    expect(screen.queryByText(/aggiornato/i)).not.toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /stima fiscale/i })).not.toBeInTheDocument()
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Ricavi incassati' })).toBeNull()
   })
 })

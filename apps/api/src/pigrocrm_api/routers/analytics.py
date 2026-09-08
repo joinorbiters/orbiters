@@ -15,6 +15,7 @@ from fastapi import APIRouter, Query
 from pigrocrm.core.analytics.schemas import (
     BudgetPage,
     BudgetQuery,
+    EconomicOverview,
     FiscalEstimate,
     PeriodPnl,
     PeriodPnlQuery,
@@ -65,6 +66,16 @@ def budget_vs_actual(
     return AnalyticsService(session).budget_vs_actual(
         BudgetQuery(da=da, a=a, customer_id=customer_id, limit=limit, cursor=cursor), actor
     )
+
+
+@router.get("/panoramica", response_model=EconomicOverview)
+def economic_overview(
+    session: SessionDep, actor: ActorDep, anno: Annotated[int, Query(ge=2000, le=2200)]
+) -> EconomicOverview:
+    """The dashboard's economic tab: the year as cash for everyone, plus the fiscal
+    estimate on collected and projected revenue for an admin with a profile. No MCP
+    tool, for the estimate's own reasons."""
+    return AnalyticsService(session).economic_overview(anno, actor)
 
 
 @router.get("/fiscale", response_model=FiscalEstimate)

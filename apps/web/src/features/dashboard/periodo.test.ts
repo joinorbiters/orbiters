@@ -56,8 +56,8 @@ describe('validateDashboardSearch', () => {
 
   it('reads back exactly what a shared link carried', () => {
     // The round trip the URL exists for. Without this the period is decoration.
-    expect(validateDashboardSearch({ tab: 'operativa', da: '2025-11-03', a: '2025-11-09' })).toEqual(
-      { tab: 'operativa', da: '2025-11-03', a: '2025-11-09' },
+    expect(validateDashboardSearch({ tab: 'economica', da: '2025-11-03', a: '2025-11-09' })).toEqual(
+      { tab: 'economica', da: '2025-11-03', a: '2025-11-09' },
     )
   })
 
@@ -110,7 +110,11 @@ describe('validateDashboardSearch', () => {
     })
   })
 
-  it('offers the three tabs slice 6 declares', () => {
-    expect(DASHBOARD_TABS.map((tab) => tab.id)).toEqual(['commerciale', 'economica', 'operativa'])
+  it('offers the two tabs the dashboard has since 2026-09-08', () => {
+    expect(DASHBOARD_TABS.map((tab) => tab.id)).toEqual(['commerciale', 'economica'])
+  })
+
+  it('falls back to the commercial tab for a link that still names the retired operational one', () => {
+    expect(validateDashboardSearch({ tab: 'operativa' }).tab).toBe('commerciale')
   })
 })

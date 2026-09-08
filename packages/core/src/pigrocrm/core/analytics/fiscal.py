@@ -98,6 +98,11 @@ def estimate_income(
         aliquota_inps=aliquota_inps,
         contributi=contributi,
         reddito_netto_stimato=netto,
+        totale_dovuto=(
+            round_money(sostitutiva + contributi)
+            if (sostitutiva is not None and contributi is not None)
+            else None
+        ),
     )
 
 

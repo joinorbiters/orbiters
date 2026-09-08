@@ -11,10 +11,11 @@ import { currentMonth } from './periodo'
  * is what keeps it code-split).
  */
 
+// Two tabs since 2026-09-08: the operational one (week, backlog, signals) is gone from
+// the page; its API and MCP tool remain for the agent.
 export const DASHBOARD_TABS = [
   { id: 'commerciale', label: 'Commerciale' },
   { id: 'economica', label: 'Economica' },
-  { id: 'operativa', label: 'Operativa' },
 ] as const
 
 export type TabId = (typeof DASHBOARD_TABS)[number]['id']

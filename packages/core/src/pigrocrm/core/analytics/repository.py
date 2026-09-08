@@ -268,6 +268,68 @@ class AnalyticsRepository:
         ).scalar_one()
         return int(entries) + int(costs)
 
+    def monthly_incassato(self, anno: int) -> dict[int, Decimal]:
+        """`Σ totale` of revenue invoices paid in each month of `anno`, by `data_incasso`
+        -- money in the bank, so `totale`, as `sum_da_incassare` reasons. An invoice
+        marked paid with no date falls back to its issue date rather than vanishing."""
+        month = func.extract("month", func.coalesce(Invoice.data_incasso, Invoice.data_emissione))
+        year = func.extract("year", func.coalesce(Invoice.data_incasso, Invoice.data_emissione))
+        rows = self.session.execute(
+            select(month, func.sum(Invoice.totale))
+            .where(*_revenue_filter(), Invoice.stato_pagamento == "incassato", year == anno)
+            .group_by(month)
+        ).all()
+        return {int(m): round_money(Decimal(total)) for m, total in rows}
+
+    def monthly_da_incassare(self, anno: int) -> dict[int, Decimal]:
+        """`Σ totale` of revenue invoices still unpaid, by the month they are due (issue
+        date when no due date was set): the month the money is expected, which is what
+        a projection is about."""
+        when = func.coalesce(Invoice.data_scadenza, Invoice.data_emissione)
+        month = func.extract("month", when)
+        year = func.extract("year", when)
+        rows = self.session.execute(
+            select(month, func.sum(Invoice.totale))
+            .where(*_revenue_filter(), Invoice.stato_pagamento == "da_incassare", year == anno)
+            .group_by(month)
+        ).all()
+        return {int(m): round_money(Decimal(total)) for m, total in rows}
+
+    def monthly_bozze(self, anno: int) -> dict[int, Decimal]:
+        """`Σ totale` of what is written but not yet an issued invoice: draft invoices and
+        live proformas (not the ones already turned into an invoice, which would count
+        twice). By issue date, or the day they were created when there is none."""
+        when = func.coalesce(Invoice.data_emissione, func.date(Invoice.created_at))
+        month = func.extract("month", when)
+        year = func.extract("year", when)
+        rows = self.session.execute(
+            select(month, func.sum(Invoice.totale))
+            .where(
+                Invoice.deleted_at.is_(None),
+                year == anno,
+                (
+                    ((Invoice.tipo == "fattura") & (Invoice.stato == "bozza"))
+                    | (
+                        (Invoice.tipo == "proforma")
+                        & Invoice.stato.in_(("bozza", "emessa", "confermata"))
+                    )
+                ),
+            )
+            .group_by(month)
+        ).all()
+        return {int(m): round_money(Decimal(total)) for m, total in rows}
+
+    def monthly_costi(self, anno: int) -> dict[int, Decimal]:
+        """`Σ importo` of costs by the month they were incurred, deal or no deal."""
+        month = func.extract("month", Cost.data)
+        year = func.extract("year", Cost.data)
+        rows = self.session.execute(
+            select(month, func.sum(Cost.importo))
+            .where(Cost.deleted_at.is_(None), year == anno)
+            .group_by(month)
+        ).all()
+        return {int(m): round_money(Decimal(total)) for m, total in rows}
+
     def annual_revenue(self, anno: int) -> Decimal:
         """Every issued invoice of the year, deal or no deal: the fiscal estimate is
         about the person's income, so an invoice with no `deal_id` counts too."""

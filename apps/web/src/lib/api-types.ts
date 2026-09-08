@@ -1728,6 +1728,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/analytics/panoramica": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Economic Overview
+         * @description The dashboard's economic tab: the year as cash for everyone, plus the fiscal
+         *     estimate on collected and projected revenue for an admin with a profile. No MCP
+         *     tool, for the estimate's own reasons.
+         */
+        get: operations["economic_overview_api_analytics_panoramica_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/analytics/fiscale": {
         parameters: {
             query?: never;
@@ -2551,6 +2573,67 @@ export interface components {
             /** Pro Rata Non Calcolabile */
             pro_rata_non_calcolabile: boolean;
         };
+        /**
+         * CashMonth
+         * @description One month of the cash view: what came in, what is still owed, what sits in
+         *     drafts and proformas, what went out. Amounts are `totale` (VAT included: money in
+         *     the bank), costs are `importo`.
+         *
+         *     `quote` are the same four amounts as a share of the tallest month of their chart, in
+         *     [0, 1], computed here: the browser scales a bar with them and never turns an amount
+         *     string into a number (apps/web/src/test/no-browser-arithmetic.test.ts).
+         */
+        CashMonth: {
+            /** Anno */
+            anno: number;
+            /** Mese */
+            mese: number;
+            /** Incassato */
+            incassato: string;
+            /** Da Incassare */
+            da_incassare: string;
+            /** Bozze */
+            bozze: string;
+            /** Costi */
+            costi: string;
+            /** Quote Andamento */
+            quote_andamento: {
+                [key: string]: number;
+            };
+            /** Quote Proiezione */
+            quote_proiezione: {
+                [key: string]: number;
+            };
+        };
+        /**
+         * CashOverview
+         * @description The year as money, not as revenue by competence: `incassato` is invoices paid in
+         *     the year (by `data_incasso`), `da_incassare` invoices issued and unpaid (by due
+         *     date), `bozze` drafts and proformas not yet turned into invoices, `costi` what was
+         *     spent. `proiettato` is the first three added up -- what the year would collect if
+         *     everything issued and drafted came in -- and the two `lordo` figures are income
+         *     less costs, actual and projected.
+         */
+        CashOverview: {
+            /** Anno */
+            anno: number;
+            /** Incassato */
+            incassato: string;
+            /** Da Incassare */
+            da_incassare: string;
+            /** Bozze */
+            bozze: string;
+            /** Proiettato */
+            proiettato: string;
+            /** Costi */
+            costi: string;
+            /** Lordo Effettivo */
+            lordo_effettivo: string;
+            /** Lordo Proiettato */
+            lordo_proiettato: string;
+            /** Mesi */
+            mesi: components["schemas"]["CashMonth"][];
+        };
         /** ClosedInPeriod */
         ClosedInPeriod: {
             /** Vinti */
@@ -3352,6 +3435,27 @@ export interface components {
             /** Fatture Emesse */
             fatture_emesse: number;
         };
+        /**
+         * EconomicOverview
+         * @description Impostazioni economiche della dashboard: la cassa dell'anno e, per un admin con
+         *     un profilo fiscale configurato, la stima fiscale calcolata due volte -- sui ricavi
+         *     incassati e sui ricavi proiettati -- con i netti che ne seguono. Per chi non e'
+         *     admin, o senza profilo, la parte fiscale e' `None` e la pagina mostra solo la cassa.
+         */
+        EconomicOverview: {
+            /**
+             * Calcolato Alle
+             * Format: date-time
+             */
+            calcolato_alle: string;
+            cassa: components["schemas"]["CashOverview"];
+            fiscale: components["schemas"]["FiscalEstimate"] | null;
+            fiscale_proiettato: components["schemas"]["FiscalEstimate"] | null;
+            /** Netto Effettivo */
+            netto_effettivo?: string | null;
+            /** Netto Proiettato */
+            netto_proiettato?: string | null;
+        };
         /** EmailDraftCreate */
         EmailDraftCreate: {
             /**
@@ -3687,6 +3791,8 @@ export interface components {
             contributi: string | null;
             /** Reddito Netto Stimato */
             reddito_netto_stimato: string | null;
+            /** Totale Dovuto */
+            totale_dovuto?: string | null;
         };
         /** FiscalProfileRead */
         FiscalProfileRead: {
@@ -20633,6 +20739,125 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BudgetPage"];
+                };
+            };
+            /** @description Permesso negato: l'actor non ha il ruolo richiesto. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La risorsa richiesta non esiste o è stata rimossa. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La richiesta è in conflitto con lo stato attuale della risorsa. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Una regola di dominio non è stata rispettata (application/problem+json), oppure il corpo, i parametri o il path della richiesta non hanno la forma attesa e non hanno mai raggiunto l'endpoint (application/json). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    economic_overview_api_analytics_panoramica_get: {
+        parameters: {
+            query: {
+                anno: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EconomicOverview"];
                 };
             };
             /** @description Permesso negato: l'actor non ha il ruolo richiesto. */

@@ -219,16 +219,17 @@ test.describe('il ciclo completo — metà umana', () => {
       tariffa: '90.000000',
     })
 
-    await page.goto('/app/?tab=operativa')
-    const riga = page.locator('li', { hasText: /^Vinto ma da fatturare:/ })
-    await expect(riga).toBeVisible()
-    const sulCartellino = await readCount(riga.locator('strong'))
+    // The operational tab left the dashboard on 2026-09-08; the signal's count still comes
+    // from the API, and the list behind it is what this test compares it with.
+    const segnali = (await (await page.request.get('/api/dashboard/operativa')).json()) as {
+      segnali: { codice: string; conteggio: number }[]
+    }
+    const cartellino = segnali.segnali.find((s) => s.codice === 'vinto_da_fatturare')
+    if (!cartellino) throw new Error('il segnale «Vinto ma da fatturare» non è fra i segnali')
+    const sulCartellino = cartellino.conteggio
     expect(sulCartellino).toBeGreaterThanOrEqual(1)
 
-    await riga.getByRole('link', { name: 'Vinto ma da fatturare' }).click()
-
-    // The URL carries the filter, and the page *states* it: a list silently shorter than
-    // the one the user asked for is the failure this slice calls a partial result.
+    await page.goto('/app/deal/lista?da_fatturare=true')
     await expect(page).toHaveURL(/\/app\/deal\/lista\?da_fatturare=true/)
     // Filtered rather than bare: `DataTable`'s own loading indicator is also a `status`,
     // so `getByRole('status')` alone is two elements and a strict-mode violation.
@@ -253,12 +254,12 @@ test.describe('il ciclo completo — metà umana', () => {
     }).toPass()
   })
 
-  test('le tre schede sono raggiungibili e il periodo è nell’URL', async ({ page }) => {
+  test('le due schede sono raggiungibili e il periodo è nell’URL', async ({ page }) => {
     await loginAsAdmin(page)
     const { da, a } = currentMonth()
 
     await page.goto(`/app/?tab=economica&da=${da}&a=${a}`)
-    await expect(page.getByText(/fatturato \(imponibile, emesso\)/i)).toBeVisible()
+    await expect(page.getByRole('group', { name: 'Ricavi incassati' })).toBeVisible()
 
     // The period is still in the address bar, which is the entire point of §4: a screenshot
     // or a shared link of a dashboard with no period is a number with no unit. Re-opened
@@ -274,29 +275,23 @@ test.describe('il ciclo completo — metà umana', () => {
     expect(condiviso).toContain(`da=${da}`)
     expect(condiviso).toContain(`&a=${a}`)
     await page.goto(condiviso.replace('/app?', '/app/?'))
-    await expect(page.getByText(/fatturato \(imponibile, emesso\)/i)).toBeVisible()
-
-    await page.goto('/app/?tab=operativa')
-    await expect(page.getByRole('table', { name: /ore per giorno/i })).toBeVisible()
-    // §6: the operational dashboard is the current week and a backlog — the two things
-    // that make no sense in the past — so it takes no period, and a picker that changed
-    // nothing on screen would be a control that lies.
-    await expect(page.getByLabel('Dal')).toHaveCount(0)
+    await expect(page.getByRole('group', { name: 'Ricavi incassati' })).toBeVisible()
+    // Two tabs since 2026-09-08: the operational one is gone from the page.
+    await expect(page.getByRole('tab')).toHaveCount(2)
 
     await page.goto('/app/?tab=commerciale')
     await expect(page.getByText('Pipeline aperta per stato')).toBeVisible()
     await expect(page.getByLabel('Dal')).toHaveCount(1)
   })
 
-  test('la stima fiscale è un link e non un numero', async ({ page }) => {
+  test('la scheda economica mostra cassa e stima fiscale, con il rimando alla stima', async ({
+    page,
+  }) => {
     await loginAsAdmin(page)
     await page.goto('/app/?tab=economica')
-    await expect(page.getByRole('link', { name: /stima fiscale/i })).toBeVisible()
-    // §5.3. A dashboard is the screen most likely to end up in a screenshot or a screen
-    // share, and the estimate is admin-only — so none of its three figures may be on it,
-    // not even as a label with a number beside it.
-    for (const vietato of [/imposta sostitutiva/i, /contributi/i, /netto stimato/i]) {
-      await expect(page.getByText(vietato)).toHaveCount(0)
-    }
+    await expect(page.getByRole('group', { name: 'Ricavi incassati' })).toBeVisible()
+    await expect(page.getByRole('figure', { name: /Andamento economico/ })).toBeVisible()
+    await expect(page.getByRole('figure', { name: /Proiezione economica/ })).toBeVisible()
+    await expect(page.getByRole('link', { name: /stima fiscale/i }).first()).toBeVisible()
   })
 })

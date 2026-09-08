@@ -1,7 +1,6 @@
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { CommercialTab } from './CommercialTab'
 import { EconomicTab } from './EconomicTab'
-import { OperationalTab } from './OperationalTab'
 import { PeriodPicker } from './PeriodPicker'
 import { DASHBOARD_TABS, type DashboardSearch } from './search'
 
@@ -39,12 +38,7 @@ export function DashboardPage({
             ))}
           </TabsList>
         </Tabs>
-        {/* §6: the operational dashboard is the current week and a backlog -- the two
-            things that make no sense in the past -- so it takes no period, and a picker
-            that changed nothing on screen would be a control that lies. */}
-        {tab !== 'operativa' && (
-          <PeriodPicker periodo={{ da, a }} onChange={(next) => onSearchChange(next)} />
-        )}
+        <PeriodPicker periodo={{ da, a }} onChange={(next) => onSearchChange(next)} />
       </div>
 
       {/* One tab is mounted at a time, deliberately. Rendering all three and hiding two
@@ -54,8 +48,6 @@ export function DashboardPage({
           explaining their absence would be the untrue thing on the page. */}
       {tab === 'commerciale' && <CommercialTab periodo={{ da, a }} />}
       {tab === 'economica' && <EconomicTab periodo={{ da, a }} />}
-      {/* No period: §6's dashboard is the current week and a backlog. */}
-      {tab === 'operativa' && <OperationalTab />}
     </div>
   )
 }
