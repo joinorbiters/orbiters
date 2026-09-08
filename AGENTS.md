@@ -111,6 +111,10 @@ projects can never deploy each other by accident.
   already taken.
 - A design decision that is a rule rather than a picture goes in
   `docs/design/DECISIONS.md`, as a row, with the date.
+- **The tracker is Linear**, team `Orbiters`, one project per monorepo project. An
+  issue points at a spec rather than copying it, carries exactly one `Area` label
+  (Linear allows one per group) and uses Linear's own priority field instead of a
+  priority label. A new project opens its own Linear project: `docs/adding-a-project.md` §9.
 
 ## What a human decides, not you
 

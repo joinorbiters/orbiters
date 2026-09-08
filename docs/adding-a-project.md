@@ -140,3 +140,20 @@ not whether.
 
 `projects/<name>/README.md` and `projects/<name>/AGENTS.md`, plus a row in the
 project table in the root `README.md`.
+
+## 9. Its own Linear project
+
+One Linear project per monorepo project, in the `Orbiters` team, never a shared one:
+a single project holding every product turns the board into a list nobody can read
+at a glance, which is the failure that makes people stop opening it.
+
+Name it exactly as the directory reads to people (`PigroCRM`, not `pigrocrm`), point
+its description at `projects/<name>/` and at the specs that stay in the repo, and add
+a link to the repository. The `Area` labels are shared across projects: add the
+children the new project needs (`api`, `web`, `mcp`, `core`, `infra`, `ci` exist
+today) rather than inventing a parallel scheme. Only one label per group can be
+applied to an issue, so an issue that spans two areas wants splitting or the area
+that actually owns the fix.
+
+Priority is Linear's own field, not a label. Milestones belong to the project and are
+for outcomes that can be finished, not for phases of work that never end.
