@@ -19,6 +19,11 @@ const badgeVariants = cva(
         ghost:
           "hover:bg-muted hover:text-muted-foreground dark:hover:bg-muted/50",
         link: "text-primary underline-offset-4 hover:underline",
+        /* The status pill of the reference screenshots (design spec §4): fully round,
+           12px/500, 2px 10px of padding, on Paper rather than on a colour of its own.
+           The state it reports is carried by the label and, optionally, by `dot`; the
+           chip itself stays quiet because a table shows dozens of them at once. */
+        pill: "rounded-full bg-[var(--color-paper)] px-2.5 py-0.5 text-xs font-medium text-foreground",
       },
     },
     defaultVariants: {
@@ -27,13 +32,40 @@ const badgeVariants = cva(
   }
 )
 
+/**
+ * The tint of the 6px dot a badge can carry before its label. `ink` and `muted` read
+ * the semantic slots (the ink, and the ink faded to Charcoal Blue); `accent` reads the
+ * --accent slot, which is Royal Gold today and follows it if it is ever re-pointed;
+ * `gold` and `danger` name the tint itself, for a dot that must stay Royal Gold or
+ * Watermelon whatever the slots do. No sixth colour: these are the five tints.
+ */
+const BADGE_DOTS = {
+  ink: "bg-foreground",
+  muted: "bg-muted-foreground",
+  accent: "bg-accent",
+  danger: "bg-[var(--color-watermelon)]",
+  gold: "bg-[var(--color-royal-gold)]",
+} as const
+
+type BadgeDot = keyof typeof BADGE_DOTS
+
+/**
+ * `dot` and `asChild` are mutually exclusive by type, not by runtime check: with
+ * `asChild` the badge renders a Slot, which takes exactly one child, and a dot would
+ * make two. A caller that needs both can put the dot in its own child element.
+ */
+type BadgeProps = React.ComponentProps<"span"> &
+  VariantProps<typeof badgeVariants> &
+  ({ asChild?: false; dot?: BadgeDot } | { asChild: true; dot?: never })
+
 function Badge({
   className,
   variant = "default",
   asChild = false,
+  dot,
+  children,
   ...props
-}: React.ComponentProps<"span"> &
-  VariantProps<typeof badgeVariants> & { asChild?: boolean }) {
+}: BadgeProps) {
   const Comp = asChild ? Slot.Root : "span"
 
   return (
@@ -42,8 +74,20 @@ function Badge({
       data-variant={variant}
       className={cn(badgeVariants({ variant }), className)}
       {...props}
-    />
+    >
+      {dot ? (
+        <span
+          data-slot="badge-dot"
+          /* Decoration, not information: the label beside it says the same thing in
+             words, so a reader who cannot separate two hues has lost nothing. */
+          aria-hidden="true"
+          className={cn("size-1.5 shrink-0 rounded-full", BADGE_DOTS[dot])}
+        />
+      ) : null}
+      {children}
+    </Comp>
   )
 }
 
 export { Badge, badgeVariants }
+export type { BadgeDot, BadgeProps }
