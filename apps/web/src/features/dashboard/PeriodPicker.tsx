@@ -28,7 +28,7 @@ export function PeriodPicker({
         type="date"
         value={periodo.da}
         onChange={(event) => onChange({ ...periodo, da: event.target.value })}
-        className="rounded-lg border bg-background px-2 py-1 text-sm"
+        className="min-w-0 rounded-lg border bg-background px-2 py-1 text-sm"
       />
       <label className="text-sm text-muted-foreground" htmlFor="periodo-a">
         al
@@ -38,7 +38,7 @@ export function PeriodPicker({
         type="date"
         value={periodo.a}
         onChange={(event) => onChange({ ...periodo, a: event.target.value })}
-        className="rounded-lg border bg-background px-2 py-1 text-sm"
+        className="min-w-0 rounded-lg border bg-background px-2 py-1 text-sm"
       />
       <Button variant="outline" size="sm" onClick={() => onChange(currentMonth())}>
         Mese

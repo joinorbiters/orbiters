@@ -198,6 +198,22 @@ describe('the table container', () => {
     expect(container?.className).toContain('rounded-xl')
     expect(container?.className).toContain('border-border')
     expect(container?.className).toContain('bg-card')
-    expect(container?.className).toContain('overflow-hidden')
+  })
+
+  /**
+   * A table wider than the panel has to scroll *inside its own box*, never widen the
+   * page: at 390 the columns of Deal and of the settings panels reached past the right
+   * edge of the white panel and took the page's own horizontal scroll with them
+   * (screenshots `deal-lista-390.png`, `impostazioni-390.png`).
+   *
+   * `overflow-y-hidden` and not the old `overflow-hidden`: the vertical clip is what
+   * keeps the first row's hover tint and the header's rule inside the rounded corners,
+   * and it has to stay, but the horizontal axis is now a scroll axis.
+   */
+  it('scrolls a too-wide table inside itself rather than widening the page', () => {
+    render(<DataTable columns={COLUMNS} data={DATA} />)
+    const container = screen.getByRole('table').closest('[data-slot="data-table"]')
+    expect(container?.className).toContain('overflow-x-auto')
+    expect(container?.className).toContain('overflow-y-hidden')
   })
 })
