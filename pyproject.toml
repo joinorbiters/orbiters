@@ -57,11 +57,19 @@ testpaths = [
   "projects/pigrocrm/apps/mcp/tests",
 ]
 asyncio_mode = "auto"
-# Nothing skips on this marker by default. It exists so a developer can say
-# `-m "not slow"` while iterating, and so CI's own `uv run pytest -q` still runs it: a
-# plan assertion that CI skips is a plan assertion that does not exist.
+# Nothing skips on either marker by default: a plan assertion that CI skips is a plan
+# assertion that does not exist, so both run in `uv run pytest -q` and both run on the
+# trunk. What they buy is a change-scoped PR gate that can leave out the two kinds of
+# check whose result is not only about the code.
 markers = [
   "slow: builds the 50 000-row inflated corpus; minutes, not seconds",
+  # A plan is not a behaviour: it is what one PostgreSQL, holding one table in one
+  # physical state, decided was cheapest. Where the two candidates sit within a few
+  # percent of each other the winner changes with the machine and with what the rest
+  # of the suite left in the table, so the same assertion passes on a 96-core devbox
+  # and fails on a two-core runner with no line of code in between. Measured
+  # 2026-09-08: 56.25..60.26 for the bitmap scan, twice, identical to the cent.
+  "planner: asserts a query plan, whose outcome depends on the machine and not only on the code",
 ]
 
 [tool.mypy]
