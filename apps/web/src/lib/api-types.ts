@@ -2294,8 +2294,11 @@ export interface paths {
         put?: never;
         /**
          * Subscribe
-         * @description 201 the first time an address is seen, 200 when it was already on the list. Both
-         *     are the same body and the same outcome for the person: they are on the list.
+         * @description 201 and `{"ok": true}`, whether the address was new or already on the list.
+         *
+         *     The person is on the list either way, which is the only thing the page says and the
+         *     only thing this answers: telling a caller *which* of the two happened is telling
+         *     them whether an address they do not own is a subscriber.
          */
         post: operations["subscribe_api_orbiters_signups_post"];
         delete?: never;
@@ -5132,6 +5135,22 @@ export interface components {
             /** Collegamento */
             collegamento: string | null;
         };
+        /**
+         * SignupAck
+         * @description What the public POST answers, and all it answers: the request was accepted.
+         *
+         *     The same body and the same 201 for a first signup and for the hundredth, so the
+         *     reply does not say whether the address was already on the list either. The landing
+         *     needs nothing more -- it branches on the status alone -- and anything more would be
+         *     readable by anyone who can guess an email address.
+         */
+        SignupAck: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+        };
         /** SignupCreate */
         SignupCreate: {
             /**
@@ -5139,39 +5158,13 @@ export interface components {
              * Format: email
              */
             email: string;
+            /** Nome */
+            nome: string;
+            /** Cognome */
+            cognome: string;
+            /** Linkedin Url */
+            linkedin_url?: string | null;
             utm?: components["schemas"]["SignupUtm"] | null;
-        };
-        /** SignupRead */
-        SignupRead: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Email */
-            email: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Nuova
-             * @default false
-             */
-            nuova: boolean;
-            /** Utm Source */
-            utm_source?: string | null;
-            /** Utm Medium */
-            utm_medium?: string | null;
-            /** Utm Campaign */
-            utm_campaign?: string | null;
-            /** Utm Content */
-            utm_content?: string | null;
-            /** Utm Term */
-            utm_term?: string | null;
-            /** Utm Id */
-            utm_id?: string | null;
         };
         /**
          * SignupUtm
@@ -24670,7 +24663,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SignupRead"];
+                    "application/json": components["schemas"]["SignupAck"];
                 };
             };
             /** @description Permesso negato: l'actor non ha il ruolo richiesto. */
