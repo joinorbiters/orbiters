@@ -120,10 +120,22 @@ export function DataTable<T extends RowData>({
 
   if (isLoading) {
     return (
-      <div className="space-y-2" role="status" aria-label="Caricamento">
-        {Array.from({ length: LOADING_ROW_COUNT }, (_, index) => (
-          <Skeleton key={index} className="h-12 w-full" />
-        ))}
+      /* The same container, and bars the height of the rows they stand in for (`h-14`,
+         `ui/table.tsx`), so the table does not visibly jump the moment the request
+         lands. It is still a deliberately different *shape* -- animated bars, no header
+         -- because "something is happening" is not "here is your data"; what it stops
+         being is a different size. */
+      <div
+        data-slot="data-table"
+        className="overflow-hidden rounded-xl border border-border bg-card p-2"
+        role="status"
+        aria-label="Caricamento"
+      >
+        <div className="space-y-2">
+          {Array.from({ length: LOADING_ROW_COUNT }, (_, index) => (
+            <Skeleton key={index} className="h-14 w-full" />
+          ))}
+        </div>
       </div>
     )
   }
@@ -145,15 +157,12 @@ export function DataTable<T extends RowData>({
   }
 
   return (
-    /* Design spec §4: the table is a white container with a hairline border (the ink at
-       12%, `--border`) and a radius a step wider than the buttons inside it --
-       `rounded-2xl` is `--radius * 1.8` = 18px, the same step `Card` takes. And
-       `overflow-hidden`, which is what keeps the first row's hover tint and the header's
-       own bottom rule inside those corners instead of squaring them off. */
-    <div
-      data-slot="data-table"
-      className="overflow-hidden rounded-2xl border border-border bg-card"
-    >
+    /* Design spec §4, to the letter: a white container, a hairline border (the ink at
+       12%, `--border`) and a radius of 14 -- which is `rounded-xl`, `--radius * 1.4`,
+       and not `rounded-2xl`'s 18. And `overflow-hidden`, which is what keeps the first
+       row's hover tint and the header's own bottom rule inside those corners instead of
+       squaring them off. */
+    <div data-slot="data-table" className="overflow-hidden rounded-xl border border-border bg-card">
       <Table>
         <TableHeader>
           {table.getHeaderGroups().map((group) => (

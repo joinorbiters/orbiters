@@ -15,13 +15,17 @@ import {
  *
  *  The tone each state reads as is `INVOICE_STATE_TONE`, next to the labels in
  *  `queries.ts`, not a second table here: the state's label and the state's colour are
- *  one decision and a state added on the server must break the compile in exactly one
- *  place. */
+ *  one decision and a new state must break the compile in exactly one place. Both maps
+ *  are read without a fallback, deliberately: they are total over `InvoiceStato`, so
+ *  `?? 'muted'` would be a branch the types make unreachable -- and in the one case it
+ *  could fire (a wire string the cast below lies about) it would render a grey pill whose
+ *  label is `undefined`, which is worse than nothing at all. If that cast ever stops being
+ *  safe, the fix is to narrow it here, not to tint an empty pill. */
 export function InvoiceStateBadge({ invoice }: { invoice: Invoice }) {
   const stato = invoice.stato as InvoiceStato
   return (
     <span className="inline-flex items-center gap-1.5">
-      <StatusPill tone={INVOICE_STATE_TONE[stato] ?? 'muted'}>
+      <StatusPill tone={INVOICE_STATE_TONE[stato]}>
         {INVOICE_STATE_LABELS[stato]}
       </StatusPill>
       {/* The column's value is never printed. What a reader of the register needs is

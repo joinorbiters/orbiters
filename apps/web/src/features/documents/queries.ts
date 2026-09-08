@@ -45,7 +45,9 @@ export const OFFER_STATE_LABELS: Record<OfferState, string> = {
 
 /**
  * The tone each offer state reads as in a `StatusPill` (design spec §4), beside the
- * labels and total over `OfferState` for the same reason `OFFER_TRANSITIONS` is.
+ * labels and total over `OfferState` for the same reason `OFFER_TRANSITIONS` is -- which
+ * means the compile breaks when that hand-written union is widened, not when the server
+ * grows a state.
  *
  * `accettata` is `ink`, not gold: an accepted offer is the settled, ordinary outcome --
  * the thing every offer is trying to become -- and gold in this product means "waiting

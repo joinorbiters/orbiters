@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react'
 import { Badge, type BadgeDot } from '@/components/ui/badge'
-import { cn } from '@/lib/utils'
 
 /**
  * The five tints a state can read as, and the only five (design spec §3: no new
@@ -14,8 +13,11 @@ import { cn } from '@/lib/utils'
  * - `accent`  the --accent slot, for a state that must follow the theme's own accent
  *
  * A feature never inlines a tone at the call site: each one keeps a `Record` from its
- * own state enum to a tone, next to the labels for those states, so adding a state to
- * the backend makes the map fail to compile rather than silently render as the default.
+ * own state enum to a tone, next to the labels for those states, so adding a state
+ * makes the map fail to compile rather than silently render as the default. Three of the
+ * four enums it is keyed on (`InvoiceStato`, `StatoPagamento`, `OfferState`) are unions
+ * written by hand next to the labels, so the compile only breaks once somebody has widened
+ * the union -- only `Stage['tipo']` comes from the generated API types.
  */
 export type StatusTone = BadgeDot
 
@@ -32,17 +34,9 @@ export type StatusTone = BadgeDot
  * `data-variant`: a test, or somebody in devtools, can read which tone a row got
  * without matching Tailwind classes that the next design pass will rename.
  */
-export function StatusPill({
-  tone,
-  children,
-  className,
-}: {
-  tone: StatusTone
-  children: ReactNode
-  className?: string
-}) {
+export function StatusPill({ tone, children }: { tone: StatusTone; children: ReactNode }) {
   return (
-    <Badge variant="pill" dot={tone} data-tone={tone} className={cn('gap-1.5', className)}>
+    <Badge variant="pill" dot={tone} data-tone={tone} className="gap-1.5">
       {children}
     </Badge>
   )

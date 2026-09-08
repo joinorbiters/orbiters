@@ -70,10 +70,10 @@ export function buildInvoiceColumns(): ColumnDef<DataTableFeatures, Invoice>[] {
         if (row.original.tipo === 'proforma') {
           return <span className="text-muted-foreground">{EMPTY}</span>
         }
+        // Both maps are total over `StatoPagamento`, so neither read takes a fallback:
+        // one would be a branch the types make unreachable.
         const stato = row.original.stato_pagamento as StatoPagamento
-        const label = PAYMENT_STATE_LABELS[stato]
-        if (label === undefined) return <span className="text-muted-foreground">{EMPTY}</span>
-        return <StatusPill tone={PAYMENT_STATE_TONE[stato]}>{label}</StatusPill>
+        return <StatusPill tone={PAYMENT_STATE_TONE[stato]}>{PAYMENT_STATE_LABELS[stato]}</StatusPill>
       },
     },
   ]
