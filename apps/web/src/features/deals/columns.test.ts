@@ -1,7 +1,9 @@
+import { render, screen } from '@testing-library/react'
+import type { ReactElement } from 'react'
 import { describe, expect, it } from 'vitest'
 import { buildDealColumns, displayNative, formatDate, formatHours, formatMoney, sumValorePrevisto } from './columns'
 import type { FieldDefinition } from '@/lib/schema'
-import type { Deal } from './queries'
+import { DEAL_STAGE_TONE, type Deal } from './queries'
 
 // `Intl.NumberFormat('it-IT', {style:'currency',...})` separates the amount from
 // "€" with U+00A0 (NO-BREAK SPACE), not an ordinary U+0020 -- checked directly
@@ -230,5 +232,62 @@ describe('sumValorePrevisto', () => {
     expect(naiveFormatted).toBe(`2.955.149.865.447,02${NBSP}€`)
 
     expect(sumValorePrevisto(deals)).toBe(`2.955.149.865.447,00${NBSP}€`)
+  })
+})
+
+/**
+ * Reads a column's *rendered* cell rather than only its accessor: the accessor keeps
+ * the plain text value asserted above, while `cell` carries what the design revision
+ * adds -- an initials chip on the deal's name, a right-aligned figure, a calendar icon
+ * before the date (design spec §4). Only `row.original` is consulted, so the cast
+ * supplies exactly that and nothing else.
+ */
+function renderCell(index: number, deal: Deal) {
+  const column = buildDealColumns([])[index]
+  if (column === undefined || typeof column.cell !== 'function') {
+    throw new Error(`la colonna ${index} non ha un cell renderer`)
+  }
+  return render(column.cell({ row: { original: deal } } as never) as ReactElement)
+}
+
+describe('how a deal row reads', () => {
+  it('carries the deal name beside a chip of its initials', () => {
+    renderCell(0, { ...BASE_DEAL, nome: 'Sito vetrina' })
+    expect(screen.getByText('Sito vetrina')).toBeInTheDocument()
+    expect(screen.getByText('SV')).toBeInTheDocument()
+  })
+
+  /** The header has to sit over the digits it labels, which only the column can say. */
+  it('declares value and probability right-aligned columns, so their headers move too', () => {
+    const [, valore, probabilita] = buildDealColumns([])
+    expect(valore?.meta).toEqual({ align: 'right' })
+    expect(probabilita?.meta).toEqual({ align: 'right' })
+  })
+
+  it('right-aligns the expected value inside its own cell', () => {
+    renderCell(1, { ...BASE_DEAL, valore_previsto: '2500.50' })
+    expect(screen.getByText(/2\.500,50/).className).toContain('text-right')
+  })
+
+  it('puts a calendar icon before the expected closing date', () => {
+    const { container } = renderCell(3, { ...BASE_DEAL, data_chiusura_prevista: '2026-08-06' })
+    expect(screen.getByText('06/08/2026')).toBeInTheDocument()
+    expect(container.querySelector('svg')).not.toBeNull()
+  })
+
+  it('shows an unpriced closing date as the dash, with no calendar icon claiming a date', () => {
+    const { container } = renderCell(3, { ...BASE_DEAL, data_chiusura_prevista: null })
+    expect(screen.getByText('—')).toBeInTheDocument()
+    expect(container.querySelector('svg')).toBeNull()
+  })
+})
+
+/**
+ * Keyed on `tipo`, never on the stage's name: a tenant renames its stages freely, and
+ * only `open`/`won`/`lost` is guaranteed by the backend.
+ */
+describe('DEAL_STAGE_TONE', () => {
+  it('states only the two ends of the pipeline and keeps every open stage quiet', () => {
+    expect(DEAL_STAGE_TONE).toEqual({ open: 'muted', won: 'ink', lost: 'danger' })
   })
 })

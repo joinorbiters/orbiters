@@ -1,5 +1,6 @@
 import { Link } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
+import { EntityCell } from '@/components/cells'
 import type { DataTableFeatures } from '@/components/DataTable'
 import { renderFieldValue } from '@/components/DynamicFieldRenderer'
 import type { FieldDefinition } from '@/lib/schema'
@@ -43,6 +44,19 @@ export function displayNative(value: string | null): string {
  */
 
 /**
+ * «Mario Rossi», or «Mario» for a person whose surname nobody filled in.
+ *
+ * Not `${nome} ${cognome}`: `cognome` is nullable *and* can hold the explicit `""` a
+ * cleared native column leaves behind (see `displayNative` above), either of which
+ * would otherwise produce a trailing space and, worse, a second initial taken from
+ * nothing.
+ */
+function fullName(person: Person): string {
+  const cognome = person.cognome === null || person.cognome === '' ? '' : ` ${person.cognome}`
+  return `${person.nome}${cognome}`
+}
+
+/**
  * TanStack Table v9 (pinned exactly in package.json): `ColumnDef` takes
  * `<TFeatures, TData, TValue>`, not v8's `<TData, TValue>` -- see
  * `features/customers/columns.tsx`'s identical comment for how this was
@@ -65,7 +79,21 @@ export function buildPersonColumns(
   customFields: FieldDefinition[],
 ): ColumnDef<DataTableFeatures, Person>[] {
   const native: ColumnDef<DataTableFeatures, Person>[] = [
-    { header: 'Nome', accessorKey: 'nome' },
+    {
+      header: 'Nome',
+      accessorKey: 'nome',
+      // The row *is* a person, so the first cell carries their identity (design spec
+      // §4): initials, the full name, and the company underneath when the row brought
+      // one. The accessor stays the bare `nome` -- it is what this column's own tests
+      // read and what a future sort or export would use -- while `cell` shows the whole
+      // name, because initials taken from a first name alone say almost nothing.
+      cell: ({ row }) => (
+        <EntityCell
+          name={fullName(row.original)}
+          sub={row.original.customer_ragione_sociale ?? null}
+        />
+      ),
+    },
     { header: 'Cognome', id: 'cognome', accessorFn: (row) => displayNative(row.cognome) },
     {
       header: 'Azienda',

@@ -1,3 +1,5 @@
+import { render, screen } from '@testing-library/react'
+import type { ReactElement } from 'react'
 import { describe, expect, it } from 'vitest'
 import { buildCustomerColumns } from './columns'
 import type { FieldDefinition } from '@/lib/schema'
@@ -94,5 +96,31 @@ describe('buildCustomerColumns', () => {
     expect(cellValue(vipColumn!, { ...BASE_CUSTOMER, custom_fields: {} })).toBe('No')
     expect(cellValue(vipColumn!, { ...BASE_CUSTOMER, custom_fields: { vip: false } })).toBe('No')
     expect(cellValue(vipColumn!, { ...BASE_CUSTOMER, custom_fields: { vip: true } })).toBe('Sì')
+  })
+})
+
+/**
+ * The first cell of a customer's row: the row *is* a company, so it carries its
+ * identity as an initials chip beside the name (design spec §4). The accessor stays
+ * the bare `ragione_sociale`, which is what the tests above read.
+ */
+describe('the customer as an entity in the first cell', () => {
+  function renderName(customer: Customer) {
+    const column = buildCustomerColumns([])[0]
+    if (column === undefined || typeof column.cell !== 'function') {
+      throw new Error('la colonna «Ragione sociale» non ha un cell renderer')
+    }
+    return render(column.cell({ row: { original: customer } } as never) as ReactElement)
+  }
+
+  it('shows the ragione sociale beside a chip of its initials', () => {
+    renderName({ ...BASE_CUSTOMER, ragione_sociale: 'ACME Srl' })
+    expect(screen.getByText('ACME Srl')).toBeInTheDocument()
+    expect(screen.getByText('AS')).toBeInTheDocument()
+  })
+
+  it('keeps the chip to two letters however long the company name is', () => {
+    renderName({ ...BASE_CUSTOMER, ragione_sociale: 'Acme Srl' })
+    expect(screen.getByText('CS')).toBeInTheDocument()
   })
 })

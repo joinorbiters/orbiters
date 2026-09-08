@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { api, toProblem, unwrap } from '@/lib/api'
+import type { StatusTone } from '@/components/StatusPill'
 import type { components } from '@/lib/api-types'
 import { queryKeys } from '@/lib/query'
 
@@ -21,6 +22,22 @@ import { queryKeys } from '@/lib/query'
  */
 export type Deal = components['schemas']['DealRead']
 export type Stage = components['schemas']['PipelineStageRead']
+
+/**
+ * The tone a pipeline stage reads as in a `StatusPill` (design spec §4), keyed on the
+ * stage's `tipo` rather than on its name: a tenant renames «Vinto» to whatever it likes
+ * and adds as many open stages as it wants, but `tipo` is the closed enum
+ * (`open`/`won`/`lost`) the backend guarantees -- so this map stays total and no
+ * tenant-defined stage can fall through to a tone nobody chose.
+ *
+ * Every open stage is `muted`: a deal in the middle of a pipeline is not news, and a
+ * board of eight coloured pills would say nothing. Only the two ends are stated.
+ */
+export const DEAL_STAGE_TONE: Record<Stage['tipo'], StatusTone> = {
+  open: 'muted',
+  won: 'ink',
+  lost: 'danger',
+}
 
 type DealCreateBody = components['schemas']['DealCreate']
 type DealUpdateBody = components['schemas']['DealUpdate']

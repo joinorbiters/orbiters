@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Download, Trash2 } from 'lucide-react'
 import { QueryErrorBanner } from '@/components/QueryErrorBanner'
+import { StatusPill } from '@/components/StatusPill'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { toProblem, type ProblemDetail } from '@/lib/api'
@@ -8,6 +9,7 @@ import { NewFromTemplateDialog } from './NewFromTemplateDialog'
 import {
   DOCUMENT_TYPE_LABELS,
   OFFER_STATE_LABELS,
+  OFFER_STATE_TONE,
   downloadDocument,
   useCreateDocument,
   useDeleteDocument,
@@ -133,7 +135,12 @@ export function DocumentsTab({ owner }: { owner: DocumentOwner }) {
                 {DOCUMENT_TYPE_LABELS[document.tipo] ?? document.tipo}
               </Badge>
               {document.stato && (
-                <Badge>{OFFER_STATE_LABELS[document.stato as OfferState] ?? document.stato}</Badge>
+                /* The document *type* stays a plain badge -- it is a category, not a
+                   state -- while the offer's state reads as the same dotted pill every
+                   other state in the product does (design spec §4). */
+                <StatusPill tone={OFFER_STATE_TONE[document.stato as OfferState] ?? 'muted'}>
+                  {OFFER_STATE_LABELS[document.stato as OfferState] ?? document.stato}
+                </StatusPill>
               )}
               <span className="text-sm text-muted-foreground">v{document.versione_corrente}</span>
               <Button

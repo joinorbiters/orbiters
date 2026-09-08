@@ -1,4 +1,5 @@
 import type { ColumnDef } from '@tanstack/react-table'
+import { EntityCell } from '@/components/cells'
 import type { DataTableFeatures } from '@/components/DataTable'
 import { renderFieldValue } from '@/components/DynamicFieldRenderer'
 import type { FieldDefinition } from '@/lib/schema'
@@ -43,7 +44,16 @@ export function buildCustomerColumns(
   customFields: FieldDefinition[],
 ): ColumnDef<DataTableFeatures, Customer>[] {
   const native: ColumnDef<DataTableFeatures, Customer>[] = [
-    { header: 'Ragione sociale', accessorKey: 'ragione_sociale' },
+    {
+      header: 'Ragione sociale',
+      accessorKey: 'ragione_sociale',
+      // The row *is* a company, so the first cell carries its identity: an initials
+      // chip beside the name (design spec §4). The accessor stays the bare name, so
+      // the table still has one plain text value per cell to sort or export; `cell`
+      // only adds the chip on top of it, the same shape «Azienda» in
+      // `features/people/columns.tsx` already uses.
+      cell: ({ row }) => <EntityCell name={row.original.ragione_sociale} />,
+    },
     { header: 'P.IVA', id: 'partita_iva', accessorFn: (row) => displayNative(row.partita_iva) },
     { header: 'Comune', id: 'comune', accessorFn: (row) => displayNative(row.comune) },
     { header: 'Email', id: 'email', accessorFn: (row) => displayNative(row.email) },

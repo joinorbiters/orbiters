@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { Badge } from '@/components/ui/badge'
+import { StatusPill } from '@/components/StatusPill'
 import { Button } from '@/components/ui/button'
 import { toProblem, type ProblemDetail } from '@/lib/api'
 import {
   OFFER_STATE_LABELS,
+  OFFER_STATE_TONE,
   OFFER_TRANSITIONS,
   useSetOfferState,
   type Document,
@@ -29,7 +30,7 @@ export function OfferStatePicker({ document }: { document: Document }) {
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm text-muted-foreground">Stato:</span>
-        <Badge>{OFFER_STATE_LABELS[current]}</Badge>
+        <StatusPill tone={OFFER_STATE_TONE[current]}>{OFFER_STATE_LABELS[current]}</StatusPill>
         {allowed.map((next) => (
           <Button
             key={next}
