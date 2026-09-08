@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { Download, Trash2 } from 'lucide-react'
 import { QueryErrorBanner } from '@/components/QueryErrorBanner'
+import { RowActions } from '@/components/RowActions'
 import { StatusPill } from '@/components/StatusPill'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -143,33 +143,39 @@ export function DocumentsTab({ owner }: { owner: DocumentOwner }) {
                 </StatusPill>
               )}
               <span className="text-sm text-muted-foreground">v{document.versione_corrente}</span>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={`Scarica ${document.titolo}`}
-                disabled={document.versione_corrente === 0}
-                onClick={() => {
-                  setProblem(null)
-                  void downloadDocument(document.id).catch((error: unknown) =>
-                    setProblem(toProblem(error)),
-                  )
-                }}
-              >
-                <Download className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={`Archivia ${document.titolo}`}
-                onClick={() => {
-                  setProblem(null)
-                  deleteDocument.mutate(document.id, {
-                    onError: (error: unknown) => setProblem(toProblem(error)),
-                  })
-                }}
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
+              {/* Behind the «⋯» like every other row action (§4). These were the two lone
+                  icons at the end of the row -- exactly the pattern the revision moved
+                  into the menu -- and the words they carried only as `aria-label` are
+                  now the items themselves. «Scarica» is disabled rather than dropped on
+                  a document with no version yet: that is a state of this row, not an
+                  action it can never take. */}
+              <RowActions
+                label={`Azioni per ${document.titolo}`}
+                items={[
+                  {
+                    label: 'Scarica',
+                    disabled: document.versione_corrente === 0,
+                    onSelect: () => {
+                      setProblem(null)
+                      void downloadDocument(document.id).catch((error: unknown) =>
+                        setProblem(toProblem(error)),
+                      )
+                    },
+                  },
+                  {
+                    // A soft delete the server can undo, but it takes the row out of the
+                    // list being read, so it reads in the destructive tone.
+                    label: 'Archivia',
+                    destructive: true,
+                    onSelect: () => {
+                      setProblem(null)
+                      deleteDocument.mutate(document.id, {
+                        onError: (error: unknown) => setProblem(toProblem(error)),
+                      })
+                    },
+                  },
+                ]}
+              />
             </li>
           ))}
         </ul>

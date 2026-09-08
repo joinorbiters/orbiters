@@ -151,6 +151,19 @@ describe('AppShell', () => {
     )
   })
 
+  it('keeps «Analisi» marked on each of its three tabs, not only on the first', () => {
+    // The entry used to point at `/app/analisi/margini`, so the prefix match covered
+    // `margini` and nothing else: on the fiscal and estimate-versus-actual tabs no
+    // sidebar entry at all was marked. It points at the layout route instead, whose
+    // index still redirects to `margini`, so the click behaves as before.
+    mockRoute.pathname = '/app/analisi/fiscale'
+    renderShell()
+    expect(sidebar().getByRole('link', { name: 'Analisi' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+  })
+
   it('opens the search palette from the sidebar field', async () => {
     renderShell()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()

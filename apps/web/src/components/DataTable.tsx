@@ -201,8 +201,17 @@ export function DataTable<T extends RowData>({
                 onClick={() => onRowClick?.(row.original)}
                 onKeyDown={(event) => handleRowKeyDown(event, row.original)}
                 tabIndex={onRowClick ? 0 : undefined}
+                /* A focused row draws a ring, not a tint. The tint it used to draw was
+                   `--muted`, which is the very colour the hover paints (`ui/table.tsx`),
+                   so keyboard focus was both invisible on the white panel (~1.1:1) and
+                   indistinguishable from the row under the pointer. `--ring` is
+                   Watermelon, 3.9:1, past the 3:1 an indicator needs. `ring-inset` is
+                   required rather than chosen: the container above clips on the vertical
+                   axis (`overflow-y-hidden`), and an outer ring on the last row would be
+                   cut off. */
                 className={cn(
-                  onRowClick && 'cursor-pointer focus-visible:bg-muted focus-visible:outline-none',
+                  onRowClick &&
+                    'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
                 )}
               >
                 {row.getAllCells().map((cell) => (
