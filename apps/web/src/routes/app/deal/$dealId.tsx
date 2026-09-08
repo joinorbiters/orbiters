@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { renderFieldValue } from '@/components/DynamicFieldRenderer'
 import { EntityDetailLayout } from '@/components/EntityDetailLayout'
 import { QueryErrorBanner } from '@/components/QueryErrorBanner'
-import { Badge } from '@/components/ui/badge'
+import { StatusPill } from '@/components/StatusPill'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -13,7 +13,13 @@ import { EconomicsTab } from '@/features/analytics/EconomicsTab'
 import { useCustomer } from '@/features/customers/queries'
 import { DealForm, dealToFormValues } from '@/features/deals/DealForm'
 import { displayNative, formatDate, formatHours, formatMoney } from '@/features/deals/columns'
-import { useDeal, useDeleteDeal, useStages, useUpdateDeal } from '@/features/deals/queries'
+import {
+  DEAL_STAGE_TONE,
+  useDeal,
+  useDeleteDeal,
+  useStages,
+  useUpdateDeal,
+} from '@/features/deals/queries'
 import { DocumentsTab } from '@/features/documents/DocumentsTab'
 import { EmailTab } from '@/features/gmail/EmailTab'
 import { useGmailConfigured } from '@/features/gmail/queries'
@@ -155,9 +161,7 @@ export function DealDetail() {
                 <div className="mb-3 flex items-center justify-between">
                   <h2 className="font-semibold">Stato</h2>
                   {stage && (
-                    <Badge variant={stage.tipo === 'open' ? 'secondary' : 'default'}>
-                      {stage.nome}
-                    </Badge>
+                    <StatusPill tone={DEAL_STAGE_TONE[stage.tipo]}>{stage.nome}</StatusPill>
                   )}
                 </div>
                 <Row label="Valore previsto" value={formatMoney(deal.valore_previsto)} />

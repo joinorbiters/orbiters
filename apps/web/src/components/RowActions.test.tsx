@@ -1,0 +1,97 @@
+import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { describe, expect, it, vi } from 'vitest'
+import { RowActions } from './RowActions'
+
+describe('RowActions', () => {
+  it('shows one «⋯» button, labelled for assistive technology, and no menu until asked', () => {
+    render(<RowActions items={[{ label: 'Apri', onSelect: vi.fn() }]} />)
+    expect(screen.getByRole('button', { name: 'Azioni' })).toBeInTheDocument()
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+  })
+
+  it('accepts a more specific label than the default', () => {
+    render(<RowActions label="Azioni sulla fattura" items={[{ label: 'Apri', onSelect: vi.fn() }]} />)
+    expect(screen.getByRole('button', { name: 'Azioni sulla fattura' })).toBeInTheDocument()
+  })
+
+  /** A row with nothing to do must not grow a button that opens an empty menu: the
+   *  «⋯» is a promise that there is something behind it. */
+  it('renders nothing at all when there are no actions', () => {
+    const { container } = render(<RowActions items={[]} />)
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('opens the menu with one item per action and runs the one that is chosen', async () => {
+    const apri = vi.fn()
+    const elimina = vi.fn()
+    render(
+      <RowActions
+        items={[
+          { label: 'Apri', onSelect: apri },
+          { label: 'Elimina', onSelect: elimina, destructive: true },
+        ]}
+      />,
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Azioni' }))
+    expect(screen.getByRole('menuitem', { name: 'Apri' })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Elimina' }))
+    expect(elimina).toHaveBeenCalledOnce()
+    expect(apri).not.toHaveBeenCalled()
+  })
+
+  it('marks a destructive action as such rather than letting it read like the others', async () => {
+    render(<RowActions items={[{ label: 'Elimina', onSelect: vi.fn(), destructive: true }]} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Azioni' }))
+    expect(screen.getByRole('menuitem', { name: 'Elimina' })).toHaveAttribute(
+      'data-variant',
+      'destructive',
+    )
+  })
+
+  it('disables an action that is not available right now instead of hiding it', async () => {
+    const emetti = vi.fn()
+    render(<RowActions items={[{ label: 'Emetti', onSelect: emetti, disabled: true }]} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Azioni' }))
+    const item = screen.getByRole('menuitem', { name: 'Emetti' })
+    expect(item).toHaveAttribute('data-disabled')
+    await userEvent.click(item)
+    expect(emetti).not.toHaveBeenCalled()
+  })
+
+  /**
+   * The whole table row is clickable (`DataTable`'s `onRowClick` opens the record), and
+   * the menu content is rendered through a React portal -- so a synthetic click on the
+   * trigger, or on an item, still bubbles up the *React* tree to the row's handler even
+   * though it is nowhere near it in the DOM. Without stopping it, pressing «⋯» would
+   * navigate away from the table before the menu could be read.
+   */
+  it('never lets the row underneath it react to the menu', async () => {
+    const rowClick = vi.fn()
+    const apri = vi.fn()
+    render(
+      <div onClick={rowClick}>
+        <RowActions items={[{ label: 'Apri', onSelect: apri }]} />
+      </div>,
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Azioni' }))
+    expect(rowClick).not.toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Apri' }))
+    expect(apri).toHaveBeenCalledOnce()
+    expect(rowClick).not.toHaveBeenCalled()
+  })
+
+  /** `DataTable` also activates a row on Enter and Space so the keyboard can reach it.
+   *  Both keys open this menu, which must not double as "open the record". */
+  it('keeps Enter and Space on the trigger from activating the row as well', async () => {
+    const rowKeyDown = vi.fn()
+    render(
+      <div onKeyDown={rowKeyDown}>
+        <RowActions items={[{ label: 'Apri', onSelect: vi.fn() }]} />
+      </div>,
+    )
+    screen.getByRole('button', { name: 'Azioni' }).focus()
+    await userEvent.keyboard('{Enter}')
+    expect(rowKeyDown).not.toHaveBeenCalled()
+  })
+})
