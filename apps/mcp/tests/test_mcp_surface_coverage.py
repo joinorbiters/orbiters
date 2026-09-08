@@ -366,6 +366,20 @@ _CREDENZIALI: dict[Method, str] = {
 #    the configuration is. Exposing them would also mean an agent could rewrite the field
 #    definitions its own `describe_schema` output is derived from.
 _CONFIGURAZIONE: dict[Method, str] = {
+    ("SpaceSettingsService", "read"): (
+        "Impostazioni → Spazio: le variabili che uno spazio decide per se' (client Google, "
+        "storage, accesso completo dell'agente, soglie dei solleciti). Configurazione "
+        "dell'installazione, e per di piu' cio' che decide *se* un agente ha accesso "
+        "completo: non puo' essere l'agente a leggerla o a cambiarla"
+    ),
+    ("SpaceSettingsService", "update"): (
+        "stessa ragione di `read`, al quadrato: scrive `mcp_full_access` e il client Google"
+    ),
+    ("SpaceSettingsService", "overrides"): (
+        "lettura interna: e' cio' che `deps.get_request_settings` posa sopra l'ambiente a "
+        "ogni richiesta, prima che esista un actor"
+    ),
+    ("SpaceSettingsService", "effective"): "come `overrides`, gia' applicate a `Settings`",
     ("AutomationConfigService", "update_automation_config"): (
         "decide che cosa il CRM fa **da solo** ai dati futuri, senza nessuno nel mezzo: "
         "e' la stessa famiglia di `PipelineService.update`, un grado piu' seria. Un agente "

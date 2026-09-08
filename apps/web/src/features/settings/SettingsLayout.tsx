@@ -6,6 +6,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useIsAdmin } from '@/lib/auth'
 
 const TABS = [
+  { value: 'spazio', label: 'Spazio' },
   { value: 'campi', label: 'Campi' },
   { value: 'pipeline', label: 'Pipeline' },
   { value: 'template', label: 'Template' },

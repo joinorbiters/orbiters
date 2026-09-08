@@ -19,6 +19,14 @@ import { BrandMark } from '@/components/BrandMark'
 import { CommandPalette } from '@/features/search/CommandPalette'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Separator } from '@/components/ui/separator'
 import { useAuth, useIsAdmin } from '@/lib/auth'
 import { cn } from '@/lib/utils'
@@ -141,23 +149,46 @@ export function AppShell({ children }: { children: ReactNode }) {
         </nav>
 
         <Separator />
-        <div className="flex items-center gap-3 p-4">
-          <Avatar className="size-8 shrink-0">
-            <AvatarFallback className="text-xs">{initials}</AvatarFallback>
-          </Avatar>
-          <div className={cn('min-w-0 flex-1', collapsed && 'sr-only')}>
-            <p className="truncate text-sm font-medium">{user?.nome}</p>
-            <p className="truncate text-xs text-muted-foreground">{user?.ruolo}</p>
-          </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="shrink-0"
-            onClick={() => void logout()}
-            aria-label="Esci"
-          >
-            <LogOut className="size-4" />
-          </Button>
+        {/* The profile, anchored at the bottom, opens a menu: the account's own things --
+            who is signed in, the space's settings for an admin, the way out. One control
+            where there used to be a name and a bare logout icon. */}
+        <div className="mt-auto p-3">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="flex w-full items-center gap-3 px-2 py-2 text-left hover:bg-muted"
+                aria-label="Menu del profilo"
+              >
+                <Avatar className="size-8 shrink-0">
+                  <AvatarFallback className="text-xs">{initials}</AvatarFallback>
+                </Avatar>
+                <div className={cn('min-w-0 flex-1', collapsed && 'sr-only')}>
+                  <p className="truncate text-sm font-medium">{user?.nome}</p>
+                  <p className="truncate text-xs text-muted-foreground">{user?.ruolo}</p>
+                </div>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent side="top" align="start" className="w-56">
+              <DropdownMenuLabel className="font-normal">
+                <p className="truncate text-sm font-medium">{user?.nome}</p>
+                <p className="truncate text-xs text-muted-foreground">{user?.email}</p>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {isAdmin && (
+                <DropdownMenuItem asChild>
+                  <Link to="/app/impostazioni/spazio">
+                    <Settings className="size-4" />
+                    Impostazioni dello spazio
+                  </Link>
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem onSelect={() => void logout()}>
+                <LogOut className="size-4" />
+                Esci
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </aside>
 

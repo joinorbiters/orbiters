@@ -150,6 +150,17 @@ def test_the_root_slug_is_the_root_itself_and_nobody_elses_name(
     assert split_tenant_prefix("/humancraft/api/auth/me", "humancraft") == (None, "/api/auth/me")
     assert split_tenant_prefix("/humancraft/health", "humancraft") == (None, "/health")
     assert split_tenant_prefix("/altro/api/x", "humancraft") == ("altro", "/api/x")
+    # Cookies follow the prefix the request wore, root alias included.
+    from fastapi import Request
+
+    from pigrocrm_api.tenancy import cookie_path
+
+    def _request(state: dict[str, str]) -> Request:
+        return Request({"type": "http", "path": "/api/x", "headers": [], "state": state})
+
+    assert cookie_path(_request({})) == "/"
+    assert cookie_path(_request({"prefix": "humancraft"})) == "/humancraft/"
+    assert cookie_path(_request({"prefix": "studio", "tenant": "studio"})) == "/studio/"
 
     monkeypatch.setenv("PIGROCRM_ROOT_SLUG", "humancraft")
     monkeypatch.setenv("PIGROCRM_DATABASE_URL", container_settings.database_url)

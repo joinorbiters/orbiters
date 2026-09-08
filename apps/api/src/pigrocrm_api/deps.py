@@ -1,4 +1,5 @@
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated
@@ -15,6 +16,7 @@ from pigrocrm.core.config import Settings, get_settings
 from pigrocrm.core.db import create_engine_from_settings, session_factory
 from pigrocrm.core.errors import DomainError
 from pigrocrm.core.orbiters import ensure_orbiters_database
+from pigrocrm.core.space_settings import SpaceSettingsService, apply_overrides
 from pigrocrm.core.storage import DocumentStorage, LocalFileStorage, storage_from_settings
 from pigrocrm.core.tenants import TenantService, ensure_tenants_database
 from pigrocrm.core.tenants.database import tenant_database_url
@@ -64,6 +66,7 @@ def reset_session_factories() -> None:
             _engine.dispose()
         _engine = None
         _factory = None
+    _overrides_cache.clear()
     reset_tenant_caches()
 
 
@@ -190,30 +193,78 @@ def get_snapshot_session(
 SnapshotSessionDep = Annotated[Session, Depends(get_snapshot_session)]
 
 
-def get_request_settings(
+def request_base_settings(
     request: Request, settings: Annotated[Settings, Depends(get_settings)]
 ) -> Settings:
-    """The installation's settings as *this request* may see them.
+    """The environment's settings as *this request* may see them, before the database
+    has its say.
 
-    A space has no Google: the OAuth callback is one per installation and would come
-    back to the root, so for a space the client id is blank -- `gmail_configured` is
-    false, the UI hides the sections, the endpoints answer 409, the MCP tools are not
-    registered -- and documents go to disk under the space's own folder. The root sees
-    the settings untouched. Chained on `get_settings` so a test's override of that one
+    A space does not inherit the root's Google: the client, its secret and the token key
+    are blanked, so a space either configures its own (Impostazioni → Spazio) or has no
+    Gmail and no Drive -- `gmail_configured` false, sections hidden, endpoints 409. Its
+    public URL is the root's plus the slug, which is where Google will redirect to, and
+    documents default to disk under the space's own folder. The root sees the
+    environment untouched. Chained on `get_settings` so a test's override of that one
     dependency still reaches every route.
     """
-    if tenant_slug(request) is None:
+    slug = tenant_slug(request)
+    if slug is None:
         return settings
+    public_url = f"{settings.public_url.rstrip('/')}/{slug}" if settings.public_url else ""
     return settings.model_copy(
         update={
             "google_client_id": "",
             "google_client_secret": "",
             "google_token_key": "",
-            "public_url": "",
+            "public_url": public_url,
             "google_app_unverified": False,
             "storage_backend": "local",
         }
     )
+
+
+BaseSettingsDep = Annotated[Settings, Depends(request_base_settings)]
+
+# The rows of `space_settings`, per database, remembered briefly: every request asks
+# for its settings, and a read of a one-row table on each of them is cheap but not
+# free. Ten seconds, and `invalidate_space_settings` after every write, so the page
+# that just saved sees what it saved.
+_overrides_cache: dict[str, tuple[float, dict[str, str]]] = {}
+OVERRIDES_TTL_SECONDS = 10.0
+
+
+def _space_overrides(request: Request, base: Settings, session: Session) -> dict[str, str]:
+    key = tenant_slug(request) or ""
+    cached = _overrides_cache.get(key)
+    now = time.monotonic()
+    if cached is not None and now - cached[0] < OVERRIDES_TTL_SECONDS:
+        return cached[1]
+    overrides = SpaceSettingsService(session, base).overrides()
+    _overrides_cache[key] = (now, overrides)
+    return overrides
+
+
+def invalidate_space_settings(slug: str | None) -> None:
+    """After a write to `space_settings`: forget the cached rows and the storage built
+    from them, for this database only."""
+    _overrides_cache.pop(slug or "", None)
+    if slug is None:
+        reset_storage_cache()
+    else:
+        with _storage_lock:
+            _tenant_storages.pop(slug, None)
+
+
+def get_request_settings(
+    request: Request,
+    base: BaseSettingsDep,
+    session: Annotated[Session, Depends(get_session)],
+) -> Settings:
+    """The settings every route reads: the environment as this request may see it,
+    with the rows of this database's `space_settings` laid over it. The session is the
+    request's own (FastAPI caches the dependency), so a test's override of
+    `get_session` is where the rows come from too."""
+    return apply_overrides(base, _space_overrides(request, base, session))
 
 
 SettingsDep = Annotated[Settings, Depends(get_request_settings)]
@@ -298,16 +349,22 @@ def get_storage(request: Request, settings: SettingsDep) -> DocumentStorage:
     """
     slug = tenant_slug(request)
     if slug is not None:
-        # A space's documents live on disk beside the root's, in their own folder: the
-        # root's Drive account is the root's, and `_fresh_session` opens the root's
-        # database, so neither may serve a space.
+        # A space's documents live on disk beside the root's, in their own folder,
+        # unless the space configured Google and chose Drive (Impostazioni → Spazio):
+        # then its own Drive account, resolved from its own database. Never the root's
+        # storage: that Drive account is the root's, and `_fresh_session` opens the
+        # root's database.
         storage = _tenant_storages.get(slug)
         if storage is None:
             with _storage_lock:
                 storage = _tenant_storages.get(slug)
                 if storage is None:
-                    root = Path(settings.storage_local_root) / "tenants" / slug
-                    storage = LocalFileStorage(root)
+                    if settings.storage_backend == "gdrive":
+                        factory = _tenant_session_factory(slug, settings)
+                        storage = storage_from_settings(settings, session_factory=lambda: factory())
+                    else:
+                        root = Path(settings.storage_local_root) / "tenants" / slug
+                        storage = LocalFileStorage(root)
                     _tenant_storages[slug] = storage
         return storage
 
@@ -360,7 +417,9 @@ def get_actor(request: Request, session: SessionDep, settings: SettingsDep) -> A
     header = request.headers.get("Authorization", "")
     if header.startswith("Bearer ") and header[7:].startswith(PAT_PREFIX):
         try:
-            return PatService(session).resolve(header[7:])
+            # `settings`, so a space's own `mcp_full_access` (Impostazioni → Spazio) is
+            # what stamps `Actor.full_access`, not the process environment's.
+            return PatService(session, settings=settings).resolve(header[7:])
         except DomainError as exc:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token non valido") from exc
 

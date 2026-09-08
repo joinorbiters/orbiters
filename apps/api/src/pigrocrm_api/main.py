@@ -29,6 +29,7 @@ from pigrocrm_api.routers import (
     pipeline,
     schema,
     search,
+    space_settings,
     templates,
     tenants,
     time_entries,
@@ -94,6 +95,8 @@ def create_app() -> FastAPI:
         orbiters,
         # Spaces (2026-09-08). Public signup, on the registry database: routers/tenants.py.
         tenants,
+        # Impostazioni → Spazio: the settings a database decides for itself.
+        space_settings,
     ):
         app.include_router(module.router)
 
