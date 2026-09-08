@@ -122,6 +122,15 @@ beforeEach(() => {
 })
 
 describe('SollecitiPage', () => {
+  it('opens with its title as the page heading, and keeps it when the read fails', async () => {
+    // The shell has had no top bar since the 2026-09-08 revision, so this `<h1>` is the
+    // only thing naming the screen -- and a failed read is still this page, not an
+    // unnamed panel holding a banner.
+    respond([])
+    mount()
+    expect(await screen.findByRole('heading', { level: 1, name: 'Solleciti' })).toBeInTheDocument()
+  })
+
   it('shows the days overdue, the amount and the date of the last reminder', async () => {
     // The boring part is *building this list* by crossing due dates against payments
     // against what has already gone out. Pressing the button was never the work, which
@@ -162,6 +171,7 @@ describe('SollecitiPage', () => {
     mount()
 
     expect(await screen.findByRole('alert')).toHaveTextContent('database non raggiungibile')
+    expect(screen.getByRole('heading', { level: 1, name: 'Solleciti' })).toBeInTheDocument()
     expect(screen.queryByRole('table')).not.toBeInTheDocument()
     expect(screen.queryByText(/Nessuna fattura da sollecitare/)).not.toBeInTheDocument()
     expect(screen.queryByText('Caricamento…')).not.toBeInTheDocument()

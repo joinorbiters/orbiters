@@ -35,7 +35,7 @@ export function AnalyticsLayout() {
         icon={TrendingUp}
         title="Analisi"
         tabs={
-          <TabsList>
+          <TabsList variant="line">
             {TABS.map((tab) => (
               <TabsTrigger key={tab.value} value={tab.value} asChild>
                 <Link to={`/app/analisi/${tab.value}`}>{tab.label}</Link>

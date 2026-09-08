@@ -2,7 +2,7 @@ import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { Handshake, LayoutGrid, Search } from 'lucide-react'
 import { useState } from 'react'
 import { DataTable } from '@/components/DataTable'
-import { FilterChip, FilterRow } from '@/components/FilterRow'
+import { FilterChips, FilterRow } from '@/components/FilterRow'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -35,6 +35,14 @@ const DRILL_THROUGHS = [
       'Solo i deal vinti con ore fatturabili non ancora fatturate. Togli il filtro per vedere tutti i deal.',
   },
 ] as const
+
+/** The same two, in the shape `FilterChips` takes. Derived rather than written twice, so
+ *  a drill-through added above appears as a chip with no second edit -- and the chip's
+ *  label stays the sentence the explanation below the row uses. */
+const DRILL_THROUGH_OPTIONS = DRILL_THROUGHS.map((filter) => ({
+  value: filter.key,
+  label: filter.label,
+}))
 
 /**
  * Exported so `lista.test.tsx` can render the list without a router; the route
@@ -72,53 +80,51 @@ export function DealsList({
             </Link>
           </Button>
         }
-      />
+      >
+        <FilterRow>
+          {/* The two chips are the two drill-throughs, and nothing more: this list has
+              never had a stage filter and the revision does not add one. `FilterChips`
+              rather than a hand-rolled row, so «Tutti» means the same thing here as it
+              does on Fatture -- its `onChange` hands back `null` both for «Tutti» and for
+              the pressed chip being pressed again, and this page's only job is to turn
+              that into a URL.
 
-      <FilterRow>
-        {/* The two chips are the two drill-throughs, and nothing more: this list has
-            never had a stage filter and the revision does not add one. They navigate
-            instead of setting local state because the predicate is evaluated on the
-            server -- see `DRILL_THROUGHS` above and criterion 2. «Tutti» is on exactly
-            when neither is, so the row also states what is on screen. */}
-        <div role="group" aria-label="Filtra i deal" className="flex flex-wrap items-center gap-2">
-          <FilterChip
-            pressed={active.length === 0}
-            onPress={() => void navigate({ to: '/app/deal/lista', search: {} })}
-          >
-            Tutti
-          </FilterChip>
-          {DRILL_THROUGHS.map((filter) => {
-            const pressed = filters[filter.key] === true
-            return (
-              <FilterChip
-                key={filter.key}
-                pressed={pressed}
-                onPress={() =>
-                  void navigate({
-                    to: '/app/deal/lista',
-                    // One at a time: the two predicates are disjoint by construction (a
-                    // deal cannot be both not-won and won), so carrying the other one
-                    // along would only ever produce an empty list.
-                    search: pressed ? {} : { [filter.key]: true },
-                  })
-                }
-              >
-                {filter.label}
-              </FilterChip>
-            )
-          })}
-        </div>
-
-        <div className="relative w-full max-w-sm">
-          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            className="pl-9"
-            placeholder="Cerca per nome…"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
+              A URL and not local state, because the predicate is evaluated on the server
+              (see `DRILL_THROUGHS` above and criterion 2) -- and `search` is an *updater*
+              and not a literal object, which is the part that took a defect to learn: a
+              literal replaces the whole query string, dropping the `?search=` term the
+              command palette arrives with, and `DealsListRoute` keys the component on
+              that term, so the list remounted with an empty search box. One at a time,
+              too: the two predicates are disjoint by construction (a deal cannot be both
+              not-won and won), so carrying the other one along would only ever produce an
+              empty list. */}
+          <FilterChips
+            label="Filtra i deal"
+            allLabel="Tutti"
+            options={DRILL_THROUGH_OPTIONS}
+            value={active[0]?.key ?? null}
+            onChange={(next) =>
+              void navigate({
+                to: '/app/deal/lista',
+                search: (previous) => ({
+                  search: previous.search,
+                  ...(next === null ? {} : { [next]: true }),
+                }),
+              })
+            }
           />
-        </div>
-      </FilterRow>
+
+          <div className="relative w-full max-w-sm">
+            <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              className="pl-9"
+              placeholder="Cerca per nome…"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </div>
+        </FilterRow>
+      </PageHeader>
 
       <div className="px-8 pb-8">
         {/* The chip says which filter is on; this says what it is hiding. A filter
