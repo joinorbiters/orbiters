@@ -4,9 +4,6 @@ import { buildPersonColumns, displayNative } from './columns'
 import type { FieldDefinition } from '@/lib/schema'
 import type { Person } from './queries'
 
-/** `buildPersonColumns` reads one field `api-types.ts` does not carry yet (see
- *  `columns.tsx`'s own `PersonRow`), so the fixtures here declare it too. */
-type PersonRow = Person & { customer_ragione_sociale?: string | null }
 
 /**
  * Reads a native column's cell value the same way `DataTable` does internally --
@@ -16,14 +13,14 @@ type PersonRow = Person & { customer_ragione_sociale?: string | null }
  * column cleared through the edit form holds `""`, not `null`, and a naive
  * `value ?? EMPTY` does not catch it.
  */
-function cellValue(column: ReturnType<typeof buildPersonColumns>[number], person: PersonRow) {
+function cellValue(column: ReturnType<typeof buildPersonColumns>[number], person: Person) {
   if (!('accessorFn' in column) || typeof column.accessorFn !== 'function') {
     throw new Error(`column "${String(column.header)}" has no accessorFn to read`)
   }
   return column.accessorFn(person, 0)
 }
 
-const BASE_PERSON: PersonRow = {
+const BASE_PERSON: Person = {
   id: 'p1',
   nome: 'Mario',
   cognome: null,
@@ -121,7 +118,7 @@ describe('buildPersonColumns', () => {
  */
 function renderedCell(
   column: ReturnType<typeof buildPersonColumns>[number],
-  person: PersonRow,
+  person: Person,
 ) {
   if (typeof column.cell !== 'function') {
     throw new Error(`column "${String(column.header)}" has no cell renderer`)
@@ -130,7 +127,7 @@ function renderedCell(
 }
 
 describe("the person's company", () => {
-  const WITH_COMPANY: PersonRow = {
+  const WITH_COMPANY: Person = {
     ...BASE_PERSON,
     customer_id: 'c1',
     customer_ragione_sociale: 'ACME Srl',
@@ -174,7 +171,7 @@ describe("the person's company", () => {
    *  same dash rather than as an empty link with no text to click. */
   it('shows the dash when the id is there but the name is not', () => {
     const [, , azienda] = buildPersonColumns([])
-    const nameless: PersonRow = { ...BASE_PERSON, customer_id: 'c1' }
+    const nameless: Person = { ...BASE_PERSON, customer_id: 'c1' }
     expect(renderedCell(azienda!, nameless)).toBe('—')
   })
 })
