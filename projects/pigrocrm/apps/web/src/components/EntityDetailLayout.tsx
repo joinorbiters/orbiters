@@ -1,9 +1,19 @@
+import type { LucideIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { PageHeader } from '@/components/PageHeader'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import type { TimelineEntityType } from '@/lib/schema'
 import { Timeline } from './Timeline'
 
 interface EntityDetailLayoutProps {
+  /**
+   * The icon in the header's Paper square. Required rather than defaulted: the whole
+   * point of the square is that the eye finds the same mark in the same place for the
+   * same kind of record, so a detail page silently inheriting some other entity's icon
+   * would be worse than one with none. Each route passes the icon its own sidebar entry
+   * uses (`AppShell`'s nav), so the page and the menu agree.
+   */
+  icon: LucideIcon
   title: string
   subtitle?: string
   actions?: ReactNode
@@ -67,6 +77,7 @@ interface EntityDetailLayoutProps {
  * of this file.
  */
 export function EntityDetailLayout({
+  icon,
   title,
   subtitle,
   actions,
@@ -81,30 +92,33 @@ export function EntityDetailLayout({
   entityId,
   timelineLimit,
 }: EntityDetailLayoutProps) {
+  // The whole page lives inside `Tabs`, with the tab list in `PageHeader`'s own `tabs`
+  // slot: §4 draws the underline tabs as part of a page's intestazione, and Radix needs
+  // its list and its panels under one root. Same arrangement as `SettingsLayout`.
   return (
-    <div className="p-8">
-      <header className="mb-6 flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-          {subtitle && <p className="text-muted-foreground">{subtitle}</p>}
-        </div>
-        {actions && <div className="flex shrink-0 gap-2">{actions}</div>}
-      </header>
+    <Tabs defaultValue="panoramica">
+      <PageHeader
+        icon={icon}
+        title={title}
+        description={subtitle}
+        actions={actions}
+        tabs={
+          <TabsList variant="line">
+            <TabsTrigger value="panoramica">Panoramica</TabsTrigger>
+            {documents && <TabsTrigger value="documenti">Documenti</TabsTrigger>}
+            {invoices && <TabsTrigger value="fatture">Fatture</TabsTrigger>}
+            {hours && <TabsTrigger value="ore">Ore</TabsTrigger>}
+            {economics && <TabsTrigger value="economia">Economia</TabsTrigger>}
+            {/* Immediately before Timeline: both are a record of what already happened,
+                and everything to the left of them is a thing the user maintains. */}
+            {emails && <TabsTrigger value="email">Email</TabsTrigger>}
+            <TabsTrigger value="timeline">Timeline</TabsTrigger>
+            <TabsTrigger value="collegamenti">Collegamenti</TabsTrigger>
+          </TabsList>
+        }
+      />
 
-      <Tabs defaultValue="panoramica">
-        <TabsList>
-          <TabsTrigger value="panoramica">Panoramica</TabsTrigger>
-          {documents && <TabsTrigger value="documenti">Documenti</TabsTrigger>}
-          {invoices && <TabsTrigger value="fatture">Fatture</TabsTrigger>}
-          {hours && <TabsTrigger value="ore">Ore</TabsTrigger>}
-          {economics && <TabsTrigger value="economia">Economia</TabsTrigger>}
-          {/* Immediately before Timeline: both are a record of what already happened,
-              and everything to the left of them is a thing the user maintains. */}
-          {emails && <TabsTrigger value="email">Email</TabsTrigger>}
-          <TabsTrigger value="timeline">Timeline</TabsTrigger>
-          <TabsTrigger value="collegamenti">Collegamenti</TabsTrigger>
-        </TabsList>
-
+      <div className="px-8 pb-8">
         <TabsContent value="panoramica" className="mt-6">
           {overview}
         </TabsContent>
@@ -139,7 +153,7 @@ export function EntityDetailLayout({
         <TabsContent value="collegamenti" className="mt-6">
           {links ?? <p className="text-muted-foreground">Nessun collegamento.</p>}
         </TabsContent>
-      </Tabs>
-    </div>
+      </div>
+    </Tabs>
   )
 }

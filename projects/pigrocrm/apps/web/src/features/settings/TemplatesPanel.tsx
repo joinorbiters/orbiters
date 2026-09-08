@@ -1,8 +1,9 @@
 import type { ColumnDef } from '@tanstack/react-table'
-import { Pencil, Plus, Power, PowerOff } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { Badge } from '@/components/ui/badge'
+import { RowActions } from '@/components/RowActions'
+import { StatusPill } from '@/components/StatusPill'
 import { Button } from '@/components/ui/button'
 import { DataTable, type DataTableFeatures } from '@/components/DataTable'
 import {
@@ -217,34 +218,34 @@ export function TemplatesPanel() {
     {
       header: 'Stato',
       id: 'attivo',
+      // The same pill every state in the product goes through (design spec §4). `ink`
+      // for the settled state, `muted` for one that claims nothing: a deactivated
+      // template is a decision, not a fault, so it is not `danger`.
       cell: ({ row }) => (
-        <Badge variant={row.original.attivo ? 'default' : 'secondary'}>
+        <StatusPill tone={row.original.attivo ? 'ink' : 'muted'}>
           {row.original.attivo ? 'Attivo' : 'Disattivato'}
-        </Badge>
+        </StatusPill>
       ),
     },
     {
       header: '',
       id: 'azioni',
+      meta: { align: 'right' },
+      // Two icon buttons until the 2026-09-08 revision, now the «⋯» menu every row in
+      // the product uses (§4): the labels say what they do in words, so «Disattiva» no
+      // longer has to be inferred from a power symbol. Neither is destructive --
+      // deactivating a template has «Riattiva» one click away in the same menu.
       cell: ({ row }) => (
-        <div className="flex justify-end gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={`Modifica ${row.original.nome}`}
-            onClick={() => openEdit(row.original)}
-          >
-            <Pencil className="size-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={`${row.original.attivo ? 'Disattiva' : 'Riattiva'} ${row.original.nome}`}
-            onClick={() => toggle(row.original)}
-          >
-            {row.original.attivo ? <PowerOff className="size-4" /> : <Power className="size-4" />}
-          </Button>
-        </div>
+        <RowActions
+          label={`Azioni per ${row.original.nome}`}
+          items={[
+            { label: 'Modifica', onSelect: () => openEdit(row.original) },
+            {
+              label: row.original.attivo ? 'Disattiva' : 'Riattiva',
+              onSelect: () => toggle(row.original),
+            },
+          ]}
+        />
       ),
     },
   ]

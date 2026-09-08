@@ -40,7 +40,10 @@ export function CommercialTab({ periodo }: { periodo: Periodo }) {
         <Freshness calcolatoAlle={data.calcolato_alle} onRefresh={() => void query.refetch()} />
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Three across (design spec §4), not four: the KPI card is wider now that its
+          value is 30px, and the fourth card of a four-up row was the one that wrapped
+          first on a laptop anyway. */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <BigNumber label="Deal vinti nel periodo" value={`${data.chiusure.vinti}`} />
         <BigNumber label="Deal persi nel periodo" value={`${data.chiusure.persi}`} />
         <BigNumber

@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate, useParams } from '@tanstack/react-router'
-import { Pencil, Trash2 } from 'lucide-react'
+import { Building2, Pencil, Trash2 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { renderFieldValue } from '@/components/DynamicFieldRenderer'
@@ -164,6 +164,7 @@ export function CustomerDetail() {
   return (
     <>
       <EntityDetailLayout
+        icon={Building2}
         title={customer.ragione_sociale}
         subtitle="Cliente"
         entityType="customer"

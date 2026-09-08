@@ -1,8 +1,9 @@
 import type { ColumnDef } from '@tanstack/react-table'
-import { Plus, RotateCcw, Trash2 } from 'lucide-react'
+import { Plus, RotateCcw } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { Badge } from '@/components/ui/badge'
+import { RowActions } from '@/components/RowActions'
+import { StatusPill } from '@/components/StatusPill'
 import { Button } from '@/components/ui/button'
 import { DataTable, type DataTableFeatures } from '@/components/DataTable'
 import {
@@ -21,7 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { useStages, type Stage } from '@/features/deals/queries'
+import { DEAL_STAGE_TONE, useStages, type Stage } from '@/features/deals/queries'
 import { fieldErrorFrom, toProblem, type ProblemDetail } from '@/lib/api'
 import { useCreateStage, useDeleteStage, useSeedStages } from './queries'
 
@@ -119,25 +120,34 @@ export function PipelinePanel() {
     {
       header: 'Tipo',
       id: 'tipo',
+      // `DEAL_STAGE_TONE` rather than a tone chosen here: it is keyed on `tipo` -- the
+      // closed enum the backend guarantees -- and it is the same map the Kanban and the
+      // deal list read, so a stage reads identically wherever it appears.
       cell: (info) => (
-        <Badge variant={info.row.original.tipo === 'open' ? 'secondary' : 'default'}>
+        <StatusPill tone={DEAL_STAGE_TONE[info.row.original.tipo]}>
           {TYPES.find((type) => type.value === info.row.original.tipo)?.label}
-        </Badge>
+        </StatusPill>
       ),
     },
     {
       header: '',
       id: 'actions',
+      meta: { align: 'right' },
+      // Behind the «⋯» like every other row action (§4). Destructive, and it keeps its
+      // own `window.confirm` inside `remove`: a stage with deals in it is refused by the
+      // server (409), but a stage without them goes for good.
       cell: (info) => (
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label={`Elimina ${info.row.original.nome}`}
-          onClick={() => remove(info.row.original)}
-          disabled={deleteStage.isPending}
-        >
-          <Trash2 className="size-4" />
-        </Button>
+        <RowActions
+          label={`Azioni per ${info.row.original.nome}`}
+          items={[
+            {
+              label: 'Elimina',
+              destructive: true,
+              disabled: deleteStage.isPending,
+              onSelect: () => remove(info.row.original),
+            },
+          ]}
+        />
       ),
     },
   ]

@@ -1,8 +1,10 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { Plus, Search } from 'lucide-react'
+import { Building2, Plus, Search } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { DataTable } from '@/components/DataTable'
+import { FilterRow } from '@/components/FilterRow'
+import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { CustomerForm } from '@/features/customers/CustomerForm'
@@ -12,7 +14,11 @@ import { toProblem, type ProblemDetail } from '@/lib/api'
 import { useCanWrite } from '@/lib/auth'
 import { useEntitySchema } from '@/lib/schema'
 
-function CustomersPage({ initialSearch }: { initialSearch: string }) {
+/**
+ * Exported so `index.test.tsx` can render the list without a router. The route
+ * component below is what reads `?search=` out of the URL; this is what draws the page.
+ */
+export function CustomersPage({ initialSearch }: { initialSearch: string }) {
   const navigate = useNavigate()
   const canWrite = useCanWrite()
   const [search, setSearch] = useState(initialSearch)
@@ -30,43 +36,53 @@ function CustomersPage({ initialSearch }: { initialSearch: string }) {
   const columns = buildCustomerColumns(schema.data?.custom_fields ?? [])
 
   return (
-    <div className="p-8">
-      <header className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Clienti</h1>
-        {canWrite && (
-          <Button
-            onClick={() => {
-              setProblem(null)
-              setOpen(true)
-            }}
-          >
-            <Plus className="mr-2 size-4" />
-            Nuovo cliente
-          </Button>
-        )}
-      </header>
+    <>
+      <PageHeader
+        icon={Building2}
+        title="Clienti"
+        actions={
+          canWrite && (
+            <Button
+              onClick={() => {
+                setProblem(null)
+                setOpen(true)
+              }}
+            >
+              <Plus className="mr-2 size-4" />
+              Nuovo cliente
+            </Button>
+          )
+        }
+      >
+        {/* No state chips: a customer has no state to filter by. The search box is the
+            one filter this list has ever had, and the revision moves it into the row
+            rather than inventing one to keep it company. */}
+        <FilterRow>
+          <div className="relative w-full max-w-sm">
+            <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              className="pl-9"
+              placeholder="Cerca per ragione sociale, P.IVA, codice fiscale o email…"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </div>
+        </FilterRow>
+      </PageHeader>
 
-      <div className="relative mb-4 max-w-sm">
-        <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          className="pl-9"
-          placeholder="Cerca per ragione sociale, P.IVA, codice fiscale o email…"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
+      <div className="px-8 pb-8">
+        <DataTable
+          columns={columns}
+          data={customers.data?.items ?? []}
+          isLoading={customers.isLoading}
+          isError={customers.isError}
+          error={customers.error}
+          onRowClick={(row) =>
+            void navigate({ to: '/app/clienti/$customerId', params: { customerId: row.id } })
+          }
+          emptyMessage="Nessun cliente. Creane uno per iniziare."
         />
       </div>
-
-      <DataTable
-        columns={columns}
-        data={customers.data?.items ?? []}
-        isLoading={customers.isLoading}
-        isError={customers.isError}
-        error={customers.error}
-        onRowClick={(row) =>
-          void navigate({ to: '/app/clienti/$customerId', params: { customerId: row.id } })
-        }
-        emptyMessage="Nessun cliente. Creane uno per iniziare."
-      />
 
       <CustomerForm
         title="Nuovo cliente"
@@ -86,7 +102,7 @@ function CustomersPage({ initialSearch }: { initialSearch: string }) {
           })
         }}
       />
-    </div>
+    </>
   )
 }
 

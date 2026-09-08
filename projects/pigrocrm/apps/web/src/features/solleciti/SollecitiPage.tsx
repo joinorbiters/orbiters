@@ -1,5 +1,7 @@
+import { MailWarning } from 'lucide-react'
 import { useState } from 'react'
 import { DataTable } from '@/components/DataTable'
+import { PageHeader } from '@/components/PageHeader'
 import { QueryErrorBanner } from '@/components/QueryErrorBanner'
 import { EmailComposer } from '@/features/gmail/EmailComposer'
 import { sollecitiColumns } from './columns'
@@ -37,83 +39,114 @@ export function SollecitiPage() {
   const [reviewing, setReviewing] = useState<{ draftId: string; customerId: string } | null>(null)
   const [pendingId, setPendingId] = useState<string | null>(null)
 
+  // Hoisted, and rendered in all three of the branches below, the same way `WeekGrid`
+  // does it: a failed or still-loading read is a page with a title and a way off it, not
+  // a banner floating in an unnamed panel. There is no primary action in the header
+  // because preparing a reminder is a per-row act (see the «no bulk action» paragraph
+  // above), so the only button on this screen is the one in the row it belongs to.
+  const header = (
+    <PageHeader
+      icon={MailWarning}
+      title="Solleciti"
+      description="Fatture scadute da più di una settimana, non ancora saldate, senza un sollecito recente e sotto il tetto dei tre. Preparare il sollecito non lo invia: la bozza si apre per la revisione."
+    />
+  )
+
   // The failure branch first, always. On an error `isPending` is false while `data` is
   // still undefined, so a single `isPending || !data` guard answers a failed read with a
   // spinner that never resolves -- and an empty table and a request that never arrived
   // are two different claims about somebody's unpaid invoices.
-  if (candidates.isError) return <QueryErrorBanner error={candidates.error} />
+  if (candidates.isError)
+    return (
+      <>
+        {header}
+        <div className="px-8 pb-8">
+          <QueryErrorBanner error={candidates.error} />
+        </div>
+      </>
+    )
   if (candidates.isPending || !candidates.data)
-    return <p className="text-muted-foreground">Caricamento…</p>
+    return (
+      <>
+        {header}
+        <p className="px-8 pb-8 text-muted-foreground">Caricamento…</p>
+      </>
+    )
 
   const rows = candidates.data.items
 
   if (reviewing !== null) {
     return (
-      <section className="space-y-4">
-        <header>
-          <h1 className="text-xl font-medium">Sollecito da rivedere</h1>
-          <p className="text-sm text-muted-foreground">
-            Il sollecito è stato preparato e <strong>non è stato inviato</strong>. Leggilo,
-            correggilo se serve, e premi Invia quando è come lo vuoi tu.
-          </p>
-        </header>
-        <EmailComposer
-          entityType="customer"
-          entityId={reviewing.customerId}
-          draftId={reviewing.draftId}
-          onClose={() => setReviewing(null)}
+      <>
+        {/* Its own header rather than the hoisted one: the title states what this
+            screen is *for* right now, which is reading a letter before it goes. Still
+            no primary action -- «Invia» belongs inside the composer, next to the text
+            it sends. */}
+        <PageHeader
+          icon={MailWarning}
+          title="Sollecito da rivedere"
+          description="Leggilo, correggilo se serve, e premi Invia quando è come lo vuoi tu."
         />
-      </section>
+        <div className="space-y-4 px-8 pb-8">
+          {/* Stays a paragraph rather than folding into the header's description: the
+              emphasis is the point -- «preparare non è inviare» is this screen's whole
+              safety story -- and a `description` is a plain string. */}
+          <p role="status" className="text-sm text-muted-foreground">
+            Il sollecito è stato preparato e <strong>non è stato inviato</strong>.
+          </p>
+          <EmailComposer
+            entityType="customer"
+            entityId={reviewing.customerId}
+            draftId={reviewing.draftId}
+            onClose={() => setReviewing(null)}
+          />
+        </div>
+      </>
     )
   }
 
   return (
-    <section className="space-y-4">
-      <header>
-        <h1 className="text-xl font-medium">Solleciti</h1>
-        <p className="text-sm text-muted-foreground">
-          Fatture scadute da più di una settimana, non ancora saldate, senza un sollecito
-          recente e sotto il tetto dei tre. Preparare il sollecito non lo invia: la bozza si
-          apre per la revisione.
-        </p>
-      </header>
+    <>
+      {header}
 
-      {/* The mutation's own error, never copied into component state: a refused
-          preparation followed by a successful one must not print success under a banner
-          still claiming the opposite. */}
-      {createReminder.isError && <QueryErrorBanner error={createReminder.error} />}
+      <div className="space-y-4 px-8 pb-8">
+        {/* The mutation's own error, never copied into component state: a refused
+            preparation followed by a successful one must not print success under a banner
+            still claiming the opposite. */}
+        {createReminder.isError && <QueryErrorBanner error={createReminder.error} />}
 
-      {rows.length === 0 ? (
-        <p className="text-muted-foreground">
-          Nessuna fattura da sollecitare. È la lista che costa fatica a costruire, non il
-          pulsante da premere.
-        </p>
-      ) : (
-        <DataTable
-          columns={sollecitiColumns((invoiceId) => {
-            const candidate = rows.find((row) => row.invoice_id === invoiceId)
-            if (candidate === undefined) return
-            setPendingId(invoiceId)
-            createReminder.mutate(invoiceId, {
-              onSuccess: (reminder) => {
-                setPendingId(null)
-                // `email_draft_id` is nullable on the schema and never null in practice
-                // for a reminder this endpoint just created -- but a composer opened on
-                // `''` would ask the API for a draft that cannot exist, so the absence is
-                // handled by not opening rather than by trusting the shape.
-                if (reminder.email_draft_id !== null) {
-                  setReviewing({
-                    draftId: reminder.email_draft_id,
-                    customerId: candidate.customer_id,
-                  })
-                }
-              },
-              onError: () => setPendingId(null),
-            })
-          }, pendingId)}
-          data={rows}
-        />
-      )}
-    </section>
+        {rows.length === 0 ? (
+          <p className="text-muted-foreground">
+            Nessuna fattura da sollecitare. È la lista che costa fatica a costruire, non il
+            pulsante da premere.
+          </p>
+        ) : (
+          <DataTable
+            columns={sollecitiColumns((invoiceId) => {
+              const candidate = rows.find((row) => row.invoice_id === invoiceId)
+              if (candidate === undefined) return
+              setPendingId(invoiceId)
+              createReminder.mutate(invoiceId, {
+                onSuccess: (reminder) => {
+                  setPendingId(null)
+                  // `email_draft_id` is nullable on the schema and never null in practice
+                  // for a reminder this endpoint just created -- but a composer opened on
+                  // `''` would ask the API for a draft that cannot exist, so the absence is
+                  // handled by not opening rather than by trusting the shape.
+                  if (reminder.email_draft_id !== null) {
+                    setReviewing({
+                      draftId: reminder.email_draft_id,
+                      customerId: candidate.customer_id,
+                    })
+                  }
+                },
+                onError: () => setPendingId(null),
+              })
+            }, pendingId)}
+            data={rows}
+          />
+        )}
+      </div>
+    </>
   )
 }

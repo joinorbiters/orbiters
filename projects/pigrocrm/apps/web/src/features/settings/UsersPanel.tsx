@@ -2,7 +2,8 @@ import type { ColumnDef } from '@tanstack/react-table'
 import { Plus } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { Badge } from '@/components/ui/badge'
+import { RowActions } from '@/components/RowActions'
+import { StatusPill } from '@/components/StatusPill'
 import { Button } from '@/components/ui/button'
 import { DataTable, type DataTableFeatures } from '@/components/DataTable'
 import {
@@ -129,39 +130,45 @@ export function UsersPanel() {
     {
       header: 'Stato',
       id: 'attivo',
+      // The same pill every state in the product goes through (design spec §4). `ink`
+      // for the settled, ordinary state and `muted` for one that claims nothing: a
+      // deactivated account is not an error, so it is not `danger`.
       cell: (info) => (
-        <Badge variant={info.row.original.attivo ? 'default' : 'secondary'}>
+        <StatusPill tone={info.row.original.attivo ? 'ink' : 'muted'}>
           {info.row.original.attivo ? 'Attivo' : 'Disattivato'}
-        </Badge>
+        </StatusPill>
       ),
     },
     {
       header: '',
       id: 'actions',
+      meta: { align: 'right' },
       cell: (info) => {
         const user = info.row.original
         const isSelf = user.id === currentUser?.id
+        // Behind the «⋯» like every other row action in the product (§4). Disabled
+        // rather than omitted for your own active row: nothing server-side stops the
+        // last admin from locking themselves out (recovery needs the `createadmin`
+        // CLI), and an item that disappears from one row is a menu nobody learns.
         return (
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={update.isPending || (user.attivo && isSelf)}
-            title={
-              user.attivo && isSelf ? 'Non puoi disattivare il tuo stesso account.' : undefined
-            }
-            onClick={() =>
-              update.mutate(
-                { userId: user.id, body: { attivo: !user.attivo } },
-                {
-                  onSuccess: () =>
-                    toast.success(user.attivo ? 'Utente disattivato' : 'Utente riattivato'),
-                  onError: (error) => toast.error(toProblem(error).detail),
-                },
-              )
-            }
-          >
-            {user.attivo ? 'Disattiva' : 'Riattiva'}
-          </Button>
+          <RowActions
+            label={`Azioni per ${user.nome}`}
+            items={[
+              {
+                label: user.attivo ? 'Disattiva' : 'Riattiva',
+                disabled: update.isPending || (user.attivo && isSelf),
+                onSelect: () =>
+                  update.mutate(
+                    { userId: user.id, body: { attivo: !user.attivo } },
+                    {
+                      onSuccess: () =>
+                        toast.success(user.attivo ? 'Utente disattivato' : 'Utente riattivato'),
+                      onError: (error) => toast.error(toProblem(error).detail),
+                    },
+                  ),
+              },
+            ]}
+          />
         )
       },
     },

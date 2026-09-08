@@ -1,5 +1,6 @@
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Clock } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { PageHeader } from '@/components/PageHeader'
 import { QueryErrorBanner } from '@/components/QueryErrorBanner'
 import { Button } from '@/components/ui/button'
 import { useDeals } from '@/features/deals/queries'
@@ -47,36 +48,40 @@ export function WeekGrid() {
     )
   }, [grid, deals.data, dealNames])
 
+  // The page's intestazione (design spec §4), shared by all three branches below so a
+  // failed or pending week is still a page with a title and a way to move off it. The
+  // week being shown is the description rather than a second heading: it is what this
+  // title is *about*, and the three-button group is this page's primary action -- there
+  // is nothing to create here, only a week to choose.
   const header = (
-    <header className="flex flex-wrap items-center justify-between gap-3">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Ore</h1>
-        <p className="text-muted-foreground">
-          {days[0]?.label} — {days[6]?.label}
-        </p>
-      </div>
-      <div className="flex items-center gap-2">
-        <Button
-          variant="outline"
-          size="icon"
-          aria-label="Settimana precedente"
-          onClick={() => setAnchor((current) => shiftWeek(current, -1))}
-        >
-          <ChevronLeft className="size-4" />
-        </Button>
-        <Button variant="outline" onClick={() => setAnchor(new Date())}>
-          Questa settimana
-        </Button>
-        <Button
-          variant="outline"
-          size="icon"
-          aria-label="Settimana successiva"
-          onClick={() => setAnchor((current) => shiftWeek(current, 1))}
-        >
-          <ChevronRight className="size-4" />
-        </Button>
-      </div>
-    </header>
+    <PageHeader
+      icon={Clock}
+      title="Ore"
+      description={`${days[0]?.label} — ${days[6]?.label}`}
+      actions={
+        <>
+          <Button
+            variant="outline"
+            size="icon"
+            aria-label="Settimana precedente"
+            onClick={() => setAnchor((current) => shiftWeek(current, -1))}
+          >
+            <ChevronLeft className="size-4" />
+          </Button>
+          <Button variant="outline" onClick={() => setAnchor(new Date())}>
+            Questa settimana
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            aria-label="Settimana successiva"
+            onClick={() => setAnchor((current) => shiftWeek(current, 1))}
+          >
+            <ChevronRight className="size-4" />
+          </Button>
+        </>
+      }
+    />
   )
 
   // A failed request is neither "loading" nor "there is nothing here", and rendering a
@@ -85,10 +90,12 @@ export function WeekGrid() {
   // grid at all: see `QueryErrorBanner`'s own docstring.
   if (entries.isError || deals.isError) {
     return (
-      <div className="space-y-4 p-8">
+      <>
         {header}
-        <QueryErrorBanner error={entries.error ?? deals.error} />
-      </div>
+        <div className="px-8 pb-8">
+          <QueryErrorBanner error={entries.error ?? deals.error} />
+        </div>
+      </>
     )
   }
 
@@ -96,85 +103,89 @@ export function WeekGrid() {
   // flight would be indistinguishable from a week nobody worked.
   if (userId === undefined || entries.isPending || deals.isPending) {
     return (
-      <div className="space-y-4 p-8">
+      <>
         {header}
-        <p className="text-sm text-muted-foreground">Caricamento…</p>
-      </div>
+        <div className="px-8 pb-8">
+          <p className="text-sm text-muted-foreground">Caricamento…</p>
+        </div>
+      </>
     )
   }
 
   return (
-    <div className="space-y-4 p-8">
+    <>
       {header}
 
-      <div className="overflow-x-auto rounded-lg border">
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr className="border-b bg-muted/40">
-              <th scope="col" className="p-2 text-left font-medium">
-                Deal
-              </th>
-              {days.map((day) => (
-                <th key={day.iso} scope="col" className="p-2 text-center font-medium">
-                  {/* The weekday abbreviation alone repeats every week; the day number
-                      under it is what tells somebody which week they are looking at
-                      without reading back up to the header. */}
-                  <span className="block">{day.short}</span>
-                  <span className="block text-xs text-muted-foreground">{day.iso.slice(8)}</span>
+      <div className="space-y-4 px-8 pb-8">
+        <div className="overflow-x-auto rounded-lg border">
+          <table className="w-full border-collapse text-sm">
+            <thead>
+              <tr className="border-b bg-muted/40">
+                <th scope="col" className="p-2 text-left font-medium">
+                  Deal
                 </th>
-              ))}
-              <th scope="col" className="p-2 text-right font-medium">
-                Totale
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 ? (
-              <tr>
-                <td colSpan={9} className="p-4 text-center text-muted-foreground">
-                  Nessun deal: creane uno per registrare le ore.
+                {days.map((day) => (
+                  <th key={day.iso} scope="col" className="p-2 text-center font-medium">
+                    {/* The weekday abbreviation alone repeats every week; the day number
+                        under it is what tells somebody which week they are looking at
+                        without reading back up to the header. */}
+                    <span className="block">{day.short}</span>
+                    <span className="block text-xs text-muted-foreground">{day.iso.slice(8)}</span>
+                  </th>
+                ))}
+                <th scope="col" className="p-2 text-right font-medium">
+                  Totale
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 ? (
+                <tr>
+                  <td colSpan={9} className="p-4 text-center text-muted-foreground">
+                    Nessun deal: creane uno per registrare le ore.
+                  </td>
+                </tr>
+              ) : (
+                rows.map((dealId) => (
+                  <WeekGridRow
+                    key={dealId}
+                    dealId={dealId}
+                    dealName={dealNames.get(dealId) ?? dealId}
+                    userId={userId}
+                    days={days}
+                    row={grid.get(dealId)}
+                  />
+                ))
+              )}
+            </tbody>
+            <tfoot>
+              <tr className="border-t bg-muted/40 font-medium">
+                <th scope="row" className="p-2 text-left">
+                  Totale
+                </th>
+                {days.map((day) => (
+                  <td
+                    key={day.iso}
+                    data-testid={`column-total-${day.iso}`}
+                    className="p-2 text-center tabular-nums"
+                  >
+                    {formatHoursValue(columnTotal(grid, day.iso))}
+                  </td>
+                ))}
+                <td data-testid="grid-total" className="p-2 text-right tabular-nums">
+                  {formatHoursValue(gridTotal(grid))}
                 </td>
               </tr>
-            ) : (
-              rows.map((dealId) => (
-                <WeekGridRow
-                  key={dealId}
-                  dealId={dealId}
-                  dealName={dealNames.get(dealId) ?? dealId}
-                  userId={userId}
-                  days={days}
-                  row={grid.get(dealId)}
-                />
-              ))
-            )}
-          </tbody>
-          <tfoot>
-            <tr className="border-t bg-muted/40 font-medium">
-              <th scope="row" className="p-2 text-left">
-                Totale
-              </th>
-              {days.map((day) => (
-                <td
-                  key={day.iso}
-                  data-testid={`column-total-${day.iso}`}
-                  className="p-2 text-center tabular-nums"
-                >
-                  {formatHoursValue(columnTotal(grid, day.iso))}
-                </td>
-              ))}
-              <td data-testid="grid-total" className="p-2 text-right tabular-nums">
-                {formatHoursValue(gridTotal(grid))}
-              </td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
+            </tfoot>
+          </table>
+        </div>
 
-      <p className="text-xs text-muted-foreground">
-        La tariffa viene congelata sulla voce quando la registri. Una cella con più voci
-        nello stesso giorno mostra la prima: l&apos;elenco completo è nella tab «Ore» del
-        deal.
-      </p>
-    </div>
+        <p className="text-xs text-muted-foreground">
+          La tariffa viene congelata sulla voce quando la registri. Una cella con più voci
+          nello stesso giorno mostra la prima: l&apos;elenco completo è nella tab «Ore» del
+          deal.
+        </p>
+      </div>
+    </>
   )
 }

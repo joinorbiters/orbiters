@@ -39,6 +39,15 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: './src/test-setup.ts',
+    // 20 s, not Vitest's own 5 s. Several files here render a whole page --
+    // `QueryClientProvider`, a mocked router, a `DataTable` and a Radix dialog or
+    // dropdown per assertion -- and `userEvent`'s per-keystroke work is real time. On
+    // a laptop running the full suite across every core at once, those files sit close
+    // enough to 5 s that the timeout fired on whichever file happened to be scheduled
+    // last, which is a flake and not a failure: the same file passes on its own. The
+    // limit still exists (a genuinely hung `findBy*` fails rather than blocking the
+    // run), just far enough out that scheduling luck is not what decides.
+    testTimeout: 20_000,
     // `apps/web/e2e/*.spec.ts` (Playwright, run via `playwright.config.ts`/
     // `pnpm exec playwright test`) match Vitest's own default include glob
     // just as well as any `*.test.tsx` here does -- confirmed live: without
