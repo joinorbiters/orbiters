@@ -124,8 +124,10 @@ body {
   background-color: #ffffff;
   border-width: 2px;
   box-shadow: var(--landing-step) var(--landing-step) 0 var(--landing-ink);
-  padding: clamp(1.5rem, 4vw, 2.75rem);
-  max-width: 38rem;
+  padding: clamp(1.75rem, 4vw, 3rem);
+  /* About seven tenths of the 72rem measure: the headline sits on two lines and the box
+     carries the hero, with the field showing to its right rather than behind it. */
+  max-width: 52rem;
   display: grid;
   gap: 1.25rem;
 }
