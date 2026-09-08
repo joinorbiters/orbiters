@@ -64,6 +64,11 @@ jobs:
         # the renderer was verified against. Typst's diagnostic format and the
         # auto-typography workaround were both confirmed against 0.14.2 specifically,
         # so a runner on some other version proves less than nothing.
+        #
+        # poppler-utils is not in that image and belongs only here: `pdftotext` is how
+        # the suite reads a rendered PDF back to assert on its text, so it is test
+        # equipment rather than part of the product. Distribution version is fine --
+        # nothing is asserted about its output beyond the words the renderer put in.
         env:
           PANDOC_VERSION: 3.8.2.1
           TYPST_VERSION: 0.14.2
@@ -73,8 +78,10 @@ jobs:
           sudo mv "/tmp/pandoc-${PANDOC_VERSION}/bin/pandoc" /usr/local/bin/pandoc
           curl -fL "https://github.com/typst/typst/releases/download/v${TYPST_VERSION}/typst-x86_64-unknown-linux-musl.tar.xz" | tar -xJ -C /tmp
           sudo mv /tmp/typst-x86_64-unknown-linux-musl/typst /usr/local/bin/typst
+          sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends poppler-utils
           pandoc --version | head -1
           typst --version
+          pdftotext -v 2>&1 | head -1
 
       - name: Test
         # testcontainers starts PostgreSQL itself; no service container needed.
