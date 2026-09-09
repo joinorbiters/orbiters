@@ -155,15 +155,44 @@ jobs:
             $COMPOSE --env-file "${DEPLOY_PATH}/.env" up -d --build
           SSH
 
-      - name: Configure nginx
-        # setup-server.sh needs root (see that script's own header and the project
-        # README's "Deploy" section) -- PIGROCRM_USER, over plain SSH with no sudo in
-        # between, therefore has to already be root or equivalent on the target host.
-        # That is a property of how the server is provisioned, not something this
-        # workflow can satisfy, and it is documented rather than papered over with a
-        # non-interactive `sudo` this file cannot confirm is even configured.
+      # There used to be a "Configure nginx" step here, running deploy/setup-server.sh
+      # on every deploy. It is gone, and this is why.
+      #
+      # The script writes /etc/nginx/sites-available/${PIGROCRM_DOMAIN}, and the
+      # workflow passed no such variable, so it would have used the script's default,
+      # `pigrocrm.humancraft.tech`: a domain that is not this server's. The live host
+      # serves pigro.joinorbiters.com from a certbot-managed file named
+      # `pigro.joinorbiters.conf`, so the script's "already has TLS, leave it alone"
+      # guard would not have found it either -- it looks for a file named after the
+      # domain, and that is not how this one is named. Every deploy would have added a
+      # stray HTTP vhost, and with the right domain passed in it would have added a
+      # second vhost with a duplicate server_name instead.
+      #
+      # None of that was ever observed, because the deploy has never run. Provisioning
+      # nginx is a one-time bootstrap (README §3, then certbot in §4), not something a
+      # push should redo. A deploy that changes the reverse proxy on every commit is a
+      # deploy that can take the site down without touching the application.
+
+      - name: Check the site answers with the new code
+        # A deploy that reports success without asking the server anything is a deploy
+        # that reports success when the container failed to start.
         env:
           DEPLOY_HOST: ${{ secrets.PIGROCRM_HOST }}
           DEPLOY_USER: ${{ secrets.PIGROCRM_USER }}
-          DEPLOY_PATH: ${{ secrets.PIGROCRM_DEPLOY_PATH }}
-        run: ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "bash \"${DEPLOY_PATH}/projects/pigrocrm/deploy/setup-server.sh\""
+        run: |
+          ssh "${DEPLOY_USER}@${DEPLOY_HOST}" 'bash -s' <<'SSH'
+            set -euo pipefail
+            for attempt in $(seq 1 30); do
+              code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/tenants/root || true)
+              if [ "$code" = 200 ]; then
+                echo "api risponde 200 su /api/tenants/root"
+                docker compose -p pigrocrm ps --format 'table {{.Name}}\t{{.Status}}'
+                exit 0
+              fi
+              sleep 5
+            done
+            echo "::error::L'API non ha risposto 200 su /api/tenants/root dopo 150 secondi."
+            docker compose -p pigrocrm ps --format 'table {{.Name}}\t{{.Status}}' || true
+            docker compose -p pigrocrm logs --tail 50 api || true
+            exit 1
+          SSH
