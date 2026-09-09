@@ -115,7 +115,7 @@ invent one. The branch is the issue's `gitBranchName`, read from `get_issue` (or
 `list_issues` with `fields: ["gitBranchName"]`), not typed by hand.
 
 That name is rendered for **whoever asked for it**, not for the assignee: the same card
-answers `fiorelorenzo/orb-41-...` to one of us and `ivansala/orb-41-...` to the other. So
+answers `fiorelorenzo/orb-41-...` to one of us and `mariorossi/orb-41-...` to the other. So
 it is the branch to use once the card is yours, and it is never evidence that it is.
 
 ## What the tracker is not

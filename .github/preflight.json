@@ -253,6 +253,14 @@
       ],
       "serial": true,
       "why": "The one project whose images were verified on no tier before the trunk: ci.yml builds them on push only, so a broken Dockerfile here reached main before anything said so. `-p orbiters` because that is the project name the deploy passes (docs/adding-a-project.md section 7) and the name decides the image tags. Serial for the same reason as the other two: a docker build saturates the box."
+    },
+    {
+      "id": "identity-names",
+      "run": "orbiters-identity-scan .",
+      "when": [
+        "**"
+      ],
+      "why": "The other half of `test_no_real_identity_in_the_repository.py`. That test checks shapes and can live in a public repository; a list of forbidden *names* cannot, in any form. A hashed denylist beside the code is an oracle: on 2026-09-09 Ivan inverted 17 of 18 truncated sha256 entries in seconds with a dictionary built from this repository's own history, labels included. So the list is plaintext outside the repository (`~/.config/orbiters/forbidden-names.txt`, overridable with ORBITERS_FORBIDDEN_NAMES) and only this local tier reads it. The scanner prints a notice and exits 0 where no list is configured, which is every machine but ours."
     }
   ]
 }

@@ -114,7 +114,7 @@ def _set_cookie(
 def _clear_other_jars(response: Response, request: Request, settings: Settings) -> None:
     """Deletes the session pair at every path this installation ever set it at, except
     the one this response is about to set. A stale, more specific pair -- the root's old
-    `/humancraft/` jar -- would otherwise be sent ahead of the fresh one and shadow it on
+    `/studiorossi/` jar -- would otherwise be sent ahead of the fresh one and shadow it on
     every request (`cookie_paths_to_clear`). Deleting what is not there is a no-op."""
     keep = cookie_path(request)
     for path in cookie_paths_to_clear(request, settings.root_slug):
@@ -165,7 +165,7 @@ def _every_cookie_value(request: Request, name: str) -> list[str]:
     keeps.
 
     A browser holds one cookie per (name, domain, path), and it sends all of them that
-    match: a session opened at `/` and one opened at `/humancraft/` arrive as two
+    match: a session opened at `/` and one opened at `/studiorossi/` arrive as two
     `refresh_token=` pairs in one header. The `SimpleCookie` parser behind
     `request.cookies` keeps the last of them, so a logout that read only that one left
     the other alive. `tenancy.first_cookie` is the single-value sibling. Parsed by hand

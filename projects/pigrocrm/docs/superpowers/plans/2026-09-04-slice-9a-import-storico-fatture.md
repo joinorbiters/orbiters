@@ -1579,33 +1579,33 @@ git commit -m "feat(web): imported-from-elsewhere badge; no XML or re-render on 
 
 Un array JSON di 14 oggetti nel formato di `InvoiceImport` con `customer_id` da risolvere per `ragione_sociale` (campo ausiliario `_cliente`, rimosso dallo script di invio). `data_scadenza`, `data_incasso` e `trasmessa_esternamente_il` da compilare dal titolare dove indicato `null`.
 
-> **I valori qui sotto sono sintetici.** Il dataset reale (clienti, importi, tariffe, id Drive dei PDF) è stato rimosso da questo repository il 2026-09-09, prima della pubblicazione, insieme al file JSON che questo task creava: erano dati di clienti veri e il fatturato di un anno. Quello che resta è la forma, che è ciò di cui il piano ha bisogno per essere leggibile: 14 righe, i buchi di registro 1, 4 e 6 assenti, una fattura su due righe, una verso l'estero con `natura` diversa, e tre righe sotto la soglia del bollo. Chi rieseguisse questo task su dati propri parte da qui.
+> **I valori qui sotto sono sintetici.** Il dataset reale (clienti, importi, tariffe, id Drive dei PDF) è stato rimosso da questo repository il 2026-09-09, prima della pubblicazione, insieme al file JSON che questo task creava: erano dati di clienti veri e il fatturato di un anno. Quello che resta è la forma, che è ciò di cui il piano ha bisogno per essere leggibile: 14 righe, i buchi di registro 1, 7 e 13 assenti, una fattura su due righe, una verso l'estero con `natura` diversa, e tre righe sotto la soglia del bollo. Chi rieseguisse questo task su dati propri parte da qui.
 
 | numero | data | `_cliente` | descrizione riga | quantità × prezzo | imponibile | stato_pagamento |
 |---|---|---|---|---|---|---|
-| 2 | 2026-02-04 | Alfa S.r.l. | Consulenza sito vetrina | 1 × 200 | 200.00 | incassato |
-| 3 | 2026-02-04 | Beta Service S.r.l. | Servizi di consulenza progetto Delta (ODA 2026-012-ACM-BET) | 1 × 900 | 900.00 | incassato |
-| 5 | 2026-04-07 | Mario Rossi | Consulenza AI prototipo Delta — anticipo | 1 × 2000 | 2200.00 (seconda riga: spese accessorie 200.00) | incassato; `trasmessa_esternamente_il: null` (non consegnata) |
-| 7 | 2026-05-05 | Acme S.r.l. | 900142/0426/Consulenza AI CTO progetto Aurora | 9 × 300 | 2700.00 | incassato |
-| 8 | 2026-05-05 | Gamma Società Cooperativa | Servizi di consulenza progetto Vega — pre-analisi console remota | 3 × 300 | 900.00 | incassato |
-| 9 | 2026-06-05 | Acme S.r.l. | 900142/0526/Consulenza AI CTO progetto Aurora | 20 × 300 | 6000.00 | incassato |
-| 10 | 2026-06-05 | Acme S.r.l. | 900142/0526/Rimborso spese | 1 × 60.50 | 60.50 | incassato |
-| 11 | 2026-07-13 | Acme S.r.l. | 900142/0626/Consulenza AI CTO progetto Aurora | 21 × 300 | 6300.00 | incassato |
-| 12 | 2026-07-13 | Acme S.r.l. | 900142/0626/Rimborso hosting | 1 × 15.00 | 15.00 | incassato |
-| 13 | 2026-08-03 | Example Ltd | Consulting services for project Vega — July 2026 (pro-rata) | 1 × 5000 | 5000.00 | incassato |
-| 14 | 2026-08-03 | Acme S.r.l. | 900143/0726/Consulenza AI CTO progetto Aurora | 21 × 310 | 6510.00 | da_incassare (scaduta) |
-| 15 | 2026-08-03 | Gamma Società Cooperativa | Consulenza console remota Vega — acconto 30% | 1 × 2500 | 2500.00 | da_incassare (scaduta) |
-| 16 | 2026-08-11 | Gamma Società Cooperativa | Consulenza console remota Vega — 20% post UAT | 1 × 1600 | 1600.00 | da_incassare |
-| 17 | 2026-08-11 | Acme S.r.l. | 900143/0726/Rimborso hosting | 1 × 20.00 | 20.00 | da_incassare |
+| 2 | 2026-01-19 | Alfa S.r.l. | Consulenza sito vetrina | 1 × 200 | 200.00 | incassato |
+| 3 | 2026-01-19 | Beta Service S.r.l. | Servizi di consulenza progetto Delta (ODA 2026-012-ACM-BET) | 1 × 900 | 900.00 | incassato |
+| 4 | 2026-03-11 | Mario Rossi | Consulenza AI prototipo Delta — anticipo | 1 × 2000 | 2200.00 (seconda riga: spese accessorie 200.00) | incassato; `trasmessa_esternamente_il: null` (non consegnata) |
+| 5 | 2026-04-16 | Acme S.r.l. | 900142/0426/Consulenza AI CTO progetto Aurora | 9 × 300 | 2700.00 | incassato |
+| 6 | 2026-04-16 | Gamma Società Cooperativa | Servizi di consulenza progetto Vega — pre-analisi console remota | 3 × 300 | 900.00 | incassato |
+| 8 | 2026-05-14 | Acme S.r.l. | 900142/0526/Consulenza AI CTO progetto Aurora | 20 × 300 | 6000.00 | incassato |
+| 9 | 2026-05-14 | Acme S.r.l. | 900142/0526/Rimborso spese | 1 × 60.50 | 60.50 | incassato |
+| 10 | 2026-06-22 | Acme S.r.l. | 900142/0626/Consulenza AI CTO progetto Aurora | 21 × 300 | 6300.00 | incassato |
+| 11 | 2026-06-22 | Acme S.r.l. | 900142/0626/Rimborso hosting | 1 × 15.00 | 15.00 | incassato |
+| 12 | 2026-07-30 | Example Ltd | Consulting services for project Vega — July 2026 (pro-rata) | 1 × 5000 | 5000.00 | incassato |
+| 14 | 2026-07-30 | Acme S.r.l. | 900143/0726/Consulenza AI CTO progetto Aurora | 21 × 310 | 6510.00 | da_incassare (scaduta) |
+| 15 | 2026-07-30 | Gamma Società Cooperativa | Consulenza console remota Vega — acconto 30% | 1 × 2500 | 2500.00 | da_incassare (scaduta) |
+| 16 | 2026-08-06 | Gamma Società Cooperativa | Consulenza console remota Vega — 20% post UAT | 1 × 1600 | 1600.00 | da_incassare |
+| 17 | 2026-08-06 | Acme S.r.l. | 900143/0726/Rimborso hosting | 1 × 20.00 | 20.00 | da_incassare |
 
-Per ogni riga: `aliquota_iva: "0"`, `natura: "N2.2"`, `imposta: "0.00"`; `bollo: "2.00"` sulle fatture con imponibile > 77,47 (tutte tranne 10, 12, 17) e `totale = imponibile + bollo`. **Il bollo va confermato dal titolare** contro i PDF: se il registro di partenza non lo applicava, `bollo: "0.00"` e `totale = imponibile`. Il dataset nasce con `bollo: "0.00"` e una nota che lo dice. La fattura 13 (cliente UK) porta `natura: "N2.1"`.
+Per ogni riga: `aliquota_iva: "0"`, `natura: "N2.2"`, `imposta: "0.00"`; `bollo: "2.00"` sulle fatture con imponibile > 77,47 (tutte tranne 9, 11, 17) e `totale = imponibile + bollo`. **Il bollo va confermato dal titolare** contro i PDF: se il registro di partenza non lo applicava, `bollo: "0.00"` e `totale = imponibile`. Il dataset nasce con `bollo: "0.00"` e una nota che lo dice. La fattura 12 (cliente UK) porta `natura: "N2.1"`.
 
 - [ ] **Step 2: Scrivere il runbook**
 
 `docs/superpowers/notes/2026-09-04-import-storico-runbook.md`, in ordine:
 1. Compilare profilo fiscale ed emittente in Impostazioni (o `PUT /api/fiscal-profile`, `PUT /api/emitter-profile`).
 2. Riavviare l'API dal worktree (non ha `--reload`).
-3. Per ogni riga del dataset, in ordine di numero, chiamare `import_issued_invoice` dal server MCP `pigrocrm` (o `POST /api/invoices/import`); alla fine dichiarare i buchi 1, 4, 6 con `declare_invoice_register_gaps` (motivo da chiedere al titolare; default «numero non emesso nel gestionale precedente»).
+3. Per ogni riga del dataset, in ordine di numero, chiamare `import_issued_invoice` dal server MCP `pigrocrm` (o `POST /api/invoices/import`); alla fine dichiarare i buchi 1, 7, 13 con `declare_invoice_register_gaps` (motivo da chiedere al titolare; default «numero non emesso nel gestionale precedente»).
 4. Verifiche: `list_invoices` → 14 righe con `importata_da = "esterno"`; contatore 2026 = 17 (`SELECT * FROM invoice_counters`); `get_unbilled_backlog`/scadenziario mostrano 14 e 15 scadute; `export_invoice_xml` su una importata risponde 409.
 5. Caricare i PDF originali dalla cartella Drive `Fatture` come documenti `tipo = fattura` (a mano via `POST /api/documents` + upload versione finché 9C non esiste) e ricollegarli con `pdf_sorgente` — oppure attendere 9C e farlo con `import_drive_file`.
 

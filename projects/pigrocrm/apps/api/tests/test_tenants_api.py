@@ -145,11 +145,11 @@ def test_the_root_still_answers_without_a_prefix(spaces_client: TestClient) -> N
 def test_the_root_slug_is_the_root_itself_and_nobody_elses_name(
     container_settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`PIGROCRM_ROOT_SLUG=humancraft`: `/humancraft/api/...` is the root database with the
+    """`PIGROCRM_ROOT_SLUG=studiorossi`: `/studiorossi/api/...` is the root database with the
     root's settings, not a space, and the name is refused to signups."""
-    assert split_tenant_prefix("/humancraft/api/auth/me", "humancraft") == (None, "/api/auth/me")
-    assert split_tenant_prefix("/humancraft/health", "humancraft") == (None, "/health")
-    assert split_tenant_prefix("/altro/api/x", "humancraft") == ("altro", "/api/x")
+    assert split_tenant_prefix("/studiorossi/api/auth/me", "studiorossi") == (None, "/api/auth/me")
+    assert split_tenant_prefix("/studiorossi/health", "studiorossi") == (None, "/health")
+    assert split_tenant_prefix("/altro/api/x", "studiorossi") == ("altro", "/api/x")
     # Cookies follow the prefix the request wore, root alias included.
     from fastapi import Request
 
@@ -160,53 +160,53 @@ def test_the_root_slug_is_the_root_itself_and_nobody_elses_name(
 
     assert cookie_path(_request({})) == "/"
     # The root under its own name keeps the root's jar: it logs in at the bare
-    # `/app/login` and works under `/humancraft/app`, and only `/` serves both.
-    assert cookie_path(_request({"prefix": "humancraft"})) == "/"
+    # `/app/login` and works under `/studiorossi/app`, and only `/` serves both.
+    assert cookie_path(_request({"prefix": "studiorossi"})) == "/"
     assert cookie_path(_request({"prefix": "studio", "tenant": "studio"})) == "/studio/"
     # What login, refresh and logout clear: the root's old jar under its own name is
     # included for the root -- bare or aliased -- and never for a space.
     from pigrocrm_api.tenancy import cookie_paths_to_clear
 
-    assert cookie_paths_to_clear(_request({}), "humancraft") == ["/humancraft/", "/"]
-    assert cookie_paths_to_clear(_request({"prefix": "humancraft"}), "humancraft") == [
-        "/humancraft/",
+    assert cookie_paths_to_clear(_request({}), "studiorossi") == ["/studiorossi/", "/"]
+    assert cookie_paths_to_clear(_request({"prefix": "studiorossi"}), "studiorossi") == [
+        "/studiorossi/",
         "/",
     ]
     assert cookie_paths_to_clear(
-        _request({"prefix": "studio", "tenant": "studio"}), "humancraft"
+        _request({"prefix": "studio", "tenant": "studio"}), "studiorossi"
     ) == [
         "/studio/",
         "/",
     ]
 
-    monkeypatch.setenv("PIGROCRM_ROOT_SLUG", "humancraft")
+    monkeypatch.setenv("PIGROCRM_ROOT_SLUG", "studiorossi")
     monkeypatch.setenv("PIGROCRM_DATABASE_URL", container_settings.database_url)
     monkeypatch.setenv("PIGROCRM_JWT_SECRET", container_settings.jwt_secret)
     get_settings.cache_clear()
     reset_session_factories()
-    rooted = container_settings.model_copy(update={"root_slug": "humancraft"})
+    rooted = container_settings.model_copy(update={"root_slug": "studiorossi"})
     app = create_app()
     app.dependency_overrides[get_settings] = lambda: rooted
     registry = ensure_tenants_database(rooted)
     try:
         with TestClient(app, base_url="https://testserver") as client:
-            assert client.get("/humancraft/health").json() == {"status": "ok"}
-            assert client.get("/humancraft/api/tenants/root").json() == {"slug": "humancraft"}
+            assert client.get("/studiorossi/health").json() == {"status": "ok"}
+            assert client.get("/studiorossi/api/tenants/root").json() == {"slug": "studiorossi"}
             # The root's own login answers here, and the cookie is the root's (`Path=/`).
-            assert client.get("/humancraft/api/auth/me").status_code == 401
+            assert client.get("/studiorossi/api/auth/me").status_code == 401
             # A logout under the alias clears the root's pair at `/` *and* the pair that
-            # lived at `/humancraft/` before 2026-09-09: a browser removes a cookie only
+            # lived at `/studiorossi/` before 2026-09-09: a browser removes a cookie only
             # for a matching path, and a pair left behind kept a session alive that the
             # person had ended.
-            logout = client.post("/humancraft/api/auth/logout")
+            logout = client.post("/studiorossi/api/auth/logout")
             assert logout.status_code == 204
             deletions = logout.headers.get_list("set-cookie")
-            assert sum("Path=/humancraft/;" in c for c in deletions) == 2
+            assert sum("Path=/studiorossi/;" in c for c in deletions) == 2
             assert sum("Path=/;" in c for c in deletions) == 2
-            assert client.get("/api/tenants/humancraft/disponibile").json()["motivo"] == (
+            assert client.get("/api/tenants/studiorossi/disponibile").json()["motivo"] == (
                 "questo nome è riservato"
             )
-            refused = client.post("/api/tenants/", json={**SIGNUP, "slug": "humancraft"})
+            refused = client.post("/api/tenants/", json={**SIGNUP, "slug": "studiorossi"})
             assert refused.status_code == 422, refused.text
     finally:
         registry.dispose()

@@ -2006,7 +2006,7 @@ Edit `packages/core/pyproject.toml`, replacing the `"pyjwt==2.13.0",` line insid
   "pyjwt[crypto]==2.13.0",
 ```
 
-Then: `cd /Users/ivansala/emdash/repositories/pigrocrm/.claude/worktrees/slice-1b-frontend && uv lock && uv sync`
+Then: `cd /Users/mariorossi/emdash/repositories/pigrocrm/.claude/worktrees/slice-1b-frontend && uv lock && uv sync`
 
 - [ ] **Step 4: Write `gdrive.py`**
 
@@ -2508,7 +2508,7 @@ from pigrocrm.core.db import Base, PrimaryKeyMixin, TimestampMixin
 class EmitterProfile(Base, PrimaryKeyMixin, TimestampMixin):
     """Who is issuing the document. One row, ever.
 
-    This is what replaces "Humancraft di Ivan Sala", the P.IVA, the PEC and the
+    This is what replaces "Studio Rossi", the P.IVA, the PEC and the
     address hardcoded into the previous system's `offer/header.typ` (lines 16-28). A CRM for
     Italian freelancers cannot have one freelancer's name in its source. Slice 3
     builds FatturaPA on these same columns, which is why the fiscal ones mirror
@@ -2781,15 +2781,15 @@ READONLY = Actor(id=None, type="user", role="readonly")
 
 def _upsert(**overrides: object) -> EmitterProfileUpsert:
     payload: dict[str, object] = {
-        "ragione_sociale": "Humancraft di Ivan Sala",
-        "partita_iva": "14518240966",
-        "pec": "someone@example.com",
+        "ragione_sociale": "Studio Rossi",
+        "partita_iva": "01234567890",
+        "pec": "studiorossi@pec.it",
         "indirizzo": "Via Roma 1",
         "comune": "Milano",
         "cap": "20053",
         "provincia": "MI",
         "telefono": "+39 02 1234567",
-        "email": "ivansala@humancraft.tech",
+        "email": "mario@example.com",
         "regime_fiscale": "Regime forfettario, L. 190/2014 art. 1 commi 54-89",
     }
     payload.update(overrides)
@@ -2803,8 +2803,8 @@ def test_get_before_any_save_raises_not_found(db_session: Session) -> None:
 
 def test_upsert_creates_the_single_row(db_session: Session) -> None:
     profile = EmitterProfileService(db_session).upsert(_upsert(), ADMIN)
-    assert profile.ragione_sociale == "Humancraft di Ivan Sala"
-    assert profile.partita_iva == "14518240966"
+    assert profile.ragione_sociale == "Studio Rossi"
+    assert profile.partita_iva == "01234567890"
 
 
 def test_a_second_upsert_updates_rather_than_creating_a_second_row(db_session: Session) -> None:
@@ -2830,15 +2830,15 @@ def test_a_partita_iva_with_a_trailing_newline_is_refused(db_session: Session) -
     # `re.match` with `$` would accept this -- `$` matches before a final newline --
     # and the 12-character value would reach the String(11) column as a raw DataError.
     with pytest.raises(ValidationFailed):
-        EmitterProfileService(db_session).upsert(_upsert(partita_iva="12345678901"), ADMIN)
+        EmitterProfileService(db_session).upsert(_upsert(partita_iva="01234567890\n"), ADMIN)
 
 
 def test_as_template_values_exposes_the_profile_under_emittente(db_session: Session) -> None:
     service = EmitterProfileService(db_session)
     service.upsert(_upsert(), ADMIN)
     values = service.as_template_values(ADMIN)
-    assert values["emittente"]["ragione_sociale"] == "Humancraft di Ivan Sala"
-    assert values["emittente"]["partita_iva"] == "14518240966"
+    assert values["emittente"]["ragione_sociale"] == "Studio Rossi"
+    assert values["emittente"]["partita_iva"] == "01234567890"
     assert "singleton" not in values["emittente"]
 
 
@@ -2976,7 +2976,7 @@ from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 
 ENTITY = "emitter_profile"
 # `.fullmatch()`, not `.match()`: `$` matches before a trailing newline, so
-# "12345678901" -- 12 characters, one more than the String(11) column -- would pass
+# "01234567890\n" -- 12 characters, one more than the String(11) column -- would pass
 # a `.match()` check and reach flush() as a raw, session-poisoning DataError. The same
 # defect this project has already paid for once on `customers.partita_iva`.
 PARTITA_IVA_RE = re.compile(r"\d{11}")
@@ -4347,12 +4347,12 @@ pytestmark = pytest.mark.skipif(
 
 SETTINGS = Settings(jwt_secret="x" * 32)
 PROFILE = {
-    "ragione_sociale": "Humancraft di Ivan Sala",
-    "partita_iva": "14518240966",
-    "email": "ivansala@humancraft.tech",
+    "ragione_sociale": "Studio Rossi",
+    "partita_iva": "01234567890",
+    "email": "mario@example.com",
     "telefono": "+39 02 1234567",
-    "pec": "someone@example.com",
-    "sito_web": "www.humancraft.tech",
+    "pec": "studiorossi@pec.it",
+    "sito_web": "www.example.com",
     "indirizzo": "Via Roma 1",
     "cap": "20053",
     "comune": "Milano",
@@ -4368,10 +4368,10 @@ def test_a_minimal_document_renders_to_a_pdf() -> None:
 
 def test_the_emitter_profile_reaches_the_header() -> None:
     header = build_header(PROFILE)
-    assert "Humancraft di Ivan Sala" in header
-    assert "14518240966" in header
+    assert "Studio Rossi" in header
+    assert "01234567890" in header
     # The `@` in an email is Typst syntax for a reference and must arrive escaped.
-    assert r"ivansala\@humancraft.tech" in header
+    assert r"mario\@example.com" in header
 
 
 def test_a_broken_raw_typst_block_names_the_template_line() -> None:
@@ -4428,9 +4428,9 @@ def test_a_value_that_looks_like_a_shell_argument_is_just_text() -> None:
 
 ```bash
 mkdir -p packages/core/src/pigrocrm/core/render/assets/media
-cp /Users/ivansala/emdash/repositories/pigrocrm/.reference-*/offer/pandoc-template.typst \
+cp /Users/mariorossi/emdash/repositories/pigrocrm/.reference-*/offer/pandoc-template.typst \
    packages/core/src/pigrocrm/core/render/assets/pandoc-template.typst
-cp /Users/ivansala/emdash/repositories/pigrocrm/.reference-*/offer/media/*.png \
+cp /Users/mariorossi/emdash/repositories/pigrocrm/.reference-*/offer/media/*.png \
    packages/core/src/pigrocrm/core/render/assets/media/
 ```
 
@@ -4471,9 +4471,9 @@ Create `packages/core/src/pigrocrm/core/render/assets/header.typ.template` — t
 )
 ```
 
-Rename the logo so the header does not hardcode a brand: `mv packages/core/src/pigrocrm/core/render/assets/media/humancraftTech-logo-nobg.png packages/core/src/pigrocrm/core/render/assets/media/logo.png`.
+Rename the logo so the header does not hardcode a brand: `mv packages/core/src/pigrocrm/core/render/assets/media/studiorossiTech-logo-nobg.png packages/core/src/pigrocrm/core/render/assets/media/logo.png`.
 
-Also create `packages/core/src/pigrocrm/core/render/assets/template-offer.md` — a copy of `.reference-*/offer/template-offer.md` with the legal text carried over **verbatim** and only the placeholder syntax rewritten, plus `Humancraft di Ivan Sala` replaced by `{{emittente.ragione_sociale}}` throughout. The mapping, applied literally:
+Also create `packages/core/src/pigrocrm/core/render/assets/template-offer.md` — a copy of `.reference-*/offer/template-offer.md` with the legal text carried over **verbatim** and only the placeholder syntax rewritten, plus `Studio Rossi` replaced by `{{emittente.ragione_sociale}}` throughout. The mapping, applied literally:
 
 | Gestionale precedente | PigroCRM |
 |---|---|
@@ -4488,7 +4488,7 @@ Also create `packages/core/src/pigrocrm/core/render/assets/template-offer.md` �
 | `[ATTIVITA_EXTENDED]` | `{{offerta.attivita}}` |
 | `[SERVIZIO_ATTIVITA]` / `[TOTALE]` | `{{#each offerta.righe}} … {{/each}}` over `{{servizio}}` / `{{totale}}` |
 | `[MODALITA_FATTURAZIONE_E_PAGAMENTO]` | `{{offerta.pagamento}}` |
-| `Humancraft di Ivan Sala` (9 occurrences) | `{{emittente.ragione_sociale}}` |
+| `Studio Rossi` (9 occurrences) | `{{emittente.ragione_sociale}}` |
 | the fixed forfettario sentence | `{{emittente.regime_fiscale}}` |
 | `![](./media/sign_is.png){ width=90pt }` | unchanged |
 
@@ -4553,7 +4553,7 @@ def build_header(profile: dict[str, Any]) -> str:
     Rendered through the same engine as the document body, so the issuer's own values
     get the same Typst escaping -- an `@` in an email address is a Typst reference and
     would otherwise fail the compile, which is precisely the bug the previous system's `header.typ`
-    worked around by hand-writing `ivansala\\@humancraft.tech` in the source.
+    worked around by hand-writing `mario\\@example.com` in the source.
     """
     return render_template(
         HEADER_TEMPLATE.read_text(encoding="utf-8"), {"emittente": profile}
@@ -4800,7 +4800,7 @@ Oggetto: {{offerta.oggetto}}
 @pytest.fixture
 def setup(db_session: Session, tmp_path: Path) -> tuple[DocumentService, Customer, object]:
     EmitterProfileService(db_session).upsert(
-        EmitterProfileUpsert(ragione_sociale="Humancraft di Ivan Sala", partita_iva="14518240966"),
+        EmitterProfileUpsert(ragione_sociale="Studio Rossi", partita_iva="01234567890"),
         ADMIN,
     )
     template = TemplateService(db_session).create(
@@ -5407,10 +5407,10 @@ def test_emitter_profile_is_404_before_it_is_saved_then_readable(admin_client: T
     assert admin_client.get("/api/emitter").status_code == 404
     saved = admin_client.put(
         "/api/emitter",
-        json={"ragione_sociale": "Humancraft di Ivan Sala", "partita_iva": "14518240966"},
+        json={"ragione_sociale": "Studio Rossi", "partita_iva": "01234567890"},
     )
     assert saved.status_code == 200, saved.text
-    assert admin_client.get("/api/emitter").json()["partita_iva"] == "14518240966"
+    assert admin_client.get("/api/emitter").json()["partita_iva"] == "01234567890"
 
 
 def test_a_non_admin_cannot_write_the_emitter_profile(collaborator_client: TestClient) -> None:
@@ -8077,8 +8077,8 @@ describe('EmitterPanel', () => {
   it('sends the whole profile with PUT', async () => {
     const fetchSpy = mockJson({ code: 'not_found', detail: 'x' }, 404)
     render(<EmitterPanel />, { wrapper })
-    await userEvent.type(await screen.findByLabelText(/Ragione sociale/), 'Humancraft')
-    await userEvent.type(screen.getByLabelText(/P.IVA/), '14518240966')
+    await userEvent.type(await screen.findByLabelText(/Ragione sociale/), 'Studio Rossi')
+    await userEvent.type(screen.getByLabelText(/P.IVA/), '01234567890')
     await userEvent.click(screen.getByRole('button', { name: 'Salva' }))
     await waitFor(() => {
       const call = fetchSpy.mock.calls.find(
@@ -8086,8 +8086,8 @@ describe('EmitterPanel', () => {
       )
       expect(call).toBeDefined()
       const body = JSON.parse(String((call?.[1] as RequestInit).body)) as Record<string, unknown>
-      expect(body.ragione_sociale).toBe('Humancraft')
-      expect(body.partita_iva).toBe('14518240966')
+      expect(body.ragione_sociale).toBe('Studio Rossi')
+      expect(body.partita_iva).toBe('01234567890')
     })
   })
 

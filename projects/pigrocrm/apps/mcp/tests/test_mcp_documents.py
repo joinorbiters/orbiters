@@ -326,8 +326,8 @@ async def test_describe_emitter_profile_reads_the_issuer_every_header_prints(
     async with Client(server) as client:
         profile = _payload(await client.call_tool("describe_emitter_profile", {}))
 
-    assert profile["ragione_sociale"] == "Humancraft di Ivan Sala"
-    assert profile["partita_iva"] == "14518240966"
+    assert profile["ragione_sociale"] == "Studio Rossi"
+    assert profile["partita_iva"] == "01234567890"
     # Storage keys, never bytes (spec slice 2 §7): the logo travels as a key the REST
     # API can serve, exactly like every other identifier on this surface.
     assert "logo_key" in profile

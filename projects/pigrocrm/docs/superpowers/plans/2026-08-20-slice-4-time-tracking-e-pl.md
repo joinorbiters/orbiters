@@ -6328,8 +6328,8 @@ def test_the_seeded_template_exists_and_names_no_freelancer(db_session: Session)
     body = (ASSETS / "template-time-report.md").read_text(encoding="utf-8")
     header = (ASSETS / "header.typ.template").read_text(encoding="utf-8")
     for source in (body, header):
-        assert "humancraft" not in source.lower()
-        assert "ivansala" not in source.lower()
+        assert "studiorossi" not in source.lower()
+        assert "mariorossi" not in source.lower()
         assert not re.search(r"P\.IVA\s+\d{11}", source)
     # The carried-over layout, asserted where it is expressible as text.
     assert "0.7fr" in body

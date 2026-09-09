@@ -2,7 +2,7 @@
 
 Slice 9D, task 4. Prerequisiti già chiusi su questa installazione: il progetto OAuth è
 pubblicato (`docs/superpowers/notes/2026-09-04-google-oauth-publish-runbook.md`) e
-l'account `ivansala@humancraft.tech` ha già collegato Drive — la riga
+l'account `mario@example.com` ha già collegato Drive — la riga
 `google_drive_accounts` è `active`, con `root_folder_ids` già valorizzato:
 
 | Cartella | ID |

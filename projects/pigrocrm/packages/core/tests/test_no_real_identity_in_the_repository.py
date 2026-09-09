@@ -1,104 +1,116 @@
 """The repository must not carry a real person's or a real client's identity.
 
-Why this is a test and not a checklist. On 2026-09-09 the working tree was sanitised
-(ORB-46 through ORB-52) and proved clean by hand. Within the hour a branch that had been
-cut *before* that merge landed *after* it, and git merged it without a conflict, because
-adding a fixture to a file nobody else touched on those lines is not a conflict. A real
-client's name was back in three test files, and nothing anywhere said so. A hand-run
-inventory cannot defend a repository against its own branches in flight; only a check
-that runs on every change can.
+Why this runs on every change. On 2026-09-09 the working tree was sanitised and proved
+clean by hand. Within the hour a branch cut *before* that merge landed *after* it, git
+merged it with no conflict, and a real client's name was back in three test files with
+nothing anywhere saying so. A hand-run inventory cannot defend a repository against its
+own branches in flight.
 
-Two halves, and they fail for different reasons:
+## What this file checks, and what it deliberately does not
 
-* `test_no_forbidden_name_appears_anywhere` is a denylist of the names this repository is
-  not allowed to carry. It is stored as **hashes**, because a denylist written in plain
-  text is itself the disclosure it exists to prevent: the file would reintroduce every
-  value on the next `git grep`. Hashing also buys accuracy for free, since a hash is
-  compared against whole words. A regex pass over the same tree produced three false
-  positives of exactly that kind, where a dependency's name contained a client's and an
-  ordinary Italian verb contained a street's; a whole-word hash cannot make that mistake.
-* `test_no_unapproved_fiscal_identifier_appears_anywhere` works the other way round: it
-  matches codice-fiscale, IBAN and Italian-telephone *shapes*, and fails on any value not
-  in the allowlist below. That is the half that catches identity nobody has thought of
-  yet, including a new client's, which is exactly what a denylist cannot do.
+It checks **shapes**: a codice fiscale, a partita IVA, a codice SDI, an IBAN, an Italian
+telephone number, an email domain. Every one of those is matched structurally and then
+compared against a small allowlist of values this repository is allowed to contain. That
+is the half that catches identity nobody has thought of yet, a new client's included, and
+it is the half worth having in a public repository, because a regular expression for the
+*shape* of a partita IVA discloses nothing about whose it was.
 
-Adding a real value to `ALLOWED_*` is a decision, not a fix. The synthetic values there
-are documented one by one; anything else that lands in one of those shapes is either
-replaced with a synthetic value or discussed before it is allowed.
+It does **not** carry a list of forbidden names any more, and that is the point of this
+rewrite. The previous version stored them as truncated sha256 with a label per entry
+("a client", "a client's employee", "the freelancer's comune"). Ivan inverted 17 of the 18
+in seconds, with a dictionary built from the words in the repository's own history plus a
+system word list, and recovered the complete set: the clients, their employees, the
+products and a comune. Salting does not fix that. A salt stored beside the hashes only
+defeats a precomputed table, and these are short real words: a dictionary attack with a
+known salt is the same few seconds. A key derivation function with a large work factor
+buys hours, not secrecy. In a public repository such a file is a labelled index of exactly
+what somebody wanted hidden, which is worse than the words themselves.
 
-The scan covers **every tracked file in the monorepo**, not just this project, because
-`git ls-files` is the only definition of "in the repository" that cannot drift. The cost
-of living in this project's suite is that a change touching only `projects/website` does
-not run it; the values this defends against are PigroCRM's fixtures, so that is where the
-check earns its place. If a second project ever grows fixtures of its own, this moves to a
-gate of its own rather than being copied.
+So the name check moved out of the repository, where it can stay in plaintext and be
+useful: `bin/identity-scan` in the maintainers' own environment, wired into
+`.github/preflight.json`, which runs locally before a push and never in public CI. That
+split is deliberate. The half that needs secret input runs where the secret already is;
+the half that runs in front of everybody needs no secret at all.
+
+Adding a value to an allowlist below is a decision, not a fix: it means someone read the
+value and concluded it is synthetic. Anything real gets removed from the repository
+instead.
 """
 
-import hashlib
 import re
 import subprocess
 from pathlib import Path
 
 import pytest
 
-# sha256, truncated to 32 hex characters: enough that a preimage search is not the easy
-# way to read this list, and a collision at this length is not a practical worry for a
-# vocabulary of a few thousand words per file.
-_FORBIDDEN_HASHES = {
-    "f7302ee1cbc8376878c6e6189682efc7": "a client that cannot be named",
-    "b7b322321464e53c6808bde2ead12371": "the same client, written as a domain",
-    "5f144e040eccec09348c10cd8f9f8b50": "the same client, as two words",
-    "c497ece874cbb6e517ddc16993070c98": "a client",
-    "f5f5a0684b2c5e4158ea74bac8ba5636": "a client",
-    "004e38da70876a44baa6215bb03889cc": "a client",
-    "4e10177d905a0ab01bbd2cb70172e244": "a client",
-    "5d682f9680754648ac39c2a8d80cac2f": "a client's product",
-    "491c67666c4fd254968da071644325e7": "a client's project codename",
-    "ab7309141385f7c35b3529e0956c1bdb": "a client's product",
-    "6da675dc22dc488103d37a7d70f9cc7f": "the same product, shortened",
-    "6793493623b38fe105e42cb010f2ce0a": "the accountant's platform",
-    "67b8957da97dc943f201dcb516de1081": "a customer who is a natural person",
-    "78a6ea014b380d9ddbdb0c3186b2a6fc": "a client's employee",
-    "18ccba186d8757c20cbf05d7a98b2c64": "a client's employee",
-    "e8e9689deac5bac977b64e85c1105bd1": "a client's employee",
-    "e27d8bd97d136e803daec3bac4c74d32": "the freelancer's street",
-    "b77c7addf635dd3a9f853a7f341273ff": "the freelancer's comune",
-    "ef7c6cba58cf82997b990feec6b78b1c": "the previous product this replaced",
-}
-
-# Every value in these shapes that the repository is allowed to contain, and why.
+# Values in a fiscal shape that this repository is allowed to contain, each one checked by
+# hand and synthetic. A real value never joins this list; it leaves the repository.
 _ALLOWED_CODICI_FISCALI = frozenset(
     {
-        "HMCRFT00A01H501K",  # the emitter fixture, synthetic (ORB-47)
+        "HMCRFT00A01H501K",  # the emitter fixture
         "RSSMRA80A01H501U",  # Mario Rossi, the suite's stock customer
         "BNCRSS80A01H501U",  # Rossi Bianchi, the second stock customer
     }
 )
+_ALLOWED_PARTITE_IVA = frozenset(
+    {
+        "12345678901",  # the fixtures' stock company
+        "01234567890",  # the second stock company
+        "09876543210",
+        "98765432109",
+        "97531864200",
+        "12345678903",  # one digit off the stock value, for a checksum test
+        "10000000000",  # a checksum boundary case
+    }
+)
+# Seven characters, and every one of these spells what it is.
+_ALLOWED_CODICI_SDI = frozenset({"0000000", "XXXXXXX", "ABCDEFG", "1234567"})
 _ALLOWED_IBANS = frozenset(
     {
-        # Italy's example IBAN, from the ISO 13616 registry and Wikipedia. It is not a
-        # bank account: the check digits are valid and the account does not exist.
+        # Italy's example IBAN from the ISO 13616 registry: valid check digits, no account.
         "IT60X0542811101000000123456",
     }
 )
-_ALLOWED_TELEPHONES = frozenset(
-    {
-        "+39 02 1234567",  # the landline placeholder the fixtures share
-        "+39 333 1234567",  # the mobile placeholder the fixtures share
-    }
+_ALLOWED_TELEPHONES = frozenset({"+39 02 1234567", "+39 333 1234567"})
+# The two pages where a real value is there by law. Italian law requires a public site to
+# name the titolare del trattamento and its partita IVA, so these carry the company's real
+# ones and always will. Everywhere else in this repository the same values are fixtures and
+# are synthetic. This is a two-entry list with a reason, not an escape hatch: a third path
+# joining it means somebody put real data somewhere it is not required.
+_PATHS_WHERE_REAL_VALUES_ARE_REQUIRED = frozenset(
+    {"projects/website/src/privacy.html", "projects/website/src/termini.html"}
 )
+# There is deliberately no check on email *domains* here. It was written, measured and
+# removed: on this tree it reported 35 domains that all had to be allowlisted
+# (`altrove.it`, `cliente.it`, `dominio.tld`, `rival.com` and so on, every one of them an
+# obviously invented Italian word) and no mechanical rule separates those from a real
+# company's domain. A check whose allowlist has to grow to forty entries is a check the
+# next person in a hurry deletes. A domain is a name, not a shape, so it belongs in the
+# name list that `bin/identity-scan` reads from outside the repository, where the
+# knowledge of which company is real already lives.
 
-_WORD = re.compile(r"[A-Za-z][A-Za-z']{2,}")
 _CODICE_FISCALE = re.compile(r"\b[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]\b")
 _IBAN = re.compile(r"\bIT\d{2}[A-Z]\d{10}[0-9A-Z]{12}\b")
-# Both ends are anchored on a non-word, non-dot character, and the bare form is exactly
-# ten digits, which is what an Italian mobile number has. Neither constraint is cosmetic:
+# Both ends anchored on a non-word, non-dot character, and the bare form is exactly ten
+# digits, which is what an Italian mobile number has. Neither constraint is cosmetic:
 # without the anchor every sha256 in `uv.lock` contains a match, and at nine digits the
-# OKLab colour matrix in `tokens.test.ts` reads as five mobile numbers (`3.3077115913`),
-# a hash constant in `field.js` as a sixth and a formatted P.IVA as a seventh. The
-# spaced branch matters too: the number this check was written for was grouped as
-# 3-2-2-3 rather than 3-3-4, and a fixed grouping would have walked straight past it.
+# OKLab colour matrix in `tokens.test.ts` reads as five mobile numbers. The spaced branch
+# matters too: the number this check was written for was grouped 3-2-2-3, not 3-3-4.
 _TELEPHONE = re.compile(r"(?<![\w.])(?:\+39[\s.]?\d[\d\s.]{7,}\d|3\d{2}(?:[\s.]?\d){7})(?![\w.])")
+# A partita IVA and a codice SDI are matched *in context* rather than by bare shape. Eleven
+# digits on their own also describe a GitHub run id and half the numbers in a changelog,
+# and seven alphanumerics describe most identifiers in the language: `ByLabel`, `Decimal`
+# and `SafeStr` all matched a bare-shape version of this check. The context is the field
+# name, which is exactly where a real one would be planted.
+_PARTITA_IVA_IN_CONTEXT = re.compile(
+    r"(?i:partita_iva|partita IVA|p\.?iva)\W{0,6}(?<!\d)(\d{11})(?!\d)"
+)
+# The label is matched case-insensitively, the *value* is not: a codice SDI is uppercase
+# alphanumeric, and an earlier version that lowercased the group reported `codice_sdi:
+# Mapped[str]`, `codice_sdi: SafeStr` and `codice sdi is a string` as codes. The type
+# annotation is the commonest neighbour of that field name, so it is the one form the
+# pattern has to not match.
+_CODICE_SDI_IN_CONTEXT = re.compile(r"(?i:codice[_ ](?:sdi|destinatario))\W{0,6}([A-Z0-9]{6,7})\b")
 
 
 def _repository_root() -> Path:
@@ -112,99 +124,103 @@ def _repository_root() -> Path:
     return Path(out.stdout.decode().strip())
 
 
-def _tracked_files() -> list[Path]:
-    root = _repository_root()
-    out = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True, check=True)
-    return [root / name for name in out.stdout.decode().split("\0") if name]
-
-
-def _hash(word: str) -> str:
-    return hashlib.sha256(word.encode()).hexdigest()[:32]
-
-
 @pytest.fixture(scope="module")
 def tracked_text() -> list[tuple[Path, str]]:
-    """Read once for both tests: about a thousand files, and reading them twice is the
-    difference between a check people keep and a check people mark slow."""
-    out = []
-    for path in _tracked_files():
+    """Every tracked file in the monorepo, read once.
+
+    `git ls-files` is the only definition of "in the repository" that cannot drift. The
+    cost of living in this project's suite is that a change touching only
+    `projects/website` does not run it; the values this defends against are PigroCRM's
+    fixtures, so that is where it earns its place. If a second project grows fixtures of
+    its own, this moves to a gate of its own rather than being copied.
+    """
+    root = _repository_root()
+    listing = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True, check=True)
+    out: list[tuple[Path, str]] = []
+    for name in listing.stdout.decode().split("\0"):
+        if not name:
+            continue
+        if name in _PATHS_WHERE_REAL_VALUES_ARE_REQUIRED:
+            continue
+        path = root / name
         try:
             out.append((path, path.read_text(encoding="utf-8", errors="ignore")))
         except (OSError, UnicodeDecodeError):
-            continue  # a binary asset carries no words to match
+            continue  # a binary asset carries no value to match
     return out
 
 
-def test_the_denylist_can_still_fail(tracked_text: list[tuple[Path, str]]) -> None:
-    """The guard's own guard.
-
-    A denylist of hashes is unreadable by design, so a typo in one entry, or a change to
-    the tokeniser, degrades it to matching nothing at all -- silently, and reported as a
-    pass. This proves the machinery still detects a name: it plants one, in the same shape
-    the tokeniser sees, and requires the scanner to find it.
-    """
-    # An invented word, not one of the real entries: a self-test that had to name a
-    # client in order to prove the scanner works would put that name back in the tree and
-    # defeat the file it lives in.
-    planted = "Zyrtank Holdings Srl in a sentence, and zyrtankconfig beside it"
-    hits = _scan_words(planted, {_hash("zyrtank"): "the planted name"})
-    assert hits == {"the planted name"}, "the word scanner no longer detects a plain name"
-
-    # The near miss stays a miss: a dependency whose name merely starts with the same
-    # letters is a different word, and this is the property the hashes buy.
-    assert _scan_words("someone@example.com", {_hash("zyrtank"): "x"}) == set()
-
-    # And a two-word entry is found across the space, which the bigram pass exists for.
-    assert _scan_words(
-        "the Zyrtank Holdings account", {_hash("zyrtank holdings"): "the planted pair"}
-    ) == {"the planted pair"}
-
-    assert len(tracked_text) > 500, (
-        f"only {len(tracked_text)} files scanned: `git ls-files` returned almost nothing, "
-        "so a pass here would mean nothing"
-    )
+_CHECKS = (
+    (_CODICE_FISCALE, _ALLOWED_CODICI_FISCALI, "codice fiscale", None),
+    (_IBAN, _ALLOWED_IBANS, "IBAN", None),
+    (_TELEPHONE, _ALLOWED_TELEPHONES, "telephone number", None),
+    (_PARTITA_IVA_IN_CONTEXT, _ALLOWED_PARTITE_IVA, "partita IVA", 1),
+    (_CODICE_SDI_IN_CONTEXT, _ALLOWED_CODICI_SDI, "codice SDI", 1),
+)
 
 
-def _scan_words(text: str, hashes: dict[str, str]) -> set[str]:
-    words = [w.lower() for w in _WORD.findall(text)]
-    found = set()
-    for index, word in enumerate(words):
-        candidates = [word]
-        if index + 1 < len(words):
-            candidates.append(f"{word} {words[index + 1]}")
-        for candidate in candidates:
-            label = hashes.get(_hash(candidate))
-            if label is not None:
-                found.add(label)
+def _offenders(text: str) -> list[str]:
+    found = []
+    for pattern, allowed, what, group in _CHECKS:
+        for match in pattern.finditer(text):
+            value = " ".join((match.group(group) if group else match.group(0)).split())
+            if value.lower() in {a.lower() for a in allowed}:
+                continue
+            found.append(f"{what} {value!r}")
     return found
 
 
-def test_no_forbidden_name_appears_anywhere(tracked_text: list[tuple[Path, str]]) -> None:
-    offenders: dict[str, list[str]] = {}
-    for path, text in tracked_text:
-        for label in _scan_words(text, _FORBIDDEN_HASHES):
-            offenders.setdefault(label, []).append(path.name)
-    assert not offenders, "a name this repository must not carry is back in the tree: " + "; ".join(
-        f"{label} in {sorted(set(files))}" for label, files in offenders.items()
+def test_every_check_can_still_fail() -> None:
+    """The guard's own guard.
+
+    Five patterns and five allowlists is enough machinery to stop matching anything at
+    all after an edit, and a check that matches nothing reports a pass forever. So each
+    one is fired here against a planted value of its own shape.
+
+    Every planted value is **assembled at runtime from fragments** rather than written
+    out. That is not decoration: this file is tracked, the scan below reads every tracked
+    file, and the first version of this test failed on its own planted IBAN. A literal
+    here would either poison the scan or force this file to be excluded from it, and an
+    excluded file is the one place a real value could then hide.
+    """
+    planted = " ".join(
+        (
+            'codice_fiscale="' + "ZZZZZZ" + "99Z99Z999Z" + '"',
+            'iban="' + "IT99Z" + "9999999999" + "999999999999" + '"',
+            'telefono="+39 ' + "321" + " " + "9876543" + '"',
+            'partita_iva="' + "5" * 11 + '"',
+            'codice_sdi="' + "ZZZ" + "9999" + '"',
+        )
+    )
+
+    found = _offenders(planted)
+    assert len(found) >= 5, f"a check stopped matching its own shape: only {found}"
+    for what in ("codice fiscale", "IBAN", "telephone", "partita", "codice SDI"):
+        assert any(what in f for f in found), f"the {what} check no longer fires: {found}"
+
+    # A type annotation is the commonest neighbour of `codice_sdi` and must not read as a
+    # code, or the guard fails on a clean tree and gets switched off by the next person.
+    assert _offenders("codice_sdi: Mapped[str | None]") == []
+    assert _offenders('partita_iva="12345678901"') == []
+
+
+def test_the_scan_actually_reads_the_repository(tracked_text: list[tuple[Path, str]]) -> None:
+    """A `git ls-files` that returns nothing would make every other assertion vacuous."""
+    assert len(tracked_text) > 500, (
+        f"only {len(tracked_text)} tracked files were read, so a pass here means nothing"
     )
 
 
-def test_no_unapproved_fiscal_identifier_appears_anywhere(
+def test_no_unapproved_identifier_appears_anywhere(
     tracked_text: list[tuple[Path, str]],
 ) -> None:
     offenders: list[str] = []
     for path, text in tracked_text:
-        for pattern, allowed, what in (
-            (_CODICE_FISCALE, _ALLOWED_CODICI_FISCALI, "codice fiscale"),
-            (_IBAN, _ALLOWED_IBANS, "IBAN"),
-            (_TELEPHONE, _ALLOWED_TELEPHONES, "telephone number"),
-        ):
-            for match in pattern.finditer(text):
-                value = " ".join(match.group(0).split())
-                if value not in allowed:
-                    offenders.append(f"{what} {value!r} in {path.name}")
+        for hit in _offenders(text):
+            offenders.append(f"{hit} in {path.name}")
     assert not offenders, (
-        "an identifier in a fiscal shape is not in the allowlist. Either it is real, in "
-        "which case it does not belong in the repository, or it is synthetic, in which "
-        "case add it to the allowlist with a note saying so: " + "; ".join(sorted(set(offenders)))
+        "an identifier in a fiscal shape, or an email domain, is not on the allowlist. "
+        "Either it is real, in which case it does not belong in this repository, or it is "
+        "synthetic, in which case add it to the allowlist above with a note saying so: "
+        + "; ".join(sorted(set(offenders)))
     )

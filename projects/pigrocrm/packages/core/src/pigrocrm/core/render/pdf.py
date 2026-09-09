@@ -99,7 +99,7 @@ def build_header(profile: dict[str, Any]) -> str:
     Rendered through the same engine as the document body, so the issuer's own values
     get the same escaping -- an `@` in an email address is a Typst reference and would
     otherwise fail the compile, which is precisely the bug the previous system's `header.typ` worked
-    around by hand-writing `ivansala\\@humancraft.tech` in the source. `header.typ`
+    around by hand-writing `mario\\@example.com` in the source. `header.typ`
     itself is never handed to Pandoc (it reaches Typst directly, via
     `--include-in-header`), so the "markdown" context `render_template` applies by
     default here never goes through Pandoc's writer at all -- it is not the context

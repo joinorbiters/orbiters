@@ -64,15 +64,15 @@ def emitter(logged_in: TestClient) -> dict[str, Any]:
     response = logged_in.put(
         "/api/emitter",
         json={
-            "ragione_sociale": "Humancraft di Ivan Sala",
-            "partita_iva": "14518240966",
+            "ragione_sociale": "Studio Rossi",
+            "partita_iva": "01234567890",
             "codice_fiscale": "HMCRFT00A01H501K",
             "indirizzo": "Via Vittorio Veneto 12",
             "cap": "20124",
             "comune": "Milano",
             "provincia": "MI",
             "nazione": "IT",
-            "email": "someone@example.com",
+            "email": "mario@example.com",
         },
     )
     assert response.status_code == 200, response.text

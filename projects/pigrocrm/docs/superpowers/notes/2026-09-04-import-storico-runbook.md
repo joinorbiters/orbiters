@@ -9,7 +9,7 @@
 > con valori sintetici.
 
 Slice 9A. Dataset: `docs/superpowers/data/2026-09-04-fatture-2026.json` (14 righe,
-numeri 2, 3, 5, 7–17; i numeri 1, 4, 6 non risultano emessi nel gestionale precedente e vanno dichiarati
+numeri 2–6, 8–12, 14–17; i numeri 1, 7, 13 non risultano emessi nel gestionale precedente e vanno dichiarati
 come buchi al passo 4). Ogni riga è nel formato di `InvoiceImport`
 (`packages/core/src/pigrocrm/core/invoices/schemas.py`); i campi che iniziano per `_`
 (`_cliente`, `_nota`, `_avvertenze`) sono ausiliari, non fanno parte dello schema e vanno
@@ -21,9 +21,9 @@ elemento del JSON, campo `_avvertenze`):
 1. **Bollo.** Il dataset è scritto con `bollo: "0.00"` su tutte le 14 righe. Nello
    screenshot del registro del gestionale precedente la colonna «Totale» coincide sempre con «Imp. Reddito»,
    il che è compatibile sia con «niente bollo applicato» sia con «bollo assolto
-   dall'emittente e quindi fuori dal totale». **Il titolare deve confermare contro i PDF
+   dall'emittente e quindi fuori dal totale). **Il titolare deve confermare contro i PDF
    originali** prima dell'import: se dai PDF risulta un bollo di 2 € (dovuto sulle
-   fatture con imponibile > 77,47 €, cioè tutte tranne la 12 e la 17), correggere
+   fatture con imponibile > 77,47 €, cioè tutte tranne la 11 e la 17), correggere
    `bollo: "2.00"` su quelle righe **e lasciare `totale` invariato**.
 
    Il bollo **non si somma al totale**: il CRM verifica `imponibile + imposta = totale` e
@@ -32,7 +32,7 @@ elemento del JSON, campo `_avvertenze`):
    `packages/core/src/pigrocrm/core/invoices/totals.py` fa lo stesso per una fattura
    emessa da PigroCRM). Un `totale` ricalcolato come `imponibile + bollo` viene
    **rifiutato** con `ValidationFailed` sul campo `totale`.
-2. **Date di incasso.** Per le fatture con `stato_pagamento: "incassato"` (2, 3, 5, 7–13)
+2. **Date di incasso.** Per le fatture con `stato_pagamento: "incassato"` (2–6, 8–12)
    il dataset porta un *placeholder*: `data_incasso = data_emissione + 30 giorni`. Non è
    la data reale — è solo un valore che soddisfa il vincolo del servizio («un incasso
    senza data non è un incasso»). **Il titolare deve sostituirla con la data reale
@@ -44,7 +44,7 @@ elemento del JSON, campo `_avvertenze`):
    dell'import.
 4. **Trasmissione esterna.** `trasmessa_esternamente_il` è `null` su tutte le righe
    (nessuna evidenza di invio/consegna nelle email per nessuna delle 14 fatture,
-   compresa la 5 che risulta esplicitamente non consegnata).
+   compresa la 4 che risulta esplicitamente non consegnata).
 
 ## Passi
 
@@ -101,8 +101,8 @@ consapevoli che quella riga resterà senza PDF — e annotarlo fra i residui.
 
 ### 4. Importare le 14 righe, in ordine di numero
 
-Per ciascuna riga del dataset, **in ordine di `numero`** (2, 3, 5, 7, 8, 9, 10, 11, 12,
-13, 14, 15, 16, 17):
+Per ciascuna riga del dataset, **in ordine di `numero`** (2, 3, 4, 5, 6, 8, 9, 10, 11, 12,
+14, 15, 16, 17):
 
 1. Risolvere `_cliente` (ragione sociale esatta) in un `customer_id` reale, con
    `search_customers` sul server MCP `pigrocrm` (o `GET /api/customers?...` lato REST).
@@ -118,15 +118,15 @@ Per ciascuna riga del dataset, **in ordine di `numero`** (2, 3, 5, 7, 8, 9, 10, 
    importate. Un errore di validazione non lascia niente a metà: l'import controlla tutto
    (totali, date, PDF, profili, registro) prima di scrivere la prima riga.
 
-Al termine delle 14 righe, dichiarare i numeri mancanti 1, 4 e 6 come buchi del
+Al termine delle 14 righe, dichiarare i numeri mancanti 1, 7 e 13 come buchi del
 registro con una sola chiamata:
 
 ```
 declare_invoice_register_gaps
 buchi = [
   {"numero": 1, "motivo": "<da confermare col titolare>"},
-  {"numero": 4, "motivo": "<da confermare col titolare>"},
-  {"numero": 6, "motivo": "<da confermare col titolare>"},
+  {"numero": 7, "motivo": "<da confermare col titolare>"},
+  {"numero": 13, "motivo": "<da confermare col titolare>"},
 ]
 ```
 

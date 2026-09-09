@@ -51,7 +51,7 @@ def emitter(logged_in: TestClient) -> dict[str, Any]:
         "/api/emitter",
         json={
             "ragione_sociale": "Studio Rossi",
-            "partita_iva": "14518240966",
+            "partita_iva": "01234567890",
             "codice_fiscale": "HMCRFT00A01H501K",
             "indirizzo": "Via Vittorio Veneto 12",
             "cap": "20124",

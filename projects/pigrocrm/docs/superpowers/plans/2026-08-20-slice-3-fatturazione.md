@@ -2266,19 +2266,19 @@ from pigrocrm.core.invoices.totals import build_riepilogo, sum_totals
 Q = f"{{{FPR12_NAMESPACE}}}"
 
 EMITTENTE = PartySnapshot(
-    ragione_sociale="Humancraft di Ivan Sala",
-    partita_iva="14518240966",
+    ragione_sociale="Studio Rossi",
+    partita_iva="01234567890",
     codice_fiscale="HMCRFT00A01H501K",
     codice_sdi=None,
-    pec="someone@example.com",
+    pec="studiorossi@pec.it",
     indirizzo="Via Vittorio Veneto 12",
     cap="20124",
     comune="Milano",
     provincia="MI",
     nazione="IT",
-    email="someone@example.com",
+    email="mario@example.com",
     telefono="+39 02 1234567",
-    sito_web="https://humancraft.tech",
+    sito_web="https://example.com",
 )
 
 FISCALE = {
@@ -6100,15 +6100,15 @@ def service(db_session: Session, tmp_path) -> InvoiceService:  # type: ignore[no
     FiscalProfileService(db_session).upsert(FiscalProfileUpsert(codice_regime="RF19"), ADMIN)
     EmitterProfileService(db_session).upsert(
         EmitterProfileUpsert(
-            ragione_sociale="Humancraft di Ivan Sala",
-            partita_iva="14518240966",
+            ragione_sociale="Studio Rossi",
+            partita_iva="01234567890",
             codice_fiscale="HMCRFT00A01H501K",
             indirizzo="Via Vittorio Veneto 12",
             cap="20124",
             comune="Milano",
             provincia="MI",
             nazione="IT",
-            email="someone@example.com",
+            email="mario@example.com",
         ),
         ADMIN,
     )
@@ -6392,7 +6392,7 @@ def test_the_snapshot_freezes_both_parties_and_the_fiscal_parameters(
     ).scalar_one()
     assert stored["versione"] == SNAPSHOT_VERSIONE
     assert stored["cliente"]["ragione_sociale"] == "Acme S.r.l."
-    assert stored["emittente"]["ragione_sociale"] == "Humancraft di Ivan Sala"
+    assert stored["emittente"]["ragione_sociale"] == "Studio Rossi"
     assert stored["fiscale"]["codice_regime"] == "RF19"
 
 
@@ -6946,15 +6946,15 @@ def world(db_engine: Engine, tmp_path):  # type: ignore[no-untyped-def]
         FiscalProfileService(setup).upsert(FiscalProfileUpsert(codice_regime="RF19"), ADMIN)
         EmitterProfileService(setup).upsert(
             EmitterProfileUpsert(
-                ragione_sociale="Humancraft di Ivan Sala",
-                partita_iva="14518240966",
+                ragione_sociale="Studio Rossi",
+                partita_iva="01234567890",
                 codice_fiscale="HMCRFT00A01H501K",
                 indirizzo="Via Vittorio Veneto 12",
                 cap="20124",
                 comune="Milano",
                 provincia="MI",
                 nazione="IT",
-                email="someone@example.com",
+                email="mario@example.com",
             ),
             ADMIN,
         )
@@ -7213,15 +7213,15 @@ def service(db_session: Session, tmp_path) -> InvoiceService:  # type: ignore[no
     FiscalProfileService(db_session).upsert(FiscalProfileUpsert(codice_regime="RF19"), ADMIN)
     EmitterProfileService(db_session).upsert(
         EmitterProfileUpsert(
-            ragione_sociale="Humancraft di Ivan Sala",
-            partita_iva="14518240966",
+            ragione_sociale="Studio Rossi",
+            partita_iva="01234567890",
             codice_fiscale="HMCRFT00A01H501K",
             indirizzo="Via Vittorio Veneto 12",
             cap="20124",
             comune="Milano",
             provincia="MI",
             nazione="IT",
-            email="someone@example.com",
+            email="mario@example.com",
         ),
         ADMIN,
     )
@@ -7761,15 +7761,15 @@ def service(db_session: Session, storage: LocalFileStorage) -> InvoiceService:
     FiscalProfileService(db_session).upsert(FiscalProfileUpsert(codice_regime="RF19"), ADMIN)
     EmitterProfileService(db_session).upsert(
         EmitterProfileUpsert(
-            ragione_sociale="Humancraft di Ivan Sala",
-            partita_iva="14518240966",
+            ragione_sociale="Studio Rossi",
+            partita_iva="01234567890",
             codice_fiscale="HMCRFT00A01H501K",
             indirizzo="Via Vittorio Veneto 12",
             cap="20124",
             comune="Milano",
             provincia="MI",
             nazione="IT",
-            email="someone@example.com",
+            email="mario@example.com",
         ),
         ADMIN,
     )
@@ -7843,7 +7843,7 @@ def test_the_download_name_follows_the_sdi_convention_using_the_frozen_emitter_i
     EmitterProfileService(service.session).upsert(
         EmitterProfileUpsert(
             ragione_sociale="Altro Nome",
-            partita_iva="14518240966",
+            partita_iva="01234567890",
             codice_fiscale="RSSMRA80A01H501U",
             indirizzo="Via Nuova 1",
             cap="20125",
@@ -7926,7 +7926,7 @@ def test_a_regenerated_export_is_byte_identical_to_the_original(
     EmitterProfileService(service.session).upsert(
         EmitterProfileUpsert(
             ragione_sociale="Altro Nome",
-            partita_iva="14518240966",
+            partita_iva="01234567890",
             codice_fiscale="HMCRFT00A01H501K",
             indirizzo="Via Nuova 1",
             cap="20125",
@@ -8557,15 +8557,15 @@ def service(db_session: Session, storage: LocalFileStorage) -> InvoiceService:
     )
     EmitterProfileService(db_session).upsert(
         EmitterProfileUpsert(
-            ragione_sociale="Humancraft di Ivan Sala",
-            partita_iva="14518240966",
+            ragione_sociale="Studio Rossi",
+            partita_iva="01234567890",
             codice_fiscale="HMCRFT00A01H501K",
             indirizzo="Via Vittorio Veneto 12",
             cap="20124",
             comune="Milano",
             provincia="MI",
             nazione="IT",
-            email="someone@example.com",
+            email="mario@example.com",
             regime_fiscale="Regime forfettario ex L. 190/2014",
         ),
         ADMIN,
@@ -8745,7 +8745,7 @@ def test_re_rendering_is_byte_identical_and_writes_no_second_version(
     EmitterProfileService(db_session).upsert(
         EmitterProfileUpsert(
             ragione_sociale="Altro Nome",
-            partita_iva="14518240966",
+            partita_iva="01234567890",
             codice_fiscale="HMCRFT00A01H501K",
             indirizzo="Via Nuova 1",
             cap="20125",
@@ -9168,15 +9168,15 @@ def emitter(admin_client: TestClient) -> dict[str, Any]:
     response = admin_client.put(
         "/api/emitter",
         json={
-            "ragione_sociale": "Humancraft di Ivan Sala",
-            "partita_iva": "14518240966",
+            "ragione_sociale": "Studio Rossi",
+            "partita_iva": "01234567890",
             "codice_fiscale": "HMCRFT00A01H501K",
             "indirizzo": "Via Vittorio Veneto 12",
             "cap": "20124",
             "comune": "Milano",
             "provincia": "MI",
             "nazione": "IT",
-            "email": "someone@example.com",
+            "email": "mario@example.com",
         },
     )
     assert response.status_code == 200, response.text
@@ -13008,15 +13008,15 @@ def world(db_session: Session, tmp_path) -> tuple[InvoiceService, UUID]:  # type
     )
     EmitterProfileService(db_session).upsert(
         EmitterProfileUpsert(
-            ragione_sociale="Humancraft di Ivan Sala",
-            partita_iva="14518240966",
+            ragione_sociale="Studio Rossi",
+            partita_iva="01234567890",
             codice_fiscale="HMCRFT00A01H501K",
             indirizzo="Via Vittorio Veneto 12",
             cap="20124",
             comune="Milano",
             provincia="MI",
             nazione="IT",
-            email="someone@example.com",
+            email="mario@example.com",
         ),
         HUMAN,
     )
@@ -13119,8 +13119,8 @@ export async function createFiscalProfile(page: Page): Promise<void> {
 
 export async function createEmitterProfile(page: Page): Promise<void> {
   await page.goto('/app/impostazioni/emittente')
-  await page.getByLabel('Ragione sociale').fill('Humancraft di Ivan Sala')
-  await page.getByLabel('P.IVA').fill('14518240966')
+  await page.getByLabel('Ragione sociale').fill('Studio Rossi')
+  await page.getByLabel('P.IVA').fill('01234567890')
   await page.getByLabel('Codice fiscale').fill('HMCRFT00A01H501K')
   await page.getByLabel('Indirizzo').fill('Via Vittorio Veneto 12')
   await page.getByLabel('CAP').fill('20124')

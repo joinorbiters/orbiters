@@ -105,7 +105,7 @@ def test_dropping_the_promise_leaves_no_double_space_or_orphan_line() -> None:
 def test_no_freelancers_name_appears_in_the_source() -> None:
     """Rifatta la sostanza: a CRM for Italian freelancers cannot carry one freelancer's
     name in its source -- and the previous system carried it twice, verbatim, in two builders."""
-    for forbidden in ["Ivan Sala", "CTO", "humancraft"]:
+    for forbidden in ["Mario Rossi", "CTO", "studiorossi"]:
         assert forbidden.lower() not in SOLLECITO_TEMPLATE_SOURCE.lower()
     # The phone number that used to be pinned here by literal is gone from the repository,
     # so the assertion is on the shape instead: no number of any form survives in the

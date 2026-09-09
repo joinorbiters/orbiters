@@ -14,7 +14,7 @@ project per `docs/adding-a-project.md` §9 once the code exists).
   period of need, the daily budget.
 - The joinorbiters.com landing sends people to the hub when they want to sign up.
 - A **new landing** that tells the project better -- CTAs, perks, clients and
-  testimonials -- with humancraft.tech as the structural reference. For now it
+  testimonials -- with example.com as the structural reference. For now it
   **replaces `/pigrocrm`**; the root `/` stays as it is today.
 - **Decoupled from PigroCRM**: Orbiters is a distinct product on the database, the API
   and the MCP side. Nothing of it stays inside `pigrocrm-core`, `pigrocrm-api` or
@@ -23,7 +23,7 @@ project per `docs/adding-a-project.md` §9 once the code exists).
   section of PigroCRM.
 - The hub answers at **joinorbiters.com/hub/**.
 - Clients and testimonials are **placeholders** in one combined section shaped as
-  "Ivan Sala ha lavorato per XYZ" plus a quote, until Ivan supplies the real ones.
+  "Mario Rossi ha lavorato per XYZ" plus a quote, until Ivan supplies the real ones.
 - **CVs live in the Orbiters database.**
 
 ## Today: what is Orbiters-shaped inside PigroCRM
@@ -138,11 +138,11 @@ select, checkbox, card, progress) so the two products can diverge.
 
 `src/index.html` is rewritten as the Orbiters landing and keeps being served at
 `/pigrocrm` (Ivan's instruction for now; the root stays `orbiters.html`). Structure,
-from humancraft.tech: hero with the claim and two CTAs («Entra come freelance» →
+from example.com: hero with the claim and two CTAs («Entra come freelance» →
 `/hub/freelance`, «Cerchi persone? Raccontaci il progetto» → `/hub/aziende`); «Come
 funziona» in three steps; the perks list (PigroCRM gratis, progetti da aziende vere,
 persone con cui parlarne, strumenti per fatturare e farsi pagare); one combined
-section «Hanno lavorato con noi» with four placeholder tiles shaped «Ivan Sala ha
+section «Hanno lavorato con noi» with four placeholder tiles shaped «Mario Rossi ha
 lavorato per XYZ» each carrying a quote, an initial and a role, marked as placeholders
 in the markup until the real ones arrive; the PigroCRM perk box; footer. The email
 form on `/` keeps posting to `/api/orbiters/signups` and gains a line pointing at the

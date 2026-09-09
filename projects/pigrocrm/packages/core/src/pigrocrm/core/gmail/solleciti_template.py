@@ -5,8 +5,8 @@ text that went to real clients for years, with the right running order: invoice 
 date, due date, amount, IBAN. That is carried, order included, because that order is the
 part a recipient's eye already knows how to read.
 
-What is not carried is the signature -- `Ivan Sala / CTO / mobile +39 02 1234567 /
-web https://www.humancraft.tech`, duplicated verbatim in both of the previous system's builders --
+What is not carried is the signature -- `Mario Rossi / CTO / mobile +39 02 1234567 /
+web https://www.example.com`, duplicated verbatim in both of the previous system's builders --
 nor the `NOME_CLIENTE` placeholder syntax, which slice 2 already replaced with `{{}}`. The
 signature is data now: the free-text block comes from `emitter_profile.firma_email`, and
 the company name, the phone and the website are read from their own columns rather than

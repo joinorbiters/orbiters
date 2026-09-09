@@ -1102,7 +1102,7 @@ describe.each(PAGES)('%s', (name) => {
     expect(title).toContain('PigroCRM')
     const description = meta(page, 'description') ?? ''
     expect(description.length).toBeGreaterThan(40)
-    // The trap named in spec 9.2: the previous system's index.html still carries "Humancraft is
+    // The trap named in spec 9.2: the previous system's index.html still carries "Studio Rossi is
     // the AI optimization platform for human and AI agents" from the scaffold it
     // was generated out of (.reference-*/website/index.html:7-10), describing
     // a product that exists nowhere in that codebase. It is the easiest mistake
@@ -11469,7 +11469,7 @@ git commit -m "feat(gmail): an unknown outcome is resolved by lookup, never by g
 ---
 ### Task B2-7: The signature as data, and the previous system's reminder copy as a template
 
-The previous system's reminder text is the one thing here worth carrying intact: it went to real clients for years, and it has the right running order — invoice number, date, due date, amount, IBAN. The signature is the opposite: `Ivan Sala / CTO / mobile / web`, duplicated **verbatim** in both builders.
+The previous system's reminder text is the one thing here worth carrying intact: it went to real clients for years, and it has the right running order — invoice number, date, due date, amount, IBAN. The signature is the opposite: `Mario Rossi / CTO / mobile / web`, duplicated **verbatim** in both builders.
 
 **Files:**
 - Modify: `packages/core/src/pigrocrm/core/emitter/models.py` (append `firma_email`)
@@ -11556,7 +11556,7 @@ def test_the_courtesy_clauses_that_earned_their_place_are_still_there() -> None:
 def test_no_freelancers_name_appears_in_the_source() -> None:
     """Rifatta la sostanza: a CRM for Italian freelancers cannot carry one freelancer's
     name in its source -- and the previous system carried it twice, verbatim, in two builders."""
-    for forbidden in ["Ivan Sala", "CTO", "humancraft"]:
+    for forbidden in ["Mario Rossi", "CTO", "studiorossi"]:
         assert forbidden.lower() not in SOLLECITO_TEMPLATE_SOURCE.lower()
     assert re.search(r"\+?\d[\d\s.]{8,}", SOLLECITO_TEMPLATE_SOURCE) is None
 
@@ -11671,7 +11671,7 @@ Anywhere a template's `tipo` is compared against a document's, convert explicitl
 `buildReminderInvoiceEmailBody` (`.reference-*/website/src/App.jsx:2329-2372`) is
 text that went to real clients for years, with the right running order: invoice number,
 date, due date, amount, IBAN. That is carried. What is not carried is the signature --
-`Ivan Sala / CTO / mobile +39 02 1234567 / web https://www.humancraft.tech`,
+`Mario Rossi / CTO / mobile +39 02 1234567 / web https://www.example.com`,
 duplicated verbatim in both builders -- nor the `NOME_CLIENTE` placeholder syntax, which
 slice 2 already replaced with `{{}}` for the offer.
 
@@ -12239,7 +12239,7 @@ def test_the_draft_body_is_the_template_and_not_a_string_in_the_source(
     assert draft is not None
     assert "Fattura:" in draft.body_markdown
     assert "IBAN:" in draft.body_markdown
-    assert "Ivan Sala" not in draft.body_markdown
+    assert "Mario Rossi" not in draft.body_markdown
 
 
 def test_two_concurrent_creations_produce_one_row_and_one_conflict(

@@ -377,7 +377,7 @@ Leggere in `packages/core/tests/test_gmail_oauth.py` come viene costruito l'`id_
 **Files:**
 - Create: `docs/superpowers/notes/2026-09-04-google-oauth-publish-runbook.md`
 
-Contenuto: passi nella Google Cloud Console per il progetto OAuth esistente — tipo utente **Internal** (Workspace humancraft.tech), stato **In produzione**, scope dichiarati (i quattro Gmail + i due Drive), redirect URI `…/api/gmail/oauth/callback` e `…/api/drive/oauth/callback`; poi `PIGROCRM_GOOGLE_APP_UNVERIFIED=false` e `PIGROCRM_REFRESH_TOKEN_DAYS=180` in `.env`, restart dell'API, riconnessione della casella una volta (il vecchio consenso in Testing scade comunque). Verifica: `describe_gmail_account` con `consent_expires_at: null` e nessun banner. Nessun codice.
+Contenuto: passi nella Google Cloud Console per il progetto OAuth esistente — tipo utente **Internal** (Workspace example.com), stato **In produzione**, scope dichiarati (i quattro Gmail + i due Drive), redirect URI `…/api/gmail/oauth/callback` e `…/api/drive/oauth/callback`; poi `PIGROCRM_GOOGLE_APP_UNVERIFIED=false` e `PIGROCRM_REFRESH_TOKEN_DAYS=180` in `.env`, restart dell'API, riconnessione della casella una volta (il vecchio consenso in Testing scade comunque). Verifica: `describe_gmail_account` con `consent_expires_at: null` e nessun banner. Nessun codice.
 
 - [ ] **Step 1: Scrivere e committare** — `docs: runbook to publish the Google OAuth project (Internal) so consents stop expiring`.
 

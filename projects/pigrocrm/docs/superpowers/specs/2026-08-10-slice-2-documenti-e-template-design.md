@@ -30,7 +30,7 @@ portato così com'è. La macchina che lo riempiva no.
 | `offer/pandoc-template.typst`, `offer/header.typ`, `media/` | **Portati**, con le versioni di Pandoc e Typst pinnate nell'immagine |
 | Pipeline PDF Pandoc → Typst | **Portata.** Sceglierla è stata una buona decisione: Typst compone bene, è veloce, e il template è leggibile |
 | Sintassi `[NOME_CLIENTE]` | **Sostituita.** Vedi §3 |
-| Dati dell'intestazione hardcodati (`Humancraft di Ivan Sala`, P.IVA, PEC, sede) | **Sostituiti** da un profilo emittente configurabile. Un CRM per freelance italiani non può avere il nome di un freelance nel sorgente |
+| Dati dell'intestazione hardcodati (`Studio Rossi`, P.IVA, PEC, sede) | **Sostituiti** da un profilo emittente configurabile. Un CRM per freelance italiani non può avere il nome di un freelance nel sorgente |
 | Storage su Google Drive | **Portato come uno dei due backend.** Vedi §5 |
 | Attio come sistema di record | **Rimosso, senza importer.** Vedi §8 |
 
@@ -141,7 +141,7 @@ di produrre un PDF con un buco.
 ### 4.4 `emitter_profile`
 
 Riga singola. Ragione sociale, P.IVA, codice fiscale, indirizzo, PEC, SDI, telefono, email, logo,
-firma, regime fiscale. È ciò che sostituisce i dati di Humancraft hardcodati nell'header Typst, e
+firma, regime fiscale. È ciò che sostituisce i dati di Studio Rossi hardcodati nell'header Typst, e
 **lo slice 3 ci costruisce sopra la FatturaPA**.
 
 ---

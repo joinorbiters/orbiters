@@ -15,12 +15,12 @@ pytestmark = pytest.mark.skipif(
 
 SETTINGS = Settings(jwt_secret="x" * 32)
 PROFILE = {
-    "ragione_sociale": "Humancraft di Ivan Sala",
-    "partita_iva": "14518240966",
-    "email": "ivansala@humancraft.tech",
+    "ragione_sociale": "Studio Rossi",
+    "partita_iva": "01234567890",
+    "email": "mario@example.com",
     "telefono": "+39 02 1234567",
-    "pec": "someone@example.com",
-    "sito_web": "www.humancraft.tech",
+    "pec": "studiorossi@pec.it",
+    "sito_web": "www.example.com",
     "indirizzo": "Via Roma 1",
     "cap": "20053",
     "comune": "Milano",
@@ -36,16 +36,16 @@ def test_a_minimal_document_renders_to_a_pdf() -> None:
 
 def test_the_emitter_profile_reaches_the_header() -> None:
     header = build_header(PROFILE)
-    assert "Humancraft di Ivan Sala" in header
-    assert "14518240966" in header
+    assert "Studio Rossi" in header
+    assert "01234567890" in header
     # The `@` in an email is Typst syntax for a reference and must arrive escaped.
-    # The brief's own sample asserted `r"ivansala\@humancraft.tech"` (dot bare) --
+    # The brief's own sample asserted `r"mario\@example.com"` (dot bare) --
     # wrong: `build_header` escapes every ASCII punctuation character, "." included
     # (the same rule `escape_markdown`/`escape_typst` apply everywhere else in this
     # project), so the dot is escaped too. Fixed here rather than in the escaper,
     # since the escaper's behaviour is correct and consistent; the sample assertion
     # was not.
-    assert r"ivansala\@humancraft\.tech" in header
+    assert r"mario\@example\.com" in header
 
 
 def test_a_broken_raw_typst_block_names_the_template_line() -> None:

@@ -65,8 +65,8 @@ def test_the_seeded_template_exists_and_names_no_freelancer(db_session: Session)
     body = (ASSETS / "template-time-report.md").read_text(encoding="utf-8")
     header = (ASSETS / "header.typ.template").read_text(encoding="utf-8")
     for source in (body, header):
-        assert "humancraft" not in source.lower()
-        assert "ivansala" not in source.lower()
+        assert "studiorossi" not in source.lower()
+        assert "mariorossi" not in source.lower()
         assert not re.search(r"P\.IVA\s+\d{11}", source)
     # The carried-over layout, asserted where it is expressible as text.
     assert "0.7fr" in body
@@ -158,7 +158,7 @@ def test_the_pdf_renders_and_contains_the_hostile_description_verbatim(
     # singleton row) -- every other slice-2 PDF test sets one up
     # (`test_documents_from_template.py`'s `setup` fixture); this one needs it too.
     EmitterProfileService(db_session).upsert(
-        EmitterProfileUpsert(ragione_sociale="Studio di prova", partita_iva="14518240966"),
+        EmitterProfileUpsert(ragione_sociale="Studio di prova", partita_iva="01234567890"),
         ADMIN,
     )
     TemplateService(db_session).seed_defaults(ADMIN)

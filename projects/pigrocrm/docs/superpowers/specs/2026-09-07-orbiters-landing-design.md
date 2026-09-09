@@ -77,13 +77,14 @@ le ombre morbide di `landing.css`, quindi la pagina ha il suo foglio di stile e 
 
 Dal 7 settembre 2026 la pagina risponde su **https://joinorbiters.com**, su un server Hetzner
 dedicato (Ubuntu, Docker). Lo stack è quello di `docker-compose.yml`, clonato in
-`/opt/pigrocrm` con una deploy key in sola lettura e ascoltato solo su `127.0.0.1:8080`; sopra
-c'è nginx dell'host con il vhost `deploy/nginx/joinorbiters.conf` (più lo snippet
-`orbiters-proxy.conf` in `/etc/nginx/snippets/`), che espone la sola pagina, i suoi asset, le due
-pagine di policy e l'endpoint delle iscrizioni. `/app/` e il resto dell'API non sono
-raggiungibili da quel nome. TLS via `certbot --nginx`, che riscrive il vhost sul posto.
+`$DEPLOY_PATH` (la directory di deploy configurata sull'ambiente) con una deploy key in
+sola lettura e ascoltato solo su `127.0.0.1:8080`; sopra c'è nginx dell'host con il vhost
+`deploy/nginx/joinorbiters.conf` (più lo snippet `orbiters-proxy.conf` in
+`/etc/nginx/snippets/`), che espone la sola pagina, i suoi asset, le due pagine di policy
+e l'endpoint delle iscrizioni. `/app/` e il resto dell'API non sono raggiungibili da quel
+nome. TLS via `certbot --nginx`, che riscrive il vhost sul posto.
 
-Aggiornare: `ssh orbiters 'cd /opt/pigrocrm && git pull --ff-only && docker compose up -d --build'`.
+Aggiornare: `ssh $DEPLOY_USER@$DEPLOY_HOST 'cd $DEPLOY_PATH && git pull --ff-only && docker compose up -d --build'`.
 Leggere la lista: `docker compose exec db psql -U pigrocrm -d orbiters -c "select email, created_at from signups"`.
 
 ## 7. Un sistema solo

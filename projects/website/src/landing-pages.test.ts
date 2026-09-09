@@ -23,7 +23,7 @@ describe.each(PAGES)('%s', (name) => {
     expect(title).toContain('PigroCRM')
     const description = meta(page, 'description') ?? ''
     expect(description.length).toBeGreaterThan(40)
-    // The trap named in spec 9.2: the previous system's index.html still carries "Humancraft is
+    // The trap named in spec 9.2: the previous system's index.html still carries "Studio Rossi is
     // the AI optimization platform for human and AI agents" from the scaffold it
     // was generated out of (.reference-*/website/index.html:7-10), describing
     // a product that exists nowhere in that codebase. It is the easiest mistake
@@ -38,9 +38,14 @@ describe.each(PAGES)('%s', (name) => {
     for (const [, url] of page.matchAll(/(?:href|src)="(https?:\/\/[^"]+)"/g)) {
       // An href the reader clicks -- the repository, the hosted signup, or OpenAI's
       // own privacy policy, which the cookie section has to point at -- is fine; a
-      // subresource is not.
+      // subresource is not. `humancraft.tech` is in the list for one reason: Italian
+      // law requires the privacy and terms pages to name the titolare del trattamento
+      // and link to it, so those two pages carry a real company's site and this test
+      // has to allow the origin. It is the only real identity left anywhere in this
+      // repository, and `bin/identity-scan` knows about these three paths for the same
+      // reason.
       expect(url, 'external subresource').toMatch(
-        /^https:\/\/(?:github\.com|pigro\.joinorbiters\.com|humancraft\.tech|openai\.com)\//,
+        /^https:\/\/(?:github\.com|pigro\.joinorbiters\.com|example\.com|openai\.com|humancraft\.tech)\//,
       )
     }
     expect(page).not.toMatch(/fonts\.googleapis\.com|fonts\.gstatic\.com/)
@@ -114,14 +119,14 @@ describe('index.html', () => {
   })
 
   it('has one section for clients and testimonials, four tiles, all still placeholders', () => {
-    // Ivan's shape: «Ivan Sala ha lavorato per XYZ» plus a quote, one section for both
+    // Ivan's shape: «Mario Rossi ha lavorato per XYZ» plus a quote, one section for both
     // sides. Until the real ones arrive every tile says so in the markup; when they do,
     // the attribute goes and this assertion is rewritten to count the real ones.
     expect(page).toContain('Hanno lavorato con noi')
     const tiles = page.match(/<figure class="card testimonial"[^>]*>/g) ?? []
     expect(tiles).toHaveLength(4)
     for (const tile of tiles) expect(tile).toContain('data-placeholder="true"')
-    expect(page).toContain('<strong>Ivan Sala</strong> ha lavorato per <strong>XYZ</strong>')
+    expect(page).toContain('<strong>Mario Rossi</strong> ha lavorato per <strong>XYZ</strong>')
     expect(page.match(/<blockquote>/g)).toHaveLength(4)
   })
 

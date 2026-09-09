@@ -1,7 +1,9 @@
 # How this monorepo is laid out, and what that costs
 
 Written when PigroCRM's repository became the Orbiters monorepo, so that the next
-person does not have to reverse-engineer the reasoning from the directory names.
+person does not have to reverse-engineer the reasoning from the directory names. The
+repository's own name on GitHub, under the `joinorbiters` org, changed from `pigrocrm`
+to `orbiters` on 2026-09-09, for the same reason: it holds more than one project now.
 
 ## The shape
 

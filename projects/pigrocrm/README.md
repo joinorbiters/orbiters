@@ -93,7 +93,7 @@ sudo bash deploy/setup-server.sh
 ```
 
 Writes a vhost that acts as a reverse proxy to `127.0.0.1:8080`, for now only over HTTP. Uses the
-default domain (`pigrocrm.humancraft.tech`) unless `PIGROCRM_DOMAIN` is set:
+default domain (`pigrocrm.example.com`) unless `PIGROCRM_DOMAIN` is set:
 `sudo PIGROCRM_DOMAIN=tuodominio.it bash deploy/setup-server.sh`, and it has to be passed, because the
 default is not this server's domain.
 
@@ -146,10 +146,11 @@ from the network inside a production container already running, on every single 
 
 There is no daemon and no queue: the Gmail sync is a loop that starts, does its work and
 ends. The fifteen minutes are cron's, one line in the `crontab` of the user that owns the
-deploy:
+deploy. `$DEPLOY_PATH` below is the deploy directory configured in the environment (the
+root of this repository's checkout on the server):
 
 ```
-*/15 * * * * cd /opt/pigrocrm/projects/pigrocrm && docker compose --env-file ../../.env exec -T api uv run --no-sync pigrocrm gmail-sync >> /var/log/pigrocrm-gmail-sync.log 2>&1
+*/15 * * * * cd $DEPLOY_PATH/projects/pigrocrm && docker compose --env-file ../../.env exec -T api uv run --no-sync pigrocrm gmail-sync >> /var/log/pigrocrm-gmail-sync.log 2>&1
 ```
 
 Every run writes a single line, with the time in front, the mailbox's address and the

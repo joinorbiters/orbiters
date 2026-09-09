@@ -7,7 +7,7 @@ from pigrocrm.core.db import Base, PrimaryKeyMixin, TimestampMixin
 class EmitterProfile(Base, PrimaryKeyMixin, TimestampMixin):
     """Who is issuing the document. One row, ever.
 
-    This is what replaces "Humancraft di Ivan Sala", the P.IVA, the PEC and the
+    This is what replaces "Studio Rossi", the P.IVA, the PEC and the
     address hardcoded into the previous system's `offer/header.typ` (lines 16-28). A CRM for
     Italian freelancers cannot have one freelancer's name in its source. Slice 3
     builds FatturaPA on these same columns, which is why the fiscal ones mirror

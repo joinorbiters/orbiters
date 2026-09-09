@@ -51,7 +51,7 @@ guadagnato, il meccanismo dei placeholder era un difetto di progetto.
 | `Divisa` = `EUR`, `TipoDocumento` = `TD01` | |
 | `CondizioniPagamento TP02` e `ModalitaPagamento MP05` come default | Sono i valori giusti per questo emittente: pagamento in un'unica soluzione, bonifico |
 | `Anagrafica/Denominazione` anche per un cliente persona fisica con solo CF | FPR12 ammette `Nome`/`Cognome` in alternativa, ma `customers` ha una sola `ragione_sociale`: non c'è una scelta da fare |
-| Layout Typst della fattura (`.reference-*/offer/template-invoice.md`): griglia di testata, blocco Committente, tabella Dettaglio, tabella Modalità pagamento, divisore e piede | Portato nella struttura. L'identità Humancraft hardcodata diventa `emitter_profile`, la sintassi `[PLACEHOLDER]` diventa `{{}}`, la tabella Dettaglio a riga singola diventa un `{{#each righe}}` |
+| Layout Typst della fattura (`.reference-*/offer/template-invoice.md`): griglia di testata, blocco Committente, tabella Dettaglio, tabella Modalità pagamento, divisore e piede | Portato nella struttura. L'identità Studio Rossi hardcodata diventa `emitter_profile`, la sintassi `[PLACEHOLDER]` diventa `{{}}`, la tabella Dettaglio a riga singola diventa un `{{#each righe}}` |
 
 ### 2.2 Riscritto, e perché
 

@@ -113,7 +113,7 @@ def seeded_template_id(mcp_session: Session) -> str:
     from pigrocrm.core.templates.service import TemplateService
 
     EmitterProfileService(mcp_session).upsert(
-        EmitterProfileUpsert(ragione_sociale="Humancraft di Ivan Sala", partita_iva="14518240966"),
+        EmitterProfileUpsert(ragione_sociale="Studio Rossi", partita_iva="01234567890"),
         ADMIN,
     )
     template = TemplateService(mcp_session).create(

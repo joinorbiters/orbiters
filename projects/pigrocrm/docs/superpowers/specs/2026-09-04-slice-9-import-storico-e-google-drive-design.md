@@ -32,7 +32,7 @@ l'import deve poterlo allegare.
 |---|---|---|
 | Come caricare le 14 fatture del gestionale precedente | **Import storico dedicato**: la fattura entra come `emessa`, marcata importata, con numero e data originali, senza XML/PDF generati | Solo contatore + note (niente scadenziario); re-emissione via proforma (numeri nuovi e XML duplicati verso lo SdI) |
 | Perimetro Drive via MCP | **Lettura dei documenti esistenti + scrittura dei documenti CRM** su Drive. Nessuna scrittura libera di file arbitrari | Solo lettura; scrittura libera (bypassa template, numerazione e versioning) |
-| Credenziale per Drive | **OAuth dell'utente**, sullo stesso account Google già collegato per Gmail (`ivansala@humancraft.tech`) | Service account (avrebbe richiesto di condividere le cartelle con un indirizzo tecnico) |
+| Credenziale per Drive | **OAuth dell'utente**, sullo stesso account Google già collegato per Gmail (`mario@example.com`) | Service account (avrebbe richiesto di condividere le cartelle con un indirizzo tecnico) |
 
 La terza decisione contraddice una riga della spec dello slice 5 (§5.1: «Drive usa un service
 account: sono due credenziali distinte e restano distinte»). Il §5 di questo documento dice come
@@ -81,8 +81,8 @@ Le stesse dello slice 3, applicate ai numeri dichiarati:
 3. **Il contatore avanza, mai indietro.** Dopo ogni import, `InvoiceCounter(anno).ultimo_numero
    = max(ultimo_numero, numero)`. Con le fatture 2–17 importate il contatore 2026 vale 17 e la
    prossima emissione è la 18.
-4. **I buchi si dichiarano.** Nel registro del gestionale precedente del 2026 mancano 1, 4 e 6. L'import **non**
-   li inventa e non li blocca: il chiamante passa `buchi_dichiarati: [1, 4, 6]` con un motivo
+4. **I buchi si dichiarano.** Nel registro del gestionale precedente del 2026 mancano 1, 7 e 13. L'import **non**
+   li inventa e non li blocca: il chiamante passa `buchi_dichiarati: [1, 7, 13]` con un motivo
    testuale per ciascuno (es. «annullata nel gestionale precedente prima della trasmissione»). Il servizio scrive
    una riga `invoice_register_gaps(anno, numero, motivo, dichiarato_da, dichiarato_il)`. Un
    numero mancante **non dichiarato** fra 1 e `ultimo_numero` è un errore
@@ -158,12 +158,12 @@ importata senza PDF originale», non genera.
 
 ### 3.7 L'import concreto di settembre 2026
 
-Quattordici fatture (numeri 2, 3, 5, 7–17), tutte con dati già ricostruiti dalle email e dal
+Quattordici fatture (numeri 2–6, 8–12, 14–17), tutte con dati già ricostruiti dalle email e dal
 registro del gestionale precedente (screenshot del 4/09). Tutti e sei i clienti esistono già nel CRM; i PDF stanno nella cartella
-`Fatture` del Drive humancraft. Una delle quattordici è «emessa e non consegnata» nel gestionale precedente:
+`Fatture` del Drive di Studio Rossi. Una delle quattordici è «emessa e non consegnata» nel gestionale precedente:
 si importa con `trasmessa_esternamente_il = NULL` e nota, e resta un residuo da chiudere con il
-codice fiscale del cliente. Sequenza: profili (§2.3) → collegamento Drive (§5) → import 2, 3, 5,
-7…17 in ordine di numero → buchi 1, 4, 6 dichiarati → verifica che `list_invoices` dia 14 righe
+codice fiscale del cliente. Sequenza: profili (§2.3) → collegamento Drive (§5) → import 2…6,
+8…12, 14…17 in ordine di numero → buchi 1, 7, 13 dichiarati → verifica che `list_invoices` dia 14 righe
 e `get_unbilled_backlog`/scadenziario tornino con 14 e 15 scadute.
 
 ---
@@ -172,7 +172,7 @@ e `get_unbilled_backlog`/scadenziario tornino con 14 e 15 scadute.
 
 ### 4.1 Le cartelle del titolare
 
-Il Drive humancraft ha, alla radice: `Progetti`, `Offerte`, `Meet Recordings`, `Fatture`,
+Il Drive di Studio Rossi ha, alla radice: `Progetti`, `Offerte`, `Meet Recordings`, `Fatture`,
 `ALTRO`, più file sciolti (lettere di incarico Acme, prompt). Il CRM **non** assume questa
 struttura: è il titolare che, dall'app, indica la **cartella radice** che il CRM può vedere (una
 o più: `Offerte`, `Fatture`, `Progetti`). Tutto fuori da quelle cartelle non esiste per il CRM,
@@ -281,7 +281,7 @@ e vanno chiuse entrambe:
 | Cosa scade oggi | Perché | Cosa cambia |
 |---|---|---|
 | **Sessione dell'app**: `refresh_token_days = 30` | Default dello slice 1 | Default a **180 giorni**, e la rotazione del refresh token **rinnova la scadenza a ogni uso** (sliding): chi usa il CRM non rivede il login; chi lo lascia fermo sei mesi sì. `PIGROCRM_REFRESH_TOKEN_DAYS=180` sull'installazione. L'access token resta a 15 minuti: è la finestra di revoca, non la durata della sessione |
-| **Consenso Google**: `consent_expires_at` a 7 giorni | `PIGROCRM_GOOGLE_APP_UNVERIFIED=true`: il progetto OAuth su Google Cloud è in modalità *Testing*, e Google fa scadere i refresh token consumer dopo sette giorni. Non è una scelta del CRM e nessun codice può allungarla | Il progetto OAuth passa a **pubblicato**. Poiché `ivansala@humancraft.tech` è un account Google Workspace, il tipo utente **Internal** (solo utenti del dominio humancraft.tech) non richiede la verifica di Google per gli scope sensibili di Gmail e Drive. Con l'app pubblicata il refresh token non ha scadenza fissa: Google lo revoca solo dopo **sei mesi di inutilizzo**, e il sync Gmail lo usa ogni giorno. Poi `PIGROCRM_GOOGLE_APP_UNVERIFIED=false`, così `consent_expires_at` resta `NULL` e il banner di scadenza non compare più |
+| **Consenso Google**: `consent_expires_at` a 7 giorni | `PIGROCRM_GOOGLE_APP_UNVERIFIED=true`: il progetto OAuth su Google Cloud è in modalità *Testing*, e Google fa scadere i refresh token consumer dopo sette giorni. Non è una scelta del CRM e nessun codice può allungarla | Il progetto OAuth passa a **pubblicato**. Poiché `mario@example.com` è un account Google Workspace, il tipo utente **Internal** (solo utenti del dominio example.com) non richiede la verifica di Google per gli scope sensibili di Gmail e Drive. Con l'app pubblicata il refresh token non ha scadenza fissa: Google lo revoca solo dopo **sei mesi di inutilizzo**, e il sync Gmail lo usa ogni giorno. Poi `PIGROCRM_GOOGLE_APP_UNVERIFIED=false`, così `consent_expires_at` resta `NULL` e …
 
 Il grant Drive del §5.1 nasce già sotto queste regole: stesso progetto OAuth pubblicato, nessuna
 scadenza imposta dal CRM, `consent_expires_at` valorizzato solo se l'installazione dichiara
@@ -310,7 +310,7 @@ produrrebbe un secondo consenso da rifare ogni settimana.
 
 ## 7. Come si verifica
 
-1. **Registro.** Importare 2, 3, 5, 7–17 del 2026 in ordine casuale produce lo stesso registro
+1. **Registro.** Importare 2–6, 8–12, 14–17 del 2026 in ordine casuale produce lo stesso registro
    che in ordine crescente; un import con `(2026, 9)` duplicato è `Conflict`; una `data_emissione`
    che rompe la monotonia rispetto ai vicini è `ValidationFailed`; il contatore vale 17; una
    `issue` successiva dà la 18; un numero mancante non dichiarato blocca l'ultimo import con un

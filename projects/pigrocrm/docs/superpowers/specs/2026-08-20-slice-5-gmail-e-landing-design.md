@@ -62,7 +62,7 @@ progetto.
 | Elemento del gestionale precedente | Decisione | Perché |
 |---|---|---|
 | **Testo del sollecito e della copia di cortesia** — `buildReminderInvoiceEmailBody` / `buildCourtesyInvoiceEmailBody`, `website/src/App.jsx:2329-2372` | **Portato** | È testo mandato a clienti veri per anni, con la scaletta giusta: numero fattura, data, scadenza, importo, IBAN. Diventa un template `sollecito` del motore dello slice 2, con il livello di sollecito come variabile |
-| **La firma** (`Ivan Sala / CTO / mobile / web`), duplicata **verbatim** nei due builder | **Portata la forma, rifatta la sostanza** | Diventa un campo di `emitter_profile` (slice 2 §4.4). Stessa lezione dello slice 2 sull'header Typst: un CRM per freelance italiani non può avere il nome di un freelance nel sorgente — e non due volte |
+| **La firma** (`Mario Rossi / CTO / mobile / web`), duplicata **verbatim** nei due builder | **Portata la forma, rifatta la sostanza** | Diventa un campo di `emitter_profile` (slice 2 §4.4). Stessa lezione dello slice 2 sull'header Typst: un CRM per freelance italiani non può avere il nome di un freelance nel sorgente — e non due volte |
 | Inviare **come l'utente, dalla sua casella** (`COMPANY_EMAIL`, `vite.config.js:29`) | **Portato come principio** | Un'email che arriva da `noreply@` non ottiene risposte. È la decisione giusta, ed è la ragione per cui serve OAuth e non SMTP |
 | Chiamata a `POST /gmail/v1/users/me/messages/send` (`vite.config.js:5334`), unica chiamata Gmail di tutto il repo | **Portato l'endpoint** | È quello giusto. Ciò che manca è tutto attorno |
 | HTTP grezzo con `fetch`, nessuna libreria client Google (`GOOGLE_TOKEN_URL`, `vite.config.js:23-26`) | **Portato l'approccio** | Coincide con `gdrive.py` dello slice 2. Nessuna dipendenza `googleapis` in nessuno dei due |
@@ -640,7 +640,7 @@ Prima di progettare, una correzione di fatto, perché cambia cosa c'è da studia
 React di un solo file (`src/App.jsx`, 6.784 righe, sette tab, nessun router) più il backend dentro
 `vite.config.js`. **In quel repository non esiste alcun sito di presentazione**: zero occorrenze di
 `hero`, `pricing`, `testimonial`, `signup`, nessun form di contatto, nessun link esterno tranne
-`humancraft.tech` dentro il testo della firma dell'email.
+`example.com` dentro il testo della firma dell'email.
 
 Quindi dal `website/` **non si porta nessun contenuto**. Si porta della **tecnica**, e sono cose
 buone che sarebbe stupido reinventare — mentre la palette e i caratteri non si portano affatto,
@@ -658,7 +658,7 @@ dietro.
 | Etichette-sopratitolo: `uppercase`, `letter-spacing: .24em`, `.75rem` (`App.css:83-89`) | **Portata.** Un dettaglio piccolo che fa molto del carattere «soft» di quel sistema |
 | Tipografia fluida con `clamp()` (`App.css:96-101`) | **Portata** |
 | **Google Fonts da CDN** — e caricato **due volte**, con due set diversi di famiglie di cui uno mai usato (`index.html:11-16` e `src/index.css:1`) | **Non si porta.** `tokens.css` documenta già per esteso perché: un prodotto venduto sulla promessa del self-hosting non può consegnare a Google l'IP di ogni visitatore, né rompersi in un'installazione offline. E un `@import` dentro il CSS blocca il rendering |
-| `<title>` e `<meta name="description">` **di un altro prodotto** — «Humancraft is the AI optimization platform…» (`index.html:7-17`) | **Trappola da nominare, non da portare.** È l'artefatto più simile a una landing in tutto il repo, ed è copia sbagliata rimasta dallo scaffold. La landing di questo slice ha `title`, `description` e Open Graph propri, e il §13 li verifica |
+| `<title>` e `<meta name="description">` **di un altro prodotto** — «Studio Rossi is the AI optimization platform…» (`index.html:7-17`) | **Trappola da nominare, non da portare.** È l'artefatto più simile a una landing in tutto il repo, ed è copia sbagliata rimasta dallo scaffold. La landing di questo slice ha `title`, `description` e Open Graph propri, e il §13 li verifica |
 
 ### 9.3 Da dove viene il soft, concretamente
 
