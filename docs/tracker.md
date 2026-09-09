@@ -22,7 +22,7 @@ are not part of this repo's flow.
 | Type labels | group **type**, exactly one, Linear enforces it because it is a group: `feature`, `fix`, `refactor`, `test`, `chore`, `ci`, `docs`, `design`, `security`, `spike` |
 | Area labels | group **Area**, exactly one, Linear enforces it because it is a group: `area:api`, `area:brand`, `area:ci`, `area:core`, `area:infra`, `area:mcp`, `area:repo`, `area:web`, `area:website` |
 | Assignee | who owns the card and will do the work. A claim, not a hint: see § Who owns a card |
-| Other flat labels | `flagship` for headline work, `parallel` for an issue that collides with nothing, in the files or between us, so whoever is free may pick it up whoever filed it |
+| Other flat labels | `flagship` for headline work, `parallel` for an issue that collides with nothing, in the files or between us, so whoever is free may pick it up whoever filed it, as long as nobody has claimed it yet |
 
 The two lists above are the board's, checked against `list_issue_labels` with
 `includeGroups: true` on 2026-09-09, and the board is the authority: an earlier version of
@@ -71,18 +71,25 @@ keeps two agents off the same work is the **assignee**. It is a claim, not a hin
   a comment and stop there.
 - **A card with no assignee belongs to whoever filed it**, until they say otherwise. An
   empty assignee is an omission, not an invitation.
-- **A card labelled `parallel` may be picked up by whoever is free**, whoever filed it.
-  That is what the label is for: work that collides with nothing, neither in the files
-  nor between us.
+- **A card labelled `parallel` and not yet claimed may be picked up by whoever is
+  free**, whoever filed it. An assignee, or a status of `In Progress` or `In Review`,
+  wins over the label: `parallel` says the work collides with nothing, neither in the
+  files nor between us, not that somebody's started work is up for grabs.
 - So the cards you may work are: assigned to you, or unassigned and filed by you, or
-  labelled `parallel`. Nothing else, and there is no exception for "it is quick".
+  labelled `parallel` and unclaimed. Nothing else, and there is no exception for "it is
+  quick".
+- **Being asked for a card by name does not make it yours.** The account this session
+  writes as is not always the person talking to you. When they are its assignee and you
+  are not, they reassign it, or add `parallel`, and then you proceed; you never make that
+  change yourself, and until it is made the card is theirs.
 - **The lead of a project does not own its issues.** The lead is who decides when a
   question is a decision; the assignee is who does the work.
 
-`assignee` is therefore set on every `save_issue`, including for work left for later,
-because a card nobody owns is one the other agent will reasonably take. There is no
-`createdBy` filter in the API, so an unassigned card's owner is not even queryable
-without reading it.
+`assignee` is therefore set on every issue you file, including work left for later,
+because a card nobody owns is one the other agent will reasonably take. On an update it
+is sent only when changing the owner is the point, since `save_issue` overwrites whatever
+it is given (§ API details). There is no `createdBy` filter in the API either, so an
+unassigned card's owner is not queryable without reading it.
 
 ## Reaching it
 
@@ -100,8 +107,10 @@ to check the team name that comes back: two Linear workspaces are enrolled on th
 machine and the failure mode of picking the wrong one is filing a client's work in the
 wrong company's board. Then `get_user` with `"me"`, to learn **which of us this session
 writes as**, because the token belongs to one account and both of us run agents against
-this board. That name is what `assignee: "me"` means, what "yours" means everywhere
-below, and it is not necessarily the person who is talking to you.
+this board. Keep its `id`, not the display name: ownership is decided by comparing that
+id against `assigneeId` and `createdById`, which is one string equality against a value
+that cannot be re-rendered. That account is what `assignee: "me"` means, what "yours"
+means everywhere below, and it is not necessarily the person who is talking to you.
 
 ## The loop
 
@@ -169,7 +178,8 @@ would mislead a reader is worse.
   that it works.
 - **Do not take a card that is not yours**, and do not hand your own to somebody else
   without asking them. Assigned to another person, or `In Progress` or `In Review` under
-  their name, means hands off: no assignee change, no status change, no branch, no PR.
+  their name, means hands off: no assignee change, no status change, no branch, no PR,
+  and nothing re-parented under it with `parentId` without asking.
   Comment if you have something useful, then pick different work.
 - **One area per issue**, because both label families are groups and Linear allows only
   one label from a group. An issue that genuinely spans two areas is usually two issues,
@@ -219,8 +229,11 @@ issue to `In Review` becomes something the PR does on its own rather than a manu
   empty one: `assignee: null` and `assignee: "null"` are both accepted and both silently
   ignored, so the response carries everybody's cards while looking like an answer
   (measured 2026-09-09, against the tool's own description). There is no `createdBy`
-  filter either. Ask for `assignee` and `createdById` in `fields` and filter the rows
-  yourself.
+  filter either. Ask for `assigneeId` and `createdById` in `fields` and filter the rows
+  yourself, and bound the call before you do: it defaults to 50 rows and pages with
+  `cursor`, so an unbounded one answers with a slice of a board already past ORB-58 that
+  reads like the whole of it. Narrow server-side first (`state: "Todo"`, then
+  `state: "Backlog"`) and raise `limit`.
 - Initiatives cannot be created from the MCP surface at all. `save_project` can attach
   an existing initiative with `addInitiatives`, but there is no `save_initiative`.
   Initiatives are created by hand in the Linear UI; automation only creates projects and

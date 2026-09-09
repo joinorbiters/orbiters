@@ -15,31 +15,39 @@ The MCP server is `linear-orbiters`, the only Linear surface for this board. Two
 before any write. `list_projects` or `list_issues` with `team: "Orbiters"`, and check the
 team that comes back is **Orbiters** (`ORB-`): two workspaces are enrolled on this
 machine, and filing a client's work in the wrong company's board is the failure mode.
-Then `get_user` with `query: "me"`, and keep the name it returns: it is the account this
-session writes as, it is what `assignee: "me"` will mean, and it is not necessarily the
-person talking to you. Both people on this team run agents against the same board.
+Then `get_user` with `query: "me"`, and keep the `id` it returns, not the display name:
+it is the account this session writes as, it is what `assignee: "me"` will mean, it is
+what every ownership test below compares against, and it is not necessarily the person
+talking to you. Both people on this team run agents against the same board.
 
 ## Finding before filing, and whether it is yours to take
 
 `list_issues` with `team: "Orbiters"` and `query: "<two or three words of the problem>"`,
-then with the `area:*` label. Ask for `assignee` and `createdBy` in `fields`, because an
-issue that exists is not an issue that is available (`docs/tracker.md` § Who owns a
-card):
+then with the `area:*` label. Ask for `assigneeId`, `createdById`, `statusType` and
+`labels` in `fields`, because an issue that exists is not an issue that is available
+(`docs/tracker.md` § Who owns a card). Compare ids against the `id` you kept from
+`get_user`, never display names:
 
-- assigned to the account from the first call: yours, use it, move it, comment on it.
-- assigned to somebody else, or `In Progress` or `In Review` under their name: theirs.
+- `assigneeId` is you: yours, use it, move it, comment on it.
+- `assigneeId` is somebody else, or `statusType` is `started` under their name: theirs.
   Leave every field alone, add a comment only if you have something useful, and pick
   other work. Never `assignee: "me"` on it, not even when you are about to fix exactly
-  that.
-- no assignee: it belongs to whoever filed it (`createdBy`), unless it carries
-  `parallel`, which means whoever is free may take it.
+  that, and not because the person talking to you asked for it by id: if it is theirs,
+  they reassign it and you proceed.
+- no `assigneeId`: it belongs to whoever filed it (`createdById`).
+- labelled `parallel`, with no `assigneeId` and not `started`: whoever is free may take
+  it, whoever filed it. The label opens an unclaimed card; it never reopens a claimed
+  one.
 
 Looking for something to work on rather than checking one card: `list_issues` with
-`assignee: "me"`, which does filter, and `label: "parallel"`. The unassigned list is not
-filterable: `assignee: null` and `assignee: "null"` are both accepted and both silently
-ignored, so the response still carries everybody's cards (measured 2026-09-09, against
-the tool's own description). Ask for `assignee` and `createdById` in `fields` and filter
-the rows yourself. Those lists together are the work you may start.
+`assignee: "me"`, which does filter, and `label: "parallel"`, which does not filter on
+ownership at all, so drop from it every row carrying an `assigneeId` that is not yours or
+a `statusType` of `started`. The unassigned list is not filterable either:
+`assignee: null` and `assignee: "null"` are both accepted and both silently ignored, so
+the response still carries everybody's cards (measured 2026-09-09, against the tool's own
+description). Narrow it server-side (`state: "Todo"`, then `state: "Backlog"`), raise
+`limit` past the default 50, and filter the rows yourself. Those lists together are the
+work you may start.
 
 A new issue is filed only when none exists and the work will outlive this run, and then
 **before** the work starts, never after (`docs/tracker.md`, The loop).

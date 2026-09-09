@@ -187,9 +187,11 @@ tested on a branch and is proven on the trunk instead.
   us run agents against the same board, so the only thing keeping two of them off
   the same work is that field: you may work a card assigned to the account your
   session writes as (`get_user` with `"me"`, checked once per session), a card with
-  no assignee that you filed yourself, or a card labelled `parallel`. Anything else
-  gets a comment at most, never an assignee change, a status change or a PR. Every
-  issue is filed with an assignee for the same reason: an empty one reads as free.
+  no assignee that you filed yourself, or a card labelled `parallel` that nobody has
+  claimed. Anything else gets a comment at most, never an assignee change, a status
+  change, a branch or a PR, and being asked for it by name does not make it yours
+  (`docs/tracker.md` § Who owns a card). Every issue is filed with an assignee for
+  the same reason: an empty one reads as free.
 - An issue carries exactly one `type` label and exactly one `area:*` label, both from
   enforced groups, so Linear drops a second one silently. Priority and effort are
   Linear's native fields and are never labels.
