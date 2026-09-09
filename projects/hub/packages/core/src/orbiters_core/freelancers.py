@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from orbiters_core.comments import CommentService
 from orbiters_core.errors import NotFound, ValidationFailed
 from orbiters_core.models import CV_MAX_BYTES, FREELANCER_STATES, Freelancer
 from orbiters_core.schemas import (
@@ -98,7 +99,11 @@ class FreelancerService:
         return FreelancerList(totale=totale, items=[FreelancerRead.model_validate(r) for r in rows])
 
     def get(self, freelancer_id: UUID) -> FreelancerRead:
-        return FreelancerRead.model_validate(self._require(freelancer_id))
+        """The row with its thread of comments, newest first. Only here: the list
+        leaves `commenti` empty."""
+        read = FreelancerRead.model_validate(self._require(freelancer_id))
+        read.commenti = CommentService(self.session).list(ENTITY, freelancer_id)
+        return read
 
     def cv(self, freelancer_id: UUID) -> CvFile:
         row = self._require(freelancer_id)

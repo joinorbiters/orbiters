@@ -152,6 +152,37 @@ class Company(Base, PrimaryKeyMixin, TimestampMixin, UtmMixin):
     __table_args__ = (Index("ix_companies_created_at", "created_at"),)
 
 
+# ---- comments: what an admin or an assistant says about a row, over time ---------------
+
+COMMENT_ENTITY_TYPES = ("freelancer", "company")
+COMMENT_MAX_LENGTH = 4000
+AUTORE_MAX_LENGTH = NAME_MAX_LENGTH
+
+
+class Comment(Base, PrimaryKeyMixin):
+    """One remark about a freelancer or a company, signed and dated. Append-only, like
+    PigroCRM's timeline entries: no update and no delete anywhere in the hub, so a
+    thread read in a month is the thread as it was written. `note` on the row itself
+    stays the one-line summary an admin overwrites; this is the history beside it
+    (ORB-59, Ivan's decision of 2026-09-09).
+
+    `entity_type` plus `entity_id` rather than two nullable foreign keys: the service
+    checks the row exists before writing, and one table with one index is what a
+    thread on a third kind of row would reuse without a migration on this table."""
+
+    __tablename__ = "comments"
+
+    entity_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    entity_id: Mapped[UUID] = mapped_column(nullable=False)
+    testo: Mapped[str] = mapped_column(Text, nullable=False)
+    autore: Mapped[str] = mapped_column(String(AUTORE_MAX_LENGTH), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (Index("ix_comments_entity", "entity_type", "entity_id", "created_at"),)
+
+
 # ---- the admin area -------------------------------------------------------------------
 
 ADMIN_SESSION_TOKEN_HASH_LENGTH = 64  # sha256, hex

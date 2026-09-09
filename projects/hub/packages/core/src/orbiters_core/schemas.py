@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from orbiters_core.models import (
     AZIENDA_MAX_LENGTH,
+    COMMENT_MAX_LENGTH,
     DURATA_MAX_LENGTH,
     LINKEDIN_URL_MAX_LENGTH,
     NAME_MAX_LENGTH,
@@ -222,6 +223,22 @@ def _clean_text(value: str, *, what: str) -> str:
     return trimmed
 
 
+def clean_multiline(value: str, *, what: str) -> str:
+    """A text a person writes in several lines: newlines and tabs stay, every other
+    control character and the bidi overrides are refused as everywhere else, and a
+    value that is only whitespace is refused rather than stored as nothing. Shared by
+    the company's project description and by the comments, so the API and the MCP
+    server agree on what a paragraph may contain."""
+    for character in value:
+        if character in "\n\r\t":
+            continue
+        _reject_control_characters(character)
+    trimmed = value.strip()
+    if not trimmed:
+        raise ValueError(f"serve {what}, non solo spazi")
+    return trimmed
+
+
 def _https_url(value: str) -> str:
     """Any https address: the additional links are the person's own (a site, a GitHub,
     a portfolio), so the host is not checked, only that it is a link worth following."""
@@ -291,16 +308,8 @@ class CompanyCreate(BaseModel):
     @field_validator("progetto", mode="after")
     @classmethod
     def _progetto(cls, value: str) -> str:
-        """Multi-line is the point of a project description, so newlines stay; every
-        other control character and the bidi overrides are refused as everywhere else."""
-        for character in value:
-            if character in "\n\r\t":
-                continue
-            _reject_control_characters(character)
-        trimmed = value.strip()
-        if not trimmed:
-            raise ValueError("serve una descrizione del progetto, non solo spazi")
-        return trimmed
+        """Multi-line is the point of a project description, so newlines stay."""
+        return clean_multiline(value, what="una descrizione del progetto")
 
 
 class Ack(BaseModel):
@@ -309,9 +318,35 @@ class Ack(BaseModel):
     ok: bool = True
 
 
+class CommentRead(BaseModel):
+    """One entry of a thread, as it was written: who, when, what. Nothing here is ever
+    updated, so this is also the whole history of the row's comments."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    entity_type: str
+    entity_id: UUID
+    testo: str
+    autore: str
+    created_at: datetime
+
+
+class CommentCreate(BaseModel):
+    """What the admin API takes for a new comment: the text alone. The author is the
+    logged-in admin, never a field the client fills in."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    testo: SafeStr = Field(min_length=1, max_length=COMMENT_MAX_LENGTH)
+
+
 class FreelancerRead(BaseModel):
     """The row as an admin reads it. Never the CV bytes: those have their own download,
-    so a list of two hundred people is not two hundred PDFs in one response."""
+    so a list of two hundred people is not two hundred PDFs in one response.
+
+    `commenti` is the thread, newest first, and only `get` fills it: a list of two
+    hundred people is not two hundred threads either, so the list leaves it empty."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -337,6 +372,7 @@ class FreelancerRead(BaseModel):
     utm_id: str | None = None
     created_at: datetime
     updated_at: datetime
+    commenti: list[CommentRead] = Field(default_factory=list)
 
 
 class FreelancerList(BaseModel):
@@ -365,6 +401,8 @@ class CompanyRead(BaseModel):
     utm_id: str | None = None
     created_at: datetime
     updated_at: datetime
+    # The thread, newest first; filled by `get` only, as on `FreelancerRead`.
+    commenti: list[CommentRead] = Field(default_factory=list)
 
 
 class CompanyList(BaseModel):
