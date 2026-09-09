@@ -28,7 +28,7 @@
   spacing: 2pt,
   [#text(size: 9pt)[{{cliente.ragione_sociale}}]],
   [#text(size: 9pt)[P.IVA: {{cliente.partita_iva}} | CF: {{cliente.codice_fiscale}}]],
-  [#text(size: 9pt)[{{cliente.indirizzo}}, {{cliente.cap}} {{cliente.comune}} ({{cliente.provincia}}) {{cliente.nazione}}]],
+  [#text(size: 9pt)[{{cliente.indirizzo_display}}]],
   [#text(size: 9pt)[PEC: {{cliente.pec}} | Codice destinatario: {{cliente.codice_destinatario}}]],
 )
 

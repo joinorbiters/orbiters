@@ -376,3 +376,59 @@ def test_the_proforma_pdf_prints_its_own_date_and_its_period_not_the_render_day(
     ).stdout.decode("utf-8", errors="replace")
     assert "Data: 2026-01-02" in testo
     assert "Data: 2025-12-31" not in testo
+
+
+# --- ORB-55: the address line follows the customer's country --------------------------
+
+
+def _one_line(testo: str) -> str:
+    """`pdftotext -layout` pads columns with runs of spaces; the assertions below are
+    about words and their order, not about the padding."""
+    return " ".join(testo.split())
+
+
+def test_the_pdf_for_a_non_resident_customer_prints_the_address_without_empty_parentheses(
+    service: InvoiceService,
+    db_session: Session,
+    storage: LocalFileStorage,
+    extract_pdf_text: Callable[[LocalFileStorage, Session, UUID], str],
+) -> None:
+    """ORB-55. The template hard-coded `({{cliente.provincia}})`, so a London customer
+    read `1 Old Street, EC1V 9HL London () GB` on the document. Outside Italy there is no
+    province to print: the postcode as stored, the city, the country, and no parentheses."""
+    invoice_id = _issue(service, _non_resident_customer(db_session))
+    pdf, _xml = service.produce_artifacts(invoice_id, ADMIN)
+    testo = _one_line(extract_pdf_text(storage, db_session, pdf.document_id))
+    assert "1 Old Street, EC1V 9HL London GB" in testo
+    assert "()" not in testo
+
+
+def test_the_pdf_for_an_italian_customer_keeps_cap_comune_and_province(
+    service: InvoiceService,
+    customer_id: UUID,
+    db_session: Session,
+    storage: LocalFileStorage,
+    extract_pdf_text: Callable[[LocalFileStorage, Session, UUID], str],
+) -> None:
+    """The other direction: an Italian address keeps the shape it always had, province
+    in parentheses, so the fix for London did not move Rome."""
+    invoice_id = _issue(service, customer_id)
+    pdf, _xml = service.produce_artifacts(invoice_id, ADMIN)
+    testo = _one_line(extract_pdf_text(storage, db_session, pdf.document_id))
+    assert "Corso Italia 5, 00100 Roma (RM) IT" in testo
+
+
+def test_the_proforma_pdf_for_a_non_resident_customer_prints_the_same_address_line(
+    service: InvoiceService,
+    db_session: Session,
+    storage: LocalFileStorage,
+    extract_pdf_text: Callable[[LocalFileStorage, Session, UUID], str],
+) -> None:
+    """The proforma template carried the same hard-coded parentheses, and a proforma
+    never runs the export pre-check, so it is the document most likely to be printed
+    for an incomplete record."""
+    proforma_id = _confirmed_proforma(service, _non_resident_customer(db_session))
+    (pdf,) = service.produce_artifacts(proforma_id, ADMIN)
+    testo = _one_line(extract_pdf_text(storage, db_session, pdf.document_id))
+    assert "1 Old Street, EC1V 9HL London GB" in testo
+    assert "()" not in testo
