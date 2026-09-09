@@ -75,6 +75,16 @@ export function CommercialTab({ periodo }: { periodo: Periodo }) {
           what closed is the caption under it. */}
       <BarRows caption="Pipeline per stato" rows={bars} />
 
+      {/* The closed rows sit four inches under «Deal vinti nel periodo», and the two
+          figures answer different questions: one is a place, the other a period. The MCP
+          briefing says so to the agent reading it; this is the same sentence for the
+          person reading the screen. Only when there is a closed row to caveat. */}
+      {closed.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          Vinto e Perso contano i deal che stanno oggi in quello stato, non il periodo.
+        </p>
+      )}
+
       {/* Three across (design spec §4), not four: the KPI card is wider now that its
           value is 30px, and the fourth card of a four-up row was the one that wrapped
           first on a laptop anyway. */}

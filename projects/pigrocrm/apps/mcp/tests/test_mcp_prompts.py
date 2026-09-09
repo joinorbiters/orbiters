@@ -486,6 +486,10 @@ async def test_revisione_pipeline_carries_the_dashboard_as_text(mcp_server: Any)
     assert "Pipeline per stato" in text_block
     assert "Tasso di conversione" in text_block
     assert f"{_PREFIX} aperto" in text_block, "the stage row is missing, so nothing was read"
+    # The closed stages are in the table too since 2026-09-09, with the caveat that says
+    # what they count. The corpus puts one deal in `{_PREFIX} vinto`.
+    assert f"| {_PREFIX} vinto | 1 |" in text_block
+    assert "contano i deal che ci sono **oggi**" in text_block
     # The posture, which is the half a tool could not carry without becoming an injection.
     assert "fermi" in text_block.lower()
 

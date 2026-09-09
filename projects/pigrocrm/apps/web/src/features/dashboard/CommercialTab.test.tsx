@@ -181,6 +181,8 @@ describe('CommercialTab', () => {
     const separated = table.querySelectorAll('[data-separator="true"]')
     expect(separated).toHaveLength(1)
     expect(separated[0]).toHaveTextContent('Vinto')
+    // The hairline the reader sees, not only the attribute the query found it by.
+    expect(separated[0]).toHaveClass('border-t')
   })
 
   it('scales every bar against the widest stage, closed ones included', async () => {
@@ -209,6 +211,15 @@ describe('CommercialTab', () => {
     })
   })
 
+  it('says that the closed stages count today and not the period', async () => {
+    // «Vinto 8» sits under «Deal vinti nel periodo 3» and the two answer different
+    // questions. Without this line the card contradicts itself in the reader's eye.
+    vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
+    renderTab()
+    const caveat = await screen.findByText(/stanno oggi in quello stato, non il periodo/i)
+    expect(caveat).toBeInTheDocument()
+  })
+
   it('draws no separator when the pipeline has no closed stage', async () => {
     // A rule with nothing under it is a divider between a list and its own end.
     vi.mocked(api.GET).mockResolvedValue(
@@ -217,6 +228,8 @@ describe('CommercialTab', () => {
     renderTab()
     const table = await screen.findByRole('table', { name: /pipeline per stato/i })
     expect(table.querySelectorAll('[data-separator="true"]')).toHaveLength(0)
+    // And no caveat either: a note about rows the card is not drawing.
+    expect(screen.queryByText(/stanno oggi in quello stato/i)).not.toBeInTheDocument()
   })
 
   it('renders an error banner and no dashboard when the request fails', async () => {

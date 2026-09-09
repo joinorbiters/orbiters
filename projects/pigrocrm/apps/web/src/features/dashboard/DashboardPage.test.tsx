@@ -19,8 +19,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return { ...actual, api: { GET: vi.fn(), POST: vi.fn(), PUT: vi.fn(), DELETE: vi.fn() } }
 })
 
-// The economic and operational tabs link out (the fiscal estimate, the three drill-through
-// signals), and a `<Link>` outside a router throws. What those destinations are is asserted
+// The tabs link out (the fiscal card points at Impostazioni → Fiscale when a parameter is
+// missing), and a `<Link>` outside a router throws. What those destinations are is asserted
 // in each tab's own file; here the only question is which tab got mounted.
 vi.mock('@tanstack/react-router', () => ({
   Link: ({ to, children }: { to: string; children: React.ReactNode }) => <a href={to}>{children}</a>,
@@ -59,10 +59,27 @@ const EMPTY_OVERVIEW = {
 }
 
 
-/** One mock for three endpoints: which tab is mounted decides which one is called. */
+const EMPTY_ESTIMATE = {
+  anno: 2026,
+  stima: true,
+  avvertenza: 'Stima indicativa.',
+  ricavi: '0.00',
+  coefficiente_redditivita: null,
+  imponibile: null,
+  aliquota_imposta_sostitutiva: null,
+  imposta_sostitutiva: null,
+  aliquota_inps: null,
+  contributi: null,
+  reddito_netto_stimato: null,
+}
+
+/** One mock for every endpoint the tabs read: which tab is mounted decides which are
+ *  called. The economic one reads two -- the overview behind its cards and the estimate
+ *  behind the «Stima fiscale» card under them. */
 const BY_PATH: Record<string, unknown> = {
   '/api/dashboard/commerciale': EMPTY_DASHBOARD,
   '/api/analytics/panoramica': EMPTY_OVERVIEW,
+  '/api/analytics/fiscale': EMPTY_ESTIMATE,
 }
 
 const SEARCH: DashboardSearch = { tab: 'commerciale', da: '2026-03-01', a: '2026-03-31' }
@@ -93,11 +110,19 @@ describe('DashboardPage', () => {
   it('renders the tab the URL names, not the first one', async () => {
     renderPage({ ...SEARCH, tab: 'economica' })
     expect(await screen.findByRole('group', { name: 'Ricavi incassati' })).toBeInTheDocument()
-    expect(screen.queryByText(/pipeline aperta/i)).not.toBeInTheDocument()
-    // One tab, one request: rendering all three and hiding two would open three snapshot
-    // transactions to draw one screen.
-    expect(api.GET).toHaveBeenCalledTimes(1)
+    // The commercial tab's own card, by the title it has today: after the 2026-09-09
+    // rename «Pipeline aperta per stato» exists nowhere, so asserting *its* absence
+    // passed whether or not CommercialTab was mounted. Both are checked, so neither the
+    // guard nor the rename can go quiet.
+    expect(screen.queryByText(/pipeline per stato/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/pipeline aperta per stato/i)).not.toBeInTheDocument()
+    // One tab at a time: rendering both and hiding one would open the other's snapshot
+    // transactions to draw a screen nobody is looking at. Asserted by which endpoints were
+    // read, not by a call count -- the economic tab legitimately reads two of them, the
+    // overview behind its cards and the estimate behind the «Stima fiscale» card.
     expect(api.GET).toHaveBeenCalledWith('/api/analytics/panoramica', expect.anything())
+    expect(api.GET).toHaveBeenCalledWith('/api/analytics/fiscale', expect.anything())
+    expect(api.GET).not.toHaveBeenCalledWith('/api/dashboard/commerciale', expect.anything())
   })
 
   it('passes the period from the URL through to the request', async () => {
