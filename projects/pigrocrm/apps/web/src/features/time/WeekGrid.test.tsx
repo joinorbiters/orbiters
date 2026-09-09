@@ -3,7 +3,10 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/lib/api'
+import type { Deal } from '@/features/deals/queries'
+import type { TimeEntry } from './queries'
 import { WeekGrid } from './WeekGrid'
+import { weekDays } from './week'
 
 /**
  * `api` is an `openapi-fetch` client built at import time, and `createClient()` captures
@@ -86,29 +89,8 @@ function ok(data: unknown) {
   return Promise.resolve({ data, response: new Response(null, { status: 200 }) }) as never
 }
 
-function failed(error: unknown, status: number) {
-  return Promise.resolve({ error, response: new Response(null, { status }) }) as never
-}
 
-/** Routes each mocked call by the *templated* path openapi-fetch is called with, so a
- *  mistyped path surfaces as a missing handler rather than as a silently empty screen. */
-function routeGet(responses: Record<string, () => ReturnType<typeof ok>>) {
-  vi.mocked(api.GET).mockImplementation(((path: string) => {
-    const response = responses[path]
-    if (!response) throw new Error(`unexpected GET ${path}`)
-    return response()
-  }) as never)
-}
 
-/** The GET calls, read back as `[templated path, options]`. `openapi-fetch`'s overloads
- *  collapse the mocked parameter tuple to `never`, so destructuring it directly is a
- *  compile error rather than a typo -- the cast is confined to this one helper. */
-function getCalls(): [string, { params: { query: Record<string, unknown> } }][] {
-  return vi.mocked(api.GET).mock.calls as unknown as [
-    string,
-    { params: { query: Record<string, unknown> } },
-  ][]
-}
 
 // Fake timers so "this week" is a fixed week, with `shouldAdvanceTime` because React
 // Query and `userEvent` both need the clock to keep moving; `advanceTimers` hands
@@ -129,26 +111,25 @@ beforeEach(() => {
   vi.mocked(api.DELETE).mockReset()
 })
 
-function renderGrid() {
+/** The grid is the table alone since 2026-09-09: `TimePage` owns the week and the two
+ *  reads and hands the rows down, so this renders it the way the page does. */
+function renderGrid(entries: ReturnType<typeof timeEntry>[] = []) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
-      <WeekGrid />
+      <WeekGrid
+        days={weekDays(new Date())}
+        userId={USER}
+        entries={entries as unknown as TimeEntry[]}
+        deals={[deal(DEAL, 'Progetto Alfa')] as unknown as Deal[]}
+      />
     </QueryClientProvider>,
   )
 }
 
 describe('WeekGrid', () => {
   it('shows a row total, a column total and a grand total summed in integer hundredths', async () => {
-    routeGet({
-      '/api/deals': () => ok({ items: [deal(DEAL, 'Progetto Alfa')], next_cursor: null }),
-      '/api/time-entries': () =>
-        ok({
-          items: [timeEntry(), timeEntry({ id: 'e2', data: '2026-03-11', ore: '1.25' })],
-          next_cursor: null,
-        }),
-    })
-    renderGrid()
+    renderGrid([timeEntry(), timeEntry({ id: 'e2', data: '2026-03-11', ore: '1.25' })])
     expect(await screen.findByText('Progetto Alfa')).toBeInTheDocument()
     expect(await screen.findByTestId(`row-total-${DEAL}`)).toHaveTextContent('3,75')
     expect(await screen.findByTestId('column-total-2026-03-09')).toHaveTextContent('2,5')
@@ -157,10 +138,6 @@ describe('WeekGrid', () => {
 
   it('typing in an empty cell logs an hour for that deal and that day', async () => {
     const posted: unknown[] = []
-    routeGet({
-      '/api/deals': () => ok({ items: [deal(DEAL, 'Progetto Alfa')], next_cursor: null }),
-      '/api/time-entries': () => ok({ items: [], next_cursor: null }),
-    })
     vi.mocked(api.POST).mockImplementation(((_path: string, init: { body: unknown }) => {
       posted.push(init.body)
       return ok(timeEntry({ id: 'new', ore: '3.5' }))
@@ -183,13 +160,9 @@ describe('WeekGrid', () => {
   })
 
   it('clearing a cell deletes its entry instead of logging zero hours', async () => {
-    routeGet({
-      '/api/deals': () => ok({ items: [deal(DEAL, 'Progetto Alfa')], next_cursor: null }),
-      '/api/time-entries': () => ok({ items: [timeEntry()], next_cursor: null }),
-    })
     vi.mocked(api.DELETE).mockImplementation((() => ok(null)) as never)
 
-    renderGrid()
+    renderGrid([timeEntry()])
     const cell = await screen.findByLabelText(/Progetto Alfa, lunedì 9 marzo/i)
     expect(cell).toHaveValue('2,50')
     const user = typist()
@@ -202,13 +175,9 @@ describe('WeekGrid', () => {
   })
 
   it('edits an existing entry through PATCH rather than logging a second one', async () => {
-    routeGet({
-      '/api/deals': () => ok({ items: [deal(DEAL, 'Progetto Alfa')], next_cursor: null }),
-      '/api/time-entries': () => ok({ items: [timeEntry()], next_cursor: null }),
-    })
     vi.mocked(api.PATCH).mockImplementation((() => ok(timeEntry({ ore: '4' }))) as never)
 
-    renderGrid()
+    renderGrid([timeEntry()])
     const cell = await screen.findByLabelText(/Progetto Alfa, lunedì 9 marzo/i)
     const user = typist()
     await user.clear(cell)
@@ -223,11 +192,7 @@ describe('WeekGrid', () => {
   })
 
   it('writes nothing when a cell is left exactly as it was found', async () => {
-    routeGet({
-      '/api/deals': () => ok({ items: [deal(DEAL, 'Progetto Alfa')], next_cursor: null }),
-      '/api/time-entries': () => ok({ items: [timeEntry()], next_cursor: null }),
-    })
-    renderGrid()
+    renderGrid([timeEntry()])
     const cell = await screen.findByLabelText(/Progetto Alfa, lunedì 9 marzo/i)
     const user = typist()
     await user.click(cell)
@@ -235,69 +200,5 @@ describe('WeekGrid', () => {
     expect(vi.mocked(api.POST)).not.toHaveBeenCalled()
     expect(vi.mocked(api.PATCH)).not.toHaveBeenCalled()
     expect(vi.mocked(api.DELETE)).not.toHaveBeenCalled()
-  })
-
-  it('renders a banner and no grid when the request fails', async () => {
-    routeGet({
-      '/api/deals': () => ok({ items: [deal(DEAL, 'Progetto Alfa')], next_cursor: null }),
-      '/api/time-entries': () => failed({ detail: 'Boom' }, 500),
-    })
-    renderGrid()
-    expect(await screen.findByRole('alert')).toBeInTheDocument()
-    expect(screen.queryByTestId('grid-total')).not.toBeInTheDocument()
-  })
-
-  it('opens with its title and its week controls in the page header', async () => {
-    // The intestazione of design spec §4: the `<h1>` is the only thing naming this
-    // screen, and choosing a week is this page's primary action -- there is nothing to
-    // create here.
-    routeGet({
-      '/api/deals': () => ok({ items: [deal(DEAL, 'Progetto Alfa')], next_cursor: null }),
-      '/api/time-entries': () => ok({ items: [], next_cursor: null }),
-    })
-    renderGrid()
-    expect(await screen.findByRole('heading', { level: 1, name: 'Ore' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Questa settimana' })).toBeInTheDocument()
-  })
-
-  it('moves a whole week at a time', async () => {
-    routeGet({
-      '/api/deals': () => ok({ items: [deal(DEAL, 'Progetto Alfa')], next_cursor: null }),
-      '/api/time-entries': () => ok({ items: [], next_cursor: null }),
-    })
-    renderGrid()
-    expect(await screen.findByText(/9 marzo/i)).toBeInTheDocument()
-    await typist().click(screen.getByRole('button', { name: /settimana precedente/i }))
-    expect(await screen.findByText(/2 marzo/i)).toBeInTheDocument()
-  })
-
-  it('asks the API for this user, this week, and nothing wider', async () => {
-    routeGet({
-      '/api/deals': () => ok({ items: [deal(DEAL, 'Progetto Alfa')], next_cursor: null }),
-      '/api/time-entries': () => ok({ items: [], next_cursor: null }),
-    })
-    renderGrid()
-    await screen.findByTestId('grid-total')
-    const call = getCalls().find(([path]) => path === '/api/time-entries')
-    expect(call?.[1].params.query).toMatchObject({
-      user_id: USER,
-      da: '2026-03-09',
-      a: '2026-03-15',
-    })
-  })
-
-  it('asks for nothing at all until the session is known', async () => {
-    // Without the `enabled` guard the first render fires a `user_id: undefined` list
-    // request, which an admin's session answers with the whole team's hours -- rows
-    // whose cells would then belong to somebody else.
-    session.user = null
-    routeGet({
-      '/api/deals': () => ok({ items: [deal(DEAL, 'Progetto Alfa')], next_cursor: null }),
-      '/api/time-entries': () => ok({ items: [], next_cursor: null }),
-    })
-    renderGrid()
-    await screen.findByText(/ore/i)
-    await waitFor(() => expect(getCalls().some(([path]) => path === '/api/deals')).toBe(true))
-    expect(getCalls().some(([path]) => path === '/api/time-entries')).toBe(false)
   })
 })
