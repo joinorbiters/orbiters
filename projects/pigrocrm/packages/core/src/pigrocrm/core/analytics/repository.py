@@ -312,7 +312,14 @@ class AnalyticsRepository:
     def monthly_bozze(self, anno: int) -> dict[int, Decimal]:
         """`Σ totale` of what is written but not yet an issued invoice: draft invoices and
         live proformas (not the ones already turned into an invoice, which would count
-        twice). By issue date, or the day they were created when there is none."""
+        twice). By the document's own date, or the day it was created when it has none.
+
+        Since ORB-63 a proforma always has one: `data_emissione` is the date the sender
+        put on the document, so a proforma dated 5 September for August's work is
+        September's projected money whatever day it was typed in, exactly as the fattura
+        it becomes will be. A `fattura` draft still has no date until `issue` and stays
+        bucketed by the day it was created; `created_at` is the fallback for it alone.
+        """
         when = func.coalesce(Invoice.data_emissione, func.date(Invoice.created_at))
         month = func.extract("month", when)
         year = func.extract("year", when)

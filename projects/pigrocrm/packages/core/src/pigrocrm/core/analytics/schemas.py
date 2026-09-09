@@ -90,6 +90,9 @@ class PeriodPnl(BaseModel):
     da: date
     a: date
     customer_id: UUID | None
+    # Echoed from the query, so a reader of the figure knows which of the two readings
+    # of revenue produced it (ORB-61) without keeping the request beside the response.
+    base: RevenueBase
     chiusi: PnlTotals
     in_corso: PnlTotals
     # A cost with `deal_id IS NULL`: it enters the period P&L in a row of its own and is

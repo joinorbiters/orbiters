@@ -254,6 +254,7 @@ class AnalyticsService:
             da=query.da,
             a=query.a,
             customer_id=query.customer_id,
+            base=query.base,
             chiusi=_totals(chiusi),
             in_corso=_totals(in_corso),
             # Never apportioned onto any deal (§7.4), and absent entirely under a

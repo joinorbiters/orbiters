@@ -138,5 +138,7 @@ async def test_get_period_pnl_offers_the_accrual_reading_and_refuses_an_unknown_
     # No invoice in the fixture, so the hours are the same under both readings: costs and
     # hours never move with the base.
     assert accrual.structured_content["in_corso"] == default.structured_content["in_corso"]
+    assert default.structured_content["base"] == "emissione"
+    assert accrual.structured_content["base"] == "competenza"
     assert unknown.is_error
     assert "errors.pydantic.dev" not in unknown.content[0].text

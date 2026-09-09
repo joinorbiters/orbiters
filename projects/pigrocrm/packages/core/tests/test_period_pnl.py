@@ -402,6 +402,9 @@ def test_by_default_revenue_follows_the_emission_date(
     assert this_month.chiusi.deal == 1
     assert last_month.chiusi.ricavi == Decimal("0.00")
     assert last_month.chiusi.deal == 0
+    # The response says which reading produced it, so a figure read later is not
+    # mistaken for the other one.
+    assert this_month.base == "emissione"
 
 
 def test_by_accrual_period_the_revenue_lands_in_the_month_the_work_belongs_to(
@@ -429,6 +432,7 @@ def test_by_accrual_period_the_revenue_lands_in_the_month_the_work_belongs_to(
     last_month = service.period_pnl(
         PeriodPnlQuery(da=MESE_PRECEDENTE[0], a=MESE_PRECEDENTE[1], base="competenza"), READER
     )
+    assert last_month.base == "competenza"
     assert last_month.chiusi.ricavi == Decimal("2000.00")
     assert last_month.chiusi.deal == 1
     assert last_month.chiusi.costi_diretti == Decimal("0.00")

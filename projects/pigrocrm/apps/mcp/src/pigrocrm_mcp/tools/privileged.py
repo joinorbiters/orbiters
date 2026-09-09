@@ -200,7 +200,9 @@ def register(
 
         `dati` ha la forma di `InvoiceImport`, campo per campo: `anno`, `numero`,
         `data_emissione`, `data_scadenza` (opzionale, altrimenti calcolata dal regime),
-        `customer_id`, `deal_id` (opzionale), `causale`, `righe` (ciascuna con
+        `customer_id`, `deal_id` (opzionale), `causale`, `competenza_da` e
+        `competenza_a` (opzionali, insieme o nessuno dei due: il periodo di competenza
+        del lavoro fatturato, se il documento lo dichiarava), `righe` (ciascuna con
         `descrizione`, `quantita`, `prezzo_unitario`, `prezzo_totale`, `aliquota_iva` e
         `natura` come stampati sul documento), `imponibile`, `imposta`, `bollo`,
         `totale`, `stato_pagamento`, `data_incasso` (richiesta se incassato),

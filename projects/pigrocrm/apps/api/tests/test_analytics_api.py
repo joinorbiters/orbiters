@@ -557,6 +557,10 @@ def test_the_period_report_takes_a_base_and_defaults_to_emission(
     assert by_accrual.status_code == 200, by_accrual.text
     assert _ricavi(by_emission.json()) == "1000.00"
     assert _ricavi(by_accrual.json()) == "0.00"
+    # The body echoes the reading, so the web client can label the figure it shows
+    # without carrying the request around beside it.
+    assert by_emission.json()["base"] == "emissione"
+    assert by_accrual.json()["base"] == "competenza"
     last_month = {
         "from": fine_mese_prima.replace(day=1).isoformat(),
         "to": fine_mese_prima.isoformat(),
