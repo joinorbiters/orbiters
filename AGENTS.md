@@ -117,9 +117,12 @@ Adding a project means adding one filter to `changes` and one or two jobs that c
 
 **Deploy is a fourth thing, and it is not a status check.** Two environments per
 project: preview when CI concludes green on `main` for a commit that touched the
-project, production only on a project-scoped tag, `<project>-v<semver>`. The
-mechanism is shared (`_deploy-compose.yml`); the trigger is per project
-(`deploy-<project>.yml`), so two projects can never deploy each other by accident.
+project, production only on a project-scoped tag, `<project>-v<semver>`. **Never by
+hand**: no `docker compose up`, `rsync` or `git pull` on the server is a release, for
+any stack in any environment (`docs/design/DECISIONS.md`, 2026-09-09); a deploy that is
+not armed gets armed. The mechanism is shared (`_deploy-compose.yml`); the trigger is
+per project (`deploy-<project>.yml`), so two projects can never deploy each other by
+accident.
 Per-environment configuration is a **GitHub Environment**, holding the same four
 secrets everywhere: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH`, `DEPLOY_SSH_KEY`.
 The caller must pass `secrets: inherit`, or a reusable workflow reads all four as
