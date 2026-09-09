@@ -51,6 +51,8 @@ export const queryKeys = {
   invoiceLines: (id: string) => ['invoice-lines', id] as const,
   fiscalProfile: ['fiscal-profile'] as const,
   timeEntries: (params?: unknown) => ['time-entries', params ?? {}] as const,
+  /** The caller's own running timer -- one row or null, so one key with no argument. */
+  timer: ['timer'] as const,
   timeEntry: (id: string) => ['time-entry', id] as const,
   dealTimeSummary: (dealId: string) => ['deal-time-summary', dealId] as const,
   // Keyed by both ids: the answer depends on the deal's rate *and* the user's default,

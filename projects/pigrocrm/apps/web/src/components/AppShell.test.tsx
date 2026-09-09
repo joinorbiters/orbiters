@@ -201,7 +201,7 @@ describe('AppShell', () => {
   it('opens a group on click and persists it', async () => {
     const { unmount } = renderShell()
     await userEvent.click(sidebar().getByRole('button', { name: 'Amministrazione' }))
-    expect(sidebar().getByRole('link', { name: 'Solleciti' })).toBeInTheDocument()
+    expect(sidebar().getByRole('link', { name: 'Ore' })).toBeInTheDocument()
     expect(JSON.parse(localStorage.getItem(SIDEBAR_GROUPS_KEY) ?? '{}')).toMatchObject({
       amministrazione: true,
     })
@@ -213,7 +213,7 @@ describe('AppShell', () => {
       'aria-expanded',
       'true',
     )
-    expect(sidebar().getByRole('link', { name: 'Solleciti' })).toBeInTheDocument()
+    expect(sidebar().getByRole('link', { name: 'Ore' })).toBeInTheDocument()
   })
 
   it('closes a group on a second click and persists that too', async () => {

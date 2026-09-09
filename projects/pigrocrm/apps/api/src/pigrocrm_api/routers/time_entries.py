@@ -10,8 +10,13 @@ from pigrocrm.core.timetracking.schemas import (
     TimeEntryPage,
     TimeEntryRead,
     TimeEntryUpdate,
+    TimerRead,
+    TimerStart,
+    TimerStop,
+    TimerUpdate,
 )
 from pigrocrm.core.timetracking.service import TimeEntryService
+from pigrocrm.core.timetracking.timer import TimerService
 from pigrocrm.core.validation import SafeStr
 from pigrocrm_api.deps import ActorDep, SessionDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
@@ -58,6 +63,38 @@ def list_time_entries(
         cursor=cursor,
     )
     return TimeEntryService(session).list(query, actor)
+
+
+# The timer routes sit above `/{entry_id}` on purpose: FastAPI matches in declaration
+# order, and `entry_id` is typed `UUID`, so a `/timer` declared after it would be tried
+# as an id first and answer 422 before this handler was ever reached.
+@router.get("/timer", response_model=TimerRead | None)
+def running_timer(session: SessionDep, actor: ActorDep) -> TimerRead | None:
+    """The caller's own running timer, or `null`. A 200 with `null` rather than a 404:
+    "no clock running" is the ordinary state of the page that asks, not an error."""
+    return TimerService(session).current(actor)
+
+
+@router.post("/timer/start", response_model=TimerRead, status_code=status.HTTP_201_CREATED)
+def start_timer(data: TimerStart, session: SessionDep, actor: ActorDep) -> TimerRead:
+    return TimerService(session).start(data, actor)
+
+
+@router.patch("/timer", response_model=TimerRead)
+def update_timer(data: TimerUpdate, session: SessionDep, actor: ActorDep) -> TimerRead:
+    return TimerService(session).update(data, actor)
+
+
+@router.post("/timer/stop", response_model=TimeEntryRead, status_code=status.HTTP_201_CREATED)
+def stop_timer(data: TimerStop, session: SessionDep, actor: ActorDep) -> TimeEntryRead:
+    """Stops the clock and answers with the entry it became -- the row now in the
+    register, with its frozen rate, exactly as `POST /api/time-entries` would return it."""
+    return TimerService(session).stop(data, actor)
+
+
+@router.delete("/timer", status_code=status.HTTP_204_NO_CONTENT)
+def discard_timer(session: SessionDep, actor: ActorDep) -> None:
+    TimerService(session).discard(actor)
 
 
 @router.get("/{entry_id}", response_model=TimeEntryRead)

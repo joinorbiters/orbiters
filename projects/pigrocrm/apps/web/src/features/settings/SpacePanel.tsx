@@ -168,8 +168,8 @@ export function SpacePanel() {
         <CardHeader>
           <CardTitle>Agente</CardTitle>
           <CardDescription>
-            Con l'accesso completo un token personale può anche emettere fatture, chiudere
-            periodi e preparare solleciti: operazioni che non si annullano.
+            Con l'accesso completo un token personale può anche emettere fatture e chiudere
+            periodi: operazioni che non si annullano.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -187,19 +187,14 @@ export function SpacePanel() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Solleciti e Gmail</CardTitle>
+          <CardTitle>Gmail</CardTitle>
           <CardDescription>
-            Quando una fattura scaduta diventa sollecitabile, quanto aspettare fra due
-            solleciti, quanti al massimo, e quanti giorni di posta caricare al primo
-            collegamento.
+            Quanti giorni di posta caricare al primo collegamento della casella.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
           {(
             [
-              ['solleciti_grace_days', 'Giorni di tolleranza dopo la scadenza', 1, 365],
-              ['solleciti_min_interval_days', 'Giorni minimi fra due solleciti', 1, 365],
-              ['solleciti_max_reminders', 'Solleciti al massimo', 1, 3],
               ['gmail_backfill_days', 'Giorni di posta al primo collegamento', 1, 3650],
             ] as const
           ).map(([key, label, min, max]) => (
