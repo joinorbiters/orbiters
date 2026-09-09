@@ -102,7 +102,7 @@ def revisione_pipeline(
     lines = [
         f"# Revisione pipeline — {board.periodo.da} → {board.periodo.a}",
         "",
-        "## Pipeline aperta per stato",
+        "## Pipeline per stato",
         "",
         "| Stato | Deal | Valore | Senza valore | Valore ponderato (stima) |",
         "|---|---|---|---|---|",
@@ -117,6 +117,9 @@ def revisione_pipeline(
         "Il valore ponderato è una **stima** (valore previsto × probabilità): non è "
         "fatturato e non va sommato ai ricavi. I deal senza valore previsto sono contati "
         "a parte e non valgono zero.",
+        "",
+        "Gli stati chiusi (vinto, perso) contano i deal che ci sono **oggi**, non quelli "
+        "chiusi nel periodo: quelli sono nella sezione successiva.",
         "",
         "## Chiusure nel periodo",
         "",

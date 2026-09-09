@@ -99,8 +99,21 @@ export type BarRow = {
   value: string
   /** 0..1, computed by the server. Clamped here, never derived here. */
   ratio: number
-  /** 1..5, mapped to --chart-1..5. */
+  /** 1..5, mapped to --chart-1..5. Ignored when `color` is given. */
   tone: number
+  /**
+   * An explicit fill for a row that means something the sequence does not -- the pipeline
+   * card's «Vinto» and «Perso», which are outcomes and not two more steps. A `var()` or a
+   * `color-mix()` of the existing tokens, never a literal colour: `styles/tokens.css`
+   * stays the single source of colour.
+   */
+  color?: string
+  /**
+   * Draws a hairline above this row, to separate one group of rows from the next. A
+   * border on the first row of the second group rather than a row of its own: an empty
+   * `<tr>` is a phantom row in the table a screen reader reads.
+   */
+  separator?: boolean
 }
 
 export function BarRows({ caption, rows }: { caption: string; rows: BarRow[] }) {
@@ -119,7 +132,11 @@ export function BarRows({ caption, rows }: { caption: string; rows: BarRow[] }) 
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={row.label}>
+            <tr
+              key={row.label}
+              data-separator={row.separator ? 'true' : undefined}
+              className={cn(row.separator && 'border-t')}
+            >
               <th scope="row" className="py-1 pr-3 text-left font-normal">
                 {row.label}
               </th>
@@ -134,7 +151,7 @@ export function BarRows({ caption, rows }: { caption: string; rows: BarRow[] }) 
                       className="h-2 rounded-r-[3px]"
                       style={{
                         width: widthPercent(row.ratio),
-                        backgroundColor: toneColor(row.tone),
+                        backgroundColor: row.color ?? toneColor(row.tone),
                       }}
                     />
                   </div>

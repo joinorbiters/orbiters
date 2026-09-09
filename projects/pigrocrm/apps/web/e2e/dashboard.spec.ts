@@ -280,7 +280,7 @@ test.describe('il ciclo completo — metà umana', () => {
     await expect(page.getByRole('tab')).toHaveCount(2)
 
     await page.goto('/app/?tab=commerciale')
-    await expect(page.getByText('Pipeline aperta per stato')).toBeVisible()
+    await expect(page.getByText('Pipeline per stato')).toBeVisible()
     await expect(page.getByLabel('Dal')).toHaveCount(1)
   })
 

@@ -13,6 +13,7 @@ so that a composition layer provably cannot invent a figure.
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -96,6 +97,10 @@ class PipelineStageSummary(BaseModel):
     stage_id: str
     stage_code: str | None
     stage_nome: str
+    # Which kind of stage this is, so a renderer can group the closed ones without
+    # matching `stage_nome` -- a label the user is free to change (residuo R15). The same
+    # reasoning that made `tipo` exist on `PipelineStage` in the first place.
+    stage_tipo: Literal["open", "won", "lost"]
     posizione: int
     numero: int
     valore_totale: Decimal = Field(max_digits=12, decimal_places=2)

@@ -483,7 +483,7 @@ async def test_revisione_pipeline_carries_the_dashboard_as_text(mcp_server: Any)
     only on the headings: a template with every value missing has all the same words in it.
     """
     text_block = _text_of(await mcp_server.get_prompt("revisione-pipeline", {}))
-    assert "Pipeline aperta per stato" in text_block
+    assert "Pipeline per stato" in text_block
     assert "Tasso di conversione" in text_block
     assert f"{_PREFIX} aperto" in text_block, "the stage row is missing, so nothing was read"
     # The posture, which is the half a tool could not carry without becoming an injection.

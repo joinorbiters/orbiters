@@ -217,7 +217,7 @@ async def test_the_agent_runs_the_weekly_review_end_to_end(cycle_server: Corpus)
         # 1. Open the prompt. The context arrives *inside* it -- which is the whole reason
         #    these are prompts and not an instruction to go and fetch something.
         briefing = _text_of(await client.get_prompt("revisione-pipeline"))
-        assert "## Pipeline aperta per stato" in briefing
+        assert "## Pipeline per stato" in briefing
         assert "## Offerte inviate in attesa di risposta" in briefing
         assert STAGE_APERTO in briefing, "the stage row is missing, so nothing was read"
         # The age, not merely the title: an offer listed with no age is not a stalled offer,

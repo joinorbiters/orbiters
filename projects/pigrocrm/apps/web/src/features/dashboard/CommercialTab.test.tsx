@@ -34,6 +34,7 @@ const RESPONSE = {
       stage_id: 's1',
       stage_code: 'lead',
       stage_nome: 'Lead',
+      stage_tipo: 'open',
       posizione: 0,
       numero: 4,
       valore_totale: '3000.00',
@@ -44,11 +45,34 @@ const RESPONSE = {
       stage_id: 's2',
       stage_code: 'offerta',
       stage_nome: 'Offerta',
+      stage_tipo: 'open',
       posizione: 2,
       numero: 1,
       valore_totale: '500.00',
       senza_valore: 0,
       valore_ponderato: '250.00',
+    },
+    {
+      stage_id: 's3',
+      stage_code: 'vinto',
+      stage_nome: 'Vinto',
+      stage_tipo: 'won',
+      posizione: 4,
+      numero: 8,
+      valore_totale: '9000.00',
+      senza_valore: 0,
+      valore_ponderato: '9000.00',
+    },
+    {
+      stage_id: 's4',
+      stage_code: 'perso',
+      stage_nome: 'Perso',
+      stage_tipo: 'lost',
+      posizione: 5,
+      numero: 2,
+      valore_totale: '1000.00',
+      senza_valore: 0,
+      valore_ponderato: '0.00',
     },
   ],
   chiusure: { vinti: 3, persi: 1, valore_vinto: '15000.00', tasso_conversione: '75.00' },
@@ -89,7 +113,7 @@ describe('CommercialTab', () => {
     // read back, this proves they reach the request instead of being decoration.
     vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
     renderTab({ da: '2025-01-01', a: '2025-12-31' })
-    await screen.findByRole('table', { name: /pipeline aperta/i })
+    await screen.findByRole('table', { name: /pipeline per stato/i })
     expect(api.GET).toHaveBeenCalledWith('/api/dashboard/commerciale', {
       params: { query: { da: '2025-01-01', a: '2025-12-31' } },
     })
@@ -98,7 +122,7 @@ describe('CommercialTab', () => {
   it('renders the pipeline as a table with the values the API sent', async () => {
     vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
     renderTab()
-    const table = await screen.findByRole('table', { name: /pipeline aperta/i })
+    const table = await screen.findByRole('table', { name: /pipeline per stato/i })
     expect(within(table).getByRole('rowheader', { name: 'Lead' })).toBeInTheDocument()
     expect(within(table).getByRole('rowheader', { name: 'Offerta' })).toBeInTheDocument()
   })
@@ -138,8 +162,61 @@ describe('CommercialTab', () => {
     // every user forever.
     vi.mocked(api.GET).mockResolvedValue(ok({ ...RESPONSE, chiusure_non_attribuibili: 0 }))
     renderTab()
-    await screen.findByRole('table', { name: /pipeline aperta/i })
+    await screen.findByRole('table', { name: /pipeline per stato/i })
     expect(screen.queryByText(/non sono attribuibili/i)).not.toBeInTheDocument()
+  })
+
+  it('draws every stage, the closed ones last and behind a rule', async () => {
+    // The card is «Pipeline per stato» since 2026-09-09: a list that stopped at the last
+    // open stage never said where the work ended up. The order is open stages in their
+    // `posizione` order, then the separator, then the closed ones -- grouped by
+    // `stage_tipo` and never by `stage_nome`, which the user may rename.
+    vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
+    renderTab()
+    const table = await screen.findByRole('table', { name: /pipeline per stato/i })
+    const labels = within(table)
+      .getAllByRole('rowheader')
+      .map((cell) => cell.textContent)
+    expect(labels).toEqual(['Lead', 'Offerta', 'Vinto', 'Perso'])
+    const separated = table.querySelectorAll('[data-separator="true"]')
+    expect(separated).toHaveLength(1)
+    expect(separated[0]).toHaveTextContent('Vinto')
+  })
+
+  it('scales every bar against the widest stage, closed ones included', async () => {
+    // Vinto (8) is the widest row, and it is a closed one. Scaling the open stages
+    // against the widest *open* stage would draw a four-deal Lead as a full bar beside an
+    // eight-deal Vinto, which is a chart that lies about the two it puts side by side.
+    vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
+    renderTab()
+    await screen.findByRole('table', { name: /pipeline per stato/i })
+    const bars = screen.getAllByTestId('bar-fill')
+    expect(bars[0]).toHaveStyle({ width: '50.00%' })
+    expect(bars[2]).toHaveStyle({ width: '100.00%' })
+  })
+
+  it('paints the two closed stages in ink and in Watermelon, not in a chart hue', async () => {
+    // Won is the ink and lost is the destructive tint the `destructive` badge already
+    // uses, so the two ends of the pipeline read as outcomes rather than as two more
+    // stages in the sequence. No sixth colour enters the palette.
+    vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
+    renderTab()
+    await screen.findByRole('table', { name: /pipeline per stato/i })
+    const bars = screen.getAllByTestId('bar-fill')
+    expect(bars[2]).toHaveStyle({ backgroundColor: 'var(--foreground)' })
+    expect(bars[3]).toHaveStyle({
+      backgroundColor: 'color-mix(in oklab, var(--destructive) 10%, transparent)',
+    })
+  })
+
+  it('draws no separator when the pipeline has no closed stage', async () => {
+    // A rule with nothing under it is a divider between a list and its own end.
+    vi.mocked(api.GET).mockResolvedValue(
+      ok({ ...RESPONSE, pipeline: RESPONSE.pipeline.filter((row) => row.stage_tipo === 'open') }),
+    )
+    renderTab()
+    const table = await screen.findByRole('table', { name: /pipeline per stato/i })
+    expect(table.querySelectorAll('[data-separator="true"]')).toHaveLength(0)
   })
 
   it('renders an error banner and no dashboard when the request fails', async () => {
@@ -148,7 +225,7 @@ describe('CommercialTab', () => {
     )
     renderTab()
     expect(await screen.findByRole('alert')).toHaveTextContent('Non disponibile')
-    expect(screen.queryByRole('table', { name: /pipeline aperta/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('table', { name: /pipeline per stato/i })).not.toBeInTheDocument()
     // The rule from §8.6, applied here too: an empty dashboard drawn after a failure says
     // "there is nothing" when the truth is "I do not know". The error branch is also
     // checked *before* the loading branch, because on a failure `isPending` is false while
@@ -173,7 +250,7 @@ describe('CommercialTab', () => {
   it('shows nothing but the first row and the pipeline: no offers, no signals, no detail table', async () => {
     vi.mocked(api.GET).mockResolvedValue(ok(RESPONSE))
     renderTab()
-    await screen.findByText('Pipeline aperta per stato')
+    await screen.findByText('Pipeline per stato')
     expect(screen.queryByText(/Offerte in attesa/)).toBeNull()
     expect(screen.queryByText('Segnali')).toBeNull()
     expect(screen.queryByText('Dettaglio per stato')).toBeNull()
