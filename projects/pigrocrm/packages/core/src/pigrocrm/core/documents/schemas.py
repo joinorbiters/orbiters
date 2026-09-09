@@ -163,3 +163,26 @@ class DocumentFromTemplate(BaseModel):
     # one by name before anything is written.
     variabili: dict[str, Any] = {}
     custom_fields: dict[str, Any] = {}
+
+
+class DocumentTextRead(BaseModel):
+    """The readable text of one archived document, and the sentence that says whose it is.
+
+    Not a `DocumentVersionRead` with a field added: a version is metadata about a file
+    (its size, its hash, who uploaded it) and this is the file's *content*, which is a
+    client's contract or somebody else's invoice. Keeping them apart is what lets every
+    listing of versions stay cheap and free of anybody's text.
+
+    `provenienza` is `core/text.py::PROVENIENZA`, carried through verbatim: whoever
+    reads `testo` is reading words written outside this system, and an agent that reads
+    its own instructions as text must be told so in the same payload rather than in a
+    tool description it saw once. `troncato` is not `testo == ""` -- see `FileText`.
+    """
+
+    document_id: UUID
+    numero: int
+    titolo: str
+    testo: str
+    mime: str
+    troncato: bool
+    provenienza: str

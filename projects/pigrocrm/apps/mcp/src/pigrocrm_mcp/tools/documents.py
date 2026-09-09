@@ -91,6 +91,25 @@ def preview_template(
     return {"template_id": template_id, "markdown": markdown}
 
 
+def extract_text(
+    context: McpContext, document_id: str, numero: int | str | None = None
+) -> dict[str, Any]:
+    """The text of an archived file. Text and not bytes, which is why it may exist at
+    all under the "MCP returns identifiers, never files" rule this module's registration
+    block states: a base64 PDF in a model's context is waste, and the codice
+    destinatario printed on page one of that same PDF is the answer somebody asked for.
+
+    `numero` stays optional and defaults, in the service, to the current version -- an
+    agent that has just read `get_document` holds one id and no version number, and
+    that is the ordinary case."""
+    result = _documents(context).extract_text(
+        UUID(document_id),
+        _NUMERO.validate_python(numero) if numero is not None else None,
+        context.actor,
+    )
+    return result.model_dump(mode="json")
+
+
 def regenerate_version(context: McpContext, document_id: str, numero: int | str) -> dict[str, Any]:
     version = _documents(context).regenerate(
         UUID(document_id), _NUMERO.validate_python(numero), context.actor
