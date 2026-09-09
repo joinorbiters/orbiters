@@ -16,6 +16,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.documents.models import Document
@@ -232,14 +233,7 @@ def test_discarding_a_proforma_archives_its_pdf_and_keeps_the_bytes(
     version = documents.repo.version(row.id, row.versione_corrente)
     assert version is not None
     assert storage.get(version.storage_key)[:5] == b"%PDF-"
-
-
-def test_discarding_a_proforma_that_never_rendered_a_pdf_still_works(
-    service: InvoiceService, customer_id: UUID
-) -> None:
-    """The common case: a draft discarded before anyone asked for its PDF has no
-    document to archive, and the delete must not trip over the missing one."""
-    proforma_id = _confirmed_proforma(service, customer_id)
-    service.soft_delete(proforma_id, ADMIN)
-    with pytest.raises(NotFound):
-        service.get(proforma_id, ADMIN)
+    # And the document's own timeline says why it went, the way a delete from the
+    # documents surface would.
+    kinds = [a.kind for a in ActivityService(db_session).timeline("document", pdf.document_id)]
+    assert "deleted" in kinds

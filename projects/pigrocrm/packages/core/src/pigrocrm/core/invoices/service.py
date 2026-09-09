@@ -25,6 +25,7 @@ from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.documents.models import Document
 from pigrocrm.core.documents.schemas import DocumentCreate
+from pigrocrm.core.documents.service import ENTITY as DOCUMENT_ENTITY
 from pigrocrm.core.documents.service import DocumentService
 from pigrocrm.core.drive.reader import ALREADY_AUTHORIZED, DriveReader, drive_reader_for
 from pigrocrm.core.emitter.service import EmitterProfileService
@@ -518,7 +519,7 @@ class InvoiceService:
                 # Already archived, by hand or by an earlier attempt: nothing to redo.
                 continue
             document.deleted_at = now
-            self.activities.record("document", document.id, "deleted", actor)
+            self.activities.record(DOCUMENT_ENTITY, document.id, "deleted", actor)
         self.activities.record(ENTITY, invoice.id, "deleted", actor)
         try:
             self.session.commit()
