@@ -59,8 +59,12 @@ describe('orbiters.html', () => {
   })
 
   it('speaks to the reader, in the second person and in a few words', () => {
+    // What a visitor reads on the screen. The `.sr-only` spans are the same page for
+    // the ear, not more copy: the form's labels repeat its placeholders, and the
+    // title's first line (ORB-24) repeats the roles the typewriter cycles through.
     const text = html
       .replace(/<head>[\s\S]*<\/head>/, '')
+      .replace(/<(\w+) class="sr-only"[^>]*>[\s\S]*?<\/\1>/g, ' ')
       .replace(/<[^>]+>/g, ' ')
       .replace(/\s+/g, ' ')
       .trim()
@@ -81,7 +85,7 @@ describe('orbiters.html', () => {
     for (const headline of [
       html.match(/<title>([^<]+)<\/title>/)?.[1],
       meta('og:title'),
-      html.match(/<h1>([^<]+)<\/h1>/)?.[1],
+      html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/)?.[1]?.replace(/<[^>]+>/g, ' '),
     ]) {
       expect(headline?.toLowerCase()).not.toContain('freelance')
     }

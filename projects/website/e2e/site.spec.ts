@@ -134,7 +134,15 @@ test.describe('every page of the site', () => {
           const h1 = document.querySelector('h1') as HTMLElement
           const range = document.createRange()
           range.selectNodeContents(h1)
-          const lines = [...range.getClientRects()].map((line) => line.width)
+          // One rect per inline box, not per line, since the title is spans and a
+          // <br>: group them by their top, and skip the 1px screen-reader span.
+          const lines = [
+            ...new Set(
+              [...range.getClientRects()]
+                .filter((box) => box.width > 1)
+                .map((box) => Math.round(box.top)),
+            ),
+          ]
           // Which CSS-pixel columns of the canvas carry any paint at all.
           const canvas = document.getElementById('field') as HTMLCanvasElement
           const ctx = canvas.getContext('2d') as CanvasRenderingContext2D
@@ -179,9 +187,10 @@ test.describe('every page of the site', () => {
         expect(m.firstPainted).toBe(m.origin + 1)
         expect(m.lastPainted).toBeLessThanOrEqual(m.innerWidth)
         expect((m.lastPainted + 1 - m.origin) % m.cell).toBe(0)
-        // The title wraps to two lines of comparable length, never a word alone.
+        // The title is two lines, the role and the claim, and neither wraps. The old
+        // balance check went with the old one-line-of-text title: the first line is
+        // "CTO," for part of the cycle and its length is not the point any more.
         expect(m.lines).toHaveLength(2)
-        expect(Math.min(...m.lines) / Math.max(...m.lines)).toBeGreaterThan(0.5)
       })
     })
   }
@@ -288,6 +297,97 @@ test.describe('every page of the site', () => {
       })
     })
   }
+
+  // The title types the roles (ORB-24): "Developer" is what the page ships, then the
+  // script deletes it and types the next one, and the rest of the page does not move
+  // while it does. The layout half is checked for every word at every width without
+  // waiting for the cycle to reach it; the motion half once per page.
+  const ROLES = ['Developer', 'AI engineer', 'CTO', 'Fractional CTO', 'Tech lead']
+  const TITLED = ['/', '/pigrocrm'] as const
+
+  /** The tops that must not move, and the title's height, with `word` in the role. */
+  function titledLayout(word: string | null) {
+    const role = document.querySelector('h1 .role') as HTMLElement
+    if (word !== null) role.textContent = word
+    const top = (selector: string) => document.querySelector(selector)!.getBoundingClientRect().top
+    return {
+      h1: (document.querySelector('h1') as HTMLElement).getBoundingClientRect().height,
+      lead: top('.lead'),
+      // The form on the community page, the two doors on the landing.
+      form: top('form, .actions'),
+      scrollWidth: document.documentElement.scrollWidth,
+      innerWidth: window.innerWidth,
+    }
+  }
+
+  test.describe('the title types the roles', () => {
+    for (const path of TITLED) {
+      test(`${path} ships "Developer", types another role, and the lead does not move`, async ({
+        page,
+      }) => {
+        await page.goto(path)
+        const role = page.locator('h1 .role')
+        await expect(page.locator('h1')).toContainText('ma non da soli.')
+        await expect(role).toHaveText('Developer')
+        expect((await role.getAttribute('data-roles'))!.split('|')).toEqual(ROLES)
+        await expect(role).toHaveAttribute('aria-hidden', 'true')
+        await expect(role).toHaveClass(/is-typing/)
+        const before = await page.evaluate(titledLayout, null)
+        // Another full word from the list, once the script has typed it: about three
+        // seconds in with the default timings, and never a half-typed one.
+        const others = ROLES.filter((word) => word !== 'Developer')
+        await expect(role).toHaveText(new RegExp(`^(${others.join('|')})$`), { timeout: 10_000 })
+        const after = await page.evaluate(titledLayout, null)
+        expect(after.lead).toBe(before.lead)
+        expect(after.form).toBe(before.form)
+        expect(after.h1).toBe(before.h1)
+      })
+    }
+
+    for (const width of [360, 390, 430, 1280]) {
+      test.describe(`at ${width} wide`, () => {
+        test.use({ viewport: { width, height: 844 }, deviceScaleFactor: 1 })
+
+        for (const path of TITLED) {
+          test(`${path} keeps the lead and the form where they are for every role`, async ({
+            page,
+          }) => {
+            await page.goto(path, { waitUntil: 'networkidle' })
+            const shipped = await page.evaluate(titledLayout, null)
+            for (const word of [...ROLES, '']) {
+              const withWord = await page.evaluate(titledLayout, word)
+              expect(withWord, `"${word}" on ${path} at ${width}`).toEqual(shipped)
+              expect(withWord.scrollWidth).toBe(withWord.innerWidth)
+            }
+          })
+        }
+      })
+    }
+
+    test.describe('when the reader asked for less motion', () => {
+      for (const path of TITLED) {
+        test(`${path} keeps the static word, with no cursor`, async ({ page }) => {
+          // Per page rather than `test.use({ reducedMotion })`: on this runner the
+          // context option did not reach `matchMedia` in the page, and this does.
+          await page.emulateMedia({ reducedMotion: 'reduce' })
+          await page.goto(path, { waitUntil: 'networkidle' })
+          await page.waitForTimeout(4_000)
+          const role = page.locator('h1 .role')
+          await expect(role).toHaveText('Developer')
+          await expect(role).not.toHaveClass(/is-typing/)
+          // The line a screen reader hears is the same with or without the script.
+          await expect(page.locator('h1')).toHaveAccessibleName(
+            'Developer, AI engineer, CTO, ma non da soli.',
+          )
+          expect(
+            await page.evaluate(() =>
+              getComputedStyle(document.querySelector('h1 .role')!, '::after').display,
+            ),
+          ).toBe('none')
+        })
+      }
+    })
+  })
 
   test.describe('with JavaScript disabled', () => {
     test.use({ javaScriptEnabled: false })

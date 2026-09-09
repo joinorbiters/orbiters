@@ -199,6 +199,9 @@
   }
 
   function start() {
+    /* The title's first word, typed by the shared typewriter.js, loaded before this. */
+    var role = doc.querySelector('h1 .role')
+    if (role && window.__typewriter) window.__typewriter.mount(role)
     var canvas = doc.getElementById('field')
     if (canvas && typeof canvas.getContext === 'function') field(canvas)
     var form = doc.getElementById('signup')

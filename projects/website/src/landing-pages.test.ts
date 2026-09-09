@@ -82,7 +82,7 @@ describe('index.html', () => {
   it('opens with the community and its claim, then presents the CRM as the perk', () => {
     // Since 2026-09-08 PigroCRM is what a member of Orbiters gets: the page says what
     // Orbiters is first, in its own words, and only then what the CRM does.
-    const claim = page.indexOf('Developer e CTO, ma non da soli.')
+    const claim = page.indexOf('ma non da soli.')
     const perk = page.indexOf('PigroCRM, il perk')
     expect(claim).toBeGreaterThan(0)
     expect(perk).toBeGreaterThan(claim)
@@ -143,7 +143,7 @@ describe('index.html', () => {
       meta(page, 'og:title'),
       meta(page, 'description'),
       meta(page, 'og:description'),
-      page.match(/<h1[^>]*>([^<]+)<\/h1>/)?.[1],
+      page.match(/<h1[^>]*>([\s\S]*?)<\/h1>/)?.[1]?.replace(/<[^>]+>/g, ' '),
       ...[...page.matchAll(/<a class="cta[^"]*" href="[^"]+">([^<]+)<\/a>/g)].map((m) => m[1]),
     ]
     expect(headlines.length).toBeGreaterThanOrEqual(9)
