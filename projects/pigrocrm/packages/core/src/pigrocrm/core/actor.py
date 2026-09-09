@@ -77,6 +77,14 @@ AGENT_FORBIDDEN_ACTIONS: frozenset[str] = frozenset(
         # owner's quota under the owner's consent, exactly as a backfill does, and the
         # same switch says whether this installation wants its agent able to do that.
         "discover_gmail_correspondents",
+        # Leggere il testo di un allegato di una mail archiviata. La sincronizzazione
+        # non salva mai i byte di un allegato (spec 5.4), quindi questa operazione va a
+        # prenderli da Google al momento: spende la quota del titolare sotto il suo
+        # consenso, come sopra, e quello che restituisce e' un file scritto da un
+        # mittente esterno. Non archivia niente, e il fatto che sia una lettura non la
+        # rende diversa dalle altre voci di questo blocco: e' contenuto di fuori che
+        # entra in un contesto che legge il testo come istruzioni.
+        "read_gmail_attachment",
         # Slice 9 §3.6: writing a numbered, issued row straight into the fiscal register,
         # and declaring the numbers it will never carry. Both change what the register
         # says about the past, which is the property every other entry here protects.

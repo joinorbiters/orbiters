@@ -61,6 +61,10 @@ class FakeMessage:
     body_html: str = ""
     internal_date_ms: int = 0
     label_ids: list[str] = field(default_factory=lambda: ["INBOX"])
+    # `{"filename": ..., "mime": ..., "size": ...}`, plus an optional `"content"` of
+    # real bytes. The bytes are what `users.messages.attachments.get` hands back, and
+    # they are optional because most tests here care only that a name, a type and a size
+    # reach the sync -- which is all PigroCRM stores of an attachment (spec 5.4).
     attachments: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -152,11 +156,42 @@ class FakeGmail:
             return self._list(recorded)
         if "/threads/" in parsed.path:
             return self._thread(parsed.path.rsplit("/", 1)[-1])
+        if "/attachments/" in parsed.path:
+            # Before the `/messages/` branch, which would otherwise read the attachment
+            # id as a message id and answer 404 -- the same trap the real path shape
+            # sets, since an attachment URL contains both segments.
+            message_id, _, attachment_id = parsed.path.partition("/attachments/")
+            return self._attachment(message_id.rsplit("/", 1)[-1], attachment_id)
         if "/messages/" in parsed.path:
             return self._message(parsed.path.rsplit("/", 1)[-1])
         return self._not_found()
 
     # ---- endpoints --------------------------------------------------------------
+
+    def _attachment(self, message_id: str, attachment_id: str) -> tuple[int, bytes, dict[str, str]]:
+        """`users.messages.attachments.get`: the bytes, base64url, inside JSON.
+
+        The ids are matched rather than trusted -- `att-N` is handed out by
+        `_message_payload` in the order the attachments were declared, so asking for
+        `att-2` really does get the second one. A caller that invents an id gets the 404
+        Gmail gives, which is what makes "the id came from the payload" testable.
+        """
+        message = self.messages.get(message_id)
+        if message is None:
+            return self._not_found()
+        try:
+            index = int(attachment_id.removeprefix("att-"))
+        except ValueError:
+            return self._not_found()
+        if not 1 <= index <= len(message.attachments):
+            return self._not_found()
+        attachment = message.attachments[index - 1]
+        content = attachment.get("content") or b""
+        payload = {
+            "size": attachment.get("size", len(content)),
+            "data": base64.urlsafe_b64encode(content).decode().rstrip("="),
+        }
+        return 200, json.dumps(payload).encode(), {}
 
     @staticmethod
     def _not_found() -> tuple[int, bytes, dict[str, str]]:

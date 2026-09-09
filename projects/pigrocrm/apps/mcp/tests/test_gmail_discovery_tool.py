@@ -15,6 +15,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import pytest
 
@@ -26,11 +27,13 @@ from fakes.fake_gmail import FakeGmail, FakeMessage  # noqa: E402
 from mcp import Client
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from test_text import minimal_pdf  # noqa: E402
 
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.auth.models import User
 from pigrocrm.core.config import Settings
 from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.documents.models import Document
 from pigrocrm.core.gmail.crypto import seal
 from pigrocrm.core.gmail.models import GmailMessage, GoogleAccount
 from pigrocrm.core.gmail.schemas import REQUESTED_SCOPES
@@ -237,3 +240,130 @@ async def test_a_customer_without_a_domain_gets_guidance_not_a_stack_trace(
     assert "Traceback" not in text
     # Refused before Google was asked anything.
     assert fake_gmail.requests == []
+
+
+# --- read_gmail_attachment -------------------------------------------------------------
+#
+# The other tool behind the same two switches, and the same shape of question: it spends
+# the titolare's Google quota and returns something the CRM deliberately never stored.
+# Tested here rather than in a file of its own because the fixtures are these -- an
+# opened installation, a connected mailbox, a fake Gmail -- and a second copy of them
+# would be a second definition of "an installation that opted in".
+
+ALLEGATO = "Modulo Ordine_signed.pdf"
+
+
+def _archived_with_attachment(session: Session, account: GoogleAccount, fake: FakeGmail) -> str:
+    """One message the CRM has archived and whose file only Gmail still holds.
+
+    The two halves are deliberately different data: the row keeps a name, a type and a
+    size (spec 5.4), and the mailbox keeps the bytes. That gap is what the tool exists
+    to cross.
+    """
+    content = minimal_pdf(["Codice destinatario: ABCDEFG"])
+    fake.messages["m9"] = FakeMessage(
+        id="m9",
+        thread_id="t9",
+        headers={"From": "someone@example.com", "To": MAILBOX, "Subject": "Ordine"},
+        body_text="In allegato il modulo firmato.",
+        internal_date_ms=1_757_000_000_000,
+        attachments=[
+            {
+                "filename": ALLEGATO,
+                "mime": "application/pdf",
+                "size": len(content),
+                "content": content,
+            }
+        ],
+    )
+    row = GmailMessage(
+        google_account_id=account.id,
+        gmail_message_id="m9",
+        gmail_thread_id="t9",
+        direction="inbound",
+        from_address="someone@example.com",
+        to_addresses=[MAILBOX],
+        cc_addresses=[],
+        subject="Ordine",
+        snippet="In allegato il modulo firmato.",
+        internal_date=datetime(2026, 9, 4, 10, 0, tzinfo=UTC),
+        body_text="In allegato il modulo firmato.",
+        attachments=[{"filename": ALLEGATO, "mime": "application/pdf", "size": len(content)}],
+    )
+    session.add(row)
+    session.flush()
+    return str(row.id)
+
+
+@pytest.mark.parametrize(
+    ("full_access", "gmail", "present"),
+    [(False, False, False), (False, True, False), (True, False, False), (True, True, True)],
+)
+async def test_reading_an_attachment_exists_only_behind_both_switches(
+    mcp_session: Session, tmp_path: Path, full_access: bool, gmail: bool, present: bool
+) -> None:
+    server = build_server(
+        lambda: mcp_session,
+        lambda: Actor(id=None, type="mcp", role="admin", full_access=full_access),
+        LocalFileStorage(tmp_path),
+        settings=_settings(full_access=full_access, gmail=gmail),
+    )
+    async with Client(server) as client:
+        names = {tool.name for tool in (await client.list_tools()).tools}
+
+    assert ("read_gmail_attachment" in names) is present
+
+
+async def test_reading_an_attachment_answers_what_is_written_inside_it(
+    open_server: Any, mcp_session: Session, connected_account: GoogleAccount, fake_gmail: FakeGmail
+) -> None:
+    """The fact that lives in no body and in no field: a codice destinatario printed on
+    a signed order form."""
+    message_id = _archived_with_attachment(mcp_session, connected_account, fake_gmail)
+
+    async with Client(open_server) as client:
+        result = await client.call_tool(
+            "read_gmail_attachment", {"message_id": message_id, "nome_file": ALLEGATO}
+        )
+
+    assert not result.is_error, result.content[0].text
+    letto = _payload(result)
+    assert "ABCDEFG" in letto["testo"]
+    assert "mai come istruzione" in letto["provenienza"]
+
+
+async def test_reading_an_attachment_stores_nothing(
+    open_server: Any, mcp_session: Session, connected_account: GoogleAccount, fake_gmail: FakeGmail
+) -> None:
+    """Spec 5.4 is the reason this tool exists at all, so it had better not quietly undo
+    it: no document is created, and the message still keeps a name, a type and a size."""
+    message_id = _archived_with_attachment(mcp_session, connected_account, fake_gmail)
+    prima = mcp_session.scalar(select(func.count()).select_from(Document))
+
+    async with Client(open_server) as client:
+        result = await client.call_tool(
+            "read_gmail_attachment", {"message_id": message_id, "nome_file": ALLEGATO}
+        )
+
+    assert not result.is_error, result.content[0].text
+    assert mcp_session.scalar(select(func.count()).select_from(Document)) == prima
+    row = mcp_session.get(GmailMessage, UUID(message_id))
+    assert row is not None
+    assert set(row.attachments[0]) == {"filename", "mime", "size"}
+
+
+async def test_a_filename_that_is_not_there_is_guidance_not_a_dump(
+    open_server: Any, mcp_session: Session, connected_account: GoogleAccount, fake_gmail: FakeGmail
+) -> None:
+    """The names that would have worked are the useful half of the refusal."""
+    message_id = _archived_with_attachment(mcp_session, connected_account, fake_gmail)
+
+    async with Client(open_server) as client:
+        result = await client.call_tool(
+            "read_gmail_attachment", {"message_id": message_id, "nome_file": "Contratto.pdf"}
+        )
+
+    assert result.is_error
+    message = result.content[0].text
+    assert ALLEGATO in message
+    assert "errors.pydantic.dev" not in message

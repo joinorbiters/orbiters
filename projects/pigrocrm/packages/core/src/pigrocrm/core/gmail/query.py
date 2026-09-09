@@ -57,6 +57,13 @@ _HAS_ADDRESS_CLAUSE = re.compile(r"\b(?:from|to|cc|bcc|rfc822msgid):\S*@\S")
 # because they are interpolated into a *path*: a `/` or a `..` in one would address a
 # different endpoint entirely.
 _SAFE_ID = re.compile(r"[A-Za-z0-9_\-]{1,128}")
+# An attachment id is the same alphabet and a wholly different length: Gmail's are
+# hundreds of characters, sometimes over a thousand, where a message id is sixteen. One
+# pattern for both would have to be as loose as this one, which would stop `_SAFE_ID`
+# from saying anything useful about a message id -- so there are two, and each is as
+# tight as its subject allows. An id past this ceiling is refused, never truncated: half
+# an attachment id addresses nothing.
+_SAFE_ATTACHMENT_ID = re.compile(r"[A-Za-z0-9_\-]{1,4096}")
 
 
 def _checked(address: str) -> str:
@@ -75,6 +82,16 @@ def _checked_id(value: str) -> str:
     if not _SAFE_ID.fullmatch(value):
         raise ValidationFailed(
             "gmail_query", "id", "un id Gmail contiene solo lettere, cifre, - e _"
+        )
+    return value
+
+
+def _checked_attachment_id(value: str) -> str:
+    if not _SAFE_ATTACHMENT_ID.fullmatch(value):
+        raise ValidationFailed(
+            "gmail_query",
+            "attachment_id",
+            "un id di allegato Gmail contiene solo lettere, cifre, - e _",
         )
     return value
 
@@ -248,6 +265,25 @@ def thread_get_url(thread_id: str) -> str:
 
 def message_get_url(message_id: str) -> str:
     return f"{GMAIL_API_ROOT}/messages/{_checked_id(message_id)}?format=full"
+
+
+def attachment_get_url(message_id: str, attachment_id: str) -> str:
+    """The bytes of one attachment, `users.messages.attachments.get`.
+
+    Both ids are checked, and the attachment id is the reason that matters more here
+    than anywhere else in this module: it does not come from a person, it comes out of
+    Gmail's own message payload, and it is interpolated into a *path*. A payload
+    carrying a `/` or a `..` in that field would address a different endpoint of
+    somebody's mailbox. Gmail's attachment ids are far longer than a message id, so
+    they are measured against `_SAFE_ATTACHMENT_ID`, which exists for that reason.
+
+    The answer is JSON with the content base64url-encoded in `data`, not the raw file:
+    that is Gmail's shape, and `attachment_text.py` is what decodes it.
+    """
+    return (
+        f"{GMAIL_API_ROOT}/messages/{_checked_id(message_id)}"
+        f"/attachments/{_checked_attachment_id(attachment_id)}"
+    )
 
 
 # The one endpoint in this slice that is not built from a caller's input: there is
