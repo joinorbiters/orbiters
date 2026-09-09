@@ -154,15 +154,21 @@ describe('InvoiceActions', () => {
     expect(onDeleted).not.toHaveBeenCalled()
   })
 
-  it('offers to delete a proforma until it is consumed, and names it as such', async () => {
-    vi.mocked(api.DELETE).mockResolvedValue(ok(undefined))
-    const { unmount } = wrap(<InvoiceActions invoice={PROFORMA} />)
-    await userEvent.click(screen.getByRole('button', { name: /elimina proforma/i }))
-    expect(window.confirm).toHaveBeenCalledWith(expect.stringMatching(/Eliminare questa proforma/))
-    await waitFor(() => expect(api.DELETE).toHaveBeenCalledTimes(1))
-    expect(toast.success).toHaveBeenCalledWith('Proforma eliminata')
-    unmount()
-    // Consumed by an emission: it is the antecedent of a numbered document and stays.
+  it.each([['bozza'], ['confermata']])(
+    'offers to delete a %s proforma, and names it as such',
+    async (stato) => {
+      vi.mocked(api.DELETE).mockResolvedValue(ok(undefined))
+      wrap(<InvoiceActions invoice={{ ...PROFORMA, stato } as Invoice} />)
+      await userEvent.click(screen.getByRole('button', { name: /elimina proforma/i }))
+      expect(window.confirm).toHaveBeenCalledWith(
+        expect.stringMatching(/Eliminare questa proforma/),
+      )
+      await waitFor(() => expect(api.DELETE).toHaveBeenCalledTimes(1))
+      expect(toast.success).toHaveBeenCalledWith('Proforma eliminata')
+    },
+  )
+
+  it('offers no delete on a consumed proforma: it is the antecedent of a numbered document', () => {
     wrap(<InvoiceActions invoice={{ ...PROFORMA, stato: 'consumata' } as Invoice} />)
     expect(screen.queryByRole('button', { name: /elimina/i })).not.toBeInTheDocument()
   })
