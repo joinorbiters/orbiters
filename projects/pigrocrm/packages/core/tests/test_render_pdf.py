@@ -1,4 +1,5 @@
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -61,20 +62,38 @@ def test_the_error_never_contains_the_temporary_directory() -> None:
     assert "/tmp/" not in excinfo.value.details["reason"]
 
 
-def test_no_temporary_directory_survives_a_success_or_a_failure(tmp_path: object) -> None:
-    import tempfile
-    from pathlib import Path
-
-    before = {p.name for p in Path(tempfile.gettempdir()).glob("pigrocrm-render-*")}
-    render_pdf("ok\n", header_typst=build_header(PROFILE), settings=SETTINGS)
+def test_no_temporary_directory_survives_a_success_or_a_failure(tmp_path: Path) -> None:
+    # Rendered under a directory only this test can see, not the system temp
+    # directory: that one is shared by every xdist worker, and another worker's
+    # in-flight `pigrocrm-render-*` there is indistinguishable from a directory this
+    # render failed to remove. Observed on 2026-09-09 as
+    # `assert {'pigrocrm-render-05zt78ya'} == set()`, 1 failed of 4083, with the file
+    # passing alone (ORB-40).
+    render_pdf("ok\n", header_typst=build_header(PROFILE), settings=SETTINGS, temp_root=tmp_path)
+    assert list(tmp_path.iterdir()) == []
     with pytest.raises(ValidationFailed):
         render_pdf(
             "```{=typst}\n// pigrocrm:line=2\n#nonesiste(\n```\n",
             header_typst=build_header(PROFILE),
             settings=SETTINGS,
+            temp_root=tmp_path,
         )
-    after = {p.name for p in Path(tempfile.gettempdir()).glob("pigrocrm-render-*")}
-    assert after == before
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_render_directory_is_created_under_the_root_it_is_given(tmp_path: Path) -> None:
+    # The assertion above is only worth something if `temp_root` is honoured rather
+    # than silently replaced by the system temp directory. `mkdtemp` refuses a parent
+    # that does not exist, so a missing root failing loudly is the proof, and it fails
+    # before anything is written that would then need cleaning up.
+    with pytest.raises(FileNotFoundError):
+        render_pdf(
+            "ok\n",
+            header_typst=build_header(PROFILE),
+            settings=SETTINGS,
+            temp_root=tmp_path / "absent",
+        )
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_the_media_assets_are_reachable_from_the_rendered_document() -> None:
