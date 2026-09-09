@@ -30,6 +30,23 @@ from pigrocrm.core.storage import LocalFileStorage
 RIGA = {"descrizione": "Consulenza", "quantita": "2", "prezzo_unitario": "100.00"}
 
 
+def _emitter(session: Session) -> None:
+    # The issuer every PDF header prints: `render_proforma_pdf` refuses to render
+    # without one, the same way `issue` does.
+    EmitterProfileService(session).upsert(
+        EmitterProfileUpsert(
+            ragione_sociale="Humancraft di Ivan Sala",
+            partita_iva="14518240966",
+            indirizzo="Via Vittorio Veneto 12",
+            cap="20124",
+            comune="Milano",
+            provincia="MI",
+            email="someone@example.com",
+        ),
+        Actor(id=None, type="mcp", role="admin"),
+    )
+
+
 def _customer(session: Session, *, exportable: bool = False) -> str:
     # The regime is the install's own configuration, set as the system and not as the
     # agent, for the reason `test_full_cycle.py` spells out at its own fixture. The
@@ -78,6 +95,38 @@ async def test_a_proforma_draft_is_discarded_and_is_gone_from_the_reads(
         assert [item["id"] for item in listed.structured_content["items"]] == []
 
 
+async def test_a_discarded_proforma_takes_its_pdf_out_of_the_customers_documents(
+    server: Any, mcp_session: Session
+) -> None:
+    """ORB-41: `render_proforma_pdf` files the PDF among the customer's documents, and
+    until the service archived it together with its owner, `discard_proforma` left
+    "Proforma PROV-... (PDF)" listed and downloadable while `get_invoice` answered not
+    found. Both tools go through `InvoiceService.soft_delete`, so the MCP path is the
+    place to show the two reads agree afterwards."""
+    customer_id = _customer(mcp_session)
+    _emitter(mcp_session)
+    async with Client(server) as client:
+        created = await client.call_tool(
+            "create_proforma", {"customer_id": customer_id, "righe": [RIGA]}
+        )
+        assert not created.is_error, created.content[0].text
+        invoice_id = created.structured_content["id"]
+        rendered = await client.call_tool("render_proforma_pdf", {"invoice_id": invoice_id})
+        assert not rendered.is_error, rendered.content[0].text
+        document_id = rendered.structured_content["document_id"]
+
+        listed = await client.call_tool("list_documents", {"customer_id": customer_id})
+        assert [item["id"] for item in listed.structured_content["items"]] == [document_id]
+
+        discarded = await client.call_tool("discard_proforma", {"invoice_id": invoice_id})
+        assert not discarded.is_error, discarded.content[0].text
+
+        listed = await client.call_tool("list_documents", {"customer_id": customer_id})
+        assert listed.structured_content["items"] == []
+        read = await client.call_tool("get_document", {"document_id": document_id})
+        assert read.is_error
+
+
 async def test_anything_that_is_not_a_proforma_is_refused_before_the_service_is_reached(
     server: Any, mcp_session: Session, tmp_path: Any
 ) -> None:
@@ -111,19 +160,7 @@ async def test_a_proforma_consumed_by_an_emission_is_refused_and_stays_consumed(
     table CHECK behind it. Tested on the MCP surface because the docstring promises it
     there, and because nothing else exercised a soft delete on a consumed proforma."""
     customer_id = _customer(mcp_session, exportable=True)
-    agente = Actor(id=None, type="mcp", role="admin")
-    EmitterProfileService(mcp_session).upsert(
-        EmitterProfileUpsert(
-            ragione_sociale="Humancraft di Ivan Sala",
-            partita_iva="14518240966",
-            indirizzo="Via Vittorio Veneto 12",
-            cap="20124",
-            comune="Milano",
-            provincia="MI",
-            email="someone@example.com",
-        ),
-        agente,
-    )
+    _emitter(mcp_session)
     umano = Actor(id=None, type="user", role="admin")
     async with Client(server) as client:
         created = await client.call_tool(
