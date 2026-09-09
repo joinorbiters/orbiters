@@ -1,0 +1,49 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { render, screen } from '@testing-library/react'
+import type { ReactElement } from 'react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { api } from '@/lib/api'
+import { InvoicesTab } from './InvoicesTab'
+
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-router')>()
+  return { ...actual, useNavigate: () => vi.fn() }
+})
+
+const mockGet = vi.spyOn(api, 'GET')
+
+function ok(data: unknown) {
+  return Promise.resolve({ data, response: new Response(null, { status: 200 }) }) as never
+}
+
+beforeEach(() => {
+  mockGet.mockReset()
+  mockGet.mockImplementation((() => ok({ items: [], next_cursor: null })) as never)
+})
+
+function renderWithClient(ui: ReactElement) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>)
+}
+
+describe('InvoicesTab', () => {
+  it('renders nothing above the table when the page offers no action', async () => {
+    renderWithClient(<InvoicesTab owner={{ customerId: 'c1' }} />)
+    expect(await screen.findByText('Nessuna fattura.')).toBeInTheDocument()
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+  })
+
+  /**
+   * The slot exists so the button that creates an invoice sits on the tab that lists
+   * them, rather than in the page header where it would be offered from every other tab
+   * too. The tab knows nothing about what goes in it: the customer page passes a
+   * `NewProformaButton` bound to itself, and a deal page could pass something else.
+   */
+  it('renders the action the page gave it, above the table', async () => {
+    renderWithClient(
+      <InvoicesTab owner={{ customerId: 'c1' }} actions={<button>Nuova fattura</button>} />,
+    )
+    expect(await screen.findByText('Nessuna fattura.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Nuova fattura' })).toBeInTheDocument()
+  })
+})

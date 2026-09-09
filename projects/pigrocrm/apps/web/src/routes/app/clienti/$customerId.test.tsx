@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import type { ReactElement } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CustomerDetail } from './$customerId'
@@ -10,7 +11,10 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   return { ...actual, useParams: () => ({ customerId: 'c1' }), useNavigate: () => vi.fn() }
 })
 
-vi.mock('@/lib/auth', () => ({ useCanWrite: () => false }))
+// Hoisted so a single test can flip it: everything below is about what the page draws
+// for a reader, and only the Fatture tab's button is about what a writer may do.
+const auth = vi.hoisted(() => ({ canWrite: false }))
+vi.mock('@/lib/auth', () => ({ useCanWrite: () => auth.canWrite }))
 
 // `api.GET` is spied on directly (not `vi.mock('@/lib/api', ...)`), mirroring
 // Timeline.test.tsx: what is under test is this route's own handling of what the
@@ -37,6 +41,7 @@ function mockCustomerFetch(result: ReturnType<typeof ok> | ReturnType<typeof fai
 
 beforeEach(() => {
   mockGet.mockReset()
+  auth.canWrite = false
 })
 
 /** Enough of a `CustomerRead` for the page to render past its guards. Cast rather than
@@ -115,6 +120,35 @@ describe('CustomerDetail', () => {
       // rendered page rather than about a page that had not rendered yet.
       expect(await screen.findByRole('tab', { name: 'Panoramica' })).toBeInTheDocument()
       expect(screen.queryByRole('tab', { name: 'Email' })).not.toBeInTheDocument()
+    })
+  })
+
+  /**
+   * A fattura is nearly always for a customer one is already looking at, so the tab that
+   * lists them is also where a new one starts -- with the customer already answered
+   * (`NewProformaButton customerId=`), rather than a picker the reader has to fill in
+   * with the record they came from.
+   */
+  describe('the Fatture tab', () => {
+    async function openFatture() {
+      mockGet.mockImplementation(
+        ((path: string) =>
+          path === '/api/customers/{customer_id}' ? ok(CUSTOMER) : ok({ items: [] })) as never,
+      )
+      renderWithClient(<CustomerDetail />)
+      await userEvent.click(await screen.findByRole('tab', { name: 'Fatture' }))
+    }
+
+    it('offers a new invoice to whoever may create one', async () => {
+      auth.canWrite = true
+      await openFatture()
+      expect(await screen.findByRole('button', { name: 'Nuova fattura' })).toBeInTheDocument()
+    })
+
+    it('offers none to a reader', async () => {
+      await openFatture()
+      expect(await screen.findByText('Nessuna fattura.')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Nuova fattura' })).not.toBeInTheDocument()
     })
   })
 })

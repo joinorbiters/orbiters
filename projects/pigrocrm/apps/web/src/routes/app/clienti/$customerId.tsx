@@ -25,6 +25,7 @@ import { DocumentsTab } from '@/features/documents/DocumentsTab'
 import { EmailTab } from '@/features/gmail/EmailTab'
 import { useGmailConfigured } from '@/features/gmail/queries'
 import { InvoicesTab } from '@/features/invoices/InvoicesTab'
+import { NewProformaButton } from '@/features/invoices/NewProformaDialog'
 import { toProblem, type ProblemDetail } from '@/lib/api'
 import { useCanWrite } from '@/lib/auth'
 import { useEntitySchema } from '@/lib/schema'
@@ -170,7 +171,13 @@ export function CustomerDetail() {
         entityType="customer"
         entityId={customerId}
         documents={<DocumentsTab owner={{ customerId }} />}
-        invoices={<InvoicesTab owner={{ customerId }} />}
+        invoices={
+          <InvoicesTab
+            owner={{ customerId }}
+            // The customer is not asked for again: this tab *is* the answer.
+            actions={canWrite ? <NewProformaButton customerId={customerId} /> : undefined}
+          />
+        }
         economics={<EconomicsTab customerId={customerId} />}
         emails={gmailConfigured ? <EmailTab entityType="customer" entityId={customerId} /> : undefined}
         actions={

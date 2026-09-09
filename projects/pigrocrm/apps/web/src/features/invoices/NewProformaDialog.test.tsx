@@ -47,6 +47,11 @@ function mockGets() {
   vi.mocked(api.GET).mockImplementation(((path: string) => {
     if (path === '/api/customers') return ok({ items: CUSTOMERS, next_cursor: null })
     if (path === '/api/deals') return ok({ items: DEALS, next_cursor: null })
+    // The two single-record reads the *fixed* variants make, to name in words what the
+    // pickers would otherwise have offered as a choice. Both are cache hits in the app
+    // -- the page that opened the dialog has already read them.
+    if (path === '/api/customers/{customer_id}') return ok(CUSTOMERS[0])
+    if (path === '/api/deals/{deal_id}') return ok(DEALS[0])
     return ok({ items: [], next_cursor: null })
   }) as never)
 }
@@ -64,8 +69,10 @@ function renderWithClient(ui: ReactElement) {
   return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>)
 }
 
-async function open() {
-  renderWithClient(<NewProformaButton />)
+type ButtonProps = Parameters<typeof NewProformaButton>[0]
+
+async function open(props: ButtonProps = {}) {
+  renderWithClient(<NewProformaButton {...props} />)
   await userEvent.click(screen.getByRole('button', { name: 'Nuova fattura' }))
 }
 
@@ -225,5 +232,85 @@ describe('NewProformaButton', () => {
       'il deal non appartiene a questo cliente',
     )
     expect(navigate).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * The same dialog opened from a customer's Fatture tab or from a deal's header, where
+ * the answer to «per chi?» is already on screen. What is fixed is shown as text rather
+ * than as a disabled control: a select nobody can use still reads as a decision left to
+ * make, and the id travels in the body either way.
+ */
+describe('NewProformaButton, opened from a record that already answers the question', () => {
+  it('does not ask for the customer when it already knows one, and sends it anyway', async () => {
+    vi.mocked(api.POST).mockReturnValue(ok({ id: 'inv-9' }))
+    await open({ customerId: 'cust-1' })
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(screen.queryByLabelText(/^Cliente/)).not.toBeInTheDocument()
+    expect(await screen.findByText('ACME Srl')).toBeInTheDocument()
+
+    await userEvent.type(screen.getByLabelText(/^Causale/), 'Consulenza settembre')
+    await userEvent.type(screen.getByLabelText('Descrizione riga 1'), 'Analisi')
+    await userEvent.type(screen.getByLabelText('Prezzo unitario riga 1'), '150.00')
+    await userEvent.click(screen.getByRole('button', { name: 'Crea proforma' }))
+
+    expect(body()).toMatchObject({ customer_id: 'cust-1' })
+    expect(body()).not.toHaveProperty('deal_id')
+  })
+
+  it('fixes the deal too, and starts from the deal’s own name and expected value', async () => {
+    vi.mocked(api.POST).mockReturnValue(ok({ id: 'inv-9' }))
+    await open({
+      customerId: 'cust-1',
+      dealId: 'deal-1',
+      prefill: { descrizione: 'Sito vetrina', importo: '4500.00' },
+    })
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(screen.queryByLabelText(/^Deal/)).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Descrizione riga 1')).toHaveValue('Sito vetrina')
+    expect(screen.getByLabelText('Quantità riga 1')).toHaveValue('1')
+    expect(screen.getByLabelText('Prezzo unitario riga 1')).toHaveValue('4500.00')
+
+    await userEvent.type(screen.getByLabelText(/^Causale/), 'Acconto')
+    await userEvent.click(screen.getByRole('button', { name: 'Crea proforma' }))
+
+    expect(body()).toEqual({
+      customer_id: 'cust-1',
+      deal_id: 'deal-1',
+      tipo: 'proforma',
+      causale: 'Acconto',
+      righe: [{ descrizione: 'Sito vetrina', quantita: '1', prezzo_unitario: '4500.00' }],
+    })
+  })
+
+  it('leaves the pre-filled line editable, because a deal’s value is rarely the invoice’s', async () => {
+    vi.mocked(api.POST).mockReturnValue(ok({ id: 'inv-9' }))
+    await open({
+      customerId: 'cust-1',
+      dealId: 'deal-1',
+      prefill: { descrizione: 'Sito vetrina', importo: '4500.00' },
+    })
+
+    await userEvent.clear(screen.getByLabelText('Prezzo unitario riga 1'))
+    await userEvent.type(screen.getByLabelText('Prezzo unitario riga 1'), '1500.00')
+    await userEvent.type(screen.getByLabelText(/^Causale/), 'Primo acconto')
+    await userEvent.click(screen.getByRole('button', { name: 'Crea proforma' }))
+
+    expect(body()).toMatchObject({
+      righe: [{ descrizione: 'Sito vetrina', quantita: '1', prezzo_unitario: '1500.00' }],
+    })
+  })
+
+  it('starts from an empty line when the deal carries no expected value', async () => {
+    await open({
+      customerId: 'cust-1',
+      dealId: 'deal-1',
+      prefill: { descrizione: 'Sito vetrina', importo: '' },
+    })
+
+    expect(screen.getByLabelText('Descrizione riga 1')).toHaveValue('Sito vetrina')
+    expect(screen.getByLabelText('Prezzo unitario riga 1')).toHaveValue('')
   })
 })
