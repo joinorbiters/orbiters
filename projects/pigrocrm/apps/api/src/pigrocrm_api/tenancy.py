@@ -87,16 +87,24 @@ def cookie_path(request: Request) -> str:
     return f"/{slug}/" if slug else "/"
 
 
-def cookie_paths_to_clear(request: Request) -> list[str]:
+def cookie_paths_to_clear(request: Request, root_slug: str = "") -> list[str]:
     """Every path a session cookie of this installation may have been set at, most
-    specific first: the one `cookie_path` uses now, the prefix the request wore (the
-    root alias's own `/humancraft/`, where its cookies lived before 2026-09-09) and
-    `/`. A browser removes a cookie only for a matching path, so a logout that cleared
-    one of them left the others reviving the session."""
+    specific first: the one `cookie_path` uses now, the prefix the request wore, the
+    root's own name (`/humancraft/`, where the root's cookies lived before 2026-09-09)
+    and `/`.
+
+    A browser removes a cookie only for a matching path, and it *sends* every cookie
+    whose path matches, longest path first. So a stale pair left at `/humancraft/`
+    does worse than survive a logout: it shadows the live pair at `/` on every request
+    under the alias, `first_cookie` reads the dead token, and the session dies within
+    the access cookie's lifetime. Login and refresh therefore clear the other jars
+    too, not only logout -- see `routers/auth.py`."""
     paths = {cookie_path(request), "/"}
     prefix = getattr(request.state, "prefix", None)
     if isinstance(prefix, str) and prefix:
         paths.add(f"/{prefix}/")
+    if root_slug and tenant_slug(request) is None:
+        paths.add(f"/{root_slug}/")
     return sorted(paths, key=len, reverse=True)
 
 
