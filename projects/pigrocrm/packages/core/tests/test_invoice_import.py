@@ -174,7 +174,7 @@ def _payload(
             {
                 "descrizione": "900142/0426/Consulenza AI CTO progetto Aurora",
                 "quantita": Decimal("9"),
-                "prezzo_unitario": Decimal("380"),
+                "prezzo_unitario": Decimal("300"),
                 "prezzo_totale": Decimal("2700.00"),
                 "aliquota_iva": Decimal("0"),
                 "natura": "N2.2",

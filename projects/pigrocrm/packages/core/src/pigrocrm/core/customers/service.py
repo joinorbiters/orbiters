@@ -59,7 +59,7 @@ def _check_fiscal(data: dict[str, Any], nazione: str) -> None:
     piva = data.get("partita_iva")
     # The eleven-digit rule is Italian, so it is applied to Italian customers and to
     # nobody else. It used to apply to everyone, which made a foreign customer
-    # unrepresentable: a UK company's VAT number ("12345678901", nine digits, and GB VATs
+    # unrepresentable: a UK company's VAT number ("123456789", nine digits, and GB VATs
     # are not always numeric at all) was refused, so the only way to record it was the
     # `codice_fiscale` field, which is not validated -- a workaround that stores the
     # right value under the wrong name and then writes it into the wrong XML element.

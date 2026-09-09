@@ -1,5 +1,13 @@
 # Runbook: import dello storico fatture the previous system 2026 in PigroCRM
 
+> **Il dataset non è più in questo repository.** `docs/superpowers/data/2026-09-04-the previous system-fatture-2026.json`
+> è stato rimosso il 2026-09-09, prima della pubblicazione: conteneva clienti reali, il
+> fatturato e le tariffe di un anno, e il codice fiscale di un cliente persona fisica. La
+> procedura qui sotto resta il modo in cui l'import è stato fatto, e resta valida per
+> chiunque la rieseguisse sui propri dati; la forma delle righe è nella tabella del
+> Task 10 di `docs/superpowers/plans/2026-09-04-slice-9a-import-storico-fatture.md`,
+> con valori sintetici.
+
 Slice 9A. Dataset: `docs/superpowers/data/2026-09-04-the previous system-fatture-2026.json` (14 righe,
 numeri 2, 3, 5, 7–17; i numeri 1, 4, 6 non risultano emessi in the previous system e vanno dichiarati
 come buchi al passo 4). Ogni riga è nel formato di `InvoiceImport`

@@ -94,7 +94,7 @@ def header_addresses(raw: str) -> list[str]:
     return list(dict.fromkeys(match.group(0).lower() for match in _ADDRESS_IN_HEADER.finditer(raw)))
 
 
-# The text a header gives before an address: `Sarah Miller <sarah@…>`, `"Chen, Sarah"
+# The text a header gives before an address: `Sarah Miller <sarah@…>`, `"Miller, Sarah"
 # <sarah@…>`, or nothing at all for a bare `sarah@…`. Lazy and bounded by the previous
 # match, so in `a@x.it, Sarah Miller <sarah@x.it>` the second name does not swallow the
 # first address.

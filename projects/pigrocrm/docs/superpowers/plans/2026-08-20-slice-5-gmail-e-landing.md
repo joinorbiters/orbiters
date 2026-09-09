@@ -11556,8 +11556,9 @@ def test_the_courtesy_clauses_that_earned_their_place_are_still_there() -> None:
 def test_no_freelancers_name_appears_in_the_source() -> None:
     """Rifatta la sostanza: a CRM for Italian freelancers cannot carry one freelancer's
     name in its source -- and the previous system carried it twice, verbatim, in two builders."""
-    for forbidden in ["Ivan Sala", "CTO", "02 1234567", "humancraft"]:
+    for forbidden in ["Ivan Sala", "CTO", "humancraft"]:
         assert forbidden.lower() not in SOLLECITO_TEMPLATE_SOURCE.lower()
+    assert re.search(r"\+?\d[\d\s.]{8,}", SOLLECITO_TEMPLATE_SOURCE) is None
 
 
 def test_the_signature_comes_from_the_emitter_profile() -> None:
