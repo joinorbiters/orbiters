@@ -47,7 +47,7 @@ from typing import Any, TypeVar
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
-from pigrocrm.core.config import DRIVE_TEXT_MAX_BYTES_DEFAULT, Settings
+from pigrocrm.core.config import TEXT_MAX_BYTES_DEFAULT, Settings
 from pigrocrm.core.drive.account import GoogleDriveAccountService
 from pigrocrm.core.drive.errors import DriveCredentialRevoked
 from pigrocrm.core.drive.query import (
@@ -69,9 +69,9 @@ from pigrocrm.core.drive.query import (
     files_list_url,
 )
 from pigrocrm.core.drive.schemas import DRIVE_SCOPE_READONLY
-from pigrocrm.core.drive.text import PLAIN_TEXT_MIME, DriveText, drive_text
 from pigrocrm.core.drive.transport import TRANSPORT_ENTITY, DriveTransport, user_transport_for
 from pigrocrm.core.errors import Conflict, NotFound
+from pigrocrm.core.text import PLAIN_TEXT_MIME, FileText, file_text
 
 # The entity every refusal of this module is reported under. One name for a folder and
 # a file alike, deliberately: the entity is part of what a caller reads, and saying
@@ -199,7 +199,7 @@ class DriveReader:
         transport: DriveTransport,
         *,
         roots: Sequence[str],
-        text_max_bytes: int = DRIVE_TEXT_MAX_BYTES_DEFAULT,
+        text_max_bytes: int = TEXT_MAX_BYTES_DEFAULT,
         download_max_bytes: int = DOWNLOAD_MAX_BYTES,
         on_revoked: Callable[[], None] | None = None,
     ) -> None:
@@ -291,7 +291,7 @@ class DriveReader:
         limit = self._ceiling(max_bytes)
         return self._guarded(lambda: self._read_bytes(checked, limit))
 
-    def read_text(self, file_id: str, *, max_bytes: int | None = None) -> DriveText:
+    def read_text(self, file_id: str, *, max_bytes: int | None = None) -> FileText:
         """The text of one file, cut at `max_bytes` and stamped with its provenance.
 
         Two ceilings, not one: the bytes are fetched under the download ceiling (a 4 MB
@@ -301,9 +301,9 @@ class DriveReader:
         checked = checked_outside_id(file_id, field="file_id")
         limit = self._text_max_bytes if max_bytes is None else max_bytes
 
-        def work() -> DriveText:
+        def work() -> FileText:
             content, mime = self._read_bytes(checked, self._ceiling(None))
-            return drive_text(content, mime=mime, max_bytes=limit)
+            return file_text(content, mime=mime, max_bytes=limit)
 
         return self._guarded(work)
 

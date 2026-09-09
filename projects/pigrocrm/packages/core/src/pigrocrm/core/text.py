@@ -1,4 +1,10 @@
-"""The text of a file the titolare pointed at -- and the sentence that says whose it is.
+"""The text of a file, whoever wrote it -- and the sentence that says whose it is.
+
+Under `core/` and not under `drive/`, where this started: the bytes of a PDF do not
+know which door they came in by. The same four extractors now answer for a file the
+titolare pointed at on Drive, for a document archived in the CRM (`documents/service.py`
+`extract_text`) and for the attachment of a received mail -- and a second copy per source
+would be four parsers of somebody else's malformed PDF to keep in step.
 
 Four types, because those are the four spec 9C names: a PDF, a Google Doc (already
 exported as `text/plain` by the time its bytes reach here), a `.docx` and a
@@ -8,11 +14,11 @@ the caller can say **which** file it could not read instead of reporting an empt
 document.
 
 **Nothing here raises on a strange file.** This runs inside a read of somebody's
-folder, and folders are full of strange files: a PDF written by a fax gateway in 2011,
-a `.docx` that is really an `.odt` renamed, a text file in Latin-1. A parser that
-throws would stop the whole read on one of them, so every extractor answers the empty
-string instead -- the same discipline, and for the same reason, as `gmail/parse.py`
-("nothing here raises on an odd message").
+folder or of somebody's archive, and both are full of strange files: a PDF written by
+a fax gateway in 2011, a `.docx` that is really an `.odt` renamed, a text file in
+Latin-1. A parser that throws would stop the whole read on one of them, so every
+extractor answers the empty string instead -- the same discipline, and for the same
+reason, as `gmail/parse.py` ("nothing here raises on an odd message").
 
 **`troncato` is not `testo == ""`.** A scanned page is the single most common thing a
 person tries to import, and its honest answer is "no text, and nothing was cut": a
@@ -90,7 +96,7 @@ _DTD = b"<!DOCTYPE"
 
 
 @dataclass(frozen=True)
-class DriveText:
+class FileText:
     """What a caller may show. `provenienza` has a default and only one value, so an
     answer without the warning cannot be constructed by forgetting a field."""
 
@@ -108,7 +114,7 @@ class DriveText:
 def _extracted(content: bytes, *, mime: str, budget: int | None) -> tuple[str, bool]:
     """`extract_text`'s answer, plus whether the reader stopped before the end.
 
-    The flag exists for `drive_text`'s `troncato`, and it exists because `MAX_PDF_PAGES`
+    The flag exists for `file_text`'s `troncato`, and it exists because `MAX_PDF_PAGES`
     is a cut that leaves no trace: a 505-page PDF holding little text per page is parsed
     to page 500 and answered in full, under the byte ceiling, with `troncato: false` --
     "here is the document" about five pages that were never read. `troncato` is the one
@@ -130,13 +136,30 @@ def _extracted(content: bytes, *, mime: str, budget: int | None) -> tuple[str, b
         return _pdf_text(content, budget)
     if mime == DOCX_MIME:
         return _docx_text(content), False
-    if mime.startswith("text/"):
+    if mime.startswith("text/") or _is_xml(mime):
         # `errors="replace"`, not `strict`: a note somebody wrote in Latin-1 in 2009 is
         # still a note, and refusing it would be refusing the document over its
         # encoding. The replacement character is visible in the answer, which is the
         # honest way to say "this byte was not text".
         return content.decode("utf-8", errors="replace"), False
     return "", False
+
+
+def _is_xml(mime: str) -> bool:
+    """`application/xml` and every `.../...+xml`, read as the characters they are.
+
+    Not covered by the `text/` prefix below, and worth its own branch because of one
+    file in particular: a FatturaPA XML is archived beside the PDF of the same invoice
+    (`documents/schemas.py` allows `application/xml` for exactly that), and it is the
+    copy that holds the fields the PDF only prints -- the codice destinatario, the PEC,
+    the fiscal regime. Refusing it as "a type this does not read" would send a reader to
+    the rendered page for a value that is written, unambiguously, in the source.
+
+    XML is markup around text and this returns it *with* its tags rather than stripping
+    them: the tag name is the meaning here (`<CodiceDestinatario>` is the whole point),
+    and a stripper would answer a column of bare values nobody could attribute.
+    """
+    return mime == "application/xml" or mime.endswith("+xml")
 
 
 def extract_text(content: bytes, *, mime: str, budget: int | None = None) -> str:
@@ -146,7 +169,7 @@ def extract_text(content: bytes, *, mime: str, budget: int | None = None) -> str
     already holds more text than the caller will keep -- a 300-page scan of a land
     registry is not worth parsing in full to answer with its first 256 KB. It never
     changes *what* the answer is up to that point, and the actual cut is
-    `drive_text`'s.
+    `file_text`'s.
 
     `text/*` is read by *prefix* and not from a list of the two subtypes spec 9C names
     (`text/plain`, `text/markdown`): every `text/...` type is by definition a sequence
@@ -157,17 +180,17 @@ def extract_text(content: bytes, *, mime: str, budget: int | None = None) -> str
 
     A caller that bounds the text itself and needs to know whether the reader stopped
     short -- at `budget`, or at the page ceiling -- wants `_extracted`, which this
-    delegates to. `drive_text` is the caller that needs it, for `troncato`.
+    delegates to. `file_text` is the caller that needs it, for `troncato`.
     """
     return _extracted(content, mime=mime, budget=budget)[0]
 
 
-def drive_text(content: bytes, *, mime: str, max_bytes: int) -> DriveText:
+def file_text(content: bytes, *, mime: str, max_bytes: int) -> FileText:
     """The whole answer: extracted, cut at `max_bytes` with a marker, and stamped with
     its provenance."""
     if max_bytes < 1:
         raise ValidationFailed(
-            "drive_text", "max_bytes", "un limite di zero byte non restituisce niente"
+            "file_text", "max_bytes", "un limite di zero byte non restituisce niente"
         )
     # Two independent reasons the answer can be short of the document, ORed into the one
     # field a caller has for it: the extraction stopped early (the page ceiling, or the
@@ -175,7 +198,7 @@ def drive_text(content: bytes, *, mime: str, max_bytes: int) -> DriveText:
     # `troncato: true`; only "read to the end and it fitted" is false.
     intero, interrotto = _extracted(content, mime=mime, budget=max_bytes)
     testo, tagliato = _truncate(intero, max_bytes)
-    return DriveText(testo=testo, mime=mime, troncato=tagliato or interrotto)
+    return FileText(testo=testo, mime=mime, troncato=tagliato or interrotto)
 
 
 def _truncate(text: str, max_bytes: int) -> tuple[str, bool]:
@@ -197,7 +220,7 @@ def _pdf_text(content: bytes, budget: int | None) -> tuple[str, bool]:
 
     The second element is true when a page was left unread: the document has more pages
     than `MAX_PDF_PAGES`, or `budget` was reached before the last page. It is what makes
-    `drive_text`'s `troncato` honest about the *page* ceiling, which unlike the byte
+    `file_text`'s `troncato` honest about the *page* ceiling, which unlike the byte
     ceiling leaves nothing in the text to notice (see `_extracted`).
 
     A failure answers `("", False)`, not `("", True)`: an encrypted or malformed PDF is

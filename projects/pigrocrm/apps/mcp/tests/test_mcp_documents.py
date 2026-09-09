@@ -29,6 +29,7 @@ from fakes.fake_gmail import FakeGmail  # noqa: E402
 from fakes.gmail_fixtures import TOKEN_KEY, gmail_settings  # noqa: E402
 from mcp import Client  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
+from test_text import minimal_pdf  # noqa: E402
 
 from pigrocrm.core.actor import Actor  # noqa: E402
 from pigrocrm.core.analytics import service as analytics_service  # noqa: E402
@@ -533,3 +534,87 @@ async def test_binding_hours_to_a_draft_writes_through_the_servers_own_storage(
     draft = _payload(result)
     assert draft["stato"] == "bozza"
     assert draft["imponibile"] == "400.00"
+
+
+# --- read_document_text ----------------------------------------------------------------
+
+
+@pytest.fixture
+def documento_con_pdf(mcp_session: Session, seeded_customer_id: str, tmp_path: Path) -> str:
+    """A document holding one real PDF, seeded through the same storage root the
+    `server` fixture hands the context -- so the tool reads the very bytes written
+    here, rather than a second copy in a second directory."""
+    from uuid import UUID
+
+    from pigrocrm.core.documents.schemas import DocumentCreate
+    from pigrocrm.core.documents.service import DocumentService
+    from pigrocrm.core.storage import LocalFileStorage
+
+    service = DocumentService(mcp_session, LocalFileStorage(tmp_path))
+    document = service.create(
+        DocumentCreate(
+            customer_id=UUID(seeded_customer_id), tipo="documento", titolo="Modulo d'ordine firmato"
+        ),
+        Actor(id=None, type="system", role="admin"),
+    )
+    service.add_version(
+        document.id,
+        minimal_pdf(["Codice destinatario: ABCDEFG", "PEC: someone@example.com"]),
+        "application/pdf",
+        Actor(id=None, type="system", role="admin"),
+    )
+    return str(document.id)
+
+
+async def test_read_document_text_returns_what_is_written_inside_the_pdf(
+    server, documento_con_pdf: str
+) -> None:
+    """The reason the tool exists: a codice destinatario that lives only on a signed
+    order form was, until this, recoverable solely by downloading the file and reading
+    it by eye -- which an agent cannot do."""
+    async with Client(server) as client:
+        result = await client.call_tool("read_document_text", {"document_id": documento_con_pdf})
+
+    assert not result.is_error, result.content[0].text
+    letto = _payload(result)
+    assert "ABCDEFG" in letto["testo"]
+    assert letto["numero"] == 1
+    assert letto["troncato"] is False
+
+
+async def test_read_document_text_carries_its_provenance(server, documento_con_pdf: str) -> None:
+    """Text extracted from somebody else's file reaches a model that reads its own
+    instructions as text. The warning travels in the payload, not only in the tool
+    description the model saw once."""
+    from pigrocrm.core.text import PROVENIENZA
+
+    async with Client(server) as client:
+        result = await client.call_tool("read_document_text", {"document_id": documento_con_pdf})
+
+    assert _payload(result)["provenienza"] == PROVENIENZA
+
+
+async def test_read_document_text_returns_no_bytes(server, documento_con_pdf: str) -> None:
+    """The rule this tool is an exception to still binds it: text, never the file. No
+    base64 payload and no storage key -- the download stays on the REST API."""
+    async with Client(server) as client:
+        result = await client.call_tool("read_document_text", {"document_id": documento_con_pdf})
+
+    letto = _payload(result)
+    assert set(letto) == {
+        "document_id",
+        "numero",
+        "titolo",
+        "testo",
+        "mime",
+        "troncato",
+        "provenienza",
+    }
+
+
+async def test_read_document_text_on_an_unknown_document_is_guidance_not_a_dump(server) -> None:
+    async with Client(server) as client:
+        result = await client.call_tool("read_document_text", {"document_id": str(uuid4())})
+
+    assert result.is_error
+    assert "errors.pydantic.dev" not in result.content[0].text

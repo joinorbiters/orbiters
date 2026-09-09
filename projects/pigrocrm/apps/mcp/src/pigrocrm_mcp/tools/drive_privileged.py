@@ -53,8 +53,8 @@ from pigrocrm.core.documents.schemas import ALLOWED_CONTENT_TYPES, TITOLO_MAX_LE
 from pigrocrm.core.documents.service import DocumentService
 from pigrocrm.core.drive.query import OUTSIDE_ID_PATTERN
 from pigrocrm.core.drive.reader import GOOGLE_DOC_MIME, DriveEntry, drive_reader_for
-from pigrocrm.core.drive.text import PROVENIENZA
 from pigrocrm.core.errors import Conflict, ValidationFailed
+from pigrocrm.core.text import PROVENIENZA
 from pigrocrm_mcp.context import McpContext
 
 # What a refusal calls the thing being attempted, so a missing scope reads as a feature
