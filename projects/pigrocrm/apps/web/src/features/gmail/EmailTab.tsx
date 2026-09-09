@@ -32,10 +32,10 @@ function byThread(messages: GmailMessageRead[]): [string, GmailMessageRead[]][] 
  * rather than three different features.
  *
  * Read-only since 2026-09-09, at Ivan's request: the «Scrivi» button and the list of
- * unsent drafts left this tab. Writing an email is the agent's job (`draft_email` over
- * MCP), and the one place the UI still sends one is the payment reminder, which has its
- * own screen (`features/solleciti`) and its own reason to exist. What this tab shows is
- * what actually went back and forth, nothing that has not left yet.
+ * unsent drafts left this tab, and later the same day the composer left the web app
+ * altogether with the Solleciti page. Writing an email is the agent's job (`draft_email`
+ * over MCP). What this tab shows is what actually went back and forth, nothing that has
+ * not left yet.
  */
 export function EmailTab({
   entityType,

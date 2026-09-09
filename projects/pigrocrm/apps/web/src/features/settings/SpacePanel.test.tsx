@@ -62,15 +62,12 @@ describe('changesBetween', () => {
       google_app_unverified: false,
       storage_backend: 'local' as const,
       mcp_full_access: true,
-      solleciti_grace_days: '7',
-      solleciti_min_interval_days: '21',
-      solleciti_max_reminders: '3',
-      gmail_backfill_days: '90',
+      gmail_backfill_days: '120',
     }
     expect(changesBetween(SETTINGS, draft)).toEqual({
       google_client_id: 'abc.apps',
       mcp_full_access: true,
-      solleciti_min_interval_days: 21,
+      gmail_backfill_days: 120,
     })
   })
 })
@@ -86,16 +83,16 @@ describe('the space panel', () => {
 
   it('saves the changed keys and adopts the answer', async () => {
     PUT.mockResolvedValue({
-      data: { ...SETTINGS, solleciti_grace_days: 21, sovrascritte: ['solleciti_grace_days'] },
+      data: { ...SETTINGS, gmail_backfill_days: 21, sovrascritte: ['gmail_backfill_days'] },
     })
     const user = userEvent.setup()
     renderPanel()
     await waitFor(() => expect(screen.getByText('Spazio studio')).toBeInTheDocument())
-    const grace = screen.getByLabelText('Giorni di tolleranza dopo la scadenza')
-    await user.clear(grace)
-    await user.type(grace, '21')
+    const backfill = screen.getByLabelText('Giorni di posta al primo collegamento')
+    await user.clear(backfill)
+    await user.type(backfill, '21')
     await user.click(screen.getByRole('button', { name: 'Salva' }))
-    expect(PUT).toHaveBeenCalledWith('/api/settings/space', { body: { solleciti_grace_days: 21 } })
+    expect(PUT).toHaveBeenCalledWith('/api/settings/space', { body: { gmail_backfill_days: 21 } })
     await waitFor(() => expect(screen.getAllByText('impostato qui').length).toBe(1))
   })
 })
