@@ -301,10 +301,18 @@ li {
   font-size: 1rem;
 }
 
+/* Two columns, never three: four voices read as two rows of two, and auto-fit would
+   leave the fourth alone under a row of three on a wide screen. */
 .grid-2 {
   display: grid;
   gap: 1.5rem;
-  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 40rem) {
+  .grid-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .testimonial {
