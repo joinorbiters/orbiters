@@ -15,8 +15,14 @@ function extensionlessHtml(): Plugin {
   function rewrite(req: IncomingMessage, _res: ServerResponse, next: () => void): void {
     const [pathname = '/', query] = (req.url ?? '/').split('?')
     // `/api/` is the proxy's, never a page: rewriting it would post the form to
-    // `/api/orbiters/signups.html`, which the API rightly does not have.
-    if (pathname !== '/' && !pathname.includes('.') && !pathname.startsWith('/api/')) {
+    // `/api/orbiters/signups.html`, which the API rightly does not have. `/hub/` is the
+    // Orbiters hub, another deployable the host's nginx puts on this origin.
+    if (
+      pathname !== '/' &&
+      !pathname.includes('.') &&
+      !pathname.startsWith('/api/') &&
+      !pathname.startsWith('/hub/')
+    ) {
       req.url = `${pathname}.html${query ? `?${query}` : ''}`
     }
     next()
