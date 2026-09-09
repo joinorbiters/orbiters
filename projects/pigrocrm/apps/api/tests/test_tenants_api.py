@@ -163,6 +163,21 @@ def test_the_root_slug_is_the_root_itself_and_nobody_elses_name(
     # `/app/login` and works under `/humancraft/app`, and only `/` serves both.
     assert cookie_path(_request({"prefix": "humancraft"})) == "/"
     assert cookie_path(_request({"prefix": "studio", "tenant": "studio"})) == "/studio/"
+    # What login, refresh and logout clear: the root's old jar under its own name is
+    # included for the root -- bare or aliased -- and never for a space.
+    from pigrocrm_api.tenancy import cookie_paths_to_clear
+
+    assert cookie_paths_to_clear(_request({}), "humancraft") == ["/humancraft/", "/"]
+    assert cookie_paths_to_clear(_request({"prefix": "humancraft"}), "humancraft") == [
+        "/humancraft/",
+        "/",
+    ]
+    assert cookie_paths_to_clear(
+        _request({"prefix": "studio", "tenant": "studio"}), "humancraft"
+    ) == [
+        "/studio/",
+        "/",
+    ]
 
     monkeypatch.setenv("PIGROCRM_ROOT_SLUG", "humancraft")
     monkeypatch.setenv("PIGROCRM_DATABASE_URL", container_settings.database_url)
