@@ -10,7 +10,6 @@ import {
   KeyRound,
   LayoutDashboard,
   LogOut,
-  MailWarning,
   PanelLeftIcon,
   Receipt,
   Search,
@@ -76,10 +75,9 @@ const TOP_LEVEL = [
  * these become plain icon links and the group header disappears.
  *
  * «Amministrazione» reads in the order the money is supposed to move: the register, then
- * what an unpaid invoice becomes, then the hours the next invoice is built from. Neither
- * group is admin-gated -- e.g. `SollecitiService.candidates` is a plain read of your own
- * books, and the write behind «Prepara sollecito» is gated at the service, where the
- * refusal belongs.
+ * the hours the next invoice is built from. Neither group is admin-gated: every write
+ * behind these pages is gated at the service, where the refusal belongs. The Solleciti
+ * page left the menu on 2026-09-09 at Ivan's request; its API and MCP tools remain.
  */
 const GROUPS = [
   {
@@ -98,7 +96,6 @@ const GROUPS = [
     icon: Wallet,
     items: [
       { to: '/app/fatture', label: 'Fatture', icon: Receipt },
-      { to: '/app/solleciti', label: 'Solleciti', icon: MailWarning },
       { to: '/app/ore', label: 'Ore', icon: Clock },
     ],
   },

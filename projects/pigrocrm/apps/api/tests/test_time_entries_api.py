@@ -165,3 +165,50 @@ def test_the_openapi_document_describes_the_new_routes(logged_in: TestClient) ->
         "/api/users/{user_id}/rates",
     ):
         assert path in paths, path
+
+
+def test_the_timer_round_trip_over_http(logged_in: TestClient) -> None:
+    """Start, read, adjust, stop: the wire shape of the clock. `GET /timer` answers a
+    200 with `null` when nothing runs -- the ordinary state of the page that asks -- and
+    `stop` answers with the entry the timer became, so the client needs no second read."""
+    deal_id, _ = _seed_deal_and_user(logged_in)
+
+    empty = logged_in.get("/api/time-entries/timer")
+    assert empty.status_code == 200
+    assert empty.json() is None
+
+    started = logged_in.post("/api/time-entries/timer/start", json={"descrizione": "Call"})
+    assert started.status_code == 201, started.text
+    assert started.json()["deal_id"] is None
+
+    again = logged_in.post("/api/time-entries/timer/start", json={})
+    assert again.status_code == 409
+
+    adjusted = logged_in.patch("/api/time-entries/timer", json={"deal_id": deal_id})
+    assert adjusted.status_code == 200
+    assert adjusted.json()["deal_id"] == deal_id
+    assert logged_in.get("/api/time-entries/timer").json()["descrizione"] == "Call"
+
+    stopped = logged_in.post("/api/time-entries/timer/stop", json={})
+    assert stopped.status_code == 201, stopped.text
+    entry = stopped.json()
+    assert entry["deal_id"] == deal_id
+    assert entry["descrizione"] == "Call"
+    # Decimal-as-string, like every hour on this API; the smallest entry there is.
+    assert entry["ore"] == "0.01"
+    assert logged_in.get("/api/time-entries/timer").json() is None
+    assert logged_in.get(f"/api/time-entries/{entry['id']}").status_code == 200
+
+
+def test_stopping_without_a_deal_keeps_the_timer_and_says_what_is_missing(
+    logged_in: TestClient,
+) -> None:
+    assert logged_in.post("/api/time-entries/timer/start", json={}).status_code == 201
+    refused = logged_in.post("/api/time-entries/timer/stop", json={})
+    assert refused.status_code == 422
+    assert refused.json()["field"] == "deal_id"
+    assert logged_in.get("/api/time-entries/timer").json() is not None
+    assert logged_in.delete("/api/time-entries/timer").status_code == 204
+    assert logged_in.get("/api/time-entries/timer").json() is None
+    # Nothing to discard any more: a 404, and the problem document names the timer.
+    assert logged_in.delete("/api/time-entries/timer").status_code == 404

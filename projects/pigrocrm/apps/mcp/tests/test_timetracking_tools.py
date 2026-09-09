@@ -3,12 +3,17 @@
 makes the criterion of existence for every feature. It is the opposite of
 `issue_invoice`: reversible, attributed, and bounded to one deal and one day."""
 
+from pathlib import Path
+
 from mcp import Client
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
+from pigrocrm.core.config import Settings
+from pigrocrm.core.storage import LocalFileStorage
 from pigrocrm.core.timetracking.locks import PeriodLockService
 from pigrocrm.core.timetracking.schemas import PeriodLockCreate
+from pigrocrm_mcp.server import build_server
 
 ADMIN = Actor(id=None, type="mcp", role="admin")
 # The person's half. Setting up a fixture by taking a decision the product reserves to
@@ -172,3 +177,41 @@ async def test_the_deal_resource_carries_the_hours_block(
     assert "## Ore" in rendered
     assert "Ore consuntivate: 8.00" in rendered
     assert "Stato: **in corso**" in rendered
+
+
+async def test_the_timer_is_the_agents_clock_too(
+    mcp_session: Session, seeded_deal_id, seeded_user_id, tmp_path: Path
+) -> None:
+    """«Claude, ho iniziato a lavorare sul progetto Rossi» is `start_timer`, and «ho
+    finito» is `stop_timer`: the entry it writes is a `log_time` entry in every respect,
+    frozen rate and activity row included.
+
+    Built with an actor that *has* an id, unlike the module's `ADMIN`: a timer is a
+    person's clock, keyed on `actor.id`, and a PAT in production always resolves to its
+    owner. `ADMIN` with `id=None` is what `start_timer` must refuse, and does."""
+    owner = Actor(id=seeded_user_id, type="mcp", role="admin")
+    server = build_server(
+        lambda: mcp_session,
+        lambda: owner,
+        LocalFileStorage(tmp_path),
+        Settings(_env_file=None),  # type: ignore[call-arg]
+    )
+    async with Client(server) as client:
+        assert (await client.call_tool("get_running_timer", {})).structured_content in (
+            None,
+            {"result": None},
+        )
+        started = await client.call_tool(
+            "start_timer", {"deal_id": str(seeded_deal_id), "descrizione": "Riunione"}
+        )
+        assert started.structured_content["deal_id"] == str(seeded_deal_id)
+
+        stopped = await client.call_tool("stop_timer", {})
+        entry = stopped.structured_content
+        assert entry["descrizione"] == "Riunione"
+        assert entry["ore"] == "0.01"
+
+        timeline = await client.call_tool(
+            "get_timeline", {"entity_type": "time_entry", "entity_id": entry["id"]}
+        )
+        assert timeline.structured_content["entries"][0]["actor_type"] == "mcp"
