@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { expect, test } from '@playwright/test'
 
 const PAGES = ['/', '/pigrocrm', '/privacy', '/termini', '/orbiters'] as const
@@ -141,4 +142,33 @@ test.describe('every page of the site', () => {
       })
     }
   })
+})
+
+// The preview server is what this suite drives, and until ORB-21 it served PigroCRM's
+// page at `/` and a 200 for any path at all, so a test written against `/` checked a
+// page production never serves there. These pin the served map to deploy/nginx.conf's:
+// the same file under each name, the same redirect, and a 404 where nginx has one.
+test.describe('the path map, as production serves it', () => {
+  const source = (name: string) =>
+    readFileSync(new URL(`../src/${name}`, import.meta.url), 'utf-8').match(/<title>([^<]+)<\/title>/)?.[1]
+
+  test('/ is the community page and /pigrocrm is the landing', async ({ page }) => {
+    await page.goto('/')
+    await expect(page).toHaveTitle(source('orbiters.html')!)
+    await page.goto('/pigrocrm')
+    await expect(page).toHaveTitle(source('index.html')!)
+  })
+
+  test('/orbiters is a 301 to /', async ({ page }) => {
+    const response = await page.request.get('/orbiters', { maxRedirects: 0 })
+    expect(response.status()).toBe(301)
+    expect(response.headers()['location']).toBe('/')
+  })
+
+  for (const path of ['/nonexistent', '/pigrocrm/', '/index.html', '/orbiters.html']) {
+    test(`${path} is a 404, not the landing by fallback`, async ({ page }) => {
+      const response = await page.goto(path)
+      expect(response?.status()).toBe(404)
+    })
+  }
 })
