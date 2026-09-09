@@ -4,7 +4,15 @@
 #      the full Python suite, the Playwright run, the images. Free and parallel, and
 #      the answer arrives before the push rather than minutes after it.
 #   2. `pull_request`: one cheap gate per project, scoped to what the diff can break.
-#   3. `push` to main: everything, unconditionally. Nobody waits on it.
+#   3. `push` to main: the heavy tier -- the corpus, the images -- but scoped to the
+#      same filters, because this repository is private and every minute here is
+#      billed. Measured 2026-09-09: 1,564 billable minutes in eight days against a
+#      2,000/month allowance, and a job that hits that limit dies in two seconds with
+#      no log, which reads as a broken workflow rather than as an empty wallet.
+#      A push that cannot reach a project does not pay for that project's suite, and
+#      each deploy's own `scope` job already decides the same way from the same paths.
+#      When the base commit of a push is unreachable -- a force push, a new branch --
+#      the filters are not consulted and everything runs.
 #
 # A check that stops running on a PR must appear in preflight.json. Verification did
 # not get cheaper here, it moved; a heavy check in neither tier is a hole.
@@ -28,9 +36,14 @@ permissions:
   contents: read
 
 jobs:
-  # PR-only. dorny/paths-filter answers from the API on a pull_request, so this job
-  # needs no checkout and costs seconds. Deliberately not used on push: main runs
-  # everything.
+  # Runs on both events, and answers differently on each. On a pull_request
+  # dorny/paths-filter reads the diff from the API, so no checkout is needed and the
+  # job costs seconds. On a push there is no such API view, so the repository is
+  # checked out with its history and the base is the commit the push moved off.
+  #
+  # `all` is the escape hatch, and it fails open. A force push, a freshly created
+  # branch or a base commit garbage-collected out of the remote all leave nothing to
+  # diff against, and the honest answer to "what changed" is then "assume everything".
   #
   # The `permissions` block is repeated rather than widened at the top because a
   # job-level block REPLACES the workflow-level one instead of merging: without
@@ -38,26 +51,54 @@ jobs:
   # accessible by integration" and `ci` goes red with no test failure in it.
   changes:
     name: changes
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
     outputs:
+      all: ${{ steps.base.outputs.all }}
       pigrocrm_py: ${{ steps.filter.outputs.pigrocrm_py }}
       pigrocrm_web: ${{ steps.filter.outputs.pigrocrm_web }}
       pigrocrm_image: ${{ steps.filter.outputs.pigrocrm_image }}
       website: ${{ steps.filter.outputs.website }}
+      website_image: ${{ steps.filter.outputs.website_image }}
       hub_py: ${{ steps.filter.outputs.hub_py }}
       hub_web: ${{ steps.filter.outputs.hub_web }}
     steps:
+      - uses: actions/checkout@v4
+        if: github.event_name != 'pull_request'
+        with:
+          # The filter diffs locally on a push, and a shallow clone would make every
+          # base commit unreachable and every run a full one.
+          fetch-depth: 0
+
+      - name: Is there a base commit to diff against
+        id: base
+        run: |
+          set -euo pipefail
+          if [ '${{ github.event_name }}' = 'pull_request' ]; then
+            echo 'all=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          before='${{ github.event.before }}'
+          if [ -z "$before" ] || [ "$before" = '0000000000000000000000000000000000000000' ] \
+             || ! git cat-file -e "$before^{commit}" 2>/dev/null; then
+            echo 'No usable base commit; running every job.'
+            echo 'all=true' >> "$GITHUB_OUTPUT"
+          else
+            echo "all=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # Underscores, never dashes: `needs.changes.outputs.pigrocrm-web` is invalid
       # expression syntax and the run dies in seconds with no job started, which
       # reads as a broken workflow rather than as a typo.
       - uses: dorny/paths-filter@v3
         id: filter
+        if: steps.base.outputs.all != 'true'
         with:
+          # Empty on a pull_request, where the action asks the API instead.
+          base: ${{ github.event_name == 'pull_request' && '' || github.event.before }}
           filters: |
             pigrocrm_py:
               - 'projects/pigrocrm/apps/api/**'
@@ -106,25 +147,44 @@ jobs:
               - 'pnpm-workspace.yaml'
               - '.github/workflows/ci.yml'
               - '.github/workflows/_node-gate.yml'
+            # Everything the two images copy in, which after the website split is
+            # the whole of this project plus the root manifests the build context
+            # carries. `projects/website/**` used to be here and is not a mistake
+            # that was corrected: until 2026-09-09 the CRM's web image did build the
+            # site, and now `website_image` below owns that.
             pigrocrm_image:
-              - 'projects/pigrocrm/Dockerfile.api'
-              - 'projects/pigrocrm/Dockerfile.web'
-              - 'projects/pigrocrm/docker-compose.yml'
-              - 'projects/pigrocrm/deploy/**'
+              - 'projects/pigrocrm/**'
+              - 'shared/brand/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.dockerignore'
+              - '.github/workflows/ci.yml'
+            website_image:
               - 'projects/website/**'
               - 'shared/brand/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
               - '.dockerignore'
+              - '.github/workflows/ci.yml'
 
-  # `!cancelled() &&` is not decoration. A job that `needs` a skipped job is skipped
-  # too, whatever its own `if` says, unless that `if` contains a status-check
-  # function -- and `changes` is skipped on every push. Without the guard the whole
-  # suite would skip on the trunk and `ci` would report GREEN, because skipped counts
-  # as passing. That is the one way this shape fails silently, and in the safe-looking
-  # direction.
+  # Two guards, and neither is decoration.
+  #
+  # `!cancelled() &&`: a job that `needs` a skipped or failed job is skipped too,
+  # whatever its own `if` says, unless that `if` contains a status-check function.
+  # `changes` runs on both events now, but if it ever fails this keeps the suite
+  # running instead of reporting GREEN off a wholly skipped run, which is how this
+  # shape fails silently and in the safe-looking direction.
+  #
+  # `outputs.all == 'true' ||`: the push had no base commit to diff against, so the
+  # filters were never consulted and every job runs.
   pigrocrm-py:
     name: pigrocrm · python
     needs: changes
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.pigrocrm_py == 'true') }}
+    if: ${{ !cancelled() && (needs.changes.outputs.all == 'true' || needs.changes.outputs.pigrocrm_py == 'true') }}
     uses: ./.github/workflows/_python-gate.yml
     with:
       lint-path: projects/pigrocrm
@@ -172,7 +232,8 @@ jobs:
   # runner is exactly the load that changes the answer.
   pigrocrm-py-corpus:
     name: pigrocrm · python corpus
-    if: github.event_name != 'pull_request'
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && (needs.changes.outputs.all == 'true' || needs.changes.outputs.pigrocrm_py == 'true') }}
     uses: ./.github/workflows/_python-gate.yml
     with:
       job-name: the fifty-thousand-row corpus
@@ -189,7 +250,7 @@ jobs:
   pigrocrm-web:
     name: pigrocrm · web
     needs: changes
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.pigrocrm_web == 'true') }}
+    if: ${{ !cancelled() && (needs.changes.outputs.all == 'true' || needs.changes.outputs.pigrocrm_web == 'true') }}
     uses: ./.github/workflows/_node-gate.yml
     with:
       filter: web
@@ -201,7 +262,7 @@ jobs:
   website:
     name: website · web
     needs: changes
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.website == 'true') }}
+    if: ${{ !cancelled() && (needs.changes.outputs.all == 'true' || needs.changes.outputs.website == 'true') }}
     uses: ./.github/workflows/_node-gate.yml
     with:
       filter: website
@@ -211,7 +272,7 @@ jobs:
   hub-py:
     name: hub · python
     needs: changes
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.hub_py == 'true') }}
+    if: ${{ !cancelled() && (needs.changes.outputs.all == 'true' || needs.changes.outputs.hub_py == 'true') }}
     uses: ./.github/workflows/_python-gate.yml
     with:
       lint-path: projects/hub
@@ -229,15 +290,17 @@ jobs:
   hub-web:
     name: hub · web
     needs: changes
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.hub_web == 'true') }}
+    if: ${{ !cancelled() && (needs.changes.outputs.all == 'true' || needs.changes.outputs.hub_web == 'true') }}
     uses: ./.github/workflows/_node-gate.yml
     with:
       filter: hub
 
-  # Tier 3. No `needs: changes`, so no guard is needed: the `if` decides on its own.
+  # Tier 3, and scoped like everything else: an image nobody can have changed is an
+  # image not worth two minutes of a metered runner.
   pigrocrm-images:
     name: pigrocrm · images build
-    if: github.event_name != 'pull_request'
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && (needs.changes.outputs.all == 'true' || needs.changes.outputs.pigrocrm_image == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -254,7 +317,8 @@ jobs:
 
   website-image:
     name: website · image build
-    if: github.event_name != 'pull_request'
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && (needs.changes.outputs.all == 'true' || needs.changes.outputs.website_image == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
