@@ -4,10 +4,16 @@ import { EntityDetailLayout } from '@/components/EntityDetailLayout'
 import { QueryErrorBanner } from '@/components/QueryErrorBanner'
 import { StatusPill } from '@/components/StatusPill'
 import { InvoiceActions } from '@/features/invoices/InvoiceActions'
+import { InvoiceHeaderEditor } from '@/features/invoices/InvoiceHeaderEditor'
 import { InvoiceLinesEditor } from '@/features/invoices/InvoiceLinesEditor'
 import { InvoicePdfPreview } from '@/features/invoices/InvoicePdfPreview'
 import { InvoiceStateBadge } from '@/features/invoices/InvoiceStateBadge'
-import { formatDate, formatInvoiceNumber, formatMoney } from '@/features/invoices/format'
+import {
+  formatDate,
+  formatInvoiceNumber,
+  formatMoney,
+  formatPeriod,
+} from '@/features/invoices/format'
 import {
   PAYMENT_STATE_LABELS,
   PAYMENT_STATE_TONE,
@@ -68,11 +74,30 @@ export function InvoiceDetail() {
                 invalidated. */}
             <InvoiceActions invoice={row} onDeleted={() => void navigate({ to: '/app/fatture' })} />
 
+            {/* While the document can still change, its dates are inputs (ORB-61, ORB-63)
+                and the list below states only what nobody can edit here; once frozen, the
+                same facts come back as rows. Stated or asked, never both. */}
+            {readOnly ? null : <InvoiceHeaderEditor invoice={row} />}
+
             <dl className="grid max-w-lg grid-cols-2 gap-2 text-sm">
-              <dt className="text-muted-foreground">Data emissione</dt>
-              <dd>{formatDate(row.data_emissione)}</dd>
+              {readOnly ? (
+                <>
+                  {/* «Data» on a proforma: it is the customer's document date and not
+                      an emission, which is the fiscal act a fattura's date names. */}
+                  <dt className="text-muted-foreground">
+                    {row.tipo === 'proforma' ? 'Data' : 'Data emissione'}
+                  </dt>
+                  <dd>{formatDate(row.data_emissione)}</dd>
+                </>
+              ) : null}
               <dt className="text-muted-foreground">Scadenza</dt>
               <dd>{formatDate(row.data_scadenza)}</dd>
+              {readOnly ? (
+                <>
+                  <dt className="text-muted-foreground">Periodo di competenza</dt>
+                  <dd>{formatPeriod(row.competenza_da, row.competenza_a)}</dd>
+                </>
+              ) : null}
               <dt className="text-muted-foreground">Imponibile</dt>
               <dd>{formatMoney(row.imponibile)}</dd>
               <dt className="text-muted-foreground">Imposta</dt>

@@ -1,9 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactElement } from 'react'
 import { toast } from 'sonner'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/lib/api'
 import { NewProformaButton } from './NewProformaDialog'
 
@@ -59,12 +59,22 @@ function mockGets() {
   }) as never)
 }
 
+/** The day the dialog opens on, so the proforma's default date is a known string.
+ *  Only `Date` is faked: `userEvent` waits on real timers. */
+const TODAY = '2026-09-09'
+
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date(2026, 8, 9))
   vi.mocked(api.GET).mockReset()
   vi.mocked(api.POST).mockReset()
   vi.mocked(toast.success).mockReset()
   navigate.mockReset()
   mockGets()
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 function renderWithClient(ui: ReactElement) {
@@ -88,6 +98,20 @@ function body(): Record<string, unknown> {
   const [first] = vi.mocked(api.POST).mock.calls
   if (!first) throw new Error('POST /api/invoices was never called')
   return (first[1] as { body: Record<string, unknown> }).body
+}
+
+/** A native date input takes its value through `change`, never through typing: the
+ *  browser owns the picker, and `userEvent.type` would spell digits into it. */
+function setDate(label: string | RegExp, value: string) {
+  fireEvent.change(screen.getByLabelText(label), { target: { value } })
+}
+
+/** The shortest complete form, so a test about one field is not mostly about the rest. */
+async function fillMinimum() {
+  await chooseCustomer('ACME Srl')
+  await userEvent.type(screen.getByLabelText(/^Causale/), 'Consulenza agosto')
+  await userEvent.type(screen.getByLabelText('Descrizione riga 1'), 'Analisi')
+  await userEvent.type(screen.getByLabelText('Prezzo unitario riga 1'), '150.00')
 }
 
 describe('NewProformaButton', () => {
@@ -160,6 +184,7 @@ describe('NewProformaButton', () => {
       customer_id: 'cust-1',
       tipo: 'proforma',
       causale: 'Consulenza settembre',
+      data_emissione: TODAY,
       righe: [{ descrizione: 'Analisi', quantita: '2', prezzo_unitario: '150.00' }],
     })
     expect(navigate).toHaveBeenCalledWith({
@@ -235,6 +260,89 @@ describe('NewProformaButton', () => {
       'il deal non appartiene a questo cliente',
     )
     expect(navigate).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * The proforma's own date (ORB-63) and the accrual period (ORB-61). The date is proposed
+ * and always sent; the period is sent only when both ends are given, and the two checks
+ * the server would answer 422 to are made here first, next to the inputs.
+ */
+describe('NewProformaButton, the dates', () => {
+  it('proposes today as the proforma’s date, from local date parts', async () => {
+    await open()
+
+    expect(screen.getByLabelText(/^Data/)).toHaveValue(TODAY)
+    expect(screen.getByLabelText('Competenza dal')).toHaveValue('')
+    expect(screen.getByLabelText('Competenza al')).toHaveValue('')
+  })
+
+  it('sends the date the owner chose instead of today', async () => {
+    vi.mocked(api.POST).mockReturnValue(ok({ id: 'inv-9' }))
+    await open()
+    await fillMinimum()
+    setDate(/^Data/, '2026-08-31')
+    await userEvent.click(screen.getByRole('button', { name: 'Crea proforma' }))
+
+    expect(body()).toMatchObject({ data_emissione: '2026-08-31' })
+  })
+
+  it('refuses to post without a date', async () => {
+    await open()
+    await fillMinimum()
+    setDate(/^Data/, '')
+    await userEvent.click(screen.getByRole('button', { name: 'Crea proforma' }))
+
+    expect(screen.getByText('La proforma ha bisogno di una data.')).toBeInTheDocument()
+    expect(api.POST).not.toHaveBeenCalled()
+  })
+
+  it('sends the accrual period when both ends are given', async () => {
+    vi.mocked(api.POST).mockReturnValue(ok({ id: 'inv-9' }))
+    await open()
+    await fillMinimum()
+    setDate('Competenza dal', '2026-08-01')
+    setDate('Competenza al', '2026-08-31')
+    await userEvent.click(screen.getByRole('button', { name: 'Crea proforma' }))
+
+    expect(body()).toMatchObject({ competenza_da: '2026-08-01', competenza_a: '2026-08-31' })
+  })
+
+  it('leaves the period out of the body when neither end is given', async () => {
+    // An omitted optional key on a create is the server's own default, which is what
+    // "the owner did not say" means here.
+    vi.mocked(api.POST).mockReturnValue(ok({ id: 'inv-9' }))
+    await open()
+    await fillMinimum()
+    await userEvent.click(screen.getByRole('button', { name: 'Crea proforma' }))
+
+    expect(body()).not.toHaveProperty('competenza_da')
+    expect(body()).not.toHaveProperty('competenza_a')
+  })
+
+  it('refuses a period with only one end, before asking', async () => {
+    await open()
+    await fillMinimum()
+    setDate('Competenza dal', '2026-08-01')
+    await userEvent.click(screen.getByRole('button', { name: 'Crea proforma' }))
+
+    expect(
+      screen.getByText('Il periodo di competenza richiede sia l’inizio sia la fine.'),
+    ).toBeInTheDocument()
+    expect(api.POST).not.toHaveBeenCalled()
+  })
+
+  it('refuses a period that ends before it starts', async () => {
+    await open()
+    await fillMinimum()
+    setDate('Competenza dal', '2026-09-01')
+    setDate('Competenza al', '2026-08-01')
+    await userEvent.click(screen.getByRole('button', { name: 'Crea proforma' }))
+
+    expect(
+      screen.getByText('La fine del periodo di competenza non può precedere l’inizio.'),
+    ).toBeInTheDocument()
+    expect(api.POST).not.toHaveBeenCalled()
   })
 })
 
@@ -324,6 +432,7 @@ describe('NewProformaButton, opened from a record that already answers the quest
       deal_id: 'deal-1',
       tipo: 'proforma',
       causale: 'Acconto',
+      data_emissione: TODAY,
       righe: [{ descrizione: 'Sito vetrina', quantita: '1', prezzo_unitario: '4500.00' }],
     })
   })

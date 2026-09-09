@@ -4682,6 +4682,16 @@ export interface components {
             tipo: "fattura" | "proforma";
             /** Causale */
             causale?: string | null;
+            /** Competenza Da */
+            competenza_da?: string | null;
+            /** Competenza A */
+            competenza_a?: string | null;
+            /**
+             * Data Emissione
+             * @description The proforma's own document date; refused on a fattura, whose date is
+             *     assigned at emission. Defaults to today.
+             */
+            data_emissione?: string | null;
             /** Note Interne */
             note_interne?: string | null;
             /** Righe */
@@ -4925,6 +4935,10 @@ export interface components {
             data_emissione: string | null;
             /** Data Scadenza */
             data_scadenza: string | null;
+            /** Competenza Da */
+            competenza_da: string | null;
+            /** Competenza A */
+            competenza_a: string | null;
             /** Tipo Documento */
             tipo_documento: string;
             /** Divisa */
@@ -5004,6 +5018,12 @@ export interface components {
         InvoiceUpdate: {
             /** Causale */
             causale?: string | null;
+            /** Competenza Da */
+            competenza_da?: string | null;
+            /** Competenza A */
+            competenza_a?: string | null;
+            /** Data Emissione */
+            data_emissione?: string | null;
             /** Note Interne */
             note_interne?: string | null;
             /** Custom Fields */

@@ -3,6 +3,7 @@ import {
   formatDate,
   formatInvoiceNumber,
   formatMoney,
+  formatPeriod,
   formatQuantity,
   formatRate,
   previewImponibile,
@@ -138,5 +139,27 @@ describe('formatDate on an empty value', () => {
   it('reads an explicitly-cleared ("") date as absent, exactly as null is', () => {
     expect(formatDate('')).toBe('—')
     expect(formatDate(null)).toBe('—')
+  })
+})
+
+describe('formatPeriod', () => {
+  it('joins the two ends the way the emission date beside them is written', () => {
+    expect(formatPeriod('2026-08-01', '2026-08-31')).toBe(
+      `${formatDate('2026-08-01')} - ${formatDate('2026-08-31')}`,
+    )
+  })
+
+  it('renders no period as an em dash', () => {
+    expect(formatPeriod(null, null)).toBe('—')
+  })
+
+  it('renders a lone end as an em dash too, since the server never stores one', () => {
+    expect(formatPeriod('2026-08-01', null)).toBe('—')
+    expect(formatPeriod('', '2026-08-31')).toBe('—')
+  })
+
+  it('survives an API that predates the two columns', () => {
+    // `undefined`, not `null`: the key is simply absent from an older `InvoiceRead`.
+    expect(formatPeriod(undefined as unknown as null, undefined as unknown as null)).toBe('—')
   })
 })
