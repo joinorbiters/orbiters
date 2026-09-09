@@ -48,6 +48,24 @@ export function useEconomicOverview(anno: number) {
   })
 }
 
+/**
+ * The annual fiscal estimate the «Stima fiscale» card is built from, per year.
+ *
+ * It sits beside the dashboard's own queries since the estimate moved into Home: its one
+ * caller is `FiscalPanel.tsx` next door, and a hook left behind in `features/analytics`
+ * would be the only thing that screen still borrowed from a section the interface no
+ * longer has.
+ *
+ * No `staleTime` override: unlike the aggregates above, this one is read once per visit
+ * under the cards and the default in `lib/query.ts` is the right answer for it.
+ */
+export function useFiscalEstimate(anno: number) {
+  return useQuery({
+    queryKey: queryKeys.fiscalEstimate(anno),
+    queryFn: () => unwrap(api.GET('/api/analytics/fiscale', { params: { query: { anno } } })),
+  })
+}
+
 export function useAutomations() {
   return useQuery({
     queryKey: queryKeys.automations(),

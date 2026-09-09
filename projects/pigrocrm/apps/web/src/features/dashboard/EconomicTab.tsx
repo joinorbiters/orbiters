@@ -1,8 +1,8 @@
-import { Link } from '@tanstack/react-router'
 import { QueryErrorBanner } from '@/components/QueryErrorBanner'
 import { Skeleton } from '@/components/ui/skeleton'
 import { BigNumber } from './charts'
-import { money, percent } from './format'
+import { FiscalPanel } from './FiscalPanel'
+import { money } from './format'
 import { Freshness } from './Freshness'
 import { MonthlyBars } from './MonthlyBars'
 import type { Periodo } from './periodo'
@@ -109,28 +109,24 @@ export function EconomicTab({ periodo }: { periodo: Periodo }) {
         ) : (
           <div className="rounded-lg border bg-card p-4 sm:col-span-2">
             <p className="text-sm text-muted-foreground">Stima fiscale</p>
+            {/* No link out any more: the card below says which of the two is missing, in
+                the server's own words, and offers the settings screen when that is the
+                answer. */}
             <p className="mt-1 text-sm">
               Non disponibile qui: serve un profilo fiscale configurato e un account
-              amministratore.{' '}
-              <Link to="/app/analisi/fiscale" className="underline underline-offset-2">
-                Apri la stima fiscale
-              </Link>
+              amministratore.
             </p>
           </div>
         )}
       </div>
 
-      {fiscale && (
-        <p className="rounded-lg border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-          Stima basata sul regime forfettario: coefficiente di redditività{' '}
-          {percent(fiscale.coefficiente_redditivita)}, imposta sostitutiva{' '}
-          {percent(fiscale.aliquota_imposta_sostitutiva)}, INPS {percent(fiscale.aliquota_inps)} su
-          reddito netto. È una stima, non una dichiarazione.{' '}
-          <Link to="/app/analisi/fiscale" className="underline underline-offset-2">
-            Apri la stima fiscale
-          </Link>
-        </p>
-      )}
+      {/* The whole estimate, under the figures it explains: the cards say how much is owed,
+          this says out of what and at which rates. It reads the year on its own -- one
+          request, its own loading and error branches -- rather than taking the excerpt
+          `panoramica` already carries, because a card that renders half of itself while the
+          other half loads is worse than a card that arrives whole. The charts sit above the
+          figures since 2026-09-09 and are not repeated here. */}
+      <FiscalPanel anno={anno} />
     </div>
   )
 }

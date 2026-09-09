@@ -12,9 +12,9 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
     ...actual,
     useParams: () => ({ dealId: 'd1' }),
     useNavigate: () => vi.fn(),
-    // The Preventivo card links to Analisi, and a real `Link` needs a router context
-    // this test has no reason to build. The house stub (deal/lista.test.tsx,
-    // fatture/index.test.tsx) renders it as a plain anchor.
+    // The tabs below this header render links of their own, and a real `Link` needs a
+    // router context this test has no reason to build. The house stub
+    // (deal/lista.test.tsx, fatture/index.test.tsx) renders it as a plain anchor.
     Link: ({ children }: { children: ReactNode }) => <a href="#">{children}</a>,
   }
 })

@@ -15,7 +15,6 @@ import {
   Receipt,
   Search,
   Settings,
-  TrendingUp,
   Users,
   Wallet,
 } from 'lucide-react'
@@ -51,8 +50,10 @@ import { cn } from '@/lib/utils'
  * are for. And the content is a panel with its own scroll, so the sidebar and the page
  * header never scroll away.
  *
- * Home is the dashboard, `/app`. Analisi is one link and not a group on purpose: its
- * three screens are tabs of one page, so the sidebar points at the first of them.
+ * Home is the dashboard, `/app`, and it is where the economic reading of the books now
+ * lives: the «Analisi» entry that stood between it and «Token» is gone with the section
+ * it opened (2026-09-09), whose estimate is a card in Home and whose two reports left the
+ * interface. `GET /api/analytics/*` and the MCP tools are untouched.
  *
  * Below `lg` the sidebar is the icon rail by default and its expanded form is an overlay
  * over the page, dismissed by a backdrop or by navigating: 272px of the 390px a phone has
@@ -66,14 +67,6 @@ import { cn } from '@/lib/utils'
 // would mean a collaborator could never connect an agent to their own account.
 const TOP_LEVEL = [
   { to: '/app', label: 'Home', icon: LayoutDashboard, exact: true },
-  // After the two groups in the rendering below, because every figure it reports is
-  // derived from what they contain. Not admin-gated: margins and estimate-versus-actual
-  // carry no role check at the service layer, and only the fiscal tab inside does --
-  // gating the whole entry would hide two ordinary reads to protect a third.
-  // The layout route, not `margini`: with `exact: false` the match is by prefix, so
-  // pointing at one tab left the entry unlit on the other two. Its index redirects to
-  // `margini`, so the click goes where it always did.
-  { to: '/app/analisi', label: 'Analisi', icon: TrendingUp, exact: false },
   { to: '/app/token', label: 'Token', icon: KeyRound, exact: false },
 ] as const
 
