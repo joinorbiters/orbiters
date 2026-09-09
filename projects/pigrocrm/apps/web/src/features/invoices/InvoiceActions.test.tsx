@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { toast } from 'sonner'
@@ -16,6 +16,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
 vi.mock('sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
 }))
+// «Segna trasmessa» follows the server's own admin gate; the rest of the actions do
+// not read the role at all, so an admin is the actor that shows every button.
+vi.mock('@/lib/auth', () => ({ useIsAdmin: () => true }))
 
 function ok(data: unknown) {
   return { data, response: new Response(null, { status: 200 }) } as never
@@ -26,7 +29,15 @@ function failed(error: unknown, status: number) {
 }
 
 const DRAFT = { id: 'inv-1', tipo: 'fattura', stato: 'bozza' } as unknown as Invoice
-const ISSUED = { id: 'inv-1', tipo: 'fattura', stato: 'emessa' } as unknown as Invoice
+const ISSUED = {
+  id: 'inv-1',
+  tipo: 'fattura',
+  stato: 'emessa',
+  stato_pagamento: 'da_incassare',
+  trasmessa_esternamente_il: null,
+} as unknown as Invoice
+const COLLECTED = { ...ISSUED, stato_pagamento: 'incassato', data_incasso: '2026-09-01' } as Invoice
+const PROFORMA = { id: 'pf-1', tipo: 'proforma', stato: 'confermata' } as unknown as Invoice
 
 function wrap(children: ReactNode) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -35,6 +46,7 @@ function wrap(children: ReactNode) {
 
 beforeEach(() => {
   vi.mocked(api.POST).mockReset()
+  vi.mocked(api.PATCH).mockReset()
   vi.mocked(toast.success).mockReset()
   vi.mocked(toast.warning).mockReset()
   vi.spyOn(window, 'confirm').mockReturnValue(true)
@@ -109,6 +121,87 @@ describe('InvoiceActions', () => {
     wrap(<InvoiceActions invoice={ISSUED} />)
     await userEvent.click(screen.getByRole('button', { name: /^annulla$/i }))
     expect(screen.getByText(/Il numero resta nel registro/)).toBeInTheDocument()
+  })
+
+  // --- the states after emission: collected, transmitted ---------------------------------
+
+  it('records a collection with its date, through the payment endpoint', async () => {
+    vi.mocked(api.PATCH).mockResolvedValue(ok(COLLECTED))
+    wrap(<InvoiceActions invoice={ISSUED} />)
+
+    await userEvent.click(screen.getByRole('button', { name: /segna incassata/i }))
+    const dialog = screen.getByRole('dialog', { name: /registra l'incasso/i })
+    // Today, proposed rather than imposed: the field is editable and the server needs a
+    // date, so the dialog never sends a collection without one.
+    const date = screen.getByLabelText('Data incasso') as HTMLInputElement
+    expect(date.value).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    fireEvent.change(date, { target: { value: '2026-09-01' } })
+    await userEvent.click(within(dialog).getByRole('button', { name: /registra incasso/i }))
+
+    await waitFor(() => expect(api.PATCH).toHaveBeenCalledTimes(1))
+    const [path, options] = vi.mocked(api.PATCH).mock.calls[0] as unknown as [
+      string,
+      { body: unknown },
+    ]
+    expect(path).toContain('/payment')
+    expect(options.body).toEqual({ stato_pagamento: 'incassato', data_incasso: '2026-09-01' })
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Incasso registrato'))
+  })
+
+  it('offers the way back once collected, clearing the date with the state', async () => {
+    vi.mocked(api.PATCH).mockResolvedValue(ok(ISSUED))
+    wrap(<InvoiceActions invoice={COLLECTED} />)
+
+    expect(screen.queryByRole('button', { name: /segna incassata/i })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /segna da incassare/i }))
+    expect(window.confirm).toHaveBeenCalled()
+
+    await waitFor(() => expect(api.PATCH).toHaveBeenCalledTimes(1))
+    const [, options] = vi.mocked(api.PATCH).mock.calls[0] as unknown as [string, { body: unknown }]
+    expect(options.body).toEqual({ stato_pagamento: 'da_incassare', data_incasso: null })
+  })
+
+  it('records the external transmission once, and never offers it again', async () => {
+    vi.mocked(api.POST).mockResolvedValue(ok({ ...ISSUED, trasmessa_esternamente_il: '2026-09-02' }))
+    wrap(<InvoiceActions invoice={ISSUED} />)
+
+    await userEvent.click(screen.getByRole('button', { name: /segna trasmessa/i }))
+    const dialog = screen.getByRole('dialog', { name: /segna come trasmessa/i })
+    expect(dialog).toHaveTextContent(/Non si può annullare/)
+    fireEvent.change(screen.getByLabelText('Data di trasmissione'), {
+      target: { value: '2026-09-02' },
+    })
+    await userEvent.click(within(dialog).getByRole('button', { name: /segna trasmessa/i }))
+
+    await waitFor(() => expect(api.POST).toHaveBeenCalledTimes(1))
+    const [path, options] = vi.mocked(api.POST).mock.calls[0] as unknown as [
+      string,
+      { body: unknown },
+    ]
+    expect(path).toContain('/transmitted')
+    expect(options.body).toEqual({ data: '2026-09-02' })
+
+  })
+
+  it('never offers the transmission again once it is recorded', () => {
+    // The column is frozen on the server (`mark_transmitted_externally`), so the button
+    // follows the row and is gone.
+    wrap(<InvoiceActions invoice={{ ...ISSUED, trasmessa_esternamente_il: '2026-09-02' } as Invoice} />)
+    expect(screen.queryByRole('button', { name: /segna trasmessa/i })).toBeNull()
+  })
+
+  it('offers no payment or transmission action on a draft, a proforma or an imported invoice', () => {
+    wrap(<InvoiceActions invoice={DRAFT} />)
+    expect(screen.queryByRole('button', { name: /segna/i })).toBeNull()
+
+    wrap(<InvoiceActions invoice={PROFORMA} />)
+    expect(screen.queryByRole('button', { name: /segna/i })).toBeNull()
+
+    // Imported: collected here, yes -- the money is still owed to the titolare -- but
+    // transmitted by the system that issued it, so only the payment button remains.
+    wrap(<InvoiceActions invoice={{ ...ISSUED, importata_da: 'esterno' } as Invoice} />)
+    expect(screen.getByRole('button', { name: /segna incassata/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /segna trasmessa/i })).toBeNull()
   })
 
   it('hides the XML and regenerate actions for an imported invoice', () => {

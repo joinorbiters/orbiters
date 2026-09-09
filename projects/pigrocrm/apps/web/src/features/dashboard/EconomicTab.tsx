@@ -46,6 +46,21 @@ export function EconomicTab({ periodo }: { periodo: Periodo }) {
         />
       </div>
 
+      {/* The two charts come before the figures (2026-09-09): the shape of the year is
+          what the eye reads first, and the cards below give it its exact numbers. */}
+      <MonthlyBars
+        title={`Andamento economico ${anno}`}
+        months={cassa.mesi}
+        series={['incassato', 'costi']}
+        shares="quote_andamento"
+      />
+      <MonthlyBars
+        title={`Proiezione economica ${anno}`}
+        months={cassa.mesi}
+        series={['incassato', 'da_incassare', 'bozze', 'costi']}
+        shares="quote_proiezione"
+      />
+
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <BigNumber label="Ricavi incassati" value={money(cassa.incassato)} tone="accent" />
         <BigNumber
@@ -104,19 +119,6 @@ export function EconomicTab({ periodo }: { periodo: Periodo }) {
           </div>
         )}
       </div>
-
-      <MonthlyBars
-        title={`Andamento economico ${anno}`}
-        months={cassa.mesi}
-        series={['incassato', 'costi']}
-        shares="quote_andamento"
-      />
-      <MonthlyBars
-        title={`Proiezione economica ${anno}`}
-        months={cassa.mesi}
-        series={['incassato', 'da_incassare', 'bozze', 'costi']}
-        shares="quote_proiezione"
-      />
 
       {fiscale && (
         <p className="rounded-lg border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">

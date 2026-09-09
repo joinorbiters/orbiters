@@ -40,6 +40,10 @@ export function CommercialTab({ periodo }: { periodo: Periodo }) {
         <Freshness calcolatoAlle={data.calcolato_alle} onRefresh={() => void query.refetch()} />
       </div>
 
+      {/* The pipeline first, then the closures (2026-09-09): what is open is the picture,
+          what closed is the caption under it. */}
+      <BarRows caption="Pipeline aperta per stato" rows={bars} />
+
       {/* Three across (design spec §4), not four: the KPI card is wider now that its
           value is 30px, and the fourth card of a four-up row was the one that wrapped
           first on a laptop anyway. */}
@@ -57,8 +61,6 @@ export function CommercialTab({ periodo }: { periodo: Periodo }) {
           hint="valore dichiarato dai deal, non fatturato"
         />
       </div>
-
-      <BarRows caption="Pipeline aperta per stato" rows={bars} />
 
       {data.chiusure_non_attribuibili > 0 && (
         <p className="text-xs text-muted-foreground">

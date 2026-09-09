@@ -12,10 +12,11 @@ import { currentMonth } from './periodo'
  */
 
 // Two tabs since 2026-09-08: the operational one (week, backlog, signals) is gone from
-// the page; its API and MCP tool remain for the agent.
+// the page; its API and MCP tool remain for the agent. Economica comes first since
+// 2026-09-09 (Ivan's request): the home opens on the money, the pipeline is one tab away.
 export const DASHBOARD_TABS = [
-  { id: 'commerciale', label: 'Commerciale' },
   { id: 'economica', label: 'Economica' },
+  { id: 'commerciale', label: 'Commerciale' },
 ] as const
 
 export type TabId = (typeof DASHBOARD_TABS)[number]['id']
@@ -50,7 +51,7 @@ function isCalendarDate(value: unknown): value is string {
  */
 /**
  * The search a link into the dashboard sends when it has no period of its own to name:
- * the current month, on the commercial tab.
+ * the current month, on the economic tab -- the first one drawn.
  *
  * It exists because `search={{}}` does not typecheck. TanStack derives what `<Link>` and
  * `navigate` must supply from the validator's *return* type, not its parameter type, so
@@ -66,12 +67,12 @@ function isCalendarDate(value: unknown): value is string {
  */
 export function defaultDashboardSearch(): DashboardSearch {
   const { da, a } = currentMonth()
-  return { tab: 'commerciale', da, a }
+  return { tab: 'economica', da, a }
 }
 
 export function validateDashboardSearch(search: Record<string, unknown>): DashboardSearch {
   const fallback = currentMonth()
-  const tab = DASHBOARD_TABS.find((candidate) => candidate.id === search.tab)?.id ?? 'commerciale'
+  const tab = DASHBOARD_TABS.find((candidate) => candidate.id === search.tab)?.id ?? 'economica'
   return {
     tab,
     da: isCalendarDate(search.da) ? search.da : fallback.da,

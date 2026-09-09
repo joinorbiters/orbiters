@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createContext, use, type ReactNode } from 'react'
 import { api, unwrap } from './api'
 import { queryKeys } from './query'
+import { tenantPrefix } from './tenant'
 
 export interface SessionUser {
   id: string
@@ -52,7 +53,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logoutMutation = useMutation({
     mutationFn: () => unwrap(api.POST('/api/auth/logout')),
-    onSuccess: () => queryClient.clear(),
   })
 
   const value: AuthValue = {
@@ -61,8 +61,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     login: async (email, password) => {
       await loginMutation.mutateAsync({ email, password })
     },
+    /**
+     * Ends the session and then leaves the page, whatever the server answered.
+     *
+     * The `POST` is what kills the session server-side and clears the cookies; the
+     * navigation after it is a full page load of the login screen, not a router push.
+     * A push would leave this tab's whole in-memory state alive -- the query cache, the
+     * cross-tab refresh lock, every component that read `user` a moment ago -- and it
+     * used to leave the person on the login form with `me` refetching behind it, which
+     * is how a session the server had not fully dropped bounced them back in. A load
+     * starts from nothing: the login page asks `me`, gets a 401, shows the form.
+     *
+     * `finally`, not `onSuccess`: a logout the network lost is still a logout the
+     * person asked for, and the worst case of leaving anyway is the login page finding
+     * the session alive and sending them back to the home.
+     */
     logout: async () => {
-      await logoutMutation.mutateAsync()
+      try {
+        await logoutMutation.mutateAsync()
+      } finally {
+        queryClient.clear()
+        window.location.assign(`${tenantPrefix}/app/login`)
+      }
     },
   }
 

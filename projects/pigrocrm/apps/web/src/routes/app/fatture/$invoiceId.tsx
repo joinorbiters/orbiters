@@ -2,11 +2,18 @@ import { createFileRoute } from '@tanstack/react-router'
 import { Receipt } from 'lucide-react'
 import { EntityDetailLayout } from '@/components/EntityDetailLayout'
 import { QueryErrorBanner } from '@/components/QueryErrorBanner'
+import { StatusPill } from '@/components/StatusPill'
 import { InvoiceActions } from '@/features/invoices/InvoiceActions'
 import { InvoiceLinesEditor } from '@/features/invoices/InvoiceLinesEditor'
 import { InvoiceStateBadge } from '@/features/invoices/InvoiceStateBadge'
 import { formatDate, formatInvoiceNumber, formatMoney } from '@/features/invoices/format'
-import { useInvoice, useInvoiceLines } from '@/features/invoices/queries'
+import {
+  PAYMENT_STATE_LABELS,
+  PAYMENT_STATE_TONE,
+  useInvoice,
+  useInvoiceLines,
+  type StatoPagamento,
+} from '@/features/invoices/queries'
 
 export function InvoiceDetail() {
   const { invoiceId } = Route.useParams()
@@ -28,6 +35,9 @@ export function InvoiceDetail() {
   // are immutable in the database, so offering inputs would invite an edit that cannot
   // be saved. A proforma stays editable until it is consumed.
   const readOnly = !(row.stato === 'bozza' || (row.tipo === 'proforma' && row.stato !== 'consumata'))
+  // Only a fattura has money to collect: a proforma reads as a dash in the list for the
+  // same reason (`columns.tsx`), and a second pill here would claim a state it has not.
+  const pagamento = row.tipo === 'fattura' ? (row.stato_pagamento as StatoPagamento) : null
 
   return (
     <EntityDetailLayout
@@ -36,7 +46,16 @@ export function InvoiceDetail() {
       subtitle={row.causale ?? undefined}
       entityType="invoice"
       entityId={row.id}
-      actions={<InvoiceStateBadge invoice={row} />}
+      actions={
+        <>
+          <InvoiceStateBadge invoice={row} />
+          {pagamento !== null ? (
+            <StatusPill tone={PAYMENT_STATE_TONE[pagamento]}>
+              {PAYMENT_STATE_LABELS[pagamento]}
+            </StatusPill>
+          ) : null}
+        </>
+      }
       overview={
         <div className="space-y-8">
           <InvoiceActions invoice={row} />
@@ -56,6 +75,21 @@ export function InvoiceDetail() {
             <dd>{formatMoney(row.bollo)}</dd>
             <dt className="text-muted-foreground font-medium">Totale</dt>
             <dd className="font-medium">{formatMoney(row.totale)}</dd>
+            {pagamento !== null ? (
+              <>
+                <dt className="text-muted-foreground">Pagamento</dt>
+                <dd>
+                  {PAYMENT_STATE_LABELS[pagamento]}
+                  {row.data_incasso !== null ? ` il ${formatDate(row.data_incasso)}` : ''}
+                </dd>
+              </>
+            ) : null}
+            {row.trasmessa_esternamente_il !== null ? (
+              <>
+                <dt className="text-muted-foreground">Trasmessa il</dt>
+                <dd>{formatDate(row.trasmessa_esternamente_il)}</dd>
+              </>
+            ) : null}
             {row.annullata_il !== null ? (
               <>
                 <dt className="text-muted-foreground">Annullata il</dt>

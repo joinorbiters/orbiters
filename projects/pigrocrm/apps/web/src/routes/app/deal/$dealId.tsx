@@ -1,24 +1,27 @@
 import { Link, createFileRoute, useNavigate, useParams } from '@tanstack/react-router'
-import { Handshake, Pencil, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { Handshake, Pencil, ThumbsDown, Trophy } from 'lucide-react'
+import { useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { renderFieldValue } from '@/components/DynamicFieldRenderer'
 import { EntityDetailLayout } from '@/components/EntityDetailLayout'
 import { QueryErrorBanner } from '@/components/QueryErrorBanner'
-import { StatusPill } from '@/components/StatusPill'
+import { RowActions } from '@/components/RowActions'
+import { Timeline } from '@/components/Timeline'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EconomicsTab } from '@/features/analytics/EconomicsTab'
 import { useCustomer } from '@/features/customers/queries'
 import { DealForm, dealToFormValues } from '@/features/deals/DealForm'
+import { DealStageBar } from '@/features/deals/DealStageBar'
 import { displayNative, formatDate, formatHours, formatMoney } from '@/features/deals/columns'
 import {
-  DEAL_STAGE_TONE,
   useDeal,
   useDeleteDeal,
+  useMoveDeal,
   useStages,
   useUpdateDeal,
+  type Stage,
 } from '@/features/deals/queries'
 import { DocumentsTab } from '@/features/documents/DocumentsTab'
 import { EmailTab } from '@/features/gmail/EmailTab'
@@ -29,12 +32,25 @@ import { toProblem, type ProblemDetail } from '@/lib/api'
 import { useCanWrite } from '@/lib/auth'
 import { useEntitySchema } from '@/lib/schema'
 
-function Row({ label, value }: { label: string; value: string }) {
+function Row({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex justify-between gap-4 border-b py-2 last:border-0">
       <span className="text-muted-foreground">{label}</span>
       <span className="text-right font-medium">{value}</span>
     </div>
+  )
+}
+
+/** A heading inside the summary card: one card, several short sections, instead of the
+ *  four boxes this page used to be. */
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="text-sm">
+      <h3 className="mb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+        {title}
+      </h3>
+      {children}
+    </section>
   )
 }
 
@@ -60,13 +76,48 @@ function DealCustomerCard({ customerId }: { customerId: string }) {
     <Card>
       <CardContent className="pt-6">
         <h2 className="mb-3 font-semibold">Cliente</h2>
-        <Row label="Ragione sociale" value={customer.data?.ragione_sociale ?? '…'} />
+        <Row
+          label="Ragione sociale"
+          value={
+            customer.data ? (
+              <Link
+                to="/app/clienti/$customerId"
+                params={{ customerId }}
+                className="underline underline-offset-2"
+              >
+                {customer.data.ragione_sociale}
+              </Link>
+            ) : (
+              '…'
+            )
+          }
+        />
         <Row label="P.IVA" value={customer.data ? displayNative(customer.data.partita_iva) : '…'} />
       </CardContent>
     </Card>
   )
 }
 
+/** The first stage of a kind, by pipeline position: what «Vinto» and «Perso» move to.
+ *  A tenant may define more than one of either; the first is the conventional one. */
+function firstOfKind(stages: Stage[], tipo: Stage['tipo']): Stage | undefined {
+  return stages
+    .filter((stage) => stage.tipo === tipo)
+    .sort((a, b) => a.posizione - b.posizione)[0]
+}
+
+/**
+ * The deal page, in the shape a Pipedrive deal has since 2026-09-09: the pipeline as a
+ * bar across the top, one summary column on the left with everything the deal *is*,
+ * and the recent activity on the right -- what happened to it, latest first. Won and
+ * lost are two buttons in the header, and archiving moved behind the «⋯» menu, where
+ * every list already keeps it (design spec §4).
+ *
+ * What left: the separate «Stato» and «Preventivo» cards and the paragraph pointing at
+ * the Ore and Economia tabs. The figures are still here, in the summary, and the tabs
+ * are one row above -- a note telling the reader where the tabs are was the page
+ * admitting it had too many boxes.
+ */
 export function DealDetail() {
   const { dealId } = useParams({ from: '/app/deal/$dealId' })
   const navigate = useNavigate()
@@ -79,6 +130,7 @@ export function DealDetail() {
   const stages = useStages()
   const update = useUpdateDeal(dealId)
   const remove = useDeleteDeal()
+  const move = useMoveDeal()
   // Shares the shell banner's cached health row -- see `useGmailConfigured`.
   const gmailConfigured = useGmailConfigured()
 
@@ -99,7 +151,11 @@ export function DealDetail() {
   if (!deal) return <p className="p-8">Deal non trovato.</p>
 
   const custom = schema.data?.custom_fields ?? []
-  const stage = stages.data?.find((item) => item.id === deal.pipeline_stage_id)
+  const stageList = stages.data ?? []
+  const stage = stageList.find((item) => item.id === deal.pipeline_stage_id)
+  const isOpen = stage?.tipo === 'open'
+  const won = firstOfKind(stageList, 'won')
+  const lost = firstOfKind(stageList, 'lost')
 
   function archive() {
     if (!deal) return
@@ -122,12 +178,25 @@ export function DealDetail() {
     })
   }
 
+  // No per-call `onError`: `useMoveDeal` toasts the server's message itself, for the
+  // reason its own docstring gives. Success needs no toast either -- the bar moves.
+  function moveTo(stageId: string) {
+    move.mutate({ dealId, stageId })
+  }
+
+  // The header's second line: whose deal, and for how much. `customer_ragione_sociale`
+  // rides on `DealRead` so this costs no request; the Collegamenti tab keeps the full
+  // customer card.
+  const subtitle = [deal.customer_ragione_sociale, formatMoney(deal.valore_previsto)]
+    .filter((part): part is string => typeof part === 'string' && part !== '' && part !== '—')
+    .join(' · ')
+
   return (
     <>
       <EntityDetailLayout
         icon={Handshake}
         title={deal.nome}
-        subtitle="Deal"
+        subtitle={subtitle === '' ? 'Deal' : subtitle}
         entityType="deal"
         entityId={dealId}
         documents={<DocumentsTab owner={{ dealId }} />}
@@ -138,6 +207,25 @@ export function DealDetail() {
         actions={
           canWrite && (
             <>
+              {/* Two outcomes, top right, only while the deal is still open: closing it
+                  is the one decision this page exists for. Reopening goes through the
+                  bar, which is also where the person sees which stage it goes back to. */}
+              {isOpen && won && (
+                <Button onClick={() => moveTo(won.id)} disabled={move.isPending}>
+                  <Trophy className="mr-2 size-4" />
+                  Vinto
+                </Button>
+              )}
+              {isOpen && lost && (
+                <Button
+                  variant="outline"
+                  onClick={() => moveTo(lost.id)}
+                  disabled={move.isPending}
+                >
+                  <ThumbsDown className="mr-2 size-4" />
+                  Perso
+                </Button>
+              )}
               <Button
                 variant="outline"
                 onClick={() => {
@@ -148,71 +236,94 @@ export function DealDetail() {
                 <Pencil className="mr-2 size-4" />
                 Modifica
               </Button>
-              <Button variant="destructive" onClick={archive} disabled={remove.isPending}>
-                <Trash2 className="mr-2 size-4" />
-                Archivia
-              </Button>
+              <RowActions
+                items={[
+                  {
+                    label: 'Archivia',
+                    destructive: true,
+                    disabled: remove.isPending,
+                    onSelect: archive,
+                  },
+                ]}
+              />
             </>
           )
         }
         overview={
-          <div className="grid gap-6 lg:grid-cols-2">
-            <Card>
-              <CardContent className="pt-6">
-                <div className="mb-3 flex items-center justify-between">
-                  <h2 className="font-semibold">Stato</h2>
-                  {stage && (
-                    <StatusPill tone={DEAL_STAGE_TONE[stage.tipo]}>{stage.nome}</StatusPill>
-                  )}
-                </div>
-                <Row label="Valore previsto" value={formatMoney(deal.valore_previsto)} />
-                <Row label="Probabilità" value={`${deal.probabilita}%`} />
-                <Row label="Chiusura prevista" value={formatDate(deal.data_chiusura_prevista)} />
-              </CardContent>
-            </Card>
+          <div className="space-y-6">
+            <DealStageBar
+              deal={deal}
+              stages={stageList}
+              canMove={canWrite}
+              busy={move.isPending}
+              onMove={moveTo}
+            />
 
-            <Card>
-              <CardContent className="pt-6">
-                <h2 className="mb-3 font-semibold">Preventivo</h2>
-                <Row label="Ore preventivate" value={formatHours(deal.ore_preventivate)} />
-                <Row label="Valore preventivato" value={formatMoney(deal.valore_preventivato)} />
-                {/* The comparison against this card's two figures exists now, and it is
-                    one tab away -- the 4A note that promised it for later would send a
-                    reader looking for something that has since arrived. */}
-                <p className="mt-3 text-xs text-muted-foreground">
-                  Le ore consuntivate sono nella tab «Ore»; il confronto con il consuntivo
-                  è nella tab «Economia» e in{' '}
-                  <Link to="/app/analisi/preventivo-consuntivo" className="underline">
-                    Analisi › Preventivo/consuntivo
-                  </Link>
-                  .
-                </p>
-              </CardContent>
-            </Card>
-
-            {custom.length > 0 && (
-              <Card className="lg:col-span-2">
-                <CardContent className="pt-6">
-                  <h2 className="mb-3 font-semibold">Campi personalizzati</h2>
-                  {custom.map((field) => (
+            <div className="grid gap-6 lg:grid-cols-3">
+              <Card className="lg:col-span-1">
+                <CardContent className="space-y-5 pt-6">
+                  <Section title="Riepilogo">
+                    <Row label="Valore previsto" value={formatMoney(deal.valore_previsto)} />
+                    <Row label="Probabilità" value={`${deal.probabilita}%`} />
+                    <Row label="Chiusura prevista" value={formatDate(deal.data_chiusura_prevista)} />
+                    {deal.chiuso_il !== null && (
+                      <Row label="Chiuso il" value={formatDate(deal.chiuso_il)} />
+                    )}
                     <Row
-                      key={field.key}
-                      label={field.label}
-                      value={renderFieldValue(field, deal.custom_fields[field.key])}
+                      label="Cliente"
+                      value={
+                        <Link
+                          to="/app/clienti/$customerId"
+                          params={{ customerId: deal.customer_id }}
+                          className="underline underline-offset-2"
+                        >
+                          {deal.customer_ragione_sociale ?? 'Apri il cliente'}
+                        </Link>
+                      }
                     />
-                  ))}
-                </CardContent>
-              </Card>
-            )}
+                  </Section>
 
-            {deal.note && (
-              <Card className="lg:col-span-2">
-                <CardContent className="pt-6">
-                  <h2 className="mb-3 font-semibold">Note</h2>
-                  <p className="whitespace-pre-wrap text-sm">{deal.note}</p>
+                  <Section title="Preventivo">
+                    <Row label="Ore preventivate" value={formatHours(deal.ore_preventivate)} />
+                    <Row label="Valore preventivato" value={formatMoney(deal.valore_preventivato)} />
+                    <Row label="Tariffa oraria" value={formatMoney(deal.tariffa_oraria)} />
+                  </Section>
+
+                  {custom.length > 0 && (
+                    <Section title="Campi personalizzati">
+                      {custom.map((field) => (
+                        <Row
+                          key={field.key}
+                          label={field.label}
+                          value={renderFieldValue(field, deal.custom_fields[field.key])}
+                        />
+                      ))}
+                    </Section>
+                  )}
                 </CardContent>
               </Card>
-            )}
+
+              <div className="space-y-6 lg:col-span-2">
+                {deal.note && (
+                  <Card>
+                    <CardContent className="pt-6">
+                      <h2 className="mb-3 font-semibold">Note</h2>
+                      <p className="text-sm whitespace-pre-wrap">{deal.note}</p>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* The latest ten, next to the deal rather than behind the Timeline tab:
+                    a stage moved, a field changed, an hour logged -- on Pipedrive this
+                    column is the page. The tab still has the whole history. */}
+                <Card>
+                  <CardContent className="pt-6">
+                    <h2 className="mb-3 font-semibold">Attività recenti</h2>
+                    <Timeline entityType="deal" entityId={dealId} limit={10} />
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
           </div>
         }
         links={<DealCustomerCard customerId={deal.customer_id} />}

@@ -1,4 +1,4 @@
-import { Download, FileCheck2, Ban, RefreshCw } from 'lucide-react'
+import { BadgeEuro, Ban, Download, FileCheck2, RefreshCw, Send, Undo2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -9,15 +9,20 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { QueryErrorBanner } from '@/components/QueryErrorBanner'
 import { toProblem, type ProblemDetail } from '@/lib/api'
+import { useIsAdmin } from '@/lib/auth'
+import { toIsoDate } from '@/lib/dates'
 import {
   downloadInvoiceArtifact,
   useAnnulInvoice,
   useIssueInvoice,
+  useMarkTransmitted,
   useProduceArtifacts,
+  useSetPaymentState,
   type Invoice,
 } from './queries'
 
@@ -25,10 +30,19 @@ export function InvoiceActions({ invoice }: { invoice: Invoice }) {
   const [problem, setProblem] = useState<ProblemDetail | null>(null)
   const [annulOpen, setAnnulOpen] = useState(false)
   const [motivo, setMotivo] = useState('')
+  // The two dates default to today, read from local parts (`toIsoDate`): late in the
+  // evening the UTC route would propose tomorrow, which the server refuses.
+  const [collectOpen, setCollectOpen] = useState(false)
+  const [dataIncasso, setDataIncasso] = useState(() => toIsoDate(new Date()))
+  const [transmitOpen, setTransmitOpen] = useState(false)
+  const [dataTrasmissione, setDataTrasmissione] = useState(() => toIsoDate(new Date()))
+  const isAdmin = useIsAdmin()
 
   const issue = useIssueInvoice(invoice.id)
   const annul = useAnnulInvoice(invoice.id)
   const artifacts = useProduceArtifacts(invoice.id)
+  const payment = useSetPaymentState(invoice.id)
+  const transmitted = useMarkTransmitted(invoice.id)
 
   const isDraftFattura = invoice.tipo === 'fattura' && invoice.stato === 'bozza'
   const isProformaReady = invoice.tipo === 'proforma' && invoice.stato === 'confermata'
@@ -39,6 +53,15 @@ export function InvoiceActions({ invoice }: { invoice: Invoice }) {
   // regenerate it would silently replace a legally-filed document with a
   // reconstruction. The flag is the column's presence, never its value.
   const isImported = invoice.importata_da != null
+  // Collection is a fact about an issued invoice and nothing else (`set_payment_state`
+  // answers 409 for every other state), so the two payment buttons only exist there.
+  // A proforma is never collected and a draft is not yet a document.
+  const collected = invoice.stato_pagamento === 'incassato'
+  // Settable once and admin-only on the server (`mark_transmitted_externally`), and
+  // meaningless for an imported invoice: the system that issued it is the one that
+  // transmitted it, and the column already says so. The button follows all three.
+  const canMarkTransmitted =
+    isIssued && isAdmin && !isImported && invoice.trasmessa_esternamente_il === null
 
   /**
    * Emission and the render are two steps, deliberately.
@@ -87,6 +110,49 @@ export function InvoiceActions({ invoice }: { invoice: Invoice }) {
     })
   }
 
+  function onCollect() {
+    setProblem(null)
+    payment.mutate(
+      { stato_pagamento: 'incassato', data_incasso: dataIncasso },
+      {
+        onSuccess: () => {
+          toast.success('Incasso registrato')
+          setCollectOpen(false)
+        },
+        onError: (error) => setProblem(toProblem(error)),
+      },
+    )
+  }
+
+  /**
+   * The way back. A collection recorded on the wrong invoice is an ordinary mistake,
+   * and the server clears the date with the state (`set_payment_state`), so undoing it
+   * is one call with no dialog -- the confirm is against a misclick, nothing more.
+   */
+  function onUncollect() {
+    if (!window.confirm('Segnare questa fattura come ancora da incassare? La data di incasso viene tolta.'))
+      return
+    setProblem(null)
+    payment.mutate(
+      { stato_pagamento: 'da_incassare', data_incasso: null },
+      {
+        onSuccess: () => toast.success('Fattura segnata da incassare'),
+        onError: (error) => setProblem(toProblem(error)),
+      },
+    )
+  }
+
+  function onTransmit() {
+    setProblem(null)
+    transmitted.mutate(dataTrasmissione, {
+      onSuccess: () => {
+        toast.success('Trasmissione registrata')
+        setTransmitOpen(false)
+      },
+      onError: (error) => setProblem(toProblem(error)),
+    })
+  }
+
   async function onDownload(kind: 'pdf' | 'xml') {
     try {
       await downloadInvoiceArtifact(invoice.id, kind)
@@ -109,6 +175,30 @@ export function InvoiceActions({ invoice }: { invoice: Invoice }) {
 
         {isIssued ? (
           <>
+            {/* The state of the money comes first among an issued invoice's actions:
+                marking a collection is the thing done most often to an invoice after
+                it leaves, and the one the list's «Pagamento» pill is waiting for. */}
+            {collected ? (
+              <Button variant="outline" onClick={onUncollect} disabled={payment.isPending}>
+                <Undo2 className="mr-2 size-4" />
+                Segna da incassare
+              </Button>
+            ) : (
+              <Button onClick={() => setCollectOpen(true)} disabled={payment.isPending}>
+                <BadgeEuro className="mr-2 size-4" />
+                Segna incassata
+              </Button>
+            )}
+            {canMarkTransmitted ? (
+              <Button
+                variant="outline"
+                onClick={() => setTransmitOpen(true)}
+                disabled={transmitted.isPending}
+              >
+                <Send className="mr-2 size-4" />
+                Segna trasmessa
+              </Button>
+            ) : null}
             <Button variant="outline" onClick={() => void onDownload('pdf')}>
               <Download className="mr-2 size-4" />
               PDF
@@ -148,6 +238,75 @@ export function InvoiceActions({ invoice }: { invoice: Invoice }) {
           </Button>
         ) : null}
       </div>
+
+      <Dialog open={collectOpen} onOpenChange={setCollectOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Registra l&apos;incasso</DialogTitle>
+          </DialogHeader>
+          {/* The date is required by the server («un incasso senza data non è un
+              incasso»): the day the money arrived is what the cash view and the fiscal
+              estimate read, so it is asked for here rather than assumed to be today. */}
+          <p className="text-muted-foreground text-sm">
+            La fattura passa a «Incassato» e la data entra nella vista economica dell&apos;anno
+            in cui cade. Si può tornare indietro.
+          </p>
+          <div className="space-y-2">
+            <Label htmlFor="data-incasso">Data incasso</Label>
+            <Input
+              id="data-incasso"
+              type="date"
+              required
+              value={dataIncasso}
+              onChange={(event) => setDataIncasso(event.target.value)}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCollectOpen(false)}>
+              Chiudi
+            </Button>
+            <Button onClick={onCollect} disabled={payment.isPending || dataIncasso === ''}>
+              Registra incasso
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={transmitOpen} onOpenChange={setTransmitOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Segna come trasmessa</DialogTitle>
+          </DialogHeader>
+          {/* Once. This is the column that tells an invoice that never left -- still
+              annullable -- from one already deposited with the Agenzia delle Entrate,
+              and it stays frozen for exactly that reason (`mark_transmitted_externally`). */}
+          <p className="text-muted-foreground text-sm">
+            Registra che l&apos;XML è stato consegnato all&apos;intermediario o allo SDI fuori da
+            PigroCRM. Non si può annullare.
+          </p>
+          <div className="space-y-2">
+            <Label htmlFor="data-trasmissione">Data di trasmissione</Label>
+            <Input
+              id="data-trasmissione"
+              type="date"
+              required
+              value={dataTrasmissione}
+              onChange={(event) => setDataTrasmissione(event.target.value)}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTransmitOpen(false)}>
+              Chiudi
+            </Button>
+            <Button
+              onClick={onTransmit}
+              disabled={transmitted.isPending || dataTrasmissione === ''}
+            >
+              Segna trasmessa
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={annulOpen} onOpenChange={setAnnulOpen}>
         <DialogContent>
