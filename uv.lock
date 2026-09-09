@@ -5,6 +5,9 @@ requires-python = "==3.13.*"
 [manifest]
 members = [
     "orbiters",
+    "orbiters-api",
+    "orbiters-core",
+    "orbiters-mcp",
     "pigrocrm-api",
     "pigrocrm-core",
     "pigrocrm-mcp",
@@ -659,6 +662,9 @@ name = "orbiters"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "orbiters-api" },
+    { name = "orbiters-core" },
+    { name = "orbiters-mcp" },
     { name = "pigrocrm-api" },
     { name = "pigrocrm-core" },
     { name = "pigrocrm-mcp" },
@@ -679,6 +685,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "orbiters-api", editable = "projects/hub/apps/api" },
+    { name = "orbiters-core", editable = "projects/hub/packages/core" },
+    { name = "orbiters-mcp", editable = "projects/hub/apps/mcp" },
     { name = "pigrocrm-api", editable = "projects/pigrocrm/apps/api" },
     { name = "pigrocrm-core", editable = "projects/pigrocrm/packages/core" },
     { name = "pigrocrm-mcp", editable = "projects/pigrocrm/apps/mcp" },
@@ -695,6 +704,65 @@ dev = [
     { name = "ruff", specifier = "==0.16.1" },
     { name = "testcontainers", extras = ["postgres"], specifier = "==4.15.0" },
     { name = "types-openpyxl", specifier = "==3.1.5.20260807" },
+]
+
+[[package]]
+name = "orbiters-api"
+version = "0.1.0"
+source = { editable = "projects/hub/apps/api" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "orbiters-core" },
+    { name = "python-multipart" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = "==0.141.1" },
+    { name = "orbiters-core", editable = "projects/hub/packages/core" },
+    { name = "python-multipart", specifier = "==0.0.20" },
+    { name = "uvicorn", extras = ["standard"], specifier = "==0.52.1" },
+]
+
+[[package]]
+name = "orbiters-core"
+version = "0.1.0"
+source = { editable = "projects/hub/packages/core" }
+dependencies = [
+    { name = "alembic" },
+    { name = "email-validator" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "sqlalchemy" },
+    { name = "uuid-utils" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "alembic", specifier = "==1.19.0" },
+    { name = "email-validator", specifier = "==2.3.0" },
+    { name = "psycopg", extras = ["binary"], specifier = "==3.3.4" },
+    { name = "pydantic", specifier = "==2.13.4" },
+    { name = "pydantic-settings", specifier = "==2.14.2" },
+    { name = "sqlalchemy", specifier = "==2.0.51" },
+    { name = "uuid-utils", specifier = "==0.17.0" },
+]
+
+[[package]]
+name = "orbiters-mcp"
+version = "0.1.0"
+source = { editable = "projects/hub/apps/mcp" }
+dependencies = [
+    { name = "mcp" },
+    { name = "orbiters-core" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "mcp", specifier = "==2.0.0" },
+    { name = "orbiters-core", editable = "projects/hub/packages/core" },
 ]
 
 [[package]]

@@ -1,0 +1,14 @@
+extend = "../../ruff.toml"
+
+[lint.isort]
+known-first-party = ["orbiters_core", "orbiters_api", "orbiters_mcp"]
+
+# packages/core may import neither adapter; each adapter's own nested ruff.toml
+# narrows this table to the other adapter only. The same rule PigroCRM enforces, for
+# the same reason: what the API can do, the MCP server can do, because both call core.
+[lint.flake8-tidy-imports.banned-api]
+"orbiters_api".msg = "packages/core must not import from apps/api"
+"orbiters_mcp".msg = "packages/core must not import from apps/mcp"
+"pigrocrm".msg = "the hub is a product of its own and imports nothing from PigroCRM"
+"pigrocrm_api".msg = "the hub is a product of its own and imports nothing from PigroCRM"
+"pigrocrm_mcp".msg = "the hub is a product of its own and imports nothing from PigroCRM"

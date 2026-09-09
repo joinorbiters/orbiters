@@ -39,7 +39,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from pigrocrm.core.config import Settings
+from orbiters_core.config import Settings
 
 # Documented endpoint. The pixel id goes in the query string, the key in the header.
 CONVERSIONS_URL = "https://bzr.openai.com/v1/events"
@@ -49,8 +49,8 @@ WEB = "web"
 
 HTTP_TIMEOUT_SECONDS = 10
 # "No HTTP response was ever received", travelling through the same channel as a real
-# status rather than a second failure path -- the convention `gmail/transport.py` and
-# `storage/gdrive.py` already use, and the same number.
+# status rather than a second failure path -- the convention PigroCRM's Gmail and Drive
+# transports use, and the same number.
 NETWORK_ERROR_STATUS = 599
 
 # A user agent is a header somebody else writes and it can be arbitrarily long. Cut
@@ -124,7 +124,7 @@ class ConversionsPixel:
         """One `registration_completed`. Never raises.
 
         `validate_only` asks OpenAI to check the event and not record it, which is what
-        `pigrocrm conversions-check` uses to tell the owner whether the key works
+        `orbiters conversions-check` uses to tell the owner whether the key works
         without inventing a conversion to find out.
         """
         body = self._body(
@@ -235,7 +235,7 @@ def _short(answer: bytes) -> str:
 
 
 def _urllib_call(method: str, url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
-    """`urllib`, no dependency, and the same shape `storage/gdrive.py` uses.
+    """`urllib`, no dependency.
 
     An HTTP error is a *status*, not an exception: `urllib` raises `HTTPError` for a
     4xx, and unwrapping it here is what lets `send` treat "OpenAI refused the event"

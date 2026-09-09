@@ -12,8 +12,8 @@ from typing import Any
 
 import pytest
 
-from pigrocrm.core.config import Settings
-from pigrocrm.core.orbiters.conversions import (
+from orbiters_core.config import Settings
+from orbiters_core.conversions import (
     CONVERSIONS_URL,
     NETWORK_ERROR_STATUS,
     USER_AGENT_MAX_LENGTH,
@@ -26,7 +26,7 @@ from pigrocrm.core.orbiters.conversions import (
 PIXEL_ID = "9r6qrnPxBV8WDVGtpuaqxh"
 KEY = "sk-svcacct-non-una-chiave-vera"
 EVENT_ID = "8f14e45f-ceea-467a-9f36-dcd8b0eba0b1"
-SIGNUP_URL = "https://joinorbiters.com/orbiters"
+SIGNUP_URL = "https://joinorbiters.com/"
 
 
 class FakeHttp:

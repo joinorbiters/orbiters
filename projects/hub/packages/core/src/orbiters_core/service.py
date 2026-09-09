@@ -2,9 +2,8 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from pigrocrm.core.actor import Actor
-from pigrocrm.core.orbiters.models import Signup
-from pigrocrm.core.orbiters.schemas import SignupCreate, SignupList, SignupListItem, SignupRead
+from orbiters_core.models import Signup
+from orbiters_core.schemas import SignupCreate, SignupList, SignupListItem, SignupRead
 
 LIST_LIMIT_DEFAULT = 100
 LIST_LIMIT_MAX = 1000
@@ -49,10 +48,14 @@ class SignupService:
             return _read(winner, nuova=False)
         return _read(row, nuova=True)
 
-    def list_recent(self, actor: Actor, limit: int = LIST_LIMIT_DEFAULT) -> SignupList:
-        """Who is on the list, newest first. Admin only: these are other people's
-        addresses, and the only thing anyone does with them is decide when to write."""
-        actor.require_admin("list_orbiters_signups")
+    def list_recent(self, limit: int = LIST_LIMIT_DEFAULT) -> SignupList:
+        """Who is on the list, newest first.
+
+        These are other people's addresses, and the only thing anyone does with them is
+        decide when to write -- so no public adapter exposes this. The API offers it only
+        behind the admin session (hub spec, step 3) and the MCP server is an admin's own
+        tool by construction: neither hands an actor down here, because there is exactly
+        one kind of caller allowed to reach this method at all."""
         limit = max(1, min(limit, LIST_LIMIT_MAX))
         rows = self.session.scalars(
             select(Signup).order_by(Signup.created_at.desc(), Signup.id.desc()).limit(limit)
