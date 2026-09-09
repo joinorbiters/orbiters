@@ -97,7 +97,7 @@ describe('index.html', () => {
     // The hub (projects/hub) is where somebody signs up since 2026-09-09: the freelancer
     // wizard and the company wizard. Same origin, different deployable; the paths are
     // relative so the page has one origin in every environment.
-    expect(page).toMatch(/<a class="cta" href="\/hub\/freelance">Entra come developer o CTO<\/a>/)
+    expect(page).toMatch(/<a class="cta" href="\/hub\/freelance">Entra come talento<\/a>/)
     expect(page).toMatch(/<a class="cta secondary" href="\/hub\/aziende">[^<]+<\/a>/)
     // The old door, the email form on `/`, is not what this page sells any more.
     expect(page).not.toMatch(/<a class="cta" href="\/orbiters">/)
