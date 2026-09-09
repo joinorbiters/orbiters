@@ -200,6 +200,17 @@ Find the issue before you start, move it as you go, and close it only against
 evidence on the surface it is about. A defect you found and did not fix gets filed
 before you finish.
 
+## Skills an agent is handed
+
+`.claude/skills/` holds the procedures an agent needs at a precise moment, so they are
+not left to memory: `pr-creation` (branch, title, body, review and merge loop, the
+hand-off to Linear), `linear-ticket` (the board workflow in one `save_issue` call, the
+state changes, the API quirks) and `linear-content` (how an issue, a comment, a closing
+comment or a project update is written here). They point at this file,
+`docs/tracker.md`, `.github/PULL_REQUEST_TEMPLATE.md` and `docs/design/DECISIONS.md`
+and restate as little of them as they can: the documents are the contract, the skills
+are the order of operations, and where the two disagree the skill has the bug.
+
 ## What a human decides, not you
 
 The repository's licence and whether it goes public, the repository's name and owner,
