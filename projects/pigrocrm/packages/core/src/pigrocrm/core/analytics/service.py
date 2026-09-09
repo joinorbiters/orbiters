@@ -197,7 +197,11 @@ class AnalyticsService:
         Each quantity is attributed to the period by **its own** date: revenue by
         `invoices.data_emissione`, costs by `costs.data`, labour cost by
         `time_entries.data`. Not by the deal's date, which does not exist, and not by one
-        common date, which none of the three has.
+        common date, which none of the three has. `query.base` offers a second reading
+        of the revenue alone (ORB-61): by the accrual period the invoice declares,
+        because invoicing runs late and August's work issued in September has to be
+        readable in August. Costs and hours do not move with it, and neither does
+        anything else in this report.
 
         Presented in **two columns** -- closed deals and deals in progress -- because
         adding a finished job's margin to a half-done one produces a figure that is
@@ -210,7 +214,7 @@ class AnalyticsService:
                 ENTITY, "a", "intervallo invertito", expected="una data non anteriore a 'da'"
             )
 
-        revenue = self.repo.revenue_in_range(query.da, query.a, query.customer_id)
+        revenue = self.repo.revenue_in_range(query.da, query.a, query.customer_id, query.base)
         per_deal_costs, general = self.repo.costs_in_range(query.da, query.a, query.customer_id)
         labour = self.repo.labour_cost_in_range(query.da, query.a, query.customer_id)
         # Slice 6 §5's three rows, from the same aggregate `unbilled_backlog` uses and
@@ -223,7 +227,7 @@ class AnalyticsService:
 
         chiusi: list[tuple[Decimal, Decimal, Decimal]] = []
         in_corso: list[tuple[Decimal, Decimal, Decimal]] = []
-        for deal in self.repo.deals_in_range(query.da, query.a, query.customer_id):
+        for deal in self.repo.deals_in_range(query.da, query.a, query.customer_id, query.base):
             row = (
                 revenue.get(deal.id, ZERO_MONEY),
                 per_deal_costs.get(deal.id, ZERO_MONEY),
