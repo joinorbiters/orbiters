@@ -181,6 +181,19 @@ never rsynced: the deploy excludes it. Two environments on one host must share n
 but the host, which for PigroCRM means separate databases, separate secrets, and no
 production Google credentials in preview.
 
+### Taking something over from another project
+
+When a project starts serving what another one served, the order is not a preference.
+**The new deployable goes up and takes the name first; only then does the old one stop
+building it.** Landing them the other way round leaves a window where the name points
+at a container that no longer has the pages, and on this repository that window is not
+theoretical: production is deployed from `main` by hand, so a merge is effectively a
+release whatever the tag policy says. It cost twenty minutes of a redirecting
+joinorbiters.com on 2026-09-09 (ORB-16).
+
+The reverse direction is free: a new container that nobody points at yet can be
+deployed, curled and left running for as long as you like.
+
 ### If the project answers on a public name
 
 The host's nginx vhost belongs to the project, in `projects/<name>/deploy/`, and it
