@@ -55,8 +55,19 @@ restated here:
 
 ## How it is served
 
-Today the built output is copied into PigroCRM's web image and served at that origin's
-document root, which is why one certificate and one deploy cover both. That is a
-serving arrangement rather than a source dependency, and it is transitional: this
-site is not the CRM's. ORB-12 covers giving this project its own image and
-its own vhost, which moves two live domains and is therefore a deliberate step.
+Its own container. `Dockerfile` builds the pages into an nginx image, `docker-compose.yml`
+runs it on 127.0.0.1:8082 (8083 for preview), and `deploy/nginx.conf` inside the image
+holds the path map: which extensionless path is which file, a 301 from `/orbiters` to
+`/`, and a 404 for anything else. That map and the `extensionlessHtml` plugin in
+`vite.config.ts` say the same thing twice, once for production and once for the dev and
+preview servers. Change one and change the other.
+
+`deploy/joinorbiters.conf` is the host's vhost: it terminates TLS and sends everything
+here, keeping exactly two paths on PigroCRM's stack, `/api/orbiters/signups` and
+`/health`. `/app` and `/app/` redirect to `pigro.joinorbiters.com`, which is the CRM.
+
+Deploys are `deploy-website.yml`: preview on a push to `main` that touched this project,
+production on a `website-v<semver>` tag. Until 2026-09-09 this project had no deployable
+of its own and was carried inside the CRM's web image; the four public paths that
+answered on `pigro.joinorbiters.com` are now 301s to this site, so a policy page has one
+canonical copy.

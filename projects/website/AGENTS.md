@@ -42,11 +42,13 @@ anywhere. `src/orbiters.*` is the community page and stands apart.
 and reached on the same origin. The dev and preview servers proxy `/api` for that reason
 alone; `WEBSITE_API_URL` repoints it.
 
-Serving is also not owned here yet: the built output is copied into the CRM's web image
-and served at the document root. That is transitional and ORB-12 carries it. Until then,
-a change to how these pages are served is a change to
-`projects/pigrocrm/Dockerfile.web` and `projects/pigrocrm/deploy/nginx/`, and it needs
-the CRM's image rebuilt to be seen.
+Serving is owned here since 2026-09-09: this project builds its own image and runs its
+own container. What that means in practice is that the path map exists twice, in
+`deploy/nginx.conf` for production and in `vite.config.ts` for the dev and preview
+servers, and a page added in one and not the other passes the suite and 404s in
+production. The e2e suite runs against `vite preview`, so it checks the second copy;
+the first is checked by `website-image` in preflight and by the deploy's own health
+check.
 
 ## Verification
 
