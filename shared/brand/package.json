@@ -1,0 +1,20 @@
+{
+  "name": "@orbiters/brand",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "The palette, the typeface and the four-tile mark, shared by every Orbiters surface.",
+  "exports": {
+    "./palette.css": "./palette.css",
+    "./font.css": "./font.css",
+    "./fonts/*": "./fonts/*",
+    "./mark": "./mark.ts",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "palette.css",
+    "font.css",
+    "fonts",
+    "mark.ts"
+  ]
+}

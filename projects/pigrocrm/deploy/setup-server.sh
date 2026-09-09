@@ -23,7 +23,7 @@ DOMAIN="${PIGROCRM_DOMAIN:-pigrocrm.humancraft.tech}"
 CONF="/etc/nginx/sites-available/${DOMAIN}"
 
 if [ -f "$CONF" ] && grep -q 'listen 443 ssl' "$CONF"; then
-  echo "nginx per ${DOMAIN} ha già TLS configurato da certbot: non sovrascrivo ${CONF}."
+  echo "nginx for ${DOMAIN} already has TLS configured by certbot: not overwriting ${CONF}."
 else
   cat > "$CONF" <<CONFEOF
 server {
@@ -40,10 +40,10 @@ server {
     }
 }
 CONFEOF
-  echo "nginx configurato per ${DOMAIN} (solo HTTP finché certbot non viene eseguito)."
+  echo "nginx configured for ${DOMAIN} (HTTP only until certbot runs)."
 fi
 
 ln -sf "$CONF" "/etc/nginx/sites-enabled/${DOMAIN}"
 nginx -t
 systemctl reload nginx
-echo "nginx attivo per ${DOMAIN}"
+echo "nginx active for ${DOMAIN}"

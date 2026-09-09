@@ -124,7 +124,7 @@ with session_factory(engine)() as session:
         FiscalProfileUpsert(codice_regime="RF19"),
         Actor.system(),
     )
-print("seed completato")
+print("seed complete")
 PY
 
 echo "== pigrocrm e2e: starting the API on :$PIGROCRM_E2E_API_PORT =="
@@ -135,12 +135,12 @@ echo $! >"$PIGROCRM_E2E_API_PIDFILE"
 echo "== pigrocrm e2e: waiting for the API to answer =="
 for _ in $(seq 1 60); do
   if curl -fsS "http://localhost:$PIGROCRM_E2E_API_PORT/openapi.json" >/dev/null 2>&1; then
-    echo "stack pronto su :$PIGROCRM_E2E_API_PORT (pid $(cat "$PIGROCRM_E2E_API_PIDFILE"))"
+    echo "stack ready on :$PIGROCRM_E2E_API_PORT (pid $(cat "$PIGROCRM_E2E_API_PIDFILE"))"
     exit 0
   fi
   sleep 1
 done
 
-echo "L'API non ha risposto in tempo. Log:" >&2
+echo "The API did not respond in time. Log:" >&2
 cat "$PIGROCRM_E2E_API_LOG" >&2 || true
 exit 1

@@ -34,14 +34,6 @@
 /* Same woff2 as the app, same origin, one file in the repository. Never a CDN: a
    product sold on the promise of self-hosting cannot hand every visitor's IP to
    Google, and an @import in CSS blocks rendering on top of that. */
-@font-face {
-  font-family: 'Outfit';
-  font-style: normal;
-  font-weight: 300 700;
-  font-display: swap;
-  src: url('../src/assets/fonts/outfit-variable-latin.woff2') format('woff2');
-}
-
 * {
   box-sizing: border-box;
   border-width: 0;

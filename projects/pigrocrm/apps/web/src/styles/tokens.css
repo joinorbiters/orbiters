@@ -8,62 +8,15 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import 'tailwindcss';
+/* The palette, the typeface stack and the radius scale are shared with the
+   landing, which is its own project and has no Tailwind at all: they live in
+   `packages/brand` so there is one source of colour and no copy of it. */
+@import '@orbiters/brand/font.css';
+@import '@orbiters/brand/palette.css';
 
-/* Self-hosted, not `@import url('https://fonts.googleapis.com/...')` (what this
-   file used until now): this is a self-hosted, single-tenant CRM sold to Italian
-   freelancers on exactly the promise of self-hosting, and fetching a typeface
-   from Google on every page load contradicts that outright — it hands every
-   visitor's IP and Referer to Google, breaks an offline or air-gapped install,
-   and puts a third party in the critical rendering path of a page that
-   otherwise needs nothing beyond this origin.
-   The woff2 below is Outfit's own variable font, fetched once from
-   fonts.gstatic.com and committed here instead of re-fetched from it forever
-   after — `assets/fonts/outfit-variable-latin.woff2`, the "latin" subset
-   (U+0000–00FF plus a handful of symbols above it), which already covers every
-   character Italian text uses, including the accented vowels (à, è, é, ì, ò, ù).
-   One file for the whole 300–700 weight range `--font-sans` below needs, not
-   five near-duplicates: Google's own `css2` response for this exact family and
-   weight list points all five weights at this identical file, because Outfit
-   ships as a variable font — the `font-weight: 300 700` range on the
-   `@font-face` below is what that file already is, not an approximation of
-   five static cuts. Outfit is licensed under the SIL Open Font License 1.1,
-   which permits exactly this. */
-@font-face {
-  font-family: 'Outfit';
-  font-style: normal;
-  font-weight: 300 700;
-  font-display: swap;
-  src: url('../assets/fonts/outfit-variable-latin.woff2') format('woff2');
-}
-
-/* Tailwind v4 defaults `dark:` to the OS `prefers-color-scheme` media query. This
-   project toggles dark mode with a `.dark` class instead (see `.dark` below), so
-   the variant has to be told to match on that class. */
-@custom-variant dark (&:is(.dark *));
-
-/* The single source of colour for the whole application.
-   Landing-page tokens live in slice 5 and are the soft expression of this same
-   system: Coral #FFB7B2 is the desaturated tint of Watermelon #ED254E. */
+/* The one theme token that is the application's alone: the landing's system is
+   square by design and shares no radius with it. */
 @theme {
-  --color-watermelon: #ed254e;
-  /* White text on raw Watermelon measures 4.22:1 — enough for a UI component
-     (3:1) but short of the 4.5:1 body-text threshold, and that pair is live on
-     the primary button label and the default badge. Prussian Blue on top
-     doesn't fix it either (3.96:1), so this is a same-hue, same-saturation,
-     darker step (HSL h=347.7° s=84.7% l=53.7% -> l=48.7%): white on top is
-     4.67:1, and it still contrasts 4.58:1 against the light app background and
-     3.77:1 against the dark one. Watermelon itself is unchanged and remains
-     the brand colour for every accent/border/icon/non-text use. */
-  --color-watermelon-strong: #e5133e;
-  --color-royal-gold: #f9dc5c;
-  /* The page's ground: a neutral light grey (was Mint Cream #f4fffd until 2026-09-08,
-     a tint of cyan that read as "azzurrino" and made white cards and text sit less
-     well). Neutral, so the four coloured tokens are the only colour on the page. */
-  --color-paper: #f1f2f3;
-  --color-prussian-blue: #011936;
-  --color-charcoal-blue: #465362;
-
-  --font-sans: 'Outfit', ui-sans-serif, system-ui, sans-serif;
   /* 10px, since the app UI revision (2026-09-08). It was 0px for one day, shared with
      Orbiters and the landing, whose grid of square tiles cannot draw a rounded corner.
      The app is not that page: it is used eight hours a day, and the reference product
@@ -74,6 +27,13 @@
      (--radius-xl) and the cards at 18 (--radius-2xl). */
   --radius: 10px;
 }
+
+
+/* Tailwind v4 defaults `dark:` to the OS `prefers-color-scheme` media query. This
+   project toggles dark mode with a `.dark` class instead (see `.dark` below), so
+   the variant has to be told to match on that class. */
+@custom-variant dark (&:is(.dark *));
+
 
 :root {
   --background: var(--color-paper);

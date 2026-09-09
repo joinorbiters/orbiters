@@ -58,7 +58,7 @@
     },
     {
       "id": "pigrocrm-web-build",
-      "run": "pnpm --filter web build && pnpm --filter web build:landing && pnpm --filter web exec tsc --noEmit",
+      "run": "pnpm --filter web build && pnpm --filter web exec tsc --noEmit",
       "when": [
         "projects/pigrocrm/apps/web/**",
         "package.json",
@@ -66,6 +66,46 @@
         "pnpm-workspace.yaml"
       ],
       "why": "Build before typecheck, always: a bare tsc --noEmit on a clean checkout fails every route file with TS2307 because src/routeTree.gen.ts is gitignored and only a Vite run writes it."
+    },
+    {
+      "id": "landing-lint",
+      "run": "pnpm --filter landing lint",
+      "when": [
+        "projects/landing/**",
+        "shared/brand/**"
+      ]
+    },
+    {
+      "id": "landing-unit",
+      "run": "pnpm --filter landing test",
+      "when": [
+        "projects/landing/**",
+        "shared/brand/**",
+        "pnpm-lock.yaml"
+      ],
+      "why": "99 assertions on the built and unbuilt text: which tokens each sheet may declare, what each page promises, how the field behaves. No services, about two seconds."
+    },
+    {
+      "id": "landing-build",
+      "run": "pnpm --filter landing build && pnpm --filter landing exec tsc --noEmit",
+      "when": [
+        "projects/landing/**",
+        "shared/brand/**",
+        "package.json",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml"
+      ],
+      "why": "The build is where the palette plugin runs, so a palette that stopped being extractable fails here rather than shipping a landing with no colour."
+    },
+    {
+      "id": "landing-e2e",
+      "run": "pnpm --filter landing test:e2e",
+      "when": [
+        "projects/landing/**",
+        "shared/brand/**"
+      ],
+      "serial": true,
+      "why": "Playwright against `vite preview` on 4173. Serial because that port is fixed and shared with anything else on this box."
     },
     {
       "id": "pigrocrm-e2e",
@@ -76,7 +116,7 @@
         "projects/pigrocrm/packages/core/src/**"
       ],
       "serial": true,
-      "why": "The Playwright suite against a real API and a real Postgres. `serial` because it binds three fixed host ports -- 55433 for its own Postgres, 8000 for the API, 5173 for Vite -- which are hardcoded in apps/web/scripts/e2e-env.sh rather than read from the environment. On a shared box that is also a collision with anything else holding them, and the script clears :5173 and :8000 before it starts."
+      "why": "The Playwright suite against a real API and a real Postgres. `serial` because it binds three fixed host ports -- 55433 for its own Postgres, 8000 for the API, 5173 for Vite -- which are hardcoded in projects/pigrocrm/apps/web/scripts/e2e-env.sh rather than read from the environment. On a shared box that is also a collision with anything else holding them, and the script clears :5173 and :8000 before it starts."
     },
     {
       "id": "pigrocrm-images",

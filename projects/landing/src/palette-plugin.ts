@@ -1,19 +1,25 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { Plugin } from 'vite'
 
-const TOKENS_CSS = resolve(__dirname, '../src/styles/tokens.css')
+const TOKENS_CSS = fileURLToPath(import.meta.resolve('@orbiters/brand/palette.css'))
 /** The rules the two landing sheets share (grid line, tile, glyph, contrast guard),
  *  prepended after the tokens so neither sheet restates them. */
 const SYSTEM_CSS = resolve(__dirname, 'system.css')
+/** The typeface, self-hosted, shared with the application: one @font-face for the
+ *  whole brand rather than a copy in each sheet. Prepended rather than @import-ed
+ *  because an @import is only valid before any rule, and both sheets open with
+ *  `:root`. */
+const FONT_CSS = fileURLToPath(import.meta.resolve('@orbiters/brand/font.css'))
 
 /** The palette, the font stack and the radius scale, and nothing else. Fifteen
  *  today; the count is asserted so that a token added to or removed from
- *  tokens.css is a failing test rather than a silently thinner landing. */
-const EXPECTED_TOKEN_COUNT = 15
+ *  palette.css is a failing test rather than a silently thinner landing. */
+const EXPECTED_TOKEN_COUNT = 7
 
 /**
- * Reads the custom properties `tokens.css` declares inside a `@theme` block and
+ * Reads the custom properties `palette.css` declares inside a `@theme` block and
  * that the landing can meaningfully use on its own.
  *
  * Why extraction and not an `@import`: the palette lives inside Tailwind v4's
@@ -27,11 +33,11 @@ const EXPECTED_TOKEN_COUNT = 15
  *
  * The `var()` filter is what keeps `@theme inline`'s 26 semantic re-exports out.
  * They point at `--primary`, `--background` and friends, which live in
- * `tokens.css`'s `:root` and are the *app's* theme, not the shared system.
+ * `palette.css`'s `:root` and are the *app's* theme, not the shared system.
  */
 export function extractSharedTokens(css: string): Record<string, string> {
   const collected: Record<string, string> = {}
-  // tokens.css's two `@theme` blocks contain no nested braces, so a non-greedy
+  // palette.css's two `@theme` blocks contain no nested braces, so a non-greedy
   // match up to the first `}` is exact here.
   for (const block of css.matchAll(/@theme[^{]*\{([^}]*)\}/g)) {
     for (const decl of (block[1] ?? '').matchAll(
@@ -56,7 +62,7 @@ export function extractSharedTokens(css: string): Record<string, string> {
   if (count !== EXPECTED_TOKEN_COUNT) {
     throw new Error(
       `extractSharedTokens extracted only ${count} shared token${count === 1 ? '' : 's'} ` +
-        `from tokens.css (expected ${EXPECTED_TOKEN_COUNT}). The landing must not restate ` +
+        `from palette.css (expected ${EXPECTED_TOKEN_COUNT}). The landing must not restate ` +
         'the palette: fix the extraction, do not paste values into landing.css.',
     )
   }
@@ -65,13 +71,13 @@ export function extractSharedTokens(css: string): Record<string, string> {
 
 /** The stylesheets that receive the tokens and the shared system: the landing's own
  *  and Orbiters'. */
-const TOKEN_CONSUMERS = ['landing/landing.css', 'landing/orbiters.css']
+const TOKEN_CONSUMERS = ['src/landing.css', 'src/orbiters.css']
 
 /** Prepends the shared tokens, then system.css, to each stylesheet in TOKEN_CONSUMERS,
  *  at build and at dev time. */
 export function palettePlugin(): Plugin {
   return {
-    name: 'pigrocrm-landing-palette',
+    name: 'landing-palette',
     enforce: 'pre',
     transform(code, id) {
       const file = id.split('?')[0] ?? ''
@@ -81,9 +87,13 @@ export function palettePlugin(): Plugin {
         .map(([name, value]) => `  ${name}: ${value};`)
         .join('\n')
       const system = readFileSync(SYSTEM_CSS, 'utf-8')
+      const font = readFileSync(FONT_CSS, 'utf-8').replace(
+        "url('./fonts/", `url('${resolve(FONT_CSS, '../fonts')}/`,
+      )
       return (
-        `/* injected from src/styles/tokens.css by palette-plugin.ts */\n:root {\n${block}\n}\n\n` +
-        `/* injected from landing/system.css by palette-plugin.ts */\n${system}\n${code}`
+        `/* injected from @orbiters/brand/font.css by palette-plugin.ts */\n${font}\n\n` +
+        `/* injected from @orbiters/brand/palette.css by palette-plugin.ts */\n:root {\n${block}\n}\n\n` +
+        `/* injected from src/system.css by palette-plugin.ts */\n${system}\n${code}`
       )
     },
   }

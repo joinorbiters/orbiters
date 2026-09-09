@@ -14,7 +14,7 @@ on:
         required: true
         type: string
       build:
-        description: run the package's build script (and its landing build, if any)
+        description: run the package's build script
         required: false
         default: true
         type: boolean
@@ -54,7 +54,7 @@ jobs:
 
       - name: Build
         if: inputs.build
-        run: pnpm --filter ${{ inputs.filter }} build && pnpm --filter ${{ inputs.filter }} build:landing
+        run: pnpm --filter ${{ inputs.filter }} build
 
       - name: Type check
         run: pnpm --filter ${{ inputs.filter }} exec tsc --noEmit

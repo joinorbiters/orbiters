@@ -48,6 +48,7 @@ jobs:
       pigrocrm_py: ${{ steps.filter.outputs.pigrocrm_py }}
       pigrocrm_web: ${{ steps.filter.outputs.pigrocrm_web }}
       pigrocrm_image: ${{ steps.filter.outputs.pigrocrm_image }}
+      landing: ${{ steps.filter.outputs.landing }}
     steps:
       # Underscores, never dashes: `needs.changes.outputs.pigrocrm-web` is invalid
       # expression syntax and the run dies in seconds with no job started, which
@@ -70,6 +71,15 @@ jobs:
               - '.github/workflows/_python-gate.yml'
             pigrocrm_web:
               - 'projects/pigrocrm/apps/web/**'
+              - 'shared/brand/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/_node-gate.yml'
+            landing:
+              - 'projects/landing/**'
+              - 'shared/brand/**'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
@@ -80,6 +90,8 @@ jobs:
               - 'projects/pigrocrm/Dockerfile.web'
               - 'projects/pigrocrm/docker-compose.yml'
               - 'projects/pigrocrm/deploy/**'
+              - 'projects/landing/**'
+              - 'shared/brand/**'
               - '.dockerignore'
 
   # `!cancelled() &&` is not decoration. A job that `needs` a skipped job is skipped
@@ -126,6 +138,18 @@ jobs:
     with:
       filter: web
 
+  # The community landing, joinorbiters.com. Its own project, so its own job: four
+  # static pages with no framework, which is why this one costs seconds where the
+  # application's gate costs minutes. It shares `shared/brand` with the application,
+  # so a change there runs both.
+  landing:
+    name: landing · web
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.landing == 'true') }}
+    uses: ./.github/workflows/_node-gate.yml
+    with:
+      filter: landing
+
   # Tier 3. No `needs: changes`, so no guard is needed: the `if` decides on its own.
   pigrocrm-images:
     name: pigrocrm · images build
@@ -150,7 +174,7 @@ jobs:
     # arrives. This is the only status check the repository should ever be asked to
     # require: every job name above can change forever without touching a ruleset.
     if: always()
-    needs: [changes, pigrocrm-py, pigrocrm-web, pigrocrm-images]
+    needs: [changes, pigrocrm-py, pigrocrm-web, landing, pigrocrm-images]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
