@@ -890,6 +890,15 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
 
     @mcp.tool()
     @guard
+    def discard_proforma(invoice_id: str) -> dict[str, Any]:
+        """Scarta una proforma: la toglie dagli elenchi senza cancellare nulla
+        fisicamente, ma non si ripristina: se serve ancora, si ricrea. Rifiuta una
+        fattura, anche in bozza, e una proforma gia' consumata da un'emissione: cio'
+        che ha preso un numero non si scarta, si annulla dall'applicazione."""
+        return invoices.discard_proforma(context, invoice_id)
+
+    @mcp.tool()
+    @guard
     def render_proforma_pdf(invoice_id: str) -> dict[str, Any]:
         """Genera il PDF di una proforma e restituisce l'identificativo del documento.
         I byte si scaricano dall'API REST."""

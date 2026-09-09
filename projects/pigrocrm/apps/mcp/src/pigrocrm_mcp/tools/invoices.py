@@ -112,6 +112,25 @@ def replace_proforma_lines(
     ).model_dump(mode="json")
 
 
+def discard_proforma(context: McpContext, invoice_id: str) -> dict[str, Any]:
+    """The same guard as `replace_proforma_lines`, for the same reason: from the MCP a
+    proforma is the only document an agent shapes, and discarding one it got wrong is the
+    natural end of that shaping. `discard`, not `delete`: `test_no_destructive_delete_tool_
+    exists` keeps that prefix off the surface, and this is the application's soft delete,
+    the row stays. `InvoiceService.soft_delete` refuses on its own anything
+    that consumed a number, and the table CHECK behind it refuses again; the guard here
+    only makes the refusal for a fattura say why before either of those is reached.
+
+    One-way, unlike the `archive_*` tools: `InvoiceService` has no restore, and none is
+    owed to a document that never took a number and can be recreated from what
+    `get_invoice` showed. The server's INSTRUCTIONS name it as the one exception."""
+    service = _invoices(context)
+    identifier = UUID(invoice_id)
+    _require_proforma(service, identifier, context)
+    service.soft_delete(identifier, context.actor)
+    return {"status": "scartata", "invoice_id": invoice_id}
+
+
 def render_proforma_pdf(context: McpContext, invoice_id: str) -> dict[str, Any]:
     service = _invoices(context)
     identifier = UUID(invoice_id)

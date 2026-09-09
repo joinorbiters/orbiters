@@ -24,6 +24,7 @@ Prima di creare o aggiornare un'entità, chiama `describe_schema` per conoscere 
 personalizzati definiti dall'utente: non sono codificati negli strumenti e cambiano nel tempo.
 Per leggere il contesto completo usa le risorse `customer://`, `person://` e `deal://`.
 Nulla viene cancellato fisicamente: le operazioni di archiviazione sono reversibili.
+L'unica eccezione e' `discard_proforma`, che non si ripristina: una proforma scartata si ricrea.
 """
 
 
