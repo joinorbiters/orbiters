@@ -59,9 +59,10 @@ restated here:
 Its own container. `Dockerfile` builds the pages into an nginx image, `docker-compose.yml`
 runs it on 127.0.0.1:8082 (8083 for preview), and `deploy/nginx.conf` inside the image
 holds the path map: which extensionless path is which file, a 301 from `/orbiters` to
-`/`, and a 404 for anything else. That map and the `extensionlessHtml` plugin in
-`vite.config.ts` say the same thing twice, once for production and once for the dev and
-preview servers. Change one and change the other.
+`/`, and a 404 for anything else. That map and `src/path-map-plugin.ts` say the same
+thing twice, once for production and once for the dev and preview servers. Change one
+and change the other: `path-map-plugin.test.ts` reads `nginx.conf` and fails until you
+have.
 
 `deploy/joinorbiters.conf` is the host's vhost: it terminates TLS and sends everything
 here, keeping exactly two paths on PigroCRM's stack, `/api/orbiters/signups` and
