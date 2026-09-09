@@ -71,6 +71,23 @@ body {
 
 .measure {
   max-width: 62ch;
+  /* The policy pages make this a grid: one implicit column, a gap between the blocks.
+     An implicit track is `min-width: auto`, so it never gets narrower than its widest
+     unbreakable child, and the Gmail scope URLs in privacy.html are wider than a
+     phone: at 390px the track computed to 492px and the whole page scrolled sideways
+     (ORB-22). One explicit track that is allowed to shrink to nothing keeps the column
+     inside its container whatever is put in it. On the headings and paragraphs that
+     carry this class without being grids the declaration does nothing. */
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* To the line breaker an inline code span is one word, and a scope URL is 450px of
+   it at the body size. Letting it break anywhere is what keeps it inside its
+   paragraph, and what stops its min-content width from sizing the column above:
+   `break-word` would only do the first. The scopes themselves stay verbatim, since
+   Google's restricted-scope review reads them off this page. */
+code {
+  overflow-wrap: anywhere;
 }
 
 /* --- Header: the brand and one link. */
