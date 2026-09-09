@@ -49,6 +49,7 @@ jobs:
       pigrocrm_web: ${{ steps.filter.outputs.pigrocrm_web }}
       pigrocrm_image: ${{ steps.filter.outputs.pigrocrm_image }}
       website: ${{ steps.filter.outputs.website }}
+      hub_py: ${{ steps.filter.outputs.hub_py }}
     steps:
       # Underscores, never dashes: `needs.changes.outputs.pigrocrm-web` is invalid
       # expression syntax and the run dies in seconds with no job started, which
@@ -85,6 +86,17 @@ jobs:
               - 'pnpm-workspace.yaml'
               - '.github/workflows/ci.yml'
               - '.github/workflows/_node-gate.yml'
+            hub_py:
+              - 'projects/hub/apps/api/**'
+              - 'projects/hub/apps/mcp/**'
+              - 'projects/hub/packages/**'
+              - 'projects/hub/conftest.py'
+              - 'projects/hub/ruff.toml'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - 'ruff.toml'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/_python-gate.yml'
             pigrocrm_image:
               - 'projects/pigrocrm/Dockerfile.api'
               - 'projects/pigrocrm/Dockerfile.web'
@@ -185,6 +197,24 @@ jobs:
     with:
       filter: website
 
+  # The Orbiters hub (projects/hub): its own Python gate, without the renderer -- it
+  # produces no PDF and shells out to nothing.
+  hub-py:
+    name: hub · python
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.hub_py == 'true') }}
+    uses: ./.github/workflows/_python-gate.yml
+    with:
+      lint-path: projects/hub
+      sources: >-
+        projects/hub/packages/core/src
+        projects/hub/apps/api/src
+        projects/hub/apps/mcp/src
+      tests: >-
+        projects/hub/packages/core/tests
+        projects/hub/apps/api/tests
+        projects/hub/apps/mcp/tests
+
   # Tier 3. No `needs: changes`, so no guard is needed: the `if` decides on its own.
   pigrocrm-images:
     name: pigrocrm · images build
@@ -223,7 +253,7 @@ jobs:
     # arrives. This is the only status check the repository should ever be asked to
     # require: every job name above can change forever without touching a ruleset.
     if: always()
-    needs: [changes, pigrocrm-py, pigrocrm-py-corpus, pigrocrm-web, website, pigrocrm-images, website-image]
+    needs: [changes, pigrocrm-py, pigrocrm-py-corpus, pigrocrm-web, website, hub-py, pigrocrm-images, website-image]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -1,0 +1,76 @@
+"""Admins and sessions: one cookie, hashed at rest, sliding, gone on logout."""
+
+from datetime import UTC, datetime, timedelta
+
+import pytest
+from sqlalchemy import Engine, select, text
+from sqlalchemy.orm import Session
+
+from orbiters_core.admin import AdminService
+from orbiters_core.config import Settings
+from orbiters_core.errors import ValidationFailed
+from orbiters_core.models import AdminSession
+
+
+@pytest.fixture
+def admins(hub_engine: Engine, hub_session: Session) -> AdminService:
+    settings = Settings(
+        database_url=hub_engine.url.render_as_string(hide_password=False),
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    yield AdminService(hub_session, settings)  # type: ignore[misc]
+    hub_session.rollback()
+    hub_session.execute(text("DELETE FROM admin_sessions"))
+    hub_session.execute(text("DELETE FROM admin_users"))
+    hub_session.commit()
+
+
+def test_an_admin_is_created_once_and_the_password_is_never_stored(
+    admins: AdminService, hub_session: Session
+) -> None:
+    created = admins.create("Ivan@Orbiters.it", "Ivan", "una-password-lunga")
+    assert created.email == "ivan@orbiters.it"
+    stored = hub_session.execute(text("SELECT password_hash FROM admin_users")).scalar()
+    assert stored and "una-password-lunga" not in stored and stored.startswith("$argon2")
+    with pytest.raises(ValidationFailed):
+        admins.create("ivan@orbiters.it", "Ancora", "altra-password-lunga")
+    with pytest.raises(ValidationFailed):
+        admins.create("corta@orbiters.it", "Corta", "breve")
+
+
+def test_authenticate_answers_none_for_every_wrong_answer(admins: AdminService) -> None:
+    admins.create("ivan@orbiters.it", "Ivan", "una-password-lunga")
+    assert admins.authenticate("ivan@orbiters.it", "una-password-lunga") is not None
+    assert admins.authenticate("ivan@orbiters.it", "sbagliata") is None
+    assert admins.authenticate("nessuno@orbiters.it", "una-password-lunga") is None
+
+
+def test_a_session_is_opaque_hashed_sliding_and_closable(
+    admins: AdminService, hub_session: Session
+) -> None:
+    admin = admins.create("ivan@orbiters.it", "Ivan", "una-password-lunga")
+    raw = admins.open_session(admin.id)
+    row = hub_session.scalar(select(AdminSession))
+    assert row is not None and row.token_hash != raw and len(row.token_hash) == 64
+    first_deadline = row.expires_at
+
+    # Presented, it resolves and its deadline moves forward.
+    row.expires_at = first_deadline - timedelta(days=1)
+    hub_session.commit()
+    resolved = admins.resolve(raw)
+    assert resolved is not None and resolved.email == "ivan@orbiters.it"
+    hub_session.refresh(row)
+    assert row.expires_at > first_deadline - timedelta(days=1)
+
+    assert admins.resolve("qualcosaltro") is None
+    assert admins.resolve(None) is None
+
+    # Past its deadline it is forgotten on presentation.
+    row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    hub_session.commit()
+    assert admins.resolve(raw) is None
+    assert hub_session.scalar(select(AdminSession)) is None
+
+    again = admins.open_session(admin.id)
+    admins.close_session(again)
+    assert admins.resolve(again) is None
