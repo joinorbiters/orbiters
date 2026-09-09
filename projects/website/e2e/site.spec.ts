@@ -185,6 +185,109 @@ test.describe('every page of the site', () => {
     })
   }
 
+  // The cookie notice on a phone (ORB-18, point 3). It is fixed over the bottom of the
+  // viewport, and the community page fits in one screen there, so what it covered stayed
+  // covered until the visitor answered: the box's bottom border and shadow at 390 wide,
+  // more at 360 where the sentence wraps to a third line. While it is up the page now
+  // has the same room under its content, and the room goes when the notice does. 430 is
+  // 932 tall here, the height of the phone that width belongs to.
+  for (const [width, height] of [
+    [360, 844],
+    [390, 844],
+    [430, 932],
+  ] as const) {
+    test.describe(`the cookie notice at ${width}x${height}`, () => {
+      test.use({ viewport: { width, height }, deviceScaleFactor: 1 })
+
+      /** Where the notice is against what ends the page, scrolled to the very bottom. */
+      function geometry() {
+        window.scrollTo(0, document.documentElement.scrollHeight)
+        const html = document.documentElement
+        const body = document.body
+        const notice = document.querySelector('.consent')
+        const main = document.querySelector('main') as HTMLElement
+        const box = document.querySelector('.box') as HTMLElement | null
+        const spacer = getComputedStyle(body, '::after')
+        // What ends the page in flow: on the community page the box and its shadow,
+        // plus the footer while there still is one (ORB-19 removes it); on the landing
+        // the footer inside main.
+        const step = box ? parseFloat(getComputedStyle(box).boxShadow.match(/(-?[\d.]+)px/)?.[1] ?? '0') : 0
+        const footer = document.querySelector('body > footer, main > footer')
+        const ends = [
+          main === box ? main.getBoundingClientRect().bottom + step : (main.lastElementChild as HTMLElement).getBoundingClientRect().bottom,
+          footer ? footer.getBoundingClientRect().bottom : -Infinity,
+        ]
+        return {
+          innerHeight: window.innerHeight,
+          scrollHeight: html.scrollHeight,
+          room: getComputedStyle(html).getPropertyValue('--consent-room').trim(),
+          spacer: parseFloat(spacer.height),
+          noticeTop: notice ? notice.getBoundingClientRect().top : null,
+          noticeHeight: notice ? (notice as HTMLElement).offsetHeight : null,
+          contentBottom: Math.max(...ends),
+          boxTop: box ? box.getBoundingClientRect().top : null,
+          boxBottom: box ? box.getBoundingClientRect().bottom : null,
+          // On the community page the box is centred in the body grid's first row; the
+          // row ends where the footer starts, or where the spacer does.
+          rowEnd: footer
+            ? footer.getBoundingClientRect().top
+            : window.innerHeight - parseFloat(getComputedStyle(body).paddingBottom) - parseFloat(spacer.height),
+          padTop: parseFloat(getComputedStyle(body).paddingTop),
+        }
+      }
+
+      test('sits under the box on the community page, and the box stays centred above it', async ({
+        page,
+      }) => {
+        await page.goto('/orbiters', { waitUntil: 'networkidle' })
+        const shown = await page.evaluate(geometry)
+        expect(shown.noticeTop).not.toBeNull()
+        // The room is what the notice covers, its height plus its distance from the edge,
+        // and the page spends exactly that much at its end.
+        expect(shown.room).toBe(`${Math.ceil(shown.innerHeight - shown.noticeTop!)}px`)
+        expect(shown.spacer).toBe(parseFloat(shown.room))
+        expect(shown.spacer).toBeGreaterThan(shown.noticeHeight!)
+        // Scrolled to the bottom, the box's shadow ends above the notice.
+        expect(shown.contentBottom).toBeLessThanOrEqual(shown.noticeTop!)
+        // The box is not pushed under: when the page fits it is centred in what is left
+        // above the notice, and when it does not it starts at the top, readable.
+        if (shown.scrollHeight === shown.innerHeight) {
+          const above = shown.boxTop! - shown.padTop
+          const below = shown.rowEnd - shown.boxBottom!
+          expect(Math.abs(above - below)).toBeLessThanOrEqual(1)
+        } else {
+          await page.evaluate(() => window.scrollTo(0, 0))
+          const top = await page.evaluate(() => document.querySelector('.box')!.getBoundingClientRect().top)
+          expect(top).toBeGreaterThanOrEqual(shown.padTop)
+        }
+
+        await page.locator('.consent').getByRole('button', { name: 'Va bene' }).click()
+        await expect(page.locator('.consent')).toHaveCount(0)
+        const after = await page.evaluate(geometry)
+        expect(after.room).toBe('')
+        expect(after.spacer).toBe(0)
+        expect(after.scrollHeight).toBeLessThanOrEqual(shown.scrollHeight)
+      })
+
+      test('sits under the footer on the landing, and the room goes with a no', async ({ page }) => {
+        await page.goto('/pigrocrm', { waitUntil: 'networkidle' })
+        const shown = await page.evaluate(geometry)
+        expect(shown.noticeTop).not.toBeNull()
+        expect(shown.room).toBe(`${Math.ceil(shown.innerHeight - shown.noticeTop!)}px`)
+        expect(shown.spacer).toBe(parseFloat(shown.room))
+        // The landing scrolls for screens; scrolled to its end, the footer clears the notice.
+        expect(shown.contentBottom).toBeLessThanOrEqual(shown.noticeTop!)
+
+        await page.locator('.consent').getByRole('button', { name: 'No' }).click()
+        await expect(page.locator('.consent')).toHaveCount(0)
+        const after = await page.evaluate(geometry)
+        expect(after.room).toBe('')
+        expect(after.spacer).toBe(0)
+        expect(after.scrollHeight).toBe(shown.scrollHeight - shown.spacer)
+      })
+    })
+  }
+
   test.describe('with JavaScript disabled', () => {
     test.use({ javaScriptEnabled: false })
 
