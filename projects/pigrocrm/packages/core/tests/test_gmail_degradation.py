@@ -367,6 +367,34 @@ def test_a_published_app_does_not_deduce_an_expired_consent_from_a_date(
     assert health.account.status == "active"
 
 
+def test_a_published_app_hands_no_expiry_to_the_settings_page_either(
+    db_session: Session,
+) -> None:
+    """The banner is not the only place that prediction reached.
+
+    `GmailHealth.account` is what the settings page renders, and it printed the same
+    date next to the address -- «Consenso da rinnovare entro il ...» -- straight from
+    this field. Filtering the banner alone would have moved the sentence rather than
+    removed it, and the person would read it in the one page they go to in order to fix
+    the thing it is wrong about.
+    """
+    account = connected_account(db_session)
+    when = datetime.now(UTC) + timedelta(hours=36)
+    account.consent_expires_at = when
+    db_session.flush()
+
+    testing = _service(db_session, unverified=True).health(actor_for(account))
+    assert testing.account is not None
+    assert testing.account.consent_expires_at == when
+
+    published = _service(db_session).health(actor_for(account))
+    assert published.account is not None
+    assert published.account.consent_expires_at is None
+    # The row itself is untouched: it is the record of what was true under the consent
+    # that wrote it.
+    assert account.consent_expires_at == when
+
+
 def test_a_status_of_expired_is_a_fact_and_is_reported_whatever_the_app_is(
     db_session: Session,
 ) -> None:

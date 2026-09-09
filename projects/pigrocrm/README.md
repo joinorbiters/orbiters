@@ -152,10 +152,11 @@ possiede il deploy:
 */15 * * * * cd /opt/pigrocrm/projects/pigrocrm && docker compose --env-file ../../.env exec -T api uv run --no-sync pigrocrm gmail-sync >> /var/log/pigrocrm-gmail-sync.log 2>&1
 ```
 
-Ogni esecuzione scrive una riga sola, con l'ora davanti e i soli contatori del ciclo (mai
-un oggetto, un indirizzo o un corpo di messaggio): esce `0` quando il ciclo è andato — o
-quando ne era già in corso un altro, che non è un errore — e `1` con una frase su `stderr`
-quando la casella manca, è ambigua o il consenso è revocato. `--env-file ../../.env` e
+Ogni esecuzione scrive una riga sola, con l'ora davanti, l'indirizzo della casella e i
+soli contatori del ciclo (mai un oggetto, un corpo di messaggio o l'indirizzo di un
+corrispondente): esce `0` quando il ciclo è andato — o quando ne era già in corso un
+altro, che non è un errore — e `1` con una frase su `stderr` quando la casella manca, è
+ambigua, appartiene a un utente disattivato o il consenso è revocato. `--env-file ../../.env` e
 `--no-sync` valgono qui esattamente per i motivi del §1 e del §5.
 
 Il runbook con la tabella delle frasi di errore, cosa fare per ciascuna e il rapporto con

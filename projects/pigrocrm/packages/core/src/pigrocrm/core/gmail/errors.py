@@ -31,9 +31,16 @@ class UpstreamFailure:
 
 
 class GoogleCallFailed(Exception):
-    """Internal to `pigrocrm.core.gmail`. Never crosses the package boundary: every
-    public method converts it into a `DomainError` first, because a caller outside
-    this package cannot be expected to know what an `UpstreamFailure` is."""
+    """Internal to `pigrocrm.core.gmail`, and meant never to cross the package
+    boundary: a caller outside this package cannot be expected to know what an
+    `UpstreamFailure` is, so every public method should convert it into a `DomainError`
+    first. `tokens.py` and `send.py` do.
+
+    `GmailSyncService.sync` does **not**, and until something converts it this is a
+    documented hole rather than a rule: a listing that comes back 429 raises this out
+    of `sync`, which is why `POST /api/gmail/sync` answers 500 to an exhausted Gmail
+    quota and why `cli.py` catches it by name to keep the cron log to one line. The
+    cure is `sync` raising `GmailUnavailable` instead, which would fix both at once."""
 
     def __init__(self, failure: UpstreamFailure, what: str) -> None:
         super().__init__(f"{what} fallita ({failure.status}/{failure.error_code or 'n/d'})")

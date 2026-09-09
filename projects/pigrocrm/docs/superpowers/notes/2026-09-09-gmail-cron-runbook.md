@@ -91,7 +91,9 @@ Le frasi che si possono leggere qui, e cosa fare:
 
 | Frase | Cosa è successo | Cosa fare |
 | --- | --- | --- |
-| `nessuna casella Google collegata` | Il cron è installato su un'installazione dove nessuno ha mai collegato Gmail | Collegarla da Impostazioni → Gmail, o togliere la riga di cron |
+| `nessuna casella Google collegata` | Il cron è installato su un'installazione dove nessuno ha mai collegato Gmail (o l'unica casella è stata scollegata: una casella scollegata non viene né scelta né elencata) | Collegarla da Impostazioni → Gmail, o togliere la riga di cron |
+| `la casella … appartiene a un utente disattivato` | Il titolare ha disattivato l'utente proprietario della casella | Riattivare l'utente, oppure scollegare la casella e togliere il cron. Il consenso di chi è stato disattivato non si spende |
+| `… ha il ruolo readonly e non può sincronizzare …` | Il proprietario della casella non ha un ruolo che può scrivere | Cambiare il ruolo dell'utente: il cron non agisce con più diritti del titolare della casella |
 | `più di una casella collegata, indica --email: …` | Più caselle, nessuna indicata | Una riga di cron per casella, con `--email` |
 | `… non è una casella collegata: …` | `--email` non corrisponde a nessuna riga | Correggere l'indirizzo (il messaggio elenca quelli collegati) |
 | `il consenso Google … è stato revocato` | Google ha risposto `invalid_grant`: terminale, non si risolve riprovando | Il titolare rifà il collegamento da Impostazioni → Gmail |
@@ -125,6 +127,10 @@ scadere e poi lo dichiarerebbe morto in un giorno in cui non è successo nulla.
 Quindi, con `PIGROCRM_GOOGLE_APP_UNVERIFIED=false`:
 
 - niente più banner «va rinnovato entro il …» né «è scaduto» dedotti dalla data;
+- e niente più data nemmeno nella pagina Impostazioni → Gmail: il `consent_expires_at`
+  che la pagina rende accanto all'indirizzo («Consenso da rinnovare entro il …») esce
+  dallo stesso `health`, quindi passa per lo stesso filtro. Toglierla dal solo banner
+  avrebbe spostato la frase, non rimossa;
 - resta invece tutto ciò che è un **fatto**: `status = revoked` (che il CRM impara solo
   da un `invalid_grant` di Google), `status = expired`, un consenso parziale, una casella
   scollegata dal titolare. Il banner riporta quelli esattamente come prima.

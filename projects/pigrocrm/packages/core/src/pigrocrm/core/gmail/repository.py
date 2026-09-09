@@ -92,7 +92,12 @@ class GmailRepository:
         ).scalar_one_or_none()
 
     def all_accounts(self) -> list[GoogleAccount]:
-        """Every connected mailbox, oldest consent first.
+        """Every mailbox row, whatever its status, oldest consent first.
+
+        Unfiltered deliberately: `status` is what the caller is usually asking about,
+        and a repository that hid the disconnected ones would make "there is one, and
+        it is disconnected" indistinguishable from "there is none". `cli.py` drops them
+        for its own question.
 
         For `pigrocrm gmail-sync`, which has to tell "there is one, use it" from "there
         are two, say which" -- a question `any_account` answers by picking, which is
