@@ -45,8 +45,11 @@ from pigrocrm.core.gmail.errors import ConsentExpired, CredentialRevoked, ScopeM
 from pigrocrm.core.gmail.schemas import SCOPE_READONLY, SCOPE_SEND
 
 
-def _service(session: Session) -> GoogleAccountService:
-    return GoogleAccountService(session, settings=gmail_settings())
+def _service(session: Session, *, unverified: bool = False) -> GoogleAccountService:
+    """`unverified` is the operator saying the OAuth client is still in Testing, which
+    is the only mode in which a Google consent expires by itself -- and therefore the
+    only mode in which `consent_expires_at` means anything."""
+    return GoogleAccountService(session, settings=gmail_settings(google_app_unverified=unverified))
 
 
 def _with_a_correspondent(session: Session) -> None:
@@ -220,7 +223,10 @@ def test_the_health_banner_has_a_cause_and_a_text_for_each(db_session: Session) 
     calls for a different action, so each gets its own sentence."""
     account = connected_account(db_session)
     db_session.flush()
-    service = _service(db_session)
+    # In Testing, so that the `expiring` branch -- the one that reads
+    # `consent_expires_at` -- is live at all: see the two tests at the end of this
+    # section for what a published app does with the same row.
+    service = _service(db_session, unverified=True)
     actor = actor_for(account)
 
     assert service.health(actor).banner is None
@@ -277,7 +283,7 @@ def test_the_warning_arrives_before_anything_has_failed(db_session: Session) -> 
     account = connected_account(db_session)
     account.consent_expires_at = datetime.now(UTC) + timedelta(hours=36)
     db_session.flush()
-    health = _service(db_session).health(actor_for(account))
+    health = _service(db_session, unverified=True).health(actor_for(account))
     assert health.banner == "expiring"
     assert account.status == "active"
     assert account.last_error is None
@@ -291,7 +297,7 @@ def test_the_expiring_banner_names_the_day_the_consent_runs_out(db_session: Sess
     when = datetime.now(UTC) + timedelta(hours=36)
     account.consent_expires_at = when
     db_session.flush()
-    text = _service(db_session).health(actor_for(account)).banner_text or ""
+    text = _service(db_session, unverified=True).health(actor_for(account)).banner_text or ""
     assert when.strftime("%d/%m/%Y") in text
 
 
@@ -303,7 +309,7 @@ def test_an_expiry_further_out_than_the_warning_window_says_nothing_yet(
     account = connected_account(db_session)
     account.consent_expires_at = datetime.now(UTC) + timedelta(days=6)
     db_session.flush()
-    assert _service(db_session).health(actor_for(account)).banner is None
+    assert _service(db_session, unverified=True).health(actor_for(account)).banner is None
 
 
 def test_a_consent_already_past_its_date_is_not_reported_as_merely_expiring(
@@ -313,6 +319,60 @@ def test_a_consent_already_past_its_date_is_not_reported_as_merely_expiring(
     arithmetic. It must not therefore read as a gentle heads-up."""
     account = connected_account(db_session)
     account.consent_expires_at = datetime.now(UTC) - timedelta(hours=2)
+    db_session.flush()
+    health = _service(db_session, unverified=True).health(actor_for(account))
+    assert health.banner == "expired"
+    assert "scaduto" in (health.banner_text or "")
+
+
+def test_a_published_app_stops_predicting_an_expiry_written_when_it_was_in_testing(
+    db_session: Session,
+) -> None:
+    """The seven days belong to Testing mode, not to this CRM.
+
+    A row written while the OAuth client was unverified carries a date; once the client
+    is Internal or verified, Google stops expiring the refresh token and that date
+    describes nothing. Left in, it would produce a banner asking somebody to renew a
+    consent that is not going to lapse -- the same class of defect as "revocato" for a
+    mailbox the user disconnected: a true-sounding sentence about a thing that did not
+    happen.
+    """
+    account = connected_account(db_session)
+    account.consent_expires_at = datetime.now(UTC) + timedelta(hours=36)
+    db_session.flush()
+
+    assert _service(db_session, unverified=True).health(actor_for(account)).banner == "expiring"
+    assert _service(db_session).health(actor_for(account)).banner is None
+
+
+def test_a_published_app_does_not_deduce_an_expired_consent_from_a_date(
+    db_session: Session,
+) -> None:
+    """The date is stale, not the credential.
+
+    This is the case that matters in practice: the seven days of Testing ran out weeks
+    ago, the operator published the app in the meantime, and the mailbox has been
+    syncing perfectly ever since. Reading `expired` off that old row would stop a
+    working integration on the strength of a prediction nothing renewed.
+    """
+    account = connected_account(db_session)
+    account.consent_expires_at = datetime.now(UTC) - timedelta(days=30)
+    db_session.flush()
+
+    assert _service(db_session, unverified=True).health(actor_for(account)).banner == "expired"
+    health = _service(db_session).health(actor_for(account))
+    assert health.banner is None
+    assert health.banner_text is None
+    assert health.account is not None
+    assert health.account.status == "active"
+
+
+def test_a_status_of_expired_is_a_fact_and_is_reported_whatever_the_app_is(
+    db_session: Session,
+) -> None:
+    """Only the *prediction* goes away. `status` is what the credential is, written by
+    something that learned it, and it is reported exactly as `revoked` is."""
+    account = connected_account(db_session, status="expired")
     db_session.flush()
     health = _service(db_session).health(actor_for(account))
     assert health.banner == "expired"
