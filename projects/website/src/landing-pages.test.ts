@@ -134,19 +134,19 @@ describe('index.html', () => {
     expect(page).toMatch(/\bCTO\b/)
   })
 
-  it('keeps "freelance" as the fiscal category, never as the headline', () => {
-    // It stays in the sentence about forfettario, where it is the legal status, and in
-    // the hub's route, which is code. It is gone from what a share on LinkedIn shows and
-    // from what a visitor reads first.
+  it('keeps "freelance" as the fiscal category and in the title, never as the claim', () => {
+    // It stays in the sentence about forfettario, where it is the legal status, in the
+    // hub's route, which is code, and in the <title> and og:title, which Ivan kept on
+    // 2026-09-09 for continuity. It is gone from the claim, the descriptions and the CTAs.
+    expect(page.match(/<title>([^<]+)<\/title>/)?.[1]).toContain('freelance')
+    expect(meta(page, 'og:title')).toBe('Orbiters — freelance, ma non da soli')
     const headlines = [
-      page.match(/<title>([^<]+)<\/title>/)?.[1],
-      meta(page, 'og:title'),
       meta(page, 'description'),
       meta(page, 'og:description'),
       page.match(/<h1[^>]*>([\s\S]*?)<\/h1>/)?.[1]?.replace(/<[^>]+>/g, ' '),
       ...[...page.matchAll(/<a class="cta[^"]*" href="[^"]+">([^<]+)<\/a>/g)].map((m) => m[1]),
     ]
-    expect(headlines.length).toBeGreaterThanOrEqual(9)
+    expect(headlines.length).toBeGreaterThanOrEqual(7)
     for (const headline of headlines) expect(headline?.toLowerCase()).not.toContain('freelance')
     expect(page.toLowerCase()).toContain('freelance in italia, spesso in forfettario')
   })
