@@ -38,8 +38,12 @@ from pigrocrm.core.timetracking.schemas import (
     TimeEntryCreate,
     TimeEntryListQuery,
     TimeEntryUpdate,
+    TimerStart,
+    TimerStop,
+    TimerUpdate,
 )
 from pigrocrm.core.timetracking.service import TimeEntryService
+from pigrocrm.core.timetracking.timer import TimerService
 from pigrocrm_mcp.context import McpContext
 
 # `list_locks` takes no schema of its own -- `anno` goes straight into a `WHERE` -- so
@@ -92,6 +96,38 @@ def list_time_entries(context: McpContext, query: TimeEntryListQuery) -> dict[st
         "items": [item.model_dump(mode="json") for item in page.items],
         "next_cursor": str(page.next_cursor) if page.next_cursor else None,
     }
+
+
+def get_running_timer(context: McpContext) -> dict[str, Any] | None:
+    timer = TimerService(context.session).current(context.actor)
+    return timer.model_dump(mode="json") if timer is not None else None
+
+
+def start_timer(context: McpContext, data: dict[str, Any]) -> dict[str, Any]:
+    return (
+        TimerService(context.session)
+        .start(TimerStart(**data), context.actor)
+        .model_dump(mode="json")
+    )
+
+
+def update_timer(context: McpContext, data: dict[str, Any]) -> dict[str, Any]:
+    return (
+        TimerService(context.session)
+        .update(TimerUpdate(**data), context.actor)
+        .model_dump(mode="json")
+    )
+
+
+def stop_timer(context: McpContext, data: dict[str, Any]) -> dict[str, Any]:
+    return (
+        TimerService(context.session).stop(TimerStop(**data), context.actor).model_dump(mode="json")
+    )
+
+
+def discard_timer(context: McpContext) -> dict[str, str]:
+    TimerService(context.session).discard(context.actor)
+    return {"status": "scartato"}
 
 
 def get_deal_time_summary(context: McpContext, deal_id: str) -> dict[str, Any]:
