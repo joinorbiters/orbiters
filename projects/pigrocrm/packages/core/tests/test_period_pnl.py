@@ -332,8 +332,8 @@ def _won_deal_with_period_invoice(
     FiscalProfileService(session).upsert(FiscalProfileUpsert(codice_regime="RF19"), admin)
     EmitterProfileService(session).upsert(
         EmitterProfileUpsert(
-            ragione_sociale="Humancraft di Ivan Sala",
-            partita_iva="14518240966",
+            ragione_sociale="Studio Rossi",
+            partita_iva="01234567890",
             indirizzo="Via Vittorio Veneto 12",
             cap="20124",
             comune="Milano",
