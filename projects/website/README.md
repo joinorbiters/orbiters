@@ -5,7 +5,7 @@ the product signs itself with (`/pigrocrm`, `/privacy`, `/termini`), and the sig
 form; it is called `website` rather than `landing` because it is expected to grow past
 those.
 
-Four HTML pages, three scripts, three stylesheets. No React, no Tailwind, no router.
+Four HTML pages, five scripts, three stylesheets. No React, no Tailwind, no router.
 That absence is the requirement rather than an omission: this is the first page a
 visitor loads, and it does not drag an application bundle behind it. The build takes
 about 300 milliseconds. Anything added here should keep that true.
@@ -15,7 +15,7 @@ about 300 milliseconds. Anything added here should keep that true.
 ```
 pnpm --filter website dev        # :5173, with /api proxied to a running CRM API
 pnpm --filter website build      # dist/
-pnpm --filter website test       # 99 assertions, vitest, no services
+pnpm --filter website test       # vitest, no services, about a second
 pnpm --filter website test:e2e   # Playwright against `vite preview` on :4173
 pnpm --filter website lint
 ```
@@ -65,8 +65,10 @@ and change the other: `path-map-plugin.test.ts` reads `nginx.conf` and fails unt
 have.
 
 `deploy/joinorbiters.conf` is the host's vhost: it terminates TLS and sends everything
-here, keeping exactly two paths on PigroCRM's stack, `/api/orbiters/signups` and
-`/health`. `/app` and `/app/` redirect to `pigro.joinorbiters.com`, which is the CRM.
+here except what belongs to the other tenants of the origin: `/hub/`, `/api/hub/` and
+`/api/orbiters/signups` go to the Orbiters hub (`projects/hub`), `/health` stays on
+PigroCRM's stack, and `/app` and `/app/` redirect to `pigro.joinorbiters.com`, which is
+the CRM.
 
 Deploys are `deploy-website.yml`: preview on a push to `main` that touched this project,
 production on a `website-v<semver>` tag. Until 2026-09-09 this project had no deployable
