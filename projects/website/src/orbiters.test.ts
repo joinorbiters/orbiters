@@ -212,6 +212,14 @@ describe('the form, once the script has hold of it', () => {
   const filled = { nome: '  Ada  ', cognome: 'Lovelace', email: 'ada@studio.it', linkedin_url: '' }
   let bodies: Array<Record<string, unknown>> = []
 
+  /** The single request the form sent. Throws with a readable message when it sent
+   *  none, which is a better failure than a type assertion silently reading undefined. */
+  const sent = (i = 0): Record<string, unknown> => {
+    const body = bodies[i]
+    if (!body) throw new Error(`expected a request at index ${i}, got ${bodies.length}`)
+    return body
+  }
+
   type Answer = { ok: boolean; status: number; json?: () => Promise<unknown> }
 
   function mount(search = '', answer: Answer = { ok: true, status: 201 }): void {
@@ -265,7 +273,7 @@ describe('the form, once the script has hold of it', () => {
     mount()
     fill(filled)
     await submit()
-    const [body] = bodies
+    const body = sent()
     expect(typeof body.pixel_event_id).toBe('string')
     expect(body).toEqual({
       email: 'ada@studio.it',
@@ -286,7 +294,7 @@ describe('the form, once the script has hold of it', () => {
     mount('?utm_source=linkedin&oppref=clic-123')
     fill({ ...filled, linkedin_url: 'https://www.linkedin.com/in/ada' })
     await submit()
-    const [body] = bodies
+    const body = sent()
     expect(body).toEqual({
       email: 'ada@studio.it',
       nome: 'Ada',
@@ -316,7 +324,7 @@ describe('the form, once the script has hold of it', () => {
         'measure',
         'registration_completed',
         { type: 'customer_action' },
-        { event_id: bodies[0].pixel_event_id },
+        { event_id: sent().pixel_event_id },
       ],
     ])
   })
