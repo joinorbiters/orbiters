@@ -12,7 +12,7 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/lib/api'
-import { PeoplePage } from './index'
+import { PeoplePage, Route } from './index'
 
 const navigate = vi.fn()
 
@@ -79,6 +79,19 @@ function nextSearch(previous: Record<string, unknown>): Record<string, unknown> 
   return call.search(previous)
 }
 
+/** Runs the route's own `validateSearch`, the way the router actually calls it -- not a
+ *  copy of the regex re-typed here, which would pass even if the route forgot to wire
+ *  it. */
+function validateRouteSearch(search: Record<string, unknown>): {
+  search?: string
+  customer_id?: string
+} {
+  const validateSearch = Route.options.validateSearch as (
+    search: Record<string, unknown>,
+  ) => { search?: string; customer_id?: string }
+  return validateSearch(search)
+}
+
 describe('the people list', () => {
   it('opens with its title as the page heading', async () => {
     renderPage()
@@ -143,5 +156,66 @@ describe('the people list', () => {
     await userEvent.click(await screen.findByRole('option', { name: 'Tutte le aziende' }))
 
     expect(nextSearch({ customer_id: 'cust-acme' })).toEqual({})
+  })
+})
+
+it('disables the «Azienda» select while the company list is still loading', async () => {
+  // Never resolves: the select must show as disabled *before* `/api/customers`
+  // answers, not only after an error.
+  mockGet.mockImplementation(((path: string) =>
+    path === '/api/customers'
+      ? new Promise(() => {})
+      : Promise.resolve({
+          data: { items: [], next_cursor: null, custom_fields: [] },
+          response: new Response(null, { status: 200 }),
+        })) as never)
+
+  renderPage()
+  const filters = await screen.findByRole('search')
+  expect(within(filters).getByLabelText('Filtra per azienda')).toBeDisabled()
+})
+
+/**
+ * `GET /api/people`'s `customer_id` is typed `UUID | None` on the server
+ * (`apps/api/src/pigrocrm_api/routers/people.py`), so a `?customer_id=` that is not a
+ * UUID -- a stale bookmark, a typo, a hand-edited query string -- must never reach the
+ * request: it would 422, and `unwrap()` turns that into `DataTable`'s error banner over
+ * the whole Persone list, not just an ignored filter. `validateSearch` is where that is
+ * caught, the same place an empty `?search=` is already dropped.
+ */
+describe('validateSearch', () => {
+  it('drops a customer_id that is not shaped like a UUID', () => {
+    expect(validateRouteSearch({ customer_id: 'cust-acme' }).customer_id).toBeUndefined()
+    expect(validateRouteSearch({ customer_id: '' }).customer_id).toBeUndefined()
+    expect(validateRouteSearch({ customer_id: 'not-a-uuid' }).customer_id).toBeUndefined()
+  })
+
+  it('keeps a customer_id shaped like a UUID', () => {
+    const uuid = '3fa85f64-5717-4562-b3fc-2c963f66afa6'
+    expect(validateRouteSearch({ customer_id: uuid }).customer_id).toBe(uuid)
+  })
+})
+
+/**
+ * The full URL-to-request path for a malformed `customer_id`, end to end:
+ * `PeopleRoute` reads `Route.useSearch()` -- already filtered through `validateSearch`
+ * above -- and passes its result straight into `PeoplePage` as `customerId`. Feeding
+ * `validateRouteSearch`'s own output into `renderPage` is what proves a garbage URL
+ * value never reaches the API and never leaves the select looking like nothing is
+ * chosen (blank, per the review that raised this: `SelectValue` shows nothing when its
+ * `value` matches no `SelectItem`) rather than «Tutte le aziende».
+ */
+describe('a garbage customer_id in the URL', () => {
+  it('turns into no filter at all, «Tutte le aziende» selected', async () => {
+    const { customer_id } = validateRouteSearch({
+      customer_id: 'cust-acme;DROP TABLE customers',
+    })
+
+    renderPage(customer_id)
+    const filters = await screen.findByRole('search')
+    expect(within(filters).getByLabelText('Filtra per azienda')).toHaveTextContent(
+      'Tutte le aziende',
+    )
+    expect(lastRequestedCustomerId()).toBeUndefined()
   })
 })

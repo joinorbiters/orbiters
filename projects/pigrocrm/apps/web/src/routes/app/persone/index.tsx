@@ -29,6 +29,16 @@ import { useEntitySchema } from '@/lib/schema'
 const ALL_COMPANIES = 'tutte'
 
 /**
+ * The shape `GET /api/people`'s `customer_id` accepts
+ * (`apps/api/src/pigrocrm_api/routers/people.py` types it `UUID | None`), checked here
+ * before the value ever reaches a request. A stale bookmark, a typo or a hand-edited
+ * query string carrying anything else must be dropped exactly like an empty `search`
+ * is dropped below -- not sent to the API, where it would 422 and, through `unwrap()`,
+ * turn the whole list into `DataTable`'s error banner over one bad URL parameter.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
  * Exported so `index.test.tsx` can render the list without a router -- the same split
  * `CustomersPage` makes next door.
  *
@@ -124,7 +134,17 @@ export function PeoplePage({
               })
             }
           >
-            <SelectTrigger className="w-56" aria-label="Filtra per azienda">
+            {/* Disabled, not hidden, while the company list is loading or failed to
+                load: «Tutte le aziende» is still a real choice either way, and a
+                disabled trigger (the existing `disabled:opacity-50` on
+                `SelectTrigger`, no new colour) is the cue that the list behind it may
+                be incomplete -- distinct from a tenant that genuinely has no
+                customers. */}
+            <SelectTrigger
+              className="w-56"
+              aria-label="Filtra per azienda"
+              disabled={customers.isLoading || customers.isError}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -203,7 +223,7 @@ export const Route = createFileRoute('/app/persone/')({
     search:
       typeof search.search === 'string' && search.search.length > 0 ? search.search : undefined,
     customer_id:
-      typeof search.customer_id === 'string' && search.customer_id.length > 0
+      typeof search.customer_id === 'string' && UUID_RE.test(search.customer_id)
         ? search.customer_id
         : undefined,
   }),
