@@ -325,6 +325,7 @@ export function useProduceArtifacts(invoiceId: string) {
 
 export function useDeleteInvoice() {
   const invalidate = useInvoiceInvalidation()
+  const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (invoiceId: string) =>
       unwrap(
@@ -332,7 +333,20 @@ export function useDeleteInvoice() {
           params: { path: { invoice_id: invoiceId } },
         }),
       ),
-    onSuccess: () => invalidate(),
+    // The row is gone: its detail, lines and timeline are *removed* from the cache, not
+    // invalidated, because a refetch would ask the server for a row it now refuses and
+    // paint a 404 on a page that is about to leave. Browser Back within `staleTime`
+    // would otherwise show the deleted draft as if it existed. The list is invalidated.
+    onSuccess: (_, invoiceId) => {
+      invalidate()
+      queryClient.removeQueries({ queryKey: queryKeys.invoice(invoiceId) })
+      queryClient.removeQueries({ queryKey: queryKeys.invoiceLines(invoiceId) })
+      queryClient.removeQueries({ queryKey: queryKeys.timeline('invoice', invoiceId) })
+    },
+    // A refusal here means the state changed under the person (issued or consumed by
+    // someone else meanwhile): refetch the row so the page corrects itself while the
+    // banner explains why.
+    onError: (_, invoiceId) => invalidate(invoiceId),
   })
 }
 

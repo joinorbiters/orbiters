@@ -1,4 +1,4 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { Receipt } from 'lucide-react'
 import { EntityDetailLayout } from '@/components/EntityDetailLayout'
 import { QueryErrorBanner } from '@/components/QueryErrorBanner'
@@ -17,6 +17,7 @@ import {
 
 export function InvoiceDetail() {
   const { invoiceId } = Route.useParams()
+  const navigate = useNavigate()
   const invoice = useInvoice(invoiceId)
   const lines = useInvoiceLines(invoiceId)
 
@@ -58,7 +59,9 @@ export function InvoiceDetail() {
       }
       overview={
         <div className="space-y-8">
-          <InvoiceActions invoice={row} />
+          {/* A deleted draft has no page: back to the list, which the mutation has already
+              invalidated. */}
+          <InvoiceActions invoice={row} onDeleted={() => void navigate({ to: '/app/fatture' })} />
 
           <dl className="grid max-w-lg grid-cols-2 gap-2 text-sm">
             <dt className="text-muted-foreground">Data emissione</dt>
