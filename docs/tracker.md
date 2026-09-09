@@ -13,7 +13,7 @@ agent, starts from the board, and what is not there did not happen.
 | Projects | one per monorepo project: **PigroCRM** (`projects/pigrocrm`), **Website** (`projects/website`) |
 | Priority | Linear's own field: Urgent, High, Medium, Low. Never a label |
 | Type labels | `Bug`, `Feature`, `Improvement`, `Chore`, `Docs`. Exactly one |
-| Area labels | group **Area**: `api`, `web`, `mcp`, `core`, `infra`, `ci`, `website`, `brand`. Exactly one |
+| Area labels | group **Area**: `api`, `web`, `mcp`, `core`, `infra`, `ci`, `website`, `brand`, `repo`. Exactly one |
 | Milestones | belong to a project, and only where the project has outcomes that can finish |
 
 A new monorepo project opens its own Linear project. Never a shared one, and never a
