@@ -69,6 +69,27 @@ testpaths = [
   "projects/hub/apps/api/tests",
   "projects/hub/apps/mcp/tests",
 ]
+# Two projects both have a `tests/test_migrations.py`, and every project after them will
+# have one too. pytest's default `prepend` import mode names a test module by its
+# basename alone, so the second one to be collected is a duplicate module name and the
+# whole run stops before a single test executes -- which is what `uv run pytest -q` did
+# the day `projects/hub` arrived. `importlib` names a module by its full path instead,
+# so a basename only has to be unique inside its own directory.
+#
+# The cost of that mode is that pytest no longer inserts each test root into `sys.path`,
+# and these suites do import their own neighbours by bare name (`fakes.fake_gmail`,
+# `periodo_fiscale`, `test_mcp_invoice_ban`). `pythonpath` puts back exactly the six
+# directories that insertion used to add, one per test root, listed the same way and for
+# the same reason `testpaths` is: a glob here would also match a project with no tests.
+addopts = "--import-mode=importlib"
+pythonpath = [
+  "projects/pigrocrm/packages/core/tests",
+  "projects/pigrocrm/apps/api/tests",
+  "projects/pigrocrm/apps/mcp/tests",
+  "projects/hub/packages/core/tests",
+  "projects/hub/apps/api/tests",
+  "projects/hub/apps/mcp/tests",
+]
 asyncio_mode = "auto"
 # Nothing skips on either marker by default: a plan assertion that CI skips is a plan
 # assertion that does not exist, so both run in `uv run pytest -q` and both run on the
