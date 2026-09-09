@@ -83,7 +83,10 @@ nothing when you are not. Narrow to one project by passing its paths as argument
    1,564 hosted minutes in eight days against a 2,000/month allowance on a private
    repository. A push that cannot reach a project does not pay for that project's
    suite. When a push has no reachable base commit the filters are skipped and
-   everything runs. The `changes` job also publishes its verdict as the
+   everything runs, and so does a release tag (`<project>-v<semver>`, which `ci.yml`
+   also listens to): a production deploy is gated on the run of the tag itself, since
+   the trunk's run for the same commit may have skipped every job of that project and
+   still concluded green. The `changes` job also publishes its verdict as the
    `changed-paths` artifact, which is what each deploy reads instead of recomputing
    the same paths for itself.
 
@@ -106,9 +109,10 @@ asked to require. Every other job name can change forever without a ruleset edit
 Two traps that fail silently, both already handled in `ci.yml` and both worth
 knowing before you edit it:
 
-- A job that `needs` a skipped job is skipped too, **whatever its own `if` says**,
-  unless that `if` contains a status-check function. `changes` is PR-only, so without
-  `!cancelled() &&` the whole suite skips on the trunk and `ci` reports **green**.
+- A job that `needs` a skipped or failed job is skipped too, **whatever its own `if`
+  says**, unless that `if` contains a status-check function. `changes` runs on every
+  event now, but the day it fails, `!cancelled() &&` is what keeps the suite running
+  instead of skipping it wholesale while `ci` reports **green**.
 - Never put a `paths` filter on `on:`. A workflow that does not run reports no
   contexts, and the PR becomes unmergeable rather than passing.
 

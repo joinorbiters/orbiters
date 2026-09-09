@@ -7,9 +7,11 @@
 #
 #     git tag hub-v0.1.0 && git push origin hub-v0.1.0
 #
-# The tag deploys the commit it points at, and `_deploy-compose.yml` refuses any commit
-# whose `ci.yml` run is not green. Both environments stay off until their arming
-# variable exists: `vars.HUB_PREVIEW_ENABLED` and `vars.HUB_DEPLOY_ENABLED`.
+# The tag deploys the commit it points at. The tag is also a push `ci.yml` listens to,
+# so it gets a full CI run of its own, and `_deploy-compose.yml` refuses to deploy until
+# that run, the run of the tag itself and not the trunk's for the same commit, is green.
+# Both environments stay off until their arming variable exists:
+# `vars.HUB_PREVIEW_ENABLED` and `vars.HUB_DEPLOY_ENABLED`.
 #
 # The production compose project is `orbiters`, not `hub`: that is the name the stack
 # went up under by hand on 2026-09-09 (ORB-17), its Postgres data sits under it, and a
