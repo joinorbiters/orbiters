@@ -101,6 +101,12 @@ FORBIDDEN = (
     # this list rather than on `FORBIDDEN_GMAIL` because, unlike those two, the
     # installation *can* opt in: the same switch that hands an agent the fiscal acts.
     "discover_gmail_correspondents",
+    # Nemmeno questa e' fiscale: il testo di un allegato di una mail archiviata. Di un
+    # allegato il CRM conserva nome, tipo e peso e mai i byte (spec 5.4), quindi lo
+    # strumento va a prenderlo da Google al momento -- quota e consenso del titolare,
+    # contenuto scritto da un mittente esterno -- e non archivia niente. Stessa porta di
+    # `discover_gmail_correspondents`, per la stessa ragione.
+    "read_gmail_attachment",
     # Fiscal again: writing a numbered, issued
     # row straight into the register (slice 9 §3), and declaring the numbers it will
     # never carry (slice 9 §3.2).
@@ -165,6 +171,7 @@ REST_ONLY_FORBIDDEN = frozenset(
 FORBIDDEN_NEEDING_GMAIL = frozenset(
     {
         "discover_gmail_correspondents",
+        "read_gmail_attachment",
         "list_drive_files",
         "read_drive_file",
         "import_drive_file",
@@ -193,6 +200,13 @@ FORBIDDEN_SERVICE_CALLS = (
     "bind_time_to_invoice",
     "get_fiscal_estimate",
     "discover",
+    # `GmailAttachmentService.attachment_text`: scarica da Gmail, al momento, il file che
+    # la sincronizzazione non ha mai salvato (spec 5.4 conserva nome, tipo e peso e
+    # nient'altro). Stessa famiglia di `discover` -- quota e consenso del titolare, byte
+    # scritti da un mittente esterno -- quindi stessa porta: esiste solo dove
+    # l'installazione ha aperto `mcp_full_access`. Il nome e' unico in questo codice, ed
+    # e' unico di proposito: vedi `documents/service.py::extract_text`.
+    "attachment_text",
     "import_issued",
     "declare_gaps",
     # `DriveReader`'s three reads and the two calls the Drive tools make around them

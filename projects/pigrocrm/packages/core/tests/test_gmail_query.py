@@ -200,6 +200,10 @@ def test_no_helper_can_build_a_url_that_takes_a_caller_supplied_search_string() 
         and value.__module__ == module.__name__
     ]
     assert sorted(exported) == [
+        # Two ids of Gmail's own, one of them straight out of a message payload, and no
+        # free text: what `attachment_get_url` interpolates is checked more strictly
+        # than anything a person types, because it goes into a *path*.
+        "attachment_get_url",
         "build_address_clause",
         # The three discovery builders take a *domain*, checked against an alphabet
         # narrower than a hostname's, or derive it from the customer record -- never a

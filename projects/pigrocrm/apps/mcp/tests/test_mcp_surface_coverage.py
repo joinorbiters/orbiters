@@ -112,6 +112,11 @@ _VIETATE: dict[Method, str] = {
         "del titolare, come `sync` e `backfill`; a differenza loro l'installazione puo' "
         "aprirla con `mcp_full_access`"
     ),
+    ("GmailAttachmentService", "attachment_text"): (
+        "scarica da Gmail l'allegato che la sincronizzazione non salva mai, a carico "
+        "della quota e del consenso del titolare, e ne restituisce il testo senza "
+        "archiviare niente; l'installazione puo' aprirla con `mcp_full_access`"
+    ),
     ("DocumentService", "import_bytes"): (
         "archivia byte che il CRM non ha prodotto, presi dal Drive del titolare a "
         "carico della sua quota e del suo consenso (slice 9 §4.2: `import_drive_file`); "
