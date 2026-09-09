@@ -18,7 +18,7 @@ export function Thanks() {
           : 'Abbiamo il tuo profilo e il tuo CV. Ti scriviamo noi: appena c’è un progetto che ti somiglia, o anche solo per conoscerci.'}
       </p>
       <p className="text-sm text-muted-foreground">
-        Nel frattempo, se sei un freelance,{' '}
+        Nel frattempo, se lavori in proprio,{' '}
         <a
           className="underline underline-offset-2"
           href="https://pigro.joinorbiters.com/app/registrati"

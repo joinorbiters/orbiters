@@ -30,7 +30,7 @@
    and neither sheet owns it. Deliberately small and quiet: it asks about one measurement
    cookie, so it sits in a corner rather than across the page, and it never covers the
    content or takes the focus: see `body::after` below for how the first half of that is
-   kept on a phone. No animation, like everything else on these pages.
+   kept on a phone. No animation: the one these pages spend is the title's cursor, below.
 
    Only shared tokens, like the rest of this file: the two sheets map them to their own
    names (--orb-*, --landing-*), so a colour spelled here would be a third palette. */
@@ -125,6 +125,52 @@ body::after {
     background-image: none;
   }
   canvas {
+    display: none;
+  }
+}
+
+/* Text for the ear only: the form's labels on Orbiters and the title's first line on
+   both pages, which names the roles the typewriter cycles through. Out of the layout
+   entirely, so it moves nothing. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The title's cursor, while typewriter.js types the first word: a thin bar the colour
+   of the text, blinking in steps rather than fading, because nothing on these pages
+   fades. Laid over the word's right edge rather than in the line, so it takes no room:
+   the comma stays against the word, and the bar's off half leaves no gap where it was.
+   `is-typing` is the script's, so a page without the script has no cursor after a word
+   that never moves; and under reduced motion the script does not start, which the media
+   query below repeats in case it ever did. */
+h1 .role {
+  position: relative;
+}
+
+h1 .role.is-typing::after {
+  content: '';
+  position: absolute;
+  left: 100%;
+  top: 0.08em;
+  width: 0.06em;
+  height: 0.9em;
+  background-color: currentColor;
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  h1 .role::after {
     display: none;
   }
 }
