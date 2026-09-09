@@ -52,6 +52,12 @@ created flat from the start.
 
 ## Reaching it
 
+Two skills in `.claude/skills/` carry this contract to the moment it is needed:
+`linear-ticket` (the calls, in order, with every field) and `linear-content` (how the
+words are written). This file stays the source; a disagreement between it and a skill is
+a bug in the skill.
+
+
 The MCP server is `linear-orbiters`, enrolled per client outside this repository. It is
 the only Linear surface you should be using: no other server, and no browser session,
 reaches this team's board on Lorenzo's behalf.
