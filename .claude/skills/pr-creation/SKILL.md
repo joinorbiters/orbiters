@@ -55,9 +55,10 @@ what you did to the files.
 
 ## Body
 
-The template's three sections, in the first person and in its order. Conditional
-sections go after «How I verified it» and before «Anything a reviewer should look at
-twice»; the Linear line closes the body. `gh pr create --body-file -` with a heredoc.
+The template's sections, in the first person and in its order: the three that always
+appear, then «Screenshots», which closes every body. Conditional sections go after «How
+I verified it» and before «Anything a reviewer should look at twice». The Linear line
+comes last. `gh pr create --body-file -` with a heredoc.
 
 ```markdown
 ## What this changes
@@ -76,6 +77,13 @@ verified, which part and why.>
 
 <The bit you are least sure about, a decision that could have gone the other way, a
 path no test covers. Delete this section if there is genuinely nothing.>
+
+## Screenshots
+
+<For anything a person could see: one before-and-after pair per change, composed into
+a single side-by-side image, attached with `gh --attach` (docs/pr-screenshots/README.md).
+If nothing visible changed, or a pair cannot be captured, say so and why. This section
+is never deleted.>
 ```
 
 Conditional sections, each only when true (paths from the repository root; the CRM is
@@ -100,12 +108,18 @@ Conditional sections, each only when true (paths from the repository root; the C
   `tests/test_mcp_surface_coverage.py` and `tests/test_mcp_invoice_ban.py`, the record
   of what an agent may and may not do. For the hub (`projects/hub/apps/mcp`): the
   change to `tests/test_tools.py`.
-- **`## Screenshots`** for anything a person could see: a label, a pill, a disabled
-  button, a new pane, a reordered menu. A **before and after pair**, composed into one
-  side-by-side image per pair, taken on the same data at the same viewport. Never
-  committed: attach with `gh pr edit <n> --attach ./pair-1.png` (the flag exists from
-  `gh` 2.99.0; check `gh --version`). If a pair cannot be captured (no fixture, no running stack),
-  keep the section and say why. Deleting it reads as forgetting.
+
+**Screenshots**, the section that closes every body, is not conditional: it is there on
+every PR, and it carries a picture for anything a person could see. A label, a pill, a
+disabled button, a new pane, a reordered menu, a wizard step, a public page. A **before
+and after pair** per change, composed into one side-by-side image with a box around what
+moved, taken on the same data at the same viewport, the before from a worktree on
+`origin/main` and never by swapping files in place. Never committed: attach with
+`gh pr edit <n> --attach ./pair-1.png` (the flag exists from `gh` 2.99.0; check
+`gh --version`) and verify the body holds as many `user-attachments` as pairs. The
+procedure, per app and port, is `docs/pr-screenshots/README.md`. When nothing visible
+changed, or a pair cannot be captured, the section says so and why. Deleting it reads as
+forgetting.
 
 The last line of the body: `Linear: ORB-N.`
 
