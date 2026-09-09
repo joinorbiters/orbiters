@@ -354,7 +354,7 @@ def _non_resident_customer(db_session: Session, nazione: str = "GB") -> UUID:
         ragione_sociale="Example Ltd",
         partita_iva="GB123456789",
         indirizzo="1 Old Street",
-        cap="00000",  # the SdI convention for a foreign address; a real postcode is ORB-38
+        cap="EC1V 9HL",
         comune="London",
         provincia="",
         nazione=nazione,
@@ -385,6 +385,28 @@ def test_the_xml_for_a_non_resident_customer_carries_n2_1_and_the_7_ter_referenc
     assert body is not None
     assert [n.text for n in body.iter("Natura")] == ["N2.1", "N2.1"]
     assert body.findtext("DatiBeniServizi/DatiRiepilogo/RiferimentoNormativo") == riferimento
+
+
+def test_a_foreign_customer_with_a_real_postcode_is_issued_and_exported(
+    service: InvoiceService, db_session: Session
+) -> None:
+    """ORB-38, end to end. `issue` consumed a register number for a GB customer with
+    `EC1V 9HL` and `export_xml` then refused on the five-digit `CAP` pattern, forever.
+    Now the same customer issues, the file validates against FPR12 1.2.3, `CAP` carries
+    the `00000` the specifications prescribe for a foreign address, `Provincia` is
+    omitted, and the postcode survives at the end of `Indirizzo`."""
+    invoice_id = _issue(service, _non_resident_customer(db_session))
+    assert service.get(invoice_id, ADMIN).numero is not None
+    service.export_xml(invoice_id, ADMIN)
+    data, _, _ = service.download(invoice_id, "xml", ADMIN)
+    assert_valid(data)
+
+    sede = etree.fromstring(data).find(".//CessionarioCommittente/Sede")
+    assert sede is not None
+    assert sede.findtext("CAP") == "00000"
+    assert sede.find("Provincia") is None
+    assert sede.findtext("Indirizzo") == "1 Old Street, EC1V 9HL"
+    assert sede.findtext("Nazione") == "GB"
 
 
 def test_the_xml_for_an_italian_customer_keeps_n2_2_and_the_domestic_declaration(

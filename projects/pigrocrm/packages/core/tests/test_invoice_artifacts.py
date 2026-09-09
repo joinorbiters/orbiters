@@ -153,7 +153,7 @@ def _non_resident_customer(db_session: Session) -> UUID:
         ragione_sociale="Example Ltd",
         partita_iva="GB123456789",
         indirizzo="1 Old Street",
-        cap="00000",  # the SdI convention for a foreign address; a real postcode is ORB-38
+        cap="EC1V 9HL",
         comune="London",
         provincia="",
         nazione="GB",

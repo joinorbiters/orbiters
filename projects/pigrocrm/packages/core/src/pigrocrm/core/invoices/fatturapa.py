@@ -68,6 +68,12 @@ CODICE_DESTINATARIO_FALLBACK = "0000000"
 # X's is what the specification reserves for that case; a foreign customer has no SDI
 # code and no PEC and is not supposed to have either.
 CODICE_DESTINATARIO_ESTERO = "XXXXXXX"
+# `CAP` is a five-digit numeric string in FPR12 and the technical specifications fill
+# it with `00000` for an address outside Italy, where `Provincia` is left out. The
+# writer applies the convention whatever the customer row holds: a London company keeps
+# `EC1V 9HL` in its record, the PDF prints it, and `_indirizzo_xml` carries it at the
+# end of `Indirizzo` so the document does not lose it (ORB-38).
+CAP_ESTERO = "00000"
 # Immediate VAT liability. The deferred and cash-basis variants are out of scope.
 ESIGIBILITA_IVA = "I"
 BOLLO_VIRTUALE = "SI"
@@ -148,6 +154,30 @@ def normalise_foreign_fiscal_id(value: str | None) -> str | None:
     return cleaned or None
 
 
+def _is_italian(party: PartySnapshot) -> bool:
+    return (party.nazione or "").strip().upper() == "IT"
+
+
+def _indirizzo_xml(party: PartySnapshot) -> str:
+    """The text `_sede` writes into `Indirizzo`, and the text `_check_widths` measures.
+
+    One function for both on purpose: the pre-check exists to refuse before a register
+    number is spent whatever the writer would refuse after, and a foreign address is
+    the one case where the two texts differ. `CAP` carries the `00000` placeholder for
+    a party outside Italy, so the real postcode has no element of its own and is
+    appended here instead. A record that already holds the placeholder (every foreign
+    customer entered before ORB-38 does) gets the address alone: `00000` is the SdI's
+    convention, not a postcode.
+    """
+    indirizzo = (party.indirizzo or "").strip()
+    if _is_italian(party):
+        return indirizzo
+    cap = (party.cap or "").strip()
+    if not cap or cap == CAP_ESTERO:
+        return indirizzo
+    return f"{indirizzo}, {cap}"
+
+
 def check_party_exportable(party: PartySnapshot, entity: str) -> None:
     """Refuse, naming the field on the record the user can go and fix (spec 14.9).
 
@@ -173,8 +203,13 @@ def check_party_exportable(party: PartySnapshot, entity: str) -> None:
     # makes `Provincia` optional precisely so that a London address is not forced to
     # invent one. Requiring it of everybody is what made a foreign customer
     # unrepresentable -- along with the outright refusal that used to stand here, which
-    # this replaces.
-    obbligatori = ("indirizzo", "cap", "comune", "provincia") if italiano else ("indirizzo",)
+    # this replaces. `cap` is not required outside Italy either, since `CAP` carries the
+    # `00000` placeholder there. `comune` is required of everybody: the schema's
+    # `Comune` is one to sixty characters with no `minOccurs="0"`, and leaving it out
+    # of this list let an emission through that the writer could never serialise.
+    obbligatori = (
+        ("indirizzo", "cap", "comune", "provincia") if italiano else ("indirizzo", "comune")
+    )
     for field in obbligatori:
         if not (getattr(party, field) or "").strip():
             raise ValidationFailed(
@@ -207,12 +242,15 @@ def _check_widths(party: PartySnapshot, entity: str, italiano: bool) -> None:
     the same values, because a check here that were laxer than the writer would let a
     number be spent on a document that still cannot be produced.
     """
-    for field, limit in (
-        ("ragione_sociale", _DENOMINAZIONE_MAX),
-        ("indirizzo", _INDIRIZZO_MAX),
-        ("comune", _COMUNE_MAX),
+    # `indirizzo` is measured as `_sede` will write it: for a foreign party that is the
+    # address with the postcode appended, so the bound is checked on the composite and a
+    # London address one character too long is refused here, by the field the user can
+    # shorten, rather than by the writer after the number is spent.
+    for field, value, limit in (
+        ("ragione_sociale", party.ragione_sociale.strip(), _DENOMINAZIONE_MAX),
+        ("indirizzo", _indirizzo_xml(party), _INDIRIZZO_MAX),
+        ("comune", (party.comune or "").strip(), _COMUNE_MAX),
     ):
-        value = (getattr(party, field) or "").strip()
         if len(value) > limit:
             raise ValidationFailed(
                 entity,
@@ -221,15 +259,19 @@ def _check_widths(party: PartySnapshot, entity: str, italiano: bool) -> None:
                 expected=f"al massimo {limit} caratteri",
             )
 
+    # Outside Italy the stored postcode has no shape to check: the writer puts the
+    # `00000` placeholder in `CAP` and the real one at the end of `Indirizzo`, measured
+    # above. Inside Italy the schema's five digits are the customer's own CAP and a
+    # mistyped one is refused before it costs a register number.
     cap = (party.cap or "").strip()
-    # Outside Italy the CAP element still has to be five digits, and the convention the
-    # SdI expects for a foreign address is `00000`. Accepted as such rather than demanded
-    # of the user, who has a postcode that is not five digits and no way to make it one.
     if italiano and not _CAP_RE.fullmatch(cap):
         raise ValidationFailed(entity, "cap", "CAP non valido", expected="esattamente 5 cifre")
 
+    # `Provincia` is written only for an Italian address (the specifications fill it only
+    # when `Nazione` is `IT`), so a county or a state stored there for a foreign customer
+    # is neither emitted nor a reason to refuse.
     provincia = (party.provincia or "").strip().upper()
-    if provincia and not _PROVINCIA_RE.fullmatch(provincia):
+    if italiano and provincia and not _PROVINCIA_RE.fullmatch(provincia):
         raise ValidationFailed(entity, "provincia", "sigla non valida", expected="due lettere")
 
 
@@ -354,16 +396,34 @@ class FatturaPAExporter:
         )
 
     def _sede(self, parent: etree._Element, party: PartySnapshot, entity: str) -> None:
+        """`Indirizzo`, `CAP`, `Comune`, `Provincia?`, `Nazione`, the way the technical
+        specifications want them for the party's country.
+
+        An Italian address is written as stored. A foreign one is written the way the
+        SdI describes it: `CAP` is the `00000` placeholder whatever the record holds,
+        `Provincia` is left out, and the real postcode rides at the end of `Indirizzo`
+        (see `_indirizzo_xml`, shared with the pre-check). Applying the five-digit
+        pattern to a real foreign postcode here is what ORB-38 was: `issue` had already
+        spent the number by the time this method refused.
+        """
+        italiano = _is_italian(party)
         sede = etree.SubElement(parent, "Sede")
         self._text(
             sede,
             "Indirizzo",
-            party.indirizzo,
+            _indirizzo_xml(party),
             entity=entity,
             field="indirizzo",
             max_length=_INDIRIZZO_MAX,
         )
-        self._text(sede, "CAP", party.cap.strip(), entity=entity, field="cap", pattern=_CAP_RE)
+        self._text(
+            sede,
+            "CAP",
+            party.cap.strip() if italiano else CAP_ESTERO,
+            entity=entity,
+            field="cap",
+            pattern=_CAP_RE,
+        )
         self._text(
             sede, "Comune", party.comune, entity=entity, field="comune", max_length=_COMUNE_MAX
         )
@@ -372,9 +432,10 @@ class FatturaPAExporter:
         # province and inventing one would be a false statement about where the customer
         # is. Writing it as `""` would be worse still: `check_party_exportable` keeps it
         # mandatory for an Italian address, so a blank one here can only mean a party
-        # that is legitimately without.
+        # that is legitimately without. Outside Italy it is omitted whatever the record
+        # holds, since the element is the code of an Italian province and nothing else.
         provincia = (party.provincia or "").strip().upper()
-        if provincia:
+        if italiano and provincia:
             self._text(
                 sede,
                 "Provincia",
