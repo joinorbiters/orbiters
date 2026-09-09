@@ -20,15 +20,20 @@ const ISSUED = {
 const DRAFT = { id: 'inv-2', tipo: 'fattura', stato: 'bozza', pdf_document_id: null } as unknown as Invoice
 const PROFORMA = { id: 'pf-1', tipo: 'proforma', stato: 'confermata', pdf_document_id: null } as unknown as Invoice
 
-function wrap(children: ReactNode) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+function wrap(children: ReactNode, client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
   return render(<QueryClientProvider client={client}>{children}</QueryClientProvider>)
+}
+
+function pdfResponse() {
+  // A string body: a jsdom `Blob` inside Node's `Response` has no `.stream()`.
+  return new Response('%PDF-1.7', { status: 200, headers: { 'Content-Type': 'application/pdf' } })
 }
 
 beforeEach(() => {
   vi.mocked(fetchWithRefresh).mockReset()
   // jsdom has neither: the browser turns a Blob into a URL its viewer can open.
-  URL.createObjectURL = vi.fn(() => 'blob:pdf-1')
+  let n = 0
+  URL.createObjectURL = vi.fn(() => `blob:pdf-${++n}`)
   URL.revokeObjectURL = vi.fn()
 })
 
@@ -38,10 +43,7 @@ afterEach(() => {
 
 describe('InvoicePdfPreview', () => {
   it('fetches the PDF through the authenticated path and shows it in a frame', async () => {
-    vi.mocked(fetchWithRefresh).mockResolvedValue(
-      // A string body: a jsdom `Blob` inside Node's `Response` has no `.stream()`.
-      new Response('%PDF-1.7', { status: 200, headers: { 'Content-Type': 'application/pdf' } }),
-    )
+    vi.mocked(fetchWithRefresh).mockResolvedValue(pdfResponse())
     wrap(<InvoicePdfPreview invoice={ISSUED} />)
     const frame = await screen.findByTitle('Anteprima PDF fattura')
     expect(fetchWithRefresh).toHaveBeenCalledWith('/api/invoices/inv-1/pdf')
@@ -49,25 +51,45 @@ describe('InvoicePdfPreview', () => {
   })
 
   it('revokes the blob URL when the page leaves', async () => {
-    vi.mocked(fetchWithRefresh).mockResolvedValue(
-      // A string body: a jsdom `Blob` inside Node's `Response` has no `.stream()`.
-      new Response('%PDF-1.7', { status: 200, headers: { 'Content-Type': 'application/pdf' } }),
-    )
+    vi.mocked(fetchWithRefresh).mockResolvedValue(pdfResponse())
     const { unmount } = wrap(<InvoicePdfPreview invoice={ISSUED} />)
     await screen.findByTitle('Anteprima PDF fattura')
     unmount()
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:pdf-1')
   })
 
-  it('asks the server for nothing when there is no PDF yet, and says why', () => {
+  it('makes a fresh URL from the cached bytes on a second mount, never the revoked one', async () => {
+    // Back to the page within `staleTime`: the Blob comes from the cache with no
+    // request, the URL is a new one, and the revoked one is not the frame's src.
+    vi.mocked(fetchWithRefresh).mockResolvedValue(pdfResponse())
+    // The app's own `staleTime` (src/lib/query.ts), not the test default of zero.
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 30_000 } } })
+    const first = wrap(<InvoicePdfPreview invoice={ISSUED} />, client)
+    await screen.findByTitle('Anteprima PDF fattura')
+    first.unmount()
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:pdf-1')
+    wrap(<InvoicePdfPreview invoice={ISSUED} />, client)
+    const frame = await screen.findByTitle('Anteprima PDF fattura')
+    expect(frame).toHaveAttribute('src', expect.stringMatching(/^blob:pdf-2#/))
+    expect(fetchWithRefresh).toHaveBeenCalledTimes(1)
+  })
+
+  it('asks the server for nothing when there is no PDF yet, and says why', async () => {
     wrap(<InvoicePdfPreview invoice={DRAFT} />)
+    await waitFor(() => expect(screen.getByText(/si genera all’emissione/)).toBeInTheDocument())
     expect(fetchWithRefresh).not.toHaveBeenCalled()
-    expect(screen.getByText(/si genera all’emissione/)).toBeInTheDocument()
   })
 
   it('tells a proforma which button produces its PDF', () => {
     wrap(<InvoicePdfPreview invoice={PROFORMA} />)
-    expect(screen.getByText(/«PDF proforma» lo produce/)).toBeInTheDocument()
+    expect(screen.getByText(/«Genera PDF proforma» lo produce/)).toBeInTheDocument()
+  })
+
+  it('does not send an imported invoice to a button it does not have', () => {
+    const imported = { ...ISSUED, pdf_document_id: null, importata_da: 'esterno' } as Invoice
+    wrap(<InvoicePdfPreview invoice={imported} />)
+    expect(screen.getByText(/PDF originale non è archiviato/)).toBeInTheDocument()
+    expect(fetchWithRefresh).not.toHaveBeenCalled()
   })
 
   it('shows the server refusal instead of an empty frame', async () => {

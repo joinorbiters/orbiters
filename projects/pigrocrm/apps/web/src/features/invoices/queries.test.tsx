@@ -3,7 +3,7 @@ import { renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/lib/api'
-import { downloadInvoiceArtifact, useInvoice, useInvoices } from './queries'
+import { downloadInvoiceArtifact, useInvoice, useInvoices, useProduceArtifacts } from './queries'
 
 function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -149,5 +149,24 @@ describe('downloadInvoiceArtifact', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/invoices/inv-1/xml')
     vi.unstubAllGlobals()
+  })
+})
+
+describe('useProduceArtifacts', () => {
+  it('invalidates the PDF preview, whose key does not change on a new version', async () => {
+    // `produce_artifacts` adds a version under the same `pdf_document_id`, so the
+    // preview's key is identical before and after: only an invalidation reaches it.
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    client.setQueryData(['invoice-pdf', 'inv-1', 'doc-1'], new Blob(['old']))
+    const post = vi.spyOn(api, 'POST').mockResolvedValue(ok([]) as never)
+    const { result } = renderHook(() => useProduceArtifacts('inv-1'), {
+      wrapper: ({ children }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+    result.current.mutate(undefined)
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(post).toHaveBeenCalled()
+    expect(client.getQueryState(['invoice-pdf', 'inv-1', 'doc-1'])?.isInvalidated).toBe(true)
   })
 })

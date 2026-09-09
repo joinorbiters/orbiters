@@ -1,4 +1,14 @@
-import { BadgeEuro, Ban, Download, FileCheck2, RefreshCw, Send, Trash2, Undo2 } from 'lucide-react'
+import {
+  BadgeEuro,
+  Ban,
+  Download,
+  FileCheck2,
+  FileText,
+  RefreshCw,
+  Send,
+  Trash2,
+  Undo2,
+} from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -267,10 +277,29 @@ export function InvoiceActions({
         ) : null}
 
         {invoice.tipo === 'proforma' && invoice.stato !== 'consumata' ? (
-          <Button variant="outline" onClick={() => void onDownload('pdf')}>
-            <Download className="mr-2 size-4" />
-            PDF proforma
-          </Button>
+          invoice.pdf_document_id === null ? (
+            /* Until now the web never produced a proforma's PDF: the download button
+               asked for a file that did not exist and got a 404 (ORB-30). The same
+               endpoint emission uses renders it; the preview beside shows it at once. */
+            <Button
+              variant="outline"
+              onClick={() =>
+                artifacts.mutate(undefined, {
+                  onSuccess: () => toast.success('PDF proforma generato'),
+                  onError: (error) => toast.error(toProblem(error).detail),
+                })
+              }
+              disabled={artifacts.isPending}
+            >
+              <FileText className="mr-2 size-4" />
+              Genera PDF proforma
+            </Button>
+          ) : (
+            <Button variant="outline" onClick={() => void onDownload('pdf')}>
+              <Download className="mr-2 size-4" />
+              PDF proforma
+            </Button>
+          )
         ) : null}
 
         {canDelete ? (
