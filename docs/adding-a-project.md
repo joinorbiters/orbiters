@@ -213,10 +213,12 @@ production Google credentials in preview.
 When a project starts serving what another one served, the order is not a preference.
 **The new deployable goes up and takes the name first; only then does the old one stop
 building it.** Landing them the other way round leaves a window where the name points
-at a container that no longer has the pages, and on this repository that window is not
-theoretical: production is deployed from `main` by hand, so a merge is effectively a
-release whatever the tag policy says. It cost twenty minutes of a redirecting
-joinorbiters.com on 2026-09-09 (ORB-16).
+at a container that no longer has the pages, and on this repository that window was not
+theoretical: while production was still deployed from `main` by hand, a merge was
+effectively a release whatever the tag policy said. It cost twenty minutes of a
+redirecting joinorbiters.com on 2026-09-09 (ORB-16). Since that afternoon nothing is
+deployed by hand (`docs/design/DECISIONS.md`, 2026-09-09): production moves only on a
+tag, so the order above is what makes the tag safe to push.
 
 The reverse direction is free: a new container that nobody points at yet can be
 deployed, curled and left running for as long as you like.
