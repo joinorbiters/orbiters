@@ -107,16 +107,18 @@ describe('index.html', () => {
     expect(page).toMatch(/<script type="module" src="\.\/field\.js"><\/script>\s*<script type="module" src="\.\/landing\.js">/)
   })
 
-  it('collects nothing, and the only thing it measures is the ad conversion', () => {
+  it('collects nothing, and measures only after the visitor has agreed to it', () => {
     // Nothing is typed on this page: the form lives on /orbiters. What arrived on
-    // 2026-09-09 is the measurement pixel, because this is a page an ad lands on --
-    // so "measures nothing" stopped being true, and pretending otherwise here would
-    // have meant a test asserting the absence of a string that is in the file.
-    // `pixel.test.ts` holds what the pixel may do; this holds what stays absent.
+    // 2026-09-09 is the measurement pixel, because this is a page an ad lands on -- so
+    // "measures nothing" stopped being true, and pretending otherwise here would have
+    // meant a test asserting the absence of a string that is in the file. What the page
+    // carries is the consent script, and only that can load the pixel;
+    // `pixel.test.ts` and `consent.test.ts` hold the gate itself.
     expect(page).not.toMatch(/<form/i)
     expect(page).not.toMatch(/<input/i)
     expect(page).not.toMatch(/gtag|googletagmanager|plausible|fathom|hotjar/i)
-    expect(page.match(/oaiq\('init'/g)).toHaveLength(1)
+    expect(page).not.toContain('oaiq')
+    expect(page.match(/<script[^>]+consent\.js/g)).toHaveLength(1)
   })
 })
 

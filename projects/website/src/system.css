@@ -26,6 +26,80 @@
   margin: 0 0.6rem 0.4rem 0;
 }
 
+/* The cookie notice, built by consent.js and styled here because both pages carry it
+   and neither sheet owns it. Deliberately small and quiet: it asks about one measurement
+   cookie, so it sits in a corner rather than across the page, and it never covers the
+   content or takes the focus. No animation, like everything else on these pages.
+
+   Only shared tokens, like the rest of this file: the two sheets map them to their own
+   names (--orb-*, --landing-*), so a colour spelled here would be a third palette. */
+.consent {
+  position: fixed;
+  left: 1rem;
+  bottom: 1rem;
+  z-index: 3;
+  max-width: 25rem;
+  display: flex;
+  flex-wrap: wrap;
+  /* Centred, not `baseline`: the paragraph wraps to two or three lines and the buttons
+     would otherwise sit against its first one, reading as a heading with controls. */
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.7rem 0.9rem;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--color-charcoal-blue);
+  background-color: var(--color-paper);
+  border: 1px solid color-mix(in oklab, var(--color-prussian-blue) 14%, transparent);
+}
+
+.consent p {
+  margin: 0;
+  flex: 1 1 12rem;
+}
+
+.consent a {
+  color: inherit;
+  text-underline-offset: 0.2em;
+}
+
+.consent-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.consent button {
+  cursor: pointer;
+  font: inherit;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid color-mix(in oklab, var(--color-prussian-blue) 20%, transparent);
+  background-color: transparent;
+  color: var(--color-prussian-blue);
+}
+
+/* The accepting one is the only thing here with any weight, and it is still a text
+   button: a coloured call to action for a cookie notice would shout louder than the
+   page it sits on. */
+.consent button[data-kind='si'] {
+  font-weight: 500;
+  border-color: var(--color-prussian-blue);
+}
+
+.consent button:hover {
+  background-color: color-mix(in oklab, var(--color-prussian-blue) 6%, transparent);
+}
+
+/* On a phone the corner is not a corner: full width, still at the bottom, still short. */
+@media (max-width: 30rem) {
+  .consent {
+    left: 0.5rem;
+    right: 0.5rem;
+    bottom: 0.5rem;
+    max-width: none;
+  }
+}
+
 /* The grid and the field are texture above the ground and below the text. A reader
    who asked for more contrast is asking for less of exactly this. */
 @media (prefers-contrast: more) {
