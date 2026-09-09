@@ -98,6 +98,15 @@
       "why": "The build is where the palette plugin runs, so a palette that stopped being extractable fails here rather than shipping pages with no colour."
     },
     {
+      "id": "website-types",
+      "run": "pnpm --filter website exec tsc --noEmit",
+      "when": [
+        "projects/website/**",
+        "shared/brand/**"
+      ],
+      "why": "Vitest transpiles without typechecking, so unit tests pass on code tsc rejects. This project has noUncheckedIndexedAccess on and the trunk went red that way once (ORB-15)."
+    },
+    {
       "id": "website-e2e",
       "run": "pnpm --filter website test:e2e",
       "when": [
@@ -132,6 +141,18 @@
       ],
       "serial": true,
       "why": "Both images build from the repository-root context they are deployed with. Serial because a docker build saturates the box and this shares it with everyone else's agents."
+    },
+    {
+      "id": "website-image",
+      "run": "cd projects/website && WEBSITE_WEB_PORT=127.0.0.1:8099 docker compose build",
+      "when": [
+        "projects/website/**",
+        "shared/brand/**",
+        ".dockerignore",
+        "pnpm-lock.yaml"
+      ],
+      "serial": true,
+      "why": "The deploy builds this image on a single-core server. Building it here is seconds and it is the only check that reads projects/website/deploy/nginx.conf at all."
     }
   ]
 }

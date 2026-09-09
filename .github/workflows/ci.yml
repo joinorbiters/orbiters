@@ -168,13 +168,27 @@ jobs:
           PIGROCRM_JWT_SECRET: build-only-never-used-and-long-enough-for-the-validator
         run: docker compose build
 
+  website-image:
+    name: website · image build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image from the repository root context
+        working-directory: projects/website
+        # Through compose rather than `docker build`, so this proves the same context
+        # and the same file the deploy uses. Nothing here needs a secret: the site has
+        # no state and the one variable is a host port.
+        run: docker compose build
+
   ci:
     name: ci
     # `always()`, or a skipped dependency makes this job skip too and the check never
     # arrives. This is the only status check the repository should ever be asked to
     # require: every job name above can change forever without touching a ruleset.
     if: always()
-    needs: [changes, pigrocrm-py, pigrocrm-web, website, pigrocrm-images]
+    needs: [changes, pigrocrm-py, pigrocrm-web, website, pigrocrm-images, website-image]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

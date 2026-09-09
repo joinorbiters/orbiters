@@ -1,0 +1,93 @@
+# Deploy, for the website only. Same shape as `deploy-pigrocrm.yml` and deliberately
+# a separate file: two projects in this monorepo must never be able to deploy each
+# other, and a shared deploy workflow is how that happens by accident. The mechanism
+# is `_deploy-compose.yml`; this file is the two rules that say when and the four
+# values that say where.
+#
+# Preview on every push to main that touched the site, production on a version tag:
+#
+#     git tag website-v0.1.0 && git push origin website-v0.1.0
+#
+# The tag deploys the commit it points at, and `_deploy-compose.yml` refuses any
+# commit whose `ci.yml` run is not green.
+name: Deploy website
+
+on:
+  push:
+    branches: [main]
+    tags: ['website-v*']
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  # A push that touched only PigroCRM must not rebuild this stack, and the reverse is
+  # true in the other file. The list below is the deploy-side twin of ci.yml's
+  # `website` path filter, plus the two workflow files that decide this deploy.
+  scope:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      changed: ${{ steps.decide.outputs.changed }}
+    steps:
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BEFORE}" ] || [ "${BEFORE}" = "0000000000000000000000000000000000000000" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          files=$(gh api "repos/${REPO}/compare/${BEFORE}...${SHA}" --jq '.files[].filename' || echo UNKNOWN)
+          if [ "$files" = UNKNOWN ]; then
+            echo "compare failed; deploying rather than skipping"
+            echo "changed=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          printf '%s\n' "$files"
+          if printf '%s\n' "$files" | grep -qE '^(projects/website/|shared/brand/|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.dockerignore|\.github/workflows/(deploy-website|_deploy-compose)\.yml)'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  preview:
+    needs: scope
+    if: |
+      github.ref == 'refs/heads/main' &&
+      needs.scope.outputs.changed == 'true' &&
+      vars.WEBSITE_PREVIEW_ENABLED == 'true'
+    concurrency:
+      group: deploy-website-preview
+      cancel-in-progress: true
+    uses: ./.github/workflows/_deploy-compose.yml
+    with:
+      environment: website-preview
+      compose-dir: projects/website
+      compose-project: website-preview
+      # The community page itself, not a static file nobody looks at: this is the one
+      # request that proves the container started, nginx parsed its config and the
+      # build produced the page map the config expects.
+      health-url: http://127.0.0.1:8083/
+      url: https://joinorbiters.com
+    secrets: inherit
+
+  production:
+    if: |
+      startsWith(github.ref, 'refs/tags/website-v') &&
+      vars.WEBSITE_DEPLOY_ENABLED == 'true'
+    concurrency:
+      group: deploy-website-production
+      cancel-in-progress: false
+    uses: ./.github/workflows/_deploy-compose.yml
+    with:
+      environment: website-production
+      compose-dir: projects/website
+      compose-project: website
+      health-url: http://127.0.0.1:8082/
+      url: https://joinorbiters.com
+    secrets: inherit
