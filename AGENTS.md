@@ -204,10 +204,15 @@ tested on a branch and is proven on the trunk instead.
 - **A project update is written whenever something changed that the issue list
   alone does not show**: a milestone slipped, a health change, a decision, a
   release. An update that only restates the board is noise.
-- Linear's GitHub app is requested and pending on this org; only the org owner can
-  approve it, so nothing closes itself yet. An issue reference in a commit body is
-  a pointer, not a link: the state is still moved by hand, with the evidence in a
-  comment.
+- Linear's GitHub app is **installed** on this org since 2026-09-09 (`linear-code`,
+  every repository, granted by the org owner `slavni96`), and a branch or a PR carrying
+  the issue id **does** link itself: PR #33 attached to ORB-80 within 25 seconds.
+  Moving a state is a separate mechanism, the team's own pull request automation in
+  Linear's workflow settings, and it is not configured here: that same linked PR left
+  ORB-80 in `In Progress`. So keep moving states by hand, with the evidence in a
+  comment, and treat an issue reference in a commit body as a pointer rather than a
+  link. Drop the manual step only once a merge is seen closing its own issue, and
+  update this line with the date when it is.
 
 Find the issue before you start, check it is yours, move it as you go, and close it
 only against evidence on the surface it is about. A defect you found and did not fix

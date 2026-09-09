@@ -196,15 +196,24 @@ would mislead a reader is worse.
 
 ## Commits and issues
 
-Linear's GitHub app (`linear-code`) is connected on Lorenzo's personal workspace. On
-`joinorbiters` the install is requested and pending: Lorenzo is a member of the org, not
-an owner, and only the org owner (`slavni96`) can approve it. Until it is approved,
-nothing closes itself here. Reference the issue in the commit body when the commit is
-the work (`ORB-9 covers the real fix`), treat that reference as a pointer only, and
-change the state yourself with the evidence in a comment.
+Linear's GitHub app (`linear-code`) is installed on `joinorbiters` since 2026-09-09,
+on every repository, granted by the org owner (`slavni96`) after Lorenzo was made an
+owner of the org the same day. Installing it gives Linear the pull request and issue
+events, and the diffs show up in Linear for anyone whose personal GitHub account is
+connected there.
 
-Once approved, a branch named from the issue links its PR automatically, and moving an
-issue to `In Review` becomes something the PR does on its own rather than a manual step.
+**Linking works, and it is measured.** PR #33 attached itself to ORB-80 within 25
+seconds of `gh pr create`, matching on the `orb-80` in the branch name rather than on
+the exact branch Linear suggests, so any branch carrying the id is enough.
+
+**The state did not move, and that is a different mechanism.** Status changes are the
+team's own pull request automation (Linear: Settings, Team, Workflow), configured per
+team, and it is not configured here: ORB-80 was still `In Progress` with the PR open
+and linked, and the five PRs merged the same day closed nothing. So reference the issue
+in the commit body when the commit is the work (`ORB-9 covers the real fix`), treat
+that reference as a pointer, and move the state yourself with the evidence in a
+comment. Turn the automation on, or watch a merge close its own issue, and this
+paragraph plus the two skills that repeat it can drop the manual step, with the date.
 
 ## API details worth knowing before you waste a call
 
