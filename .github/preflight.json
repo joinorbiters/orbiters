@@ -26,7 +26,7 @@
     },
     {
       "id": "pigrocrm-py-test",
-      "run": "uv run pytest -q projects/pigrocrm/packages/core/tests projects/pigrocrm/apps/api/tests projects/pigrocrm/apps/mcp/tests",
+      "run": "uv run pytest -q -n auto --dist loadfile -m \"not slow and not planner\" projects/pigrocrm",
       "when": [
         "projects/pigrocrm/apps/api/**",
         "projects/pigrocrm/apps/mcp/**",
@@ -35,7 +35,35 @@
         "pyproject.toml",
         "uv.lock"
       ],
-      "why": "The whole Python suite, both `slow` and `planner` included: roughly half an hour, testcontainers bringing up its own Postgres on a random port. ci.yml deselects `slow` on pull requests and `planner` everywhere, because that one asserts which plan Postgres picks and a hosted runner picks the other one, so this is the only tier where it runs at all. Needs pandoc, typst and pdftotext on PATH or about thirty renderer tests fail on \"strumento di composizione non installato\"."
+      "why": "The whole Python suite except the two kinds of check that are not only about the code. `-n auto` because it waits on PostgreSQL far more than it computes: 10m00 -> 3m36 locally, each worker getting its own container from the session fixture."
+    },
+    {
+      "id": "pigrocrm-py-corpus",
+      "run": "uv run pytest -q -m \"slow\" projects/pigrocrm/packages/core/tests",
+      "when": [
+        "projects/pigrocrm/apps/api/**",
+        "projects/pigrocrm/apps/mcp/**",
+        "projects/pigrocrm/packages/**",
+        "projects/pigrocrm/conftest.py",
+        "pyproject.toml",
+        "uv.lock"
+      ],
+      "serial": true,
+      "why": "The fifty-thousand-row corpus: twelve minutes, almost all of it inside PostgreSQL. Serial and never under -n, because every assertion in those two files is about which plan the planner picks and load changes the answer."
+    },
+    {
+      "id": "pigrocrm-py-planner",
+      "run": "uv run pytest -q -m \"planner\" projects/pigrocrm/packages/core/tests",
+      "when": [
+        "projects/pigrocrm/apps/api/**",
+        "projects/pigrocrm/apps/mcp/**",
+        "projects/pigrocrm/packages/**",
+        "projects/pigrocrm/conftest.py",
+        "pyproject.toml",
+        "uv.lock"
+      ],
+      "serial": true,
+      "why": "Deselected on both CI tiers because a hosted runner picks the other plan (ORB-9). This is the one machine where the assertion means something, so it has to run here or it runs nowhere."
     },
     {
       "id": "pigrocrm-web-lint",
