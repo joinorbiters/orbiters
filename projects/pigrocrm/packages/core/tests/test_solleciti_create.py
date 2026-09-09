@@ -3,8 +3,8 @@
 That is the whole claim of this file, and it is what lets spec 7.3 rely on 6.1's
 idempotence instead of reimplementing it: **one send path in the whole slice**. A reminder
 service with a send of its own would be the second one, and the second one is where the
-double send comes back -- the previous system's `emailSentCount` lived in a JSON file precisely because
-sending was open-coded next to the thing that wanted it.
+double send comes back -- the previous system's `emailSentCount` lived in a JSON file precisely
+because sending was open-coded next to the thing that wanted it.
 
 "Sends nothing" is asserted, never trusted. `GmailTransport.json` is the single chokepoint
 every Gmail call in this slice goes through -- the sync, the send, the reconciliation --
@@ -259,8 +259,8 @@ def test_the_draft_body_is_the_template_and_not_a_string_in_the_source(
     assert "Fattura:" in draft.body_markdown
     assert "IBAN:" in draft.body_markdown
     assert IBAN in draft.body_markdown
-    # De-personalised in B2-7: the previous system's signature was duplicated verbatim in both of its
-    # builders. It is data now, and it comes from `emitter_profile`.
+    # De-personalised in B2-7: the previous system's signature was duplicated verbatim in both of
+    # its builders. It is data now, and it comes from `emitter_profile`.
     assert "Ivan Sala" not in draft.body_markdown
     assert "Mario Rossi" in draft.body_markdown
     assert "Studio Rossi" in draft.body_markdown
@@ -393,8 +393,8 @@ def test_a_customer_with_nowhere_to_write_is_refused_before_a_row_exists(
 def test_a_missing_iban_is_refused_and_never_becomes_a_placeholder(
     db_session: Session,
 ) -> None:
-    """the previous system's `normalizeIban(iban) || 'IBAN_PAGAMENTO'` shipped the placeholder to the
-    client whenever the value was missing, which is worse than refusing: the client reads
+    """The previous system's `normalizeIban(iban) || 'IBAN_PAGAMENTO'` shipped the placeholder to
+    the client whenever the value was missing, which is worse than refusing: the client reads
     an instruction to pay into a string."""
     account = connected_account(db_session)
     _profiles(db_session, iban=None)

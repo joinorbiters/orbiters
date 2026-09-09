@@ -15,14 +15,14 @@ Lo slice 1 ha prodotto un CRM in cui si possono descrivere clienti, persone e de
 un freelance non è descrivere: è **mandare un'offerta e poi ritrovarla**. Finché quella parte manca,
 PigroCRM è un archivio, non uno strumento.
 
-the previous system faceva già questo, e lo faceva bene sotto un aspetto e male sotto un altro. Il contenuto
+Il gestionale precedente faceva già questo, e lo faceva bene sotto un aspetto e male sotto un altro. Il contenuto
 legale del template — definizioni, ambito, esclusioni, condizioni generali, proprietà
 intellettuale, validità 15 giorni — è **materiale valido, scritto e usato in produzione**, e viene
 portato così com'è. La macchina che lo riempiva no.
 
 ---
 
-## 2. Cosa si porta da the previous system, e cosa si rifà
+## 2. Cosa si porta dal gestionale precedente, e cosa si rifà
 
 | Elemento | Decisione |
 |---|---|
@@ -40,13 +40,13 @@ portato così com'è. La macchina che lo riempiva no.
 
 ### 3.1 Perché `[NOME_CLIENTE]` va sostituito
 
-Tre difetti, tutti dimostrati dal codice di the previous system stesso:
+Tre difetti, tutti dimostrati dal codice del gestionale precedente stesso:
 
 1. **Collide con Markdown.** `[testo](link)` è un link; `[NOME_CLIENTE]` è indistinguibile da un
    riferimento incompleto, e qualunque editor Markdown lo tratta come tale.
 2. **Non ha condizionali né loop.** Un'offerta con tre voci di costo e una senza IVA richiedono due
    template diversi, che divergeranno.
-3. **Non ha escaping.** I valori finiscono non escapati dentro sorgente Typst. the previous system ha un commit
+3. **Non ha escaping.** I valori finiscono non escapati dentro sorgente Typst. Il gestionale precedente ha un commit
    che si chiama `fix(pdf): escape @ and other typst-sensitive chars in placeholders`: la classe di
    bug è già stata incontrata e curata una volta, sintomo per sintomo.
 
@@ -160,8 +160,8 @@ class DocumentStorage(Protocol):
 
 - **`LocalFileStorage`** — default. Directory sul disco, path derivato dalla chiave, nessuna
   dipendenza esterna. È ciò che rende il prodotto self-hostable davvero.
-- **`GDriveStorage`** — service account, una cartella per cliente, esattamente come the previous system le crea
-  già oggi. Chi migra da the previous system ritrova le sue cartelle.
+- **`GDriveStorage`** — service account, una cartella per cliente, esattamente come il gestionale precedente le crea
+  già oggi. Chi migra dal gestionale precedente ritrova le sue cartelle.
 
 **I metadati stanno sempre in Postgres.** Ricerca, permessi, timeline e versioni funzionano identici
 su entrambi i backend, e cambiare backend non perde nulla se non i byte già caricati — per i quali
@@ -210,7 +210,7 @@ Il piano originale prevedeva un importer una tantum da Attio, a modello dati sta
 proprietario ha deciso di non usare più Attio**, quindi non c'è nulla da importare e l'importer è
 rimosso dall'ambito: non è rinviato, non esiste.
 
-Resta valida la ragione per cui Attio andava via, ed è documentata nella spec dello slice 1: the previous system
+Resta valida la ragione per cui Attio andava via, ed è documentata nella spec dello slice 1: il gestionale precedente
 leggeva le anagrafiche da Attio tirando a indovinare gli slug dei campi fiscali — `vat_number` o
 `vat` o `piva`, `sdi_code` o `codice_destinatario` o `codice_sdi` — e ogni fattura era un tiro di
 dado sull'anagrafica. In PigroCRM P.IVA, codice fiscale, SDI e PEC sono colonne di prima classe, ed

@@ -38,7 +38,7 @@ VALUES = {
 }
 
 
-def test_the_carried_copy_keeps_the previous system_running_order() -> None:
+def test_the_carried_copy_keeps_previous_system_running_order() -> None:
     """Portato: this text went to real clients for years, and its order is the useful
     part -- invoice number, date, due date, amount, IBAN."""
     rendered = render_sollecito_body(VALUES, livello=1, con_allegato=True)

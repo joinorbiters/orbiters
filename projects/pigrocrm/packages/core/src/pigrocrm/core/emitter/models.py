@@ -44,6 +44,6 @@ class EmitterProfile(Base, PrimaryKeyMixin, TimestampMixin):
     # PDF: an email does not attach an image of a signature, it wants text. The phone
     # number, the website and the company name are deliberately NOT repeated here; the
     # reminder template reads them from their own columns, so the number cannot diverge
-    # between two places. the previous system hardcoded all of it, twice, verbatim, in two builders.
+    # between two places. The previous system hardcoded all of it, twice, verbatim, in two builders.
     firma_email: Mapped[str | None] = mapped_column(Text, default=None)
     regime_fiscale: Mapped[str | None] = mapped_column(String(200), default=None)

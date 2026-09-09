@@ -65,7 +65,7 @@ Backend (slice 1A, resolved and verified 2026-08-06 — unchanged): `fastapi 0.1
 
 Frontend (slice 1B — unchanged): `vite 8.2.0` · `react 19.2.8` · `react-dom 19.2.8` · `typescript 5.9` (**not** 7.x) · `@tanstack/react-router 1.170.20` · `@tanstack/router-plugin 1.168.25` · `@tanstack/react-query 5.101.4` · `@tanstack/react-table 9.0.0` · `tailwindcss 4.3.3` · `@tailwindcss/vite 4.3.3` · `shadcn 4.16.1` (CLI) · `@dnd-kit/core 6.3.1` · `@dnd-kit/sortable 10.0.0` · `openapi-typescript 7.13.0` · `openapi-fetch 0.17.0` · `@playwright/test 1.62.1` · `lucide-react` latest · `@tabler/icons-react` latest (**brand icons only**). Package manager: **pnpm 10**.
 
-**New to this slice:** `PANDOC_VERSION=3.1.12.2` and `TYPST_VERSION=0.11.0`, pinned as build args in `Dockerfile.api`. These are the exact versions `the reference copy/Dockerfile` pins (lines 3–4); the Typst template and `header.typ` are carried over unmodified, so the toolchain that is known to compile them is carried over too. **No new Python dependency is added to `packages/core`** — the Google Drive client is built on `urllib.request` and `json` from the stdlib, which the architecture test already allows.
+**New to this slice:** `PANDOC_VERSION=3.1.12.2` and `TYPST_VERSION=0.11.0`, pinned as build args in `Dockerfile.api`. These are the exact versions `.reference-*/Dockerfile` pins (lines 3–4); the Typst template and `header.typ` are carried over unmodified, so the toolchain that is known to compile them is carried over too. **No new Python dependency is added to `packages/core`** — the Google Drive client is built on `urllib.request` and `json` from the stdlib, which the architecture test already allows.
 
 ### Design tokens (exact values — do not improvise)
 
@@ -109,10 +109,10 @@ Resolved in favour of the existing code, as instructed. Each is implemented in t
 
 1. **`entity_type` is not open — it is a closed `Literal`.** Spec §4.1 says `document` is added "senza migrazione del validator né dello schema dei campi custom … Era il punto del disegno." The code says otherwise: `packages/core/src/pigrocrm/core/fields/schemas.py:12` declares `EntityType = Literal["customer", "person", "deal"]`, with the comment "Open by design: later slices append `document` and `invoice` with no schema change." "Open by design" meant *one line to append*, not *nothing to change*. **Resolution (Task 7):** append `"document"` to that `Literal`, to `ENTITY_TYPES` and `CREATE_MODELS` in `schema_registry.py`, and to `EntityType` in `apps/web/src/lib/schema.ts`. No database migration, no validator change — the spec's substantive claim holds; its literal claim does not.
 2. **The spec says `enum`; the codebase has no `sa.Enum` anywhere.** Slice 1 spells every closed set as `String(n)` on the column plus a Pydantic `Literal` on the schema (`pipeline_stages.tipo` is `String(10)`, `PipelineStage.code` is `String(30)`). **Resolution (Task 7):** `documents.tipo` is `String(20)` and `documents.stato` is `String(20)`, each with a Pydantic `Literal`. A Postgres `ENUM` type would need its own `ALTER TYPE` migration for every future value; a `String` + `Literal` does not, and it matches every other closed set in the schema. The one `CheckConstraint` in this slice is the customer-or-deal exclusivity rule, which the spec names explicitly ("vincolo di check") and for which no existing convention competes.
-3. **`DocumentStorage.put` returns `None`, but Google Drive returns a file id.** Spec §5's Protocol is kept byte-for-byte. **Resolution (Task 4/5):** `GDriveStorage` never needs to persist an id, because it *derives* the location from the key on every call — nested folders looked up by name under a configured root, exactly as the previous system's `ensureDriveFolder`/`findDriveFileInFolder` do (`the reference copy/website/vite.config.js:2527-2576`). The key is therefore a path, and `DocumentService.storage_key_for` builds it as `{ragione_sociale-slug}-{customer_id first 8 chars}/{document_id}/v{numero}.pdf`. The customer-id fragment is what keeps the folder stable when a customer is renamed, and the slug is what makes "chi migra da the previous system ritrova le sue cartelle" true.
-4. **The spec says Drive uses a service account; the previous system uses an OAuth refresh-token flow** (`getGoogleAccessToken`, `the reference copy/website/vite.config.js:2286`). The spec governs and a service account is the right choice for an unattended server. **Consequence recorded in Task 5:** a service account has no Drive storage quota of its own, so `PIGROCRM_GDRIVE_ROOT_FOLDER_ID` must name a folder on a **Shared Drive**, or one explicitly shared with the service account, or `files.create` fails with `storageQuotaExceeded`. Every Drive call therefore carries `supportsAllDrives=true`, as the previous system's already do.
-5. **the previous system renders in one Pandoc invocation with `--pdf-engine=typst`; this slice runs the two stages separately.** the previous system: `pandoc … --to=pdf --pdf-engine=typst` (`vite.config.js:2744-2762`). **Resolution (Task 10):** run `pandoc … --to=typst -o intermediate.typ`, then `typst compile intermediate.typ out.pdf`. Owning the intermediate `.typ` is the only way to satisfy spec §6's "l'errore che torna all'utente contiene la riga del template", because Typst's diagnostics name a line in that file and nothing else can map it back. This is a deliberate deviation from the carried-over pipeline, and it changes no output: the same template, the same header, the same engine.
-6. **the previous system escaped Typst-sensitive characters with a chain of `String.replace` calls** (`escapeTypstText`, `vite.config.js:71-77`, escaping `\ @ [ ] #`) applied uniformly regardless of destination. That is the design spec §3.3 rejects. **Resolution (Tasks 1–3):** escaping is a function of a parsed node's context. The character set is also widened past both the previous system's five and the spec's seven — see Task 1's comments for each addition and why.
+3. **`DocumentStorage.put` returns `None`, but Google Drive returns a file id.** Spec §5's Protocol is kept byte-for-byte. **Resolution (Task 4/5):** `GDriveStorage` never needs to persist an id, because it *derives* the location from the key on every call — nested folders looked up by name under a configured root, exactly as the previous system's `ensureDriveFolder`/`findDriveFileInFolder` do (`.reference-*/website/vite.config.js:2527-2576`). The key is therefore a path, and `DocumentService.storage_key_for` builds it as `{ragione_sociale-slug}-{customer_id first 8 chars}/{document_id}/v{numero}.pdf`. The customer-id fragment is what keeps the folder stable when a customer is renamed, and the slug is what makes "chi migra dal gestionale precedente ritrova le sue cartelle" true.
+4. **The spec says Drive uses a service account; the previous system uses an OAuth refresh-token flow** (`getGoogleAccessToken`, `.reference-*/website/vite.config.js:2286`). The spec governs and a service account is the right choice for an unattended server. **Consequence recorded in Task 5:** a service account has no Drive storage quota of its own, so `PIGROCRM_GDRIVE_ROOT_FOLDER_ID` must name a folder on a **Shared Drive**, or one explicitly shared with the service account, or `files.create` fails with `storageQuotaExceeded`. Every Drive call therefore carries `supportsAllDrives=true`, as the previous system's already do.
+5. **The previous system renders in one Pandoc invocation with `--pdf-engine=typst`; this slice runs the two stages separately.** The previous system: `pandoc … --to=pdf --pdf-engine=typst` (`vite.config.js:2744-2762`). **Resolution (Task 10):** run `pandoc … --to=typst -o intermediate.typ`, then `typst compile intermediate.typ out.pdf`. Owning the intermediate `.typ` is the only way to satisfy spec §6's "l'errore che torna all'utente contiene la riga del template", because Typst's diagnostics name a line in that file and nothing else can map it back. This is a deliberate deviation from the carried-over pipeline, and it changes no output: the same template, the same header, the same engine.
+6. **The previous system escaped Typst-sensitive characters with a chain of `String.replace` calls** (`escapeTypstText`, `vite.config.js:71-77`, escaping `\ @ [ ] #`) applied uniformly regardless of destination. That is the design spec §3.3 rejects. **Resolution (Tasks 1–3):** escaping is a function of a parsed node's context. The character set is also widened past both the previous system's five and the spec's seven — see Task 1's comments for each addition and why.
 7. **`document_versions.creato_da` is `UUID` in the spec, but `Actor.id` is `UUID | None`** (`actor.py:22` — a `system` actor has no id). **Resolution (Task 7):** the column is nullable and is populated from `actor.id`. It is *not* validated as a foreign key on input, unlike every other FK in this slice, because no caller supplies it: it is read from the already-authenticated actor. That is the documented exception to the FK constraint above.
 
 ---
@@ -305,7 +305,7 @@ The render is two-staged: a Markdown template becomes compiled Markdown, Pandoc 
 that into Typst, Typst composes the PDF. A value in an ordinary paragraph is escaped
 for Markdown and Pandoc handles the Typst layer for it; a value inside a raw
 `{=typst}` block is passed through by Pandoc untouched, so nothing but this module
-stands between it and the compiler. the previous system applied one uniform `escapeTypstText` to
+stands between it and the compiler. The previous system applied one uniform `escapeTypstText` to
 everything (`website/vite.config.js:71-77`) and patched the character list each time a
 new symbol broke a document -- the commit `fix(pdf): escape @ and other
 typst-sensitive chars in placeholders` is that pattern in its final form. The fix is
@@ -1720,7 +1720,7 @@ the parts most likely to be wrong, so they must run for real. What it replaces i
 network, nothing above it.
 
 The API surface it implements is the one the previous system proved it needs
-(the reference copy/website/vite.config.js:2527-2647): files.list with a `q` filter,
+(.reference-*/website/vite.config.js:2527-2647): files.list with a `q` filter,
 files.create for a folder, multipart upload, media download, and delete -- all with
 `supportsAllDrives=true`, because a service account's files live on a Shared Drive.
 """
@@ -1940,7 +1940,7 @@ def test_drive_creates_one_folder_per_key_segment() -> None:
 
 
 def test_drive_reuses_an_existing_folder_instead_of_creating_a_second() -> None:
-    # "chi migra da the previous system ritrova le sue cartelle" (spec 5) only holds if a second
+    # "chi migra dal gestionale precedente ritrova le sue cartelle" (spec 5) only holds if a second
     # upload finds the folder the first one made.
     storage, drive = _drive_storage()
     storage.put("acme-0123/doc/v1.pdf", b"uno", "application/pdf")
@@ -2023,7 +2023,7 @@ quota of its own. `PIGROCRM_GDRIVE_ROOT_FOLDER_ID` must name a folder on a *Shar
 Drive*, or a folder explicitly shared with the service account's address, or
 `files.create` fails with `storageQuotaExceeded`. Every call below carries
 `supportsAllDrives=true` for that reason -- as the previous system's already do
-(the reference copy/website/vite.config.js:2537).
+(.reference-*/website/vite.config.js:2537).
 
 The key is a path. `GDriveStorage` maps `a/b/c.pdf` onto nested folders `a` then `b`
 under the configured root, and a file `c.pdf` inside. That is what makes
@@ -2078,8 +2078,8 @@ def _escape_drive_query(value: str) -> str:
 
     Backslash first is load-bearing for the same reason it is in the template
     escapers: escaping the quote first would then have its own backslash escaped by
-    the second pass. the previous system escaped only the quote
-    (the reference copy/website/vite.config.js:2360), which leaves a trailing backslash
+    the second pass. The previous system escaped only the quote
+    (.reference-*/website/vite.config.js:2360), which leaves a trailing backslash
     in a name able to swallow the closing quote.
     """
     return value.replace("\\", "\\\\").replace("'", "\\'")
@@ -3039,7 +3039,7 @@ class EmitterProfileService:
         """The profile as a template scope, under the name `emittente`.
 
         This is what makes `{{emittente.ragione_sociale}}` work in a template and what
-        replaces the hardcoded issuer data in the previous system's `header.typ`. `singleton` is
+        replaces the hardcoded issuer data nel gestionale precedente's `header.typ`. `singleton` is
         excluded: it is a storage mechanism, not a fact about the business.
         """
         profile = self.get(actor)
@@ -3921,8 +3921,8 @@ def slugify_folder(raw: str) -> str:
 
     Mirrors `fields/schemas.slugify_key` in spirit -- NFKD, drop the combining marks,
     collapse the rest -- but joins with "-" rather than "_", because these segments are
-    read by a human browsing Google Drive, which is the whole point of "chi migra da
-    the previous system ritrova le sue cartelle" (spec 5).
+    read by a human browsing Google Drive, which is the whole point of "chi migra
+    dal gestionale precedente ritrova le sue cartelle" (spec 5).
     """
     decomposed = unicodedata.normalize("NFKD", raw)
     transliterated = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
@@ -4183,9 +4183,9 @@ git commit -m "feat(documents): document service with immutable version history"
 
 **Files:**
 - Create: `packages/core/src/pigrocrm/core/render/__init__.py`, `packages/core/src/pigrocrm/core/render/diagnostics.py`, `packages/core/src/pigrocrm/core/render/pdf.py`
-- Create: `packages/core/src/pigrocrm/core/render/assets/pandoc-template.typst` (copy of `the reference copy/offer/pandoc-template.typst`, unmodified)
+- Create: `packages/core/src/pigrocrm/core/render/assets/pandoc-template.typst` (copy of `.reference-*/offer/pandoc-template.typst`, unmodified)
 - Create: `packages/core/src/pigrocrm/core/render/assets/header.typ.template`
-- Create: `packages/core/src/pigrocrm/core/render/assets/media/` (copy of `the reference copy/offer/media/`)
+- Create: `packages/core/src/pigrocrm/core/render/assets/media/` (copy of `.reference-*/offer/media/`)
 - Create: `packages/core/src/pigrocrm/core/render/assets/template-offer.md` (the carried-over legal body, placeholders rewritten)
 - Modify: `Dockerfile.api:1-6`
 - Modify: `packages/core/pyproject.toml` (package data)
@@ -4424,13 +4424,13 @@ def test_a_value_that_looks_like_a_shell_argument_is_just_text() -> None:
     assert pdf.startswith(b"%PDF")
 ```
 
-- [ ] **Step 5: Copy the the previous system assets and write the header template**
+- [ ] **Step 5: Copy the previous system's assets and write the header template**
 
 ```bash
 mkdir -p packages/core/src/pigrocrm/core/render/assets/media
-cp /Users/ivansala/emdash/repositories/pigrocrm/the reference copy/offer/pandoc-template.typst \
+cp /Users/ivansala/emdash/repositories/pigrocrm/.reference-*/offer/pandoc-template.typst \
    packages/core/src/pigrocrm/core/render/assets/pandoc-template.typst
-cp /Users/ivansala/emdash/repositories/pigrocrm/the reference copy/offer/media/*.png \
+cp /Users/ivansala/emdash/repositories/pigrocrm/.reference-*/offer/media/*.png \
    packages/core/src/pigrocrm/core/render/assets/media/
 ```
 
@@ -4473,9 +4473,9 @@ Create `packages/core/src/pigrocrm/core/render/assets/header.typ.template` — t
 
 Rename the logo so the header does not hardcode a brand: `mv packages/core/src/pigrocrm/core/render/assets/media/humancraftTech-logo-nobg.png packages/core/src/pigrocrm/core/render/assets/media/logo.png`.
 
-Also create `packages/core/src/pigrocrm/core/render/assets/template-offer.md` — a copy of `the reference copy/offer/template-offer.md` with the legal text carried over **verbatim** and only the placeholder syntax rewritten, plus `Humancraft di Ivan Sala` replaced by `{{emittente.ragione_sociale}}` throughout. The mapping, applied literally:
+Also create `packages/core/src/pigrocrm/core/render/assets/template-offer.md` — a copy of `.reference-*/offer/template-offer.md` with the legal text carried over **verbatim** and only the placeholder syntax rewritten, plus `Humancraft di Ivan Sala` replaced by `{{emittente.ragione_sociale}}` throughout. The mapping, applied literally:
 
-| the previous system | PigroCRM |
+| Gestionale precedente | PigroCRM |
 |---|---|
 | `[DATA_OFFERTA]` | `{{offerta.data}}` |
 | `[NOME_CLIENTE]` | `{{cliente.ragione_sociale}}` |
@@ -4512,7 +4512,7 @@ The cost table becomes a loop, which is the point of having `#each` at all — t
 # packages/core/src/pigrocrm/core/render/pdf.py
 """Pandoc, then Typst. Two subprocesses, no shell, no user input on either argv.
 
-the previous system ran a single `pandoc --pdf-engine=typst`. This runs the two stages separately
+The previous system ran a single `pandoc --pdf-engine=typst`. This runs the two stages separately
 so the intermediate .typ exists as a file we own -- which is the only way to satisfy
 spec 6's "l'errore contiene la riga del template", because Typst's diagnostics name a
 line in that file and nothing else can map it back.
@@ -4539,7 +4539,7 @@ RENDER_TIMEOUT_SECONDS = 30
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 PANDOC_TEMPLATE = ASSETS_DIR / "pandoc-template.typst"
 HEADER_TEMPLATE = ASSETS_DIR / "header.typ.template"
-# the previous system's own reader extensions, carried over unchanged: `raw_attribute` is what makes
+# The previous system's own reader extensions, carried over unchanged: `raw_attribute` is what makes
 # ```{=typst} a raw block rather than a code listing, and without it the whole
 # two-context escaping design has only one context.
 PANDOC_FROM = "markdown+link_attributes+pipe_tables+raw_attribute"
@@ -4691,7 +4691,7 @@ Replace `Dockerfile.api` lines 1–6 with:
 FROM python:3.13-slim-bookworm
 
 # Pinned to the exact versions the carried-over Typst template and header are known to
-# compile under (the reference copy/Dockerfile:3-4). Typst 0.11 embeds Libertinus Serif,
+# compile under (.reference-*/Dockerfile:3-4). Typst 0.11 embeds Libertinus Serif,
 # so no font package is needed.
 ARG TYPST_VERSION=0.11.0
 ARG PANDOC_VERSION=3.1.12.2
@@ -8539,7 +8539,7 @@ git commit -m "feat(web): template editor and emitter profile in settings"
 Il proprietario ha deciso di non usare più Attio, quindi non c'è nulla da importare. Il Task 19 è
 rimosso dall'ambito: non rinviato, non esiste. **Il piano ha 18 task, non 19.**
 
-Resta valida la ragione per cui Attio andava via, e sta nella spec dello slice 1: the previous system leggeva le
+Resta valida la ragione per cui Attio andava via, e sta nella spec dello slice 1: il gestionale precedente leggeva le
 anagrafiche da Attio tirando a indovinare gli slug dei campi fiscali — `vat_number` o `vat` o
 `piva`, `sdi_code` o `codice_destinatario` o `codice_sdi` — così ogni fattura era un tiro di dado
 sull'anagrafica. La sostituzione sono le colonne di prima classe per P.IVA, codice fiscale, SDI e

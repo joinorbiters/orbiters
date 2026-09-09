@@ -129,8 +129,8 @@ def test_the_fake_finds_nothing_for_a_message_id_that_was_never_sent() -> None:
 def test_a_send_that_never_answered_may_still_have_delivered() -> None:
     """The whole of spec 6.3(b): a lost answer is not a lost message. With
     `deliver_on_timeout` the mail really did arrive and only the response was lost, which
-    is the case the previous system gets wrong in production -- and a fake that cannot express it would
-    let B2-6's reconciliation tests pass against a mailbox that can never surprise them.
+    is the case the previous system gets wrong in production -- and a fake that cannot express it
+    would let B2-6's reconciliation tests pass against a mailbox that can never surprise them.
     """
     delivered = FakeGmail(timeout_on_send=True, deliver_on_timeout=True)
     status, _ = _send(delivered, "<ours.3@crm.example.it>")

@@ -8,7 +8,7 @@ contradiction the rest of the OAuth-integration world falls into, and it produce
 
 Four statuses and four sentences, because each one asks something different of the
 person: nothing, wait, re-consent, re-connect. The one thing this module refuses to do
-is collapse them into "problema con Gmail" -- that is the the previous system defect, which turned a
+is collapse them into "problema con Gmail" -- that is the previous system's defect, which turned a
 revoked grant and a dropped packet into the same screen and therefore the same wrong
 reaction.
 
@@ -217,7 +217,7 @@ class GoogleAccountService:
             "gmail.credenziale_revocata",
             actor,
             # The address and nothing else. Not the upstream body, which is the thing
-            # the previous system truncated to 400 characters and put on screen.
+            # The previous system truncated to 400 characters and put on screen.
             {"email_address": account.email_address},
         )
         self.session.commit()

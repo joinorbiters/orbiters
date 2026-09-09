@@ -208,7 +208,7 @@ BODY_MAX_LENGTH = 100_000
 
 # Five states, and none of them is a synonym for another. `incerto` is the whole of spec
 # 6.3(b): the send neither succeeded nor failed, and the interface says «esito da
-# verificare» rather than guessing. Collapsing it into either neighbour is the the previous system
+# verificare» rather than guessing. Collapsing it into either neighbour is the previous system's
 # defect -- «il CRM crede una cosa diversa da quella che è successa».
 SendState = Literal["bozza", "in_invio", "inviato", "incerto", "fallito"]
 
@@ -306,8 +306,8 @@ class SollecitoCandidate(BaseModel):
     sum recomputed at reminder time: a demand for payment that names a figure the
     client's copy of the invoice does not carry is a demand they are right to ignore.
 
-    `ultima_risposta_il` is the signal the previous system could not have had, and it is `None` on an
-    installation with no mailbox connected -- the honest degradation, not a claim that
+    `ultima_risposta_il` is the signal the previous system could not have had, and it is `None` on
+    an installation with no mailbox connected -- the honest degradation, not a claim that
     nobody replied.
     """
 

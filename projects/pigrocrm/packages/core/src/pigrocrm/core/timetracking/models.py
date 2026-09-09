@@ -75,7 +75,7 @@ class TimeEntry(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
 
     `data` is a `Date`, not a timestamp -- §6.3. It is the calendar day the work
     belongs to, and that day decides which month, which report and which period it
-    lands in. the previous system's `formatIsoDate` used `toISOString()`, so an hour logged at 23:30
+    lands in. The previous system's `formatIsoDate` used `toISOString()`, so an hour logged at 23:30
     CEST on 31 March was stored as 1 April and went into the wrong monthly export --
     the file attached to an invoice.
 
@@ -219,7 +219,7 @@ class Cost(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     `fiscal_profile.codice_regime` -- named here as a boundary, not designed (§13).
 
     `document_id` is the receipt, held in slice 2's document store with its pluggable
-    storage, versioning and hash. the previous system kept the attachment as base64 inside the costs
+    storage, versioning and hash. The previous system kept the attachment as base64 inside the costs
     JSON (`parseBase64Payload`); the document store already exists and is not
     reinvented.
     """

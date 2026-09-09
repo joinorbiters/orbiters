@@ -492,7 +492,7 @@ class AnalyticsService:
     ) -> FiscalEstimate:
         """A **period** report, never per deal (§8).
 
-        the previous system computed this per offer, and the level was the defect rather than the
+        The previous system computed this per offer, and the level was the defect rather than the
         formula. INPS gestione separata has a floor owed at zero income and a ceiling, so
         a pro-rata share attributes to a job an amount that does not depend on it; the
         profitability coefficient applies to the year, so applying it to slices and

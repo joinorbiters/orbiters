@@ -217,7 +217,7 @@ def test_drive_creates_one_folder_per_key_segment() -> None:
 
 
 def test_drive_reuses_an_existing_folder_instead_of_creating_a_second() -> None:
-    # "chi migra da the previous system ritrova le sue cartelle" (spec 5) only holds if a second
+    # "chi migra dal gestionale precedente ritrova le sue cartelle" (spec 5) only holds if a second
     # upload finds the folder the first one made.
     storage, drive = _drive_storage()
     storage.put("acme-0123/doc/v1.pdf", b"uno", "application/pdf")

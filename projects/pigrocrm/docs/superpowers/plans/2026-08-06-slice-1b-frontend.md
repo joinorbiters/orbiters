@@ -5059,7 +5059,7 @@ jobs:
           ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p \"${DEPLOY_PATH}\""
           rsync -az --delete \
             --exclude '.git' --exclude '.github' \
-            --exclude '.env' --exclude 'the reference copy' \
+            --exclude '.env' --exclude '.reference-*' \
             --exclude 'node_modules' --exclude 'dist' --exclude '.venv' \
             ./ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}"
 

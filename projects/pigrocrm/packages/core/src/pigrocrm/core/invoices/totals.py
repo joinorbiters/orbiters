@@ -1,6 +1,6 @@
 """The money arithmetic of spec 6.1, as pure functions over `Decimal`.
 
-No `float` reaches this module and none leaves it. the previous system applied a percentage to a
+No `float` reaches this module and none leaves it. The previous system applied a percentage to a
 total it had re-read out of a formatted string (`parseAmount(values.TOTALE)`); here an
 amount is only ever a `Decimal` computed from other `Decimal`s, and text is produced
 at the very end by `format_amount_*` for the XML and the PDF, never parsed back.

@@ -101,7 +101,7 @@ def _body(customer_id: str, numero: int, giorno: str) -> dict[str, Any]:
         "imposta": "0.00",
         # The stamp is declared beside the total, never inside it: the identity the
         # service checks is `imponibile + imposta == totale` (slice 3 `sum_totals`, and
-        # the previous system's own register, whose «Totale» column always equals «Imp. Reddito»).
+        # The previous system's own register, whose «Totale» column always equals «Imp. Reddito»).
         "bollo": "2.00",
         "totale": "2700.00",
         "stato_pagamento": "incassato",

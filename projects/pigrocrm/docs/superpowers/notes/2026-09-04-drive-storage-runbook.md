@@ -1,4 +1,4 @@
-# Runbook: attivare Google Drive come storage documenti e importare le 14 fatture the previous system
+# Runbook: attivare Google Drive come storage documenti e importare le 14 fatture del gestionale precedente
 
 Slice 9D, task 4. Prerequisiti già chiusi su questa installazione: il progetto OAuth è
 pubblicato (`docs/superpowers/notes/2026-09-04-google-oauth-publish-runbook.md`) e
@@ -13,11 +13,11 @@ l'account `ivansala@humancraft.tech` ha già collegato Drive — la riga
 
 `storage_folder_id` è invece `NULL`: nessuna cartella di scrittura è stata scelta.
 Questo runbook copre solo l'attivazione dello storage e l'import da Drive delle 14
-fatture the previous system (spec `docs/superpowers/specs/2026-09-04-slice-9-import-storico-e-google-drive-design.md`
+fatture del gestionale precedente (spec `docs/superpowers/specs/2026-09-04-slice-9-import-storico-e-google-drive-design.md`
 §4.3, §5.4, §6); il collegamento dell'account Drive e le sue radici di lettura sono già
 fatti e non sono ripetuti qui. Per il dataset e le avvertenze sui dati delle 14 fatture
 (bollo, date di incasso, scadenze) resta valido
-`docs/superpowers/notes/2026-09-04-import-the previous system-runbook.md` — questo runbook lo sostituisce
+`docs/superpowers/notes/2026-09-04-import-storico-runbook.md` — questo runbook lo sostituisce
 solo nel passo 3 («caricare i PDF»), che con Drive configurato diventa parte dell'import
 stesso invece di un passo separato.
 
@@ -145,7 +145,7 @@ Verifiche dopo la generazione:
 2. `GET /api/documents/{id}/download` (`apps/api/src/pigrocrm_api/routers/documents.py`)
    deve restituire lo stesso PDF.
 
-### 6. Importare le 14 fatture the previous system, dalla cartella Drive `Fatture`
+### 6. Importare le 14 fatture del gestionale precedente, dalla cartella Drive `Fatture`
 
 Con il backend attivo, il passo 3 del vecchio runbook (caricare il PDF come documento
 prima dell'import) diventa **facoltativo**: `import_issued_invoice` accetta
@@ -176,7 +176,7 @@ Per ciascuna delle 14 fatture:
    invece di segnalare un duplicato; per una fattura, comunque, non si passa da
    `import_drive_file` (vedi punto 3) ma il principio — nessuna difesa automatica contro
    il file sbagliato — vale identico.
-3. Costruire il payload `InvoiceImport` come nel runbook the previous system (righe del dataset,
+3. Costruire il payload `InvoiceImport` come nel runbook del gestionale precedente (righe del dataset,
    private delle chiavi `_...`, `customer_id` risolto), con
    `"pdf_sorgente": {"drive_file_id": "<id file>"}` al posto di `{"document_id": ...}`.
    **Non usare `import_drive_file` per queste righe**: il suo stesso docstring lo dice
@@ -185,10 +185,10 @@ Per ciascuna delle 14 fatture:
    con `import_drive_file`.
 4. Chiamare `import_issued_invoice` (MCP, server `pigrocrm`) o `POST /api/invoices/import`
    (REST), in ordine di `numero`, verificando ogni risposta prima di passare alla riga
-   successiva — stessa disciplina del runbook the previous system passo 4.
+   successiva — stessa disciplina del runbook del gestionale precedente passo 4.
 
 Al termine, dichiarare i buchi 1, 4, 6 con `declare_invoice_register_gaps` e verificare
-come nel runbook the previous system (§5): `list_invoices`, `invoice_counters.ultimo_numero = 17`,
+come nel runbook del gestionale precedente (§5): `list_invoices`, `invoice_counters.ultimo_numero = 17`,
 `export_invoice_xml` → `409`, `GET /api/invoices/{id}/pdf` byte per byte, `undeclared_gaps`
 vuoto.
 

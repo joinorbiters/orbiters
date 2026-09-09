@@ -25,7 +25,7 @@ describe.each(PAGES)('%s', (name) => {
     expect(description.length).toBeGreaterThan(40)
     // The trap named in spec 9.2: the previous system's index.html still carries "Humancraft is
     // the AI optimization platform for human and AI agents" from the scaffold it
-    // was generated out of (the reference copy/website/index.html:7-10), describing
+    // was generated out of (.reference-*/website/index.html:7-10), describing
     // a product that exists nowhere in that codebase. It is the easiest mistake
     // to repeat, and it is text Google reads during verification.
     expect(description).not.toMatch(/AI optimization platform/i)

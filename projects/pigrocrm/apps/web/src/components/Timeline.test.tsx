@@ -216,13 +216,13 @@ describe('Timeline', () => {
         ok([
           entry({
             kind: 'imported',
-            payload: { anno: 2026, numero: 2, totale: '3422.00', importata_da: 'the previous system' },
+            payload: { anno: 2026, numero: 2, totale: '3422.00', importata_da: 'esterno' },
           }),
         ]),
       )
       renderWithClient(<Timeline entityType="invoice" entityId="i1" />)
       expect(await screen.findByText('Anno: 2026 · Numero: 2 · Totale: 3422.00')).toBeInTheDocument()
-      expect(screen.queryByText(/the previous system/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/esterno/i)).not.toBeInTheDocument()
       expect(screen.queryByText(/Importata da/i)).not.toBeInTheDocument()
     })
 

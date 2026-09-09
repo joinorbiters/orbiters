@@ -19,7 +19,7 @@
 # this file when it did -- there is no reason to, once a repo-root scripts/ is no
 # longer the merge hazard it was.
 
-export PIGROCRM_DATABASE_URL="postgresql+psycopg://pigrocrm:pigrocrm@localhost:55433/pigrocrm_e2e"
+export PIGROCRM_DATABASE_URL="postgresql+psycopg://pigrocrm:pigrocrm@localhost:55434/pigrocrm_e2e"
 # The brief's own literal value here ("e2e-secret-not-for-production") is 29
 # characters -- one short of `MIN_JWT_SECRET_LENGTH = 32`
 # (packages/core/src/pigrocrm/core/config.py). `Settings`' own field validator
@@ -50,7 +50,7 @@ export PIGROCRM_COOKIE_SECURE=false
 # `process.env` to kill and relaunch the API itself, and to know where to
 # write the new pid back to for e2e-teardown.sh to find afterwards.
 export PIGROCRM_E2E_CONTAINER="pigrocrm-e2e"
-export PIGROCRM_E2E_PG_PORT="55433"
+export PIGROCRM_E2E_PG_PORT="55434"
 export PIGROCRM_E2E_API_PORT="8000"
 export PIGROCRM_E2E_API_PIDFILE="/tmp/pigrocrm-e2e-api.pid"
 export PIGROCRM_E2E_API_LOG="/tmp/pigrocrm-e2e-api.log"

@@ -1,17 +1,17 @@
 """The reminder text, carried from the previous system and de-personalised.
 
-`buildReminderInvoiceEmailBody` (`the reference copy/website/src/App.jsx:2329-2372`) is
+`buildReminderInvoiceEmailBody` (`.reference-*/website/src/App.jsx:2329-2372`) is
 text that went to real clients for years, with the right running order: invoice number,
 date, due date, amount, IBAN. That is carried, order included, because that order is the
 part a recipient's eye already knows how to read.
 
 What is not carried is the signature -- `Ivan Sala / CTO / mobile +39 02 1234567 /
-web https://www.humancraft.tech`, duplicated verbatim in both of the previous system's builders -- nor
-the `NOME_CLIENTE` placeholder syntax, which slice 2 already replaced with `{{}}`. The
+web https://www.humancraft.tech`, duplicated verbatim in both of the previous system's builders --
+nor the `NOME_CLIENTE` placeholder syntax, which slice 2 already replaced with `{{}}`. The
 signature is data now: the free-text block comes from `emitter_profile.firma_email`, and
 the company name, the phone and the website are read from their own columns rather than
 retyped into it, so the number cannot diverge between two places the way it did between
-the previous system's two builders.
+The previous system's two builders.
 
 The reminder level is a **variable**, not three templates. Three templates that resemble
 each other diverge; this is the same decision slice 2 made when it refused to duplicate

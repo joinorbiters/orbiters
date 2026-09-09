@@ -143,7 +143,10 @@ async def test_import_registers_the_invoice_and_names_the_gaps(
 
         gaps = await client.call_tool(
             "declare_invoice_register_gaps",
-            {"anno": 2026, "buchi": [{"numero": 2, "motivo": "annullata in the previous system"}]},
+            {
+                "anno": 2026,
+                "buchi": [{"numero": 2, "motivo": "annullata nel gestionale precedente"}],
+            },
         )
         gap_rows = _payload(gaps)
         rows = (
@@ -171,7 +174,10 @@ async def test_list_invoice_register_gaps_reads_what_was_declared(
     async with Client(_server(mcp_session, tmp_path, full_access=True)) as client:
         await client.call_tool(
             "declare_invoice_register_gaps",
-            {"anno": 2027, "buchi": [{"numero": 3, "motivo": "annullata in the previous system"}]},
+            {
+                "anno": 2027,
+                "buchi": [{"numero": 3, "motivo": "annullata nel gestionale precedente"}],
+            },
         )
 
     async with Client(_server(mcp_session, tmp_path, full_access=False)) as client:
@@ -179,4 +185,4 @@ async def test_list_invoice_register_gaps_reads_what_was_declared(
         rows = _payload(result)
         rows = rows["result"] if isinstance(rows, dict) and "result" in rows else rows
         assert rows[0]["numero"] == 3
-        assert rows[0]["motivo"] == "annullata in the previous system"
+        assert rows[0]["motivo"] == "annullata nel gestionale precedente"

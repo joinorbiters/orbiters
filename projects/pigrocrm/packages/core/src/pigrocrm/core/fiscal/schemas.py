@@ -32,7 +32,7 @@ RATE_DECIMAL_PLACES = 2
 GIORNI_SCADENZA_MIN = 0
 GIORNI_SCADENZA_MAX = 365
 
-# the previous system shipped `RiferimentoNormativo` as "N2.2 (non soggette - altri casi)", which is
+# The previous system shipped `RiferimentoNormativo` as "N2.2 (non soggette - altri casi)", which is
 # the *description of the code*, not a normative reference. This is the real one for
 # the forfettario, and it is a default rather than a constant because the article
 # numbers have changed before.
@@ -75,7 +75,7 @@ PAESI_UE = frozenset(
 DEFAULT_SOGLIA_BOLLO = Decimal("77.47")
 DEFAULT_IMPORTO_BOLLO = Decimal("2.00")
 
-# §4.5. The three constants that used to live in the previous system's `App.jsx` --
+# §4.5. The three constants that used to live nel gestionale precedente's `App.jsx` --
 # `FORFETTARIO_PROFITABILITY_RATE = 0.67`, `FORFETTARIO_SUBSTITUTE_TAX_RATE = 0.05`,
 # `FORFETTARIO_INPS_RATE = 0.2607` -- expressed as percentages, which is how their owner
 # reads and types them. Defaults rather than constants for the same reason the bollo

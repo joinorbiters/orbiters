@@ -1,7 +1,7 @@
 """Building the message Gmail will send.
 
-Same structure as the previous system's `buildRawEmailMessage` -- `multipart/mixed`, base64url for the
-`raw` field -- and none of its three defects:
+Same structure as the previous system's `buildRawEmailMessage` -- `multipart/mixed`, base64url for
+the `raw` field -- and none of its three defects:
 
 1. **`Message-ID` is always present**, generated here, with the right-hand side derived
    from the configured domain. It is what makes the thread correct when the client
@@ -10,8 +10,8 @@ Same structure as the previous system's `buildRawEmailMessage` -- `multipart/mix
    existing thread. Without them the reminder arrives detached, and the first thing the
    recipient does is ask for the invoice again.
 3. **The body declares `quoted-printable` or `base64`, with `charset="UTF-8"`. Never
-   `7bit`.** the previous system declares `7bit` over text containing `à` and `’`; it works by accident
-   until the first client that takes the declaration literally.
+   `7bit`.** the previous system declares `7bit` over text containing `à` and `’`; it works by
+   accident until the first client that takes the declaration literally.
 
 Built on `email.message.EmailMessage` from the standard library rather than by string
 concatenation. That is the point of the third defect: the encoding rules are subtle,

@@ -30,7 +30,7 @@ def _id_token(sub: str, email: str) -> str:
 
 
 def test_one_exchange_serves_every_call_within_the_token_lifetime() -> None:
-    """the previous system performed two OAuth exchanges to send a single invoice email, because it
+    """The previous system performed two OAuth exchanges to send a single invoice email, because it
     threw `expires_in` away. The cache is not an optimisation: it is why a flaky
     network stops presenting itself twice per operation."""
     fake = FakeGmail(expires_in=3599)
@@ -106,7 +106,7 @@ def test_invalid_grant_is_terminal_and_is_never_retried() -> None:
 
 
 def test_a_transient_failure_is_not_a_revocation() -> None:
-    """The the previous system defect, from the other side: a 503 and an `invalid_grant` produced the
+    """The previous system's defect, from the other side: a 503 and an `invalid_grant` produced the
     same screen and therefore the same wrong reaction. `GmailUnavailable` means wait,
     `CredentialRevoked` means re-consent, and the transport's retries are spent first."""
     fake = FakeGmail()

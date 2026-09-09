@@ -74,7 +74,7 @@ class Invoice(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     numero: Mapped[int | None] = mapped_column(Integer, default=None)
     riferimento: Mapped[str | None] = mapped_column(String(30), default=None)
     # `Date`, never a timestamp: this is the date printed on the document and the one
-    # that decides the fiscal year, not an instant. the previous system's `toISOString()` moved an
+    # that decides the fiscal year, not an instant. The previous system's `toISOString()` moved an
     # invoice issued on 31 December at 23:30 CET into the next year.
     data_emissione: Mapped[date | None] = mapped_column(Date, default=None)
     data_scadenza: Mapped[date | None] = mapped_column(Date, default=None)
@@ -203,7 +203,7 @@ class Invoice(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
 class InvoiceLine(Base, PrimaryKeyMixin, TimestampMixin):
     """One `DettaglioLinee`.
 
-    the previous system sent one line per invoice -- `NumeroLinea` hardcoded to 1, quantity 1, the
+    The previous system sent one line per invoice -- `NumeroLinea` hardcoded to 1, quantity 1, the
     whole total as the unit price -- so the detail of the work never reached the
     customer.
 

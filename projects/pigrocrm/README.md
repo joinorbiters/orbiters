@@ -165,6 +165,6 @@ to the expiry of the Google consent — is
 
 ## Status
 
-In development. Will replace [the previous system](https://example.com).
+In development. Will replace the previous system.
 
 The specs are in [`docs/superpowers/specs/`](docs/superpowers/specs/).

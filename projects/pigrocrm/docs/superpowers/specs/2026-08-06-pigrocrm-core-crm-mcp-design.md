@@ -18,15 +18,15 @@ Ogni funzionalità deve rispondere a una domanda: *fa risparmiare tempo ogni set
 
 ---
 
-## 2. Contesto: PigroCRM sostituisce the previous system
+## 2. Contesto: PigroCRM sostituisce il gestionale precedente
 
-PigroCRM è il rewrite da zero di **the previous system** (https://example.com, repo `humancraft-tech/the previous system`), tool interno **attualmente in produzione** per generare offerte e fatture. Il rewrite nasce da limiti strutturali reali, documentati qui sotto.
+PigroCRM è il rewrite da zero del **gestionale precedente**, tool interno **attualmente in produzione** per generare offerte e fatture. Il rewrite nasce da limiti strutturali reali, documentati qui sotto.
 
-Il repo pubblico di the previous system contiene lo scheletro, i template e il deploy. L'applicazione vive in due file: `website/vite.config.js` (5.485 righe, backend completo) e `website/src/App.jsx` (6.784 righe, frontend completo).
+Il repo pubblico del gestionale precedente contiene lo scheletro, i template e il deploy. L'applicazione vive in due file: `website/vite.config.js` (5.485 righe, backend completo) e `website/src/App.jsx` (6.784 righe, frontend completo).
 
 ### 2.1 Cosa si riusa
 
-| Asset | Dove sta in the previous system | Destinazione |
+| Asset | Dove sta nel gestionale precedente | Destinazione |
 |---|---|---|
 | Pipeline PDF Pandoc + Typst (+ `Dockerfile` con versioni pinnate) | `Dockerfile`, `offer/pandoc-template.typst`, `offer/header.typ`, `offer/invoice-header.typ` | Slice 2 |
 | Contenuto legale del template offerta (definizioni, condizioni generali, IP, validità 15gg) | `offer/template-offer.md` | Slice 2 |
@@ -43,7 +43,7 @@ Il generatore FatturaPA è conoscenza di dominio, non codice: implementa `FPR12`
 
 **Sintassi placeholder `[NOME_CLIENTE]`.** Collide con la sintassi dei link Markdown, non supporta condizionali né loop, e i valori finiscono non-escapati dentro sorgente Typst — una classe di bug da template injection, testimoniata dal commit `fix(pdf): escape @ and other typst-sensitive chars in placeholders`. Sostituita da `{{var}}` / `{{#if}}` / `{{#each}}` con escaping per contesto di destinazione (slice 2).
 
-**Persistenza su file.** the previous system salva `<offerta>.md` + `<offerta>.json` su volume montato: nessuna integrità referenziale, nessuna query, nessuna sicurezza sulla concorrenza. Sostituita da PostgreSQL.
+**Persistenza su file.** il gestionale precedente salva `<offerta>.md` + `<offerta>.json` su volume montato: nessuna integrità referenziale, nessuna query, nessuna sicurezza sulla concorrenza. Sostituita da PostgreSQL.
 
 **Backend dentro `vite.config.js`.** L'API è middleware del dev server, e in produzione gira `vite preview`. Non esiste un service layer testabile.
 
@@ -58,13 +58,13 @@ Coefficiente redditività 67%, imposta sostitutiva 5%, INPS 26,07%, ATECO 62.20.
 
 **Auth hardcoded** in `App.jsx` (password nel sorgente di un repo pubblico).
 
-**Attio come CRM.** the previous system non è un CRM: è un generatore di documenti appoggiato ad Attio, da cui legge le anagrafiche tirando a indovinare gli slug dei campi fiscali (`vat_number` o `vat` o `piva`; `sdi_code` o `codice_destinatario` o `codice_sdi`). PigroCRM assorbe questo ruolo: P.IVA, CF, SDI e PEC diventano colonne di prima classe.
+**Attio come CRM.** il gestionale precedente non è un CRM: è un generatore di documenti appoggiato ad Attio, da cui legge le anagrafiche tirando a indovinare gli slug dei campi fiscali (`vat_number` o `vat` o `piva`; `sdi_code` o `codice_destinatario` o `codice_sdi`). PigroCRM assorbe questo ruolo: P.IVA, CF, SDI e PEC diventano colonne di prima classe.
 
 ### 2.3 Cutover
 
-the previous system resta in produzione durante lo sviluppo. **Non c'è importer Attio in nessuno slice**: al 2026-08-20 il proprietario ha deciso di non usare più Attio, quindi non c'è nulla da importare. Le anagrafiche si inseriscono a mano.
+Il gestionale precedente resta in produzione durante lo sviluppo. **Non c'è importer Attio in nessuno slice**: al 2026-08-20 il proprietario ha deciso di non usare più Attio, quindi non c'è nulla da importare. Le anagrafiche si inseriscono a mano.
 
-Il clone di riferimento sta in `the reference copy/` (gitignored).
+Il clone di riferimento sta in `.reference-*/` (gitignored).
 
 ---
 
@@ -75,7 +75,7 @@ Il clone di riferimento sta in `the reference copy/` (gitignored).
 | Tenancy | **Single-tenant self-hosted** | Un'istanza = un'azienda. Elimina isolamento tenant, row-level security, signup pubblico e billing. Multi-tenant eventualmente dopo, se il prodotto lo giustifica. |
 | Auth umana | **Email + password, JWT in cookie httpOnly** | Zero dipendenze esterne, funziona in locale, test semplici. Utenti creati dall'admin. Google OAuth arriva allo slice 5 col Gmail sync, dove serve davvero il consenso Google. |
 | Auth agenti | **Personal Access Token** generati dalla UI | L'MCP gira via stdio in locale: nessuna porta esposta, nessun OAuth da configurare. |
-| Regime fiscale | **Configurabile, forfettario implementato** | `FiscalProfile` come dato di configurazione (regime, coefficiente ATECO, aliquota sostitutiva, INPS/cassa) con i valori attuali di the previous system come default. Costo quasi nullo ora; l'ordinario si aggiunge senza toccare il modello dati. |
+| Regime fiscale | **Configurabile, forfettario implementato** | `FiscalProfile` come dato di configurazione (regime, coefficiente ATECO, aliquota sostitutiva, INPS/cassa) con i valori attuali del gestionale precedente come default. Costo quasi nullo ora; l'ordinario si aggiunge senza toccare il modello dati. |
 | Documentale | **Metadati in Postgres, byte su storage pluggable** | `LocalFileStorage` per sviluppo e self-hosting, `GDriveStorage` per la produzione attuale con le cartelle per cliente già esistenti. Ricerca, permessi e timeline funzionano identici. (Slice 2.) |
 
 ---
@@ -104,7 +104,7 @@ Nessuna chiamata di rete tra MCP e API. Aggiungere un tool MCP costa poche righe
 
 ### 4.2 La regola che tiene in piedi tutto
 
-`packages/core` non importa **mai** da `apps/`. Un test automatico scandisce gli import e fallisce se trova `apps.`. Senza un controllo meccanico, "API-first" degrada nel giro di mesi — è esattamente ciò che è accaduto a the previous system.
+`packages/core` non importa **mai** da `apps/`. Un test automatico scandisce gli import e fallisce se trova `apps.`. Senza un controllo meccanico, "API-first" degrada nel giro di mesi — è esattamente ciò che è accaduto al gestionale precedente.
 
 ### 4.3 Struttura del monorepo
 
@@ -139,7 +139,7 @@ pigrocrm/
 │       │   ├── db/             # engine, sessione, migrazioni Alembic
 │       │   └── errors.py
 │       └── tests/
-├── templates/                  # portati da the previous system (slice 2+)
+├── templates/                  # portati dal gestionale precedente (slice 2+)
 ├── deploy/
 ├── docs/superpowers/specs/
 ├── docker-compose.yml
@@ -156,7 +156,7 @@ Cinque tabelle di dominio e tre di supporto. Tutte con `id` (UUID v7), `created_
 
 ### 5.1 `customers`
 
-I campi fiscali italiani sono **colonne di prima classe**: lo slice 3 ci costruisce sopra la FatturaPA, e the previous system dimostra il costo dell'alternativa.
+I campi fiscali italiani sono **colonne di prima classe**: lo slice 3 ci costruisce sopra la FatturaPA, e il gestionale precedente dimostra il costo dell'alternativa.
 
 `ragione_sociale` (obbligatorio) · `partita_iva` · `codice_fiscale` · `codice_sdi` · `pec` · `indirizzo` · `cap` · `comune` · `provincia` · `nazione` (default `IT`) · `email` · `telefono` · `sito_web` · `stato` · `note` (Markdown) · `custom_fields` (JSONB) · `deleted_at`
 
@@ -322,7 +322,7 @@ Restituiscono il contesto completo in Markdown — anagrafica, persone collegate
 - Il flag `Secure` sui cookie è configurabile (`PIGROCRM_COOKIE_SECURE`, default `true`) perché Safari — a differenza di Chrome e Firefox — non tratta `localhost` come contesto sicuro e scarta i cookie `Secure` su HTTP, facendo fallire il login in sviluppo locale senza alcun errore visibile.
 - **PAT**: `pgc_` + 32 byte random, salvati come **hash**, con `prefix` in chiaro per la lista, `last_used_at`, revoca. Mostrati una sola volta alla creazione.
 - Nessun signup pubblico: gli utenti li crea l'admin
-- **Bootstrap del primo admin**: comando CLI `pigrocrm createadmin` (`packages/core`), che legge email e password da argomenti o da prompt interattivo. Nessun account di default, nessuna password nota preconfigurata — la lezione diretta dalle credenziali hardcoded di the previous system.
+- **Bootstrap del primo admin**: comando CLI `pigrocrm createadmin` (`packages/core`), che legge email e password da argomenti o da prompt interattivo. Nessun account di default, nessuna password nota preconfigurata — la lezione diretta dalle credenziali hardcoded del gestionale precedente.
 
 ---
 
@@ -382,7 +382,7 @@ Un unico file di token CSS, due mode. **Nello slice 1 si costruiscono solo i tok
 
 ## 12. Deploy
 
-Riuso della pipeline di the previous system, con i test come gate aggiuntivo:
+Riuso della pipeline del gestionale precedente, con i test come gate aggiuntivo:
 
 1. **CI**: lint + type check + test (Python e frontend) + build
 2. **Sync**: `rsync` con esclusioni esplicite di `.env` e artefatti

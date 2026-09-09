@@ -3,7 +3,7 @@ FROM python:3.13-slim-bookworm
 # Pinned to the exact versions `pigrocrm.core.render` was built and verified against
 # (real compiles, real PDFs read back with `pdftotext` -- see
 # packages/core/tests/test_render_pdf.py and test_template_escaping.py): Pandoc
-# 3.8.2.1 and Typst 0.14.2, not the older pair `the reference copy/Dockerfile` used
+# 3.8.2.1 and Typst 0.14.2, not the older pair `.reference-*/Dockerfile` used
 # (Pandoc 3.1.12.2 / Typst 0.11.0). Typst's own diagnostic format
 # (`render/diagnostics.py`'s `_LOCATION_RE`) and the auto-typography workaround
 # (`render/pdf.py`'s `_defeat_typst_autotypography`) were both confirmed against

@@ -6,8 +6,8 @@ thing in `DealPnl`, `PnlTotals` and `FiscalEstimate`, and a second meaning would
 be introduced here, in the open, rather than discovered in a service.
 
 Every figure arrives already summed. §6 forbids the frontend of this slice from
-computing any economic total at all -- the previous system's whole P&L lived in `App.jsx`, with three
-fiscal constants and float hour sums.
+computing any economic total at all -- the previous system's whole P&L lived in `App.jsx`, with
+three fiscal constants and float hour sums.
 """
 
 from datetime import date, datetime

@@ -1,6 +1,6 @@
-# Runbook: import dello storico fatture the previous system 2026 in PigroCRM
+# Runbook: import dello storico fatture gestionale precedente 2026 in PigroCRM
 
-> **Il dataset non è più in questo repository.** `docs/superpowers/data/2026-09-04-the previous system-fatture-2026.json`
+> **Il dataset non è più in questo repository.** `docs/superpowers/data/2026-09-04-fatture-2026.json`
 > è stato rimosso il 2026-09-09, prima della pubblicazione: conteneva clienti reali, il
 > fatturato e le tariffe di un anno, e il codice fiscale di un cliente persona fisica. La
 > procedura qui sotto resta il modo in cui l'import è stato fatto, e resta valida per
@@ -8,8 +8,8 @@
 > Task 10 di `docs/superpowers/plans/2026-09-04-slice-9a-import-storico-fatture.md`,
 > con valori sintetici.
 
-Slice 9A. Dataset: `docs/superpowers/data/2026-09-04-the previous system-fatture-2026.json` (14 righe,
-numeri 2, 3, 5, 7–17; i numeri 1, 4, 6 non risultano emessi in the previous system e vanno dichiarati
+Slice 9A. Dataset: `docs/superpowers/data/2026-09-04-fatture-2026.json` (14 righe,
+numeri 2, 3, 5, 7–17; i numeri 1, 4, 6 non risultano emessi nel gestionale precedente e vanno dichiarati
 come buchi al passo 4). Ogni riga è nel formato di `InvoiceImport`
 (`packages/core/src/pigrocrm/core/invoices/schemas.py`); i campi che iniziano per `_`
 (`_cliente`, `_nota`, `_avvertenze`) sono ausiliari, non fanno parte dello schema e vanno
@@ -19,7 +19,7 @@ tolti prima di inviare la riga.
 elemento del JSON, campo `_avvertenze`):
 
 1. **Bollo.** Il dataset è scritto con `bollo: "0.00"` su tutte le 14 righe. Nello
-   screenshot del registro the previous system la colonna «Totale» coincide sempre con «Imp. Reddito»,
+   screenshot del registro del gestionale precedente la colonna «Totale» coincide sempre con «Imp. Reddito»,
    il che è compatibile sia con «niente bollo applicato» sia con «bollo assolto
    dall'emittente e quindi fuori dal totale». **Il titolare deve confermare contro i PDF
    originali** prima dell'import: se dai PDF risulta un bollo di 2 € (dovuto sulle
@@ -131,7 +131,7 @@ buchi = [
 ```
 
 Motivo di default, se il titolare non ne indica uno più specifico: `"numero non emesso
-in the previous system"`.
+nel gestionale precedente"`.
 
 I tre buchi vanno dichiarati **tutti**, 1 compreso: il controllo dei buchi non dichiarati
 parte da 1 (il registro di un anno comincia dall'1), quindi finché l'1 non è dichiarato
@@ -140,8 +140,8 @@ PigroCRM non riprende a emettere e `issue` risponde `Conflict` elencando i numer
 ### 5. Verifiche post-import
 
 - `list_invoices` (filtro `anno = 2026`, o senza filtro) deve mostrare le 14 fatture
-  importate, tutte con `importata_da = "esterno"` (il valore era `"the previous system"` fino
-  alla migrazione 0029: nessun nome di prodotto arriva all'utente).
+  importate, tutte con `importata_da = "esterno"` (la migrazione 0029 ha tolto
+  il nome del prodotto da cui venivano: nessun nome di prodotto arriva all'utente).
 - Il contatore dell'anno deve essere avanzato al numero più alto importato più i buchi
   dichiarati: `SELECT * FROM invoice_counters WHERE anno = 2026` deve dare
   `ultimo_numero = 17`.
@@ -163,7 +163,7 @@ PigroCRM non riprende a emettere e `issue` risponde `Conflict` elencando i numer
 uv run --directory . python - <<'EOF'
 import json
 from pigrocrm.core.invoices.schemas import InvoiceImport
-rows = json.load(open("docs/superpowers/data/2026-09-04-the previous system-fatture-2026.json"))
+rows = json.load(open("docs/superpowers/data/2026-09-04-fatture-2026.json"))
 for row in rows:
     row = {k: v for k, v in row.items() if not k.startswith("_")}
     row["customer_id"] = "00000000-0000-0000-0000-000000000000"

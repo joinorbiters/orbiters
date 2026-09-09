@@ -1,7 +1,7 @@
 """Every aggregate query of this slice, in one file.
 
 Deliberately one module rather than a query beside each caller: "where does `ricavi`
-come from" must have exactly one answer to read. the previous system's defect was a *dispersed*
+come from" must have exactly one answer to read. The previous system's defect was a *dispersed*
 aggregation -- `hoursByOfferKey.get(offer.id) || hoursByOfferKey.get(offer.fileName) ||
 hoursByOfferKey.get(offer.offerName) || 0` took the **first non-empty bucket instead of
 their sum**, so hours logged against an offer's name vanished if a single hour had been

@@ -1,6 +1,6 @@
 .claude/settings.local.json
 .claude/worktrees/
-the reference copy/
+.reference-*/
 .superpowers/
 
 # Python

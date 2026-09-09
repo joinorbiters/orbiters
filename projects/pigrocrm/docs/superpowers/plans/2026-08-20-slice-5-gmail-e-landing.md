@@ -767,7 +767,7 @@ describe('the landing soft layer', () => {
   })
 
   it('never uses backdrop-filter', () => {
-    // the previous system puts blur(12px) on .panel (App.css:166-172). It costs GPU on a phone,
+    // The previous system puts blur(12px) on .panel (App.css:166-172). It costs GPU on a phone,
     // and on a static page there is nothing behind the surface worth blurring.
     expect(css).not.toMatch(/backdrop-filter/)
   })
@@ -1036,7 +1036,7 @@ li {
   transform: translateY(12px);
 }
 
-/* the previous system's guard covered only .panel and .button (App.css:1289-1297). This one
+/* The previous system's guard covered only .panel and .button (App.css:1289-1297). This one
    covers everything that moves, because everything that moves is .rise. */
 @media (prefers-reduced-motion: reduce) {
   .rise,
@@ -1104,7 +1104,7 @@ describe.each(PAGES)('%s', (name) => {
     expect(description.length).toBeGreaterThan(40)
     // The trap named in spec 9.2: the previous system's index.html still carries "Humancraft is
     // the AI optimization platform for human and AI agents" from the scaffold it
-    // was generated out of (the reference copy/website/index.html:7-10), describing
+    // was generated out of (.reference-*/website/index.html:7-10), describing
     // a product that exists nowhere in that codebase. It is the easiest mistake
     // to repeat, and it is text Google reads during verification.
     expect(description).not.toMatch(/AI optimization platform/i)
@@ -3385,7 +3385,7 @@ git commit -m "feat(gmail): google_accounts, PKCE state, and the refresh token s
 
 ### Task B1-4: The HTTP seam, `FakeGmail`, and the rule that no test opens a socket
 
-This is the task the other Gmail tasks are testable *because of*. the previous system's two live production defects are both in code no test ever executed, and both are in exactly this layer.
+This is the task the other Gmail tasks are testable *because of*. The previous system's two live production defects are both in code no test ever executed, and both are in exactly this layer.
 
 **Files:**
 - Create: `packages/core/src/pigrocrm/core/gmail/errors.py`
@@ -3511,7 +3511,7 @@ def test_it_gives_up_after_four_attempts_rather_than_forever() -> None:
 
 
 def test_the_token_endpoint_surfaces_invalid_grant_as_a_machine_readable_code() -> None:
-    """the previous system's parseGoogleError truncated the message to 400 characters and returned
+    """The previous system's parseGoogleError truncated the message to 400 characters and returned
     500, so a revoked token and a flaky network produced the same screen and therefore
     the same wrong reaction: retry. The code is what makes them distinguishable."""
     body = json.dumps({"error": "invalid_grant", "error_description": "Token has been expired or revoked."}).encode()
@@ -3726,7 +3726,7 @@ def _error_code(payload: bytes) -> str:
     """Google speaks two dialects and this slice touches both. The OAuth token
     endpoint answers `{"error": "invalid_grant"}` -- a bare string. The Gmail API
     answers `{"error": {"status": "UNAUTHENTICATED", ...}}` -- an object. Reading only
-    one of them is how `invalid_grant` gets lost, which is the the previous system defect."""
+    one of them is how `invalid_grant` gets lost, which is the previous system's defect."""
     try:
         parsed = json.loads(payload.decode())
     except (ValueError, UnicodeDecodeError):
@@ -4192,9 +4192,9 @@ git commit -m "feat(gmail): the HTTP seam, a recording fake, and no socket in th
 ```
 
 ---
-### Task B1-5: Token exchange, refresh, and the cache the previous system did not have
+### Task B1-5: Token exchange, refresh, and the cache il gestionale precedente did not have
 
-the previous system discarded `expires_in`, had six call sites, and performed **two OAuth exchanges to send one invoice email**. That is not a missed optimisation: it is why a transient network error showed up twice per send.
+The previous system discarded `expires_in`, had six call sites, and performed **two OAuth exchanges to send one invoice email**. That is not a missed optimisation: it is why a transient network error showed up twice per send.
 
 **Files:**
 - Create: `packages/core/src/pigrocrm/core/gmail/tokens.py`
@@ -4256,7 +4256,7 @@ def _client(fake: FakeGmail, clock: object | None = None) -> GoogleTokenClient:
 
 
 def test_one_exchange_serves_every_call_within_the_token_lifetime() -> None:
-    """the previous system performed two OAuth exchanges to send a single invoice email, because it
+    """The previous system performed two OAuth exchanges to send a single invoice email, because it
     threw `expires_in` away. The cache is not an optimisation: it is why a flaky
     network stops presenting itself twice per operation."""
     fake = FakeGmail(expires_in=3599)
@@ -6163,7 +6163,7 @@ class GmailMessage(Base, PrimaryKeyMixin, TimestampMixin):
     """One synchronised message.
 
     The unique constraint on `(google_account_id, gmail_message_id)` is what makes the
-    watermark's deliberate 24-hour overlap free and every re-run idempotent. the previous system kept
+    watermark's deliberate 24-hour overlap free and every re-run idempotent. The previous system kept
     its send record in a JSON file on disk with a non-atomic read-modify-write, so two
     concurrent sends lost the count; a unique constraint cannot lose anything.
     """
@@ -9570,7 +9570,7 @@ git commit -m "test(gmail): verify Gmail keeps our Message-ID, and record the re
 
 ### Task B2-2: The RFC822 builder — three defects of the previous system's, none repeated
 
-`buildRawEmailMessage` (`the reference copy/website/vite.config.js:2480-2525`) hand-rolls `multipart/mixed` and gets three things wrong: no `Message-ID`, no `In-Reply-To`/`References`, and `Content-Transfer-Encoding: 7bit` declared over Italian text containing `à` and `’` — **a live defect in production**.
+`buildRawEmailMessage` (`.reference-*/website/vite.config.js:2480-2525`) hand-rolls `multipart/mixed` and gets three things wrong: no `Message-ID`, no `In-Reply-To`/`References`, and `Content-Transfer-Encoding: 7bit` declared over Italian text containing `à` and `’` — **a live defect in production**.
 
 **Files:**
 - Create: `packages/core/src/pigrocrm/core/gmail/rfc822.py`
@@ -9614,7 +9614,7 @@ from pigrocrm.core.gmail.rfc822 import (
     to_base64url,
 )
 
-# Accents, typographic quotes, an em dash and an emoji. the previous system declares 7bit over text
+# Accents, typographic quotes, an em dash and an emoji. The previous system declares 7bit over text
 # like this; it works by accident until the first mail client that takes the
 # declaration literally.
 TRICKY = "Però è già così — l’offerta “definitiva” costa 1.200 € 🎉"
@@ -9641,7 +9641,7 @@ def test_the_body_round_trips_character_for_character() -> None:
 
 
 def test_no_branch_declares_seven_bit_over_non_ascii() -> None:
-    """The live the previous system defect, banned by name. Checked over every branch: plain, with a
+    """The live defect of the previous system, banned by name. Checked over every branch: plain, with a
     cc, and with an attachment."""
     for attachments in ((), (OutgoingAttachment("offerta.pdf", "application/pdf", b"%PDF-1.7\n"),)):
         raw = build_rfc822(
@@ -10158,7 +10158,7 @@ class EmailDraft(Base, PrimaryKeyMixin, TimestampMixin):
     the `message_id_header` minted here is what makes an unknown send outcome resolvable
     by an exact lookup instead of a guess (spec 6.3).
 
-    the previous system kept this in a JSON file with a non-atomic read-modify-write, so two
+    The previous system kept this in a JSON file with a non-atomic read-modify-write, so two
     concurrent sends lost the count. The columns are the same ones -- they were the right
     columns -- on a support that cannot lose a write.
     """
@@ -10815,7 +10815,7 @@ in the middle.
 3. The outcome is committed after.
 
 The cost is that the process can die between 2 and 3. That is precisely the `incerto`
-state, and B2-6 is how it gets resolved -- by asking Gmail, not by guessing. the previous system had
+state, and B2-6 is how it gets resolved -- by asking Gmail, not by guessing. The previous system had
 the same window and no name for it, which is why it answers
 `404 'Fattura non trovata per registrare l'invio'` while the email is already delivered,
 and why the operator then presses the button again.
@@ -11469,7 +11469,7 @@ git commit -m "feat(gmail): an unknown outcome is resolved by lookup, never by g
 ---
 ### Task B2-7: The signature as data, and the previous system's reminder copy as a template
 
-the previous system's reminder text is the one thing here worth carrying intact: it went to real clients for years, and it has the right running order — invoice number, date, due date, amount, IBAN. The signature is the opposite: `Ivan Sala / CTO / mobile / web`, duplicated **verbatim** in both builders.
+The previous system's reminder text is the one thing here worth carrying intact: it went to real clients for years, and it has the right running order — invoice number, date, due date, amount, IBAN. The signature is the opposite: `Ivan Sala / CTO / mobile / web`, duplicated **verbatim** in both builders.
 
 **Files:**
 - Modify: `packages/core/src/pigrocrm/core/emitter/models.py` (append `firma_email`)
@@ -11529,7 +11529,7 @@ VALUES = {
 }
 
 
-def test_the_carried_copy_keeps_the previous system_running_order() -> None:
+def test_the_carried_copy_keeps_previous_system_running_order() -> None:
     """Portato: this text went to real clients for years, and its order is the useful
     part -- invoice number, date, due date, amount, IBAN."""
     rendered = render_template(SOLLECITO_TEMPLATE_SOURCE, VALUES, SOLLECITO_DECLARED_VARIABLES)
@@ -11639,7 +11639,7 @@ Expected: FAIL — `No module named 'pigrocrm.core.gmail.solleciti_template'`.
     # email does not attach an image of a signature, it wants text. The phone number,
     # the website and the company name are deliberately NOT repeated here; a template
     # reads them from their own columns, so the number cannot diverge between two
-    # places. the previous system hardcoded all of it, twice, verbatim, in two builders.
+    # places. The previous system hardcoded all of it, twice, verbatim, in two builders.
     firma_email: Mapped[str | None] = mapped_column(Text, default=None)
 ```
 
@@ -11668,7 +11668,7 @@ Anywhere a template's `tipo` is compared against a document's, convert explicitl
 ```python
 """The reminder text, carried from the previous system and de-personalised.
 
-`buildReminderInvoiceEmailBody` (`the reference copy/website/src/App.jsx:2329-2372`) is
+`buildReminderInvoiceEmailBody` (`.reference-*/website/src/App.jsx:2329-2372`) is
 text that went to real clients for years, with the right running order: invoice number,
 date, due date, amount, IBAN. That is carried. What is not carried is the signature --
 `Ivan Sala / CTO / mobile +39 02 1234567 / web https://www.humancraft.tech`,
@@ -11972,7 +11972,7 @@ class PaymentReminder(Base, PrimaryKeyMixin, TimestampMixin):
     of spec 7.3, and it is the database that guarantees it rather than application code:
     two concurrent writes mean the second takes an IntegrityError and becomes a Conflict.
 
-    the previous system had none of this. `wasSent = emailSentCount > 0` chose between a courtesy copy
+    The previous system had none of this. `wasSent = emailSentCount > 0` chose between a courtesy copy
     and a reminder, and nothing anywhere checked a due date, an interval, or a ceiling.
     Pressing the button ten times sent ten emails -- and the choice was wrong even when
     it worked: a courtesy copy resent because the first bounced became, on the second

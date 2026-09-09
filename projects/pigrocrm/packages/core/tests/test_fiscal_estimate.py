@@ -1,4 +1,4 @@
-"""§8. the previous system computed this **per offer**, inside `App.jsx`:
+"""§8. The previous system computed this **per offer**, inside `App.jsx`:
 
     const taxableBase   = gross * FORFETTARIO_PROFITABILITY_RATE        // 0.67
     const substituteTax = taxableBase * FORFETTARIO_SUBSTITUTE_TAX_RATE // 0.05

@@ -62,7 +62,7 @@ def test_an_invoice_records_where_it_was_imported_from(db_session: Session) -> N
 
 
 def test_a_register_gap_is_unique_per_year_and_number(db_session: Session) -> None:
-    db_session.add(InvoiceRegisterGap(anno=2026, numero=4, motivo="annullata in the previous system"))
+    db_session.add(InvoiceRegisterGap(anno=2026, numero=4, motivo="annullata altrove"))
     db_session.flush()
     db_session.add(InvoiceRegisterGap(anno=2026, numero=4, motivo="di nuovo"))
     with pytest.raises(IntegrityError):
@@ -444,8 +444,8 @@ def test_a_missing_emitter_profile_is_refused_before_any_row_is_flushed(
 def test_a_number_beyond_the_register_is_refused_by_the_schema(
     db_session: Session, tmp_path
 ) -> None:  # noqa: ANN001
-    """`MAX_NUMERO` is a bound on `InvoiceImport` itself, so a slipped the previous system document id
-    (`900142`) never reaches the service: no lock, no counter row, no
+    """`MAX_NUMERO` is a bound on `InvoiceImport` itself, so a document id slipped from
+    the previous system (`900142`) never reaches the service: no lock, no counter row, no
     two-hundred-thousand-element `undeclared_gaps`. The counter is the witness -- it
     exists only if `lock_counter` ran.
     """
@@ -468,7 +468,7 @@ def test_a_declared_gap_refuses_the_import_of_that_number(db_session: Session, t
 
     service = _svc(db_session, tmp_path)
     cid = _fiscal_customer_id(db_session)
-    service.repo.add_gap(InvoiceRegisterGap(anno=2026, numero=8, motivo="annullata in the previous system"))
+    service.repo.add_gap(InvoiceRegisterGap(anno=2026, numero=8, motivo="annullata altrove"))
     with pytest.raises(Conflict):
         service.import_issued(_payload(cid, numero=8, giorno=date(2026, 5, 5)), ADMIN)
 
@@ -492,14 +492,14 @@ def test_gaps_are_declared_with_a_reason_and_listed(db_session: Session, tmp_pat
         2026,
         RegisterGapsDeclare(
             buchi=[
-                {"numero": 1, "motivo": "annullata in the previous system"},
+                {"numero": 1, "motivo": "annullata nel gestionale precedente"},
                 {"numero": 4, "motivo": "test di emissione"},
             ]
         ),  # type: ignore[list-item]
         ADMIN,
     )
     assert [(g.numero, g.motivo) for g in out] == [
-        (1, "annullata in the previous system"),
+        (1, "annullata nel gestionale precedente"),
         (4, "test di emissione"),
     ]
     assert [g.numero for g in service.register_gaps(2026, ADMIN)] == [1, 4]
@@ -532,7 +532,7 @@ def test_undeclared_gaps_are_named_and_block_native_issuing(db_session: Session,
     service.import_issued(_payload(cid, numero=2, giorno=date(anno, 2, 4)), ADMIN)
     service.import_issued(_payload(cid, numero=5, giorno=date(anno, 4, 7)), ADMIN)
     # From 1, not from the lowest number imported: the 1 is a hole exactly as much as
-    # the 3 and the 4 are, and in the real the previous system register it is *the* hole.
+    # the 3 and the 4 are, and in the previous system's real register it is *the* hole.
     assert service.undeclared_gaps(anno) == [1, 3, 4]
 
     draft = service.create(
@@ -549,7 +549,7 @@ def test_undeclared_gaps_are_named_and_block_native_issuing(db_session: Session,
         anno,
         RegisterGapsDeclare(
             buchi=[
-                {"numero": 1, "motivo": "mai emessa in the previous system"},
+                {"numero": 1, "motivo": "mai emessa"},
                 {"numero": 3, "motivo": "a"},
                 {"numero": 4, "motivo": "b"},
             ]
@@ -575,7 +575,7 @@ def test_the_hole_at_one_is_not_silent(db_session: Session, tmp_path) -> None:  
     assert service.undeclared_gaps(2026) == [1]
     service.declare_gaps(
         2026,
-        RegisterGapsDeclare(buchi=[{"numero": 1, "motivo": "mai emessa in the previous system"}]),  # type: ignore[list-item]
+        RegisterGapsDeclare(buchi=[{"numero": 1, "motivo": "mai emessa"}]),  # type: ignore[list-item]
         ADMIN,
     )
     assert service.undeclared_gaps(2026) == []
@@ -695,7 +695,9 @@ def _pdf_document(session: Session, tmp_path, customer_id: UUID, *, storage=None
 
     docs = DocumentService(session, storage or LocalFileStorage(tmp_path), get_settings())
     doc = docs.create(
-        DocumentCreate(customer_id=customer_id, tipo="fattura", titolo="Fattura 7/2026 (the previous system)"),
+        DocumentCreate(
+            customer_id=customer_id, tipo="fattura", titolo="Fattura 7/2026 (importata)"
+        ),
         ADMIN,
     )
     docs.add_version(doc.id, b"%PDF-1.4 fake", "application/pdf", ADMIN)

@@ -99,7 +99,7 @@ class EmitterProfileService:
         """The profile as a template scope, under the name `emittente`.
 
         This is what makes `{{emittente.ragione_sociale}}` work in a template and what
-        replaces the hardcoded issuer data in the previous system's `header.typ`. `singleton` is
+        replaces the hardcoded issuer data nel gestionale precedente's `header.typ`. `singleton` is
         excluded: it is a storage mechanism, not a fact about the business (and is
         already absent from `EmitterProfileRead` for the same reason).
         """

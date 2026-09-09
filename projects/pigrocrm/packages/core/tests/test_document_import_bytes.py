@@ -63,7 +63,7 @@ def test_import_bytes_files_the_document_and_its_first_version_together(
     read = docs.import_bytes(
         customer_id=cid,
         tipo="fattura",
-        titolo="Fattura 2026/7 (originale the previous system)",
+        titolo="Fattura 2026/7 (originale del gestionale precedente)",
         data=PDF,
         content_type="application/pdf",
         actor=ADMIN,
@@ -73,7 +73,7 @@ def test_import_bytes_files_the_document_and_its_first_version_together(
     assert (read.customer_id, read.tipo, read.titolo) == (
         cid,
         "fattura",
-        "Fattura 2026/7 (originale the previous system)",
+        "Fattura 2026/7 (originale del gestionale precedente)",
     )
     assert read.versione_corrente == 1
     # The bytes are really in storage, readable through the ordinary download path: an
@@ -95,7 +95,7 @@ def test_the_import_records_where_the_bytes_came_from(db_session: Session, tmp_p
     read = docs.import_bytes(
         customer_id=_customer_id(db_session),
         tipo="fattura",
-        titolo="Fattura 2026/7 (originale the previous system)",
+        titolo="Fattura 2026/7 (originale del gestionale precedente)",
         data=PDF,
         content_type="application/pdf",
         actor=ADMIN,

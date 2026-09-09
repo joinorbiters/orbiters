@@ -8,7 +8,7 @@ Two things, and the second is a fix the task that found it could not make.
 **`payment_reminders`.** One row per reminder per invoice, with the unique constraint on
 `(invoice_id, sequence)` that is the first of the three layers of spec 7.3. It is the
 database that guarantees it and not application code: two concurrent creates both pass
-the count that precedes them, and only the constraint stops the second. the previous system kept the
+the count that precedes them, and only the constraint stops the second. The previous system kept the
 equivalent in a JSON file with a non-atomic read-modify-write and lost it under exactly
 this race.
 

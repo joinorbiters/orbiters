@@ -3,8 +3,8 @@
 SQL query run on a path independent of the service.
 
 This is the test that makes "revenue is the invoice" a property rather than a slogan.
-the previous system's P&L used `offer.totalAmount` -- the *offer's* amount -- filtered to projects with
-at least one non-draft invoice, so a job invoiced for a third of its offer appeared at
+The previous system's P&L used `offer.totalAmount` -- the *offer's* amount -- filtered to projects
+with at least one non-draft invoice, so a job invoiced for a third of its offer appeared at
 full revenue. There is no second notion of revenue here and none may be introduced.
 """
 

@@ -159,8 +159,8 @@ def test_a_readonly_actor_may_see_who_is_late(
 def test_an_invoice_still_inside_its_grace_period_is_not_a_candidate(
     logged_in: TestClient, api_session: Session, overdue_invoice: dict[str, Any]
 ) -> None:
-    """The grace window is what separates «in ritardo» from «scaduta ieri». the previous system had no
-    due date in the condition at all -- it chased on `emailSentCount > 0`."""
+    """The grace window is what separates «in ritardo» from «scaduta ieri». The previous system had
+    no due date in the condition at all -- it chased on `emailSentCount > 0`."""
     row = api_session.get(Invoice, overdue_invoice["id"])
     assert row is not None
     row.data_scadenza = oggi_in_italia() - timedelta(days=1)
@@ -232,7 +232,7 @@ def test_a_second_reminder_inside_the_interval_is_refused(
     logged_in: TestClient, overdue_invoice: dict[str, Any]
 ) -> None:
     """The interval is what makes a reminder bearable, and the refusal has to name it:
-    the previous system had no interval anywhere, which is how a client gets chased twice in a
+    The previous system had no interval anywhere, which is how a client gets chased twice in a
     morning."""
     assert logged_in.post(REMINDERS, json={"invoice_id": overdue_invoice["id"]}).status_code == 201
 

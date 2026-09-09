@@ -26,7 +26,7 @@ from pigrocrm.core.gmail.rfc822 import (
     to_base64url,
 )
 
-# Accents, typographic quotes, an em dash and an emoji. the previous system declares 7bit over text
+# Accents, typographic quotes, an em dash and an emoji. The previous system declares 7bit over text
 # like this; it works by accident until the first mail client that takes the
 # declaration literally.
 TRICKY = "Però è già così — l’offerta “definitiva” costa 1.200 € 🎉"
@@ -84,8 +84,8 @@ def test_a_long_unbroken_line_survives_the_encoding() -> None:
 
 
 def test_no_branch_declares_seven_bit_over_non_ascii() -> None:
-    """The live the previous system defect, banned by name. Checked over every branch: plain, with a
-    cc, and with an attachment."""
+    """The live defect of the previous system, banned by name. Checked over every branch: plain,
+    with a cc, and with an attachment."""
     for attachments in (
         (),
         (OutgoingAttachment("offerta.pdf", "application/pdf", b"%PDF-1.7\n"),),

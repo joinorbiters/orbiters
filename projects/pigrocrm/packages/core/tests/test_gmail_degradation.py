@@ -1,7 +1,7 @@
 """What a credential does when it stops working, and who finds out.
 
 Spec §5.5 and criteria 5-8. This is the point where an OAuth integration usually lies:
-the previous system could not tell `invalid_grant` from a flaky network, so a revoked grant and a
+The previous system could not tell `invalid_grant` from a flaky network, so a revoked grant and a
 dropped packet produced the same screen and the same wrong reaction -- retry, forever,
 against something that will never come back.
 
@@ -120,8 +120,9 @@ def test_the_next_sync_refuses_before_it_asks_google_anything(db_session: Sessio
 def test_the_stored_error_is_a_sentence_and_never_a_token_or_a_stack(
     db_session: Session,
 ) -> None:
-    """`last_error` is shown to a person. the previous system's equivalent was `parseGoogleError` fed
-    through `truncateMessage(400)`, which is how upstream prose ended up on screen."""
+    """`last_error` is shown to a person. The previous system's equivalent was
+    `parseGoogleError` fed through `truncateMessage(400)`, which is how upstream prose
+    ended up on screen."""
     account = connected_account(db_session)
     _with_a_correspondent(db_session)
     with pytest.raises(CredentialRevoked):
@@ -159,7 +160,7 @@ def test_the_gate_tells_an_expired_consent_apart_from_a_revoked_one(
 ) -> None:
     """`expired` is what we predicted; `revoked` is what Google told us. They call for
     the same action and are not the same sentence, and a gate that said "revocato" for
-    both would be the the previous system defect one level down."""
+    both would be the previous system's defect one level down."""
     account = connected_account(db_session, status="expired")
     db_session.flush()
     with pytest.raises(ConsentExpired) as caught:

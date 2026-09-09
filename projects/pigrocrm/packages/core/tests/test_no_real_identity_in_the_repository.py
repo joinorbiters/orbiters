@@ -63,6 +63,7 @@ _FORBIDDEN_HASHES = {
     "e8e9689deac5bac977b64e85c1105bd1": "a client's employee",
     "e27d8bd97d136e803daec3bac4c74d32": "the freelancer's street",
     "b77c7addf635dd3a9f853a7f341273ff": "the freelancer's comune",
+    "ef7c6cba58cf82997b990feec6b78b1c": "the previous product this replaced",
 }
 
 # Every value in these shapes that the repository is allowed to contain, and why.

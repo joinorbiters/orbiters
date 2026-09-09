@@ -229,7 +229,7 @@ def test_a_hostile_name_still_produces_a_schema_valid_file() -> None:
 
 def test_a_hostile_name_round_trips_byte_for_byte() -> None:
     """The tree serialiser is the one escaping pass, so re-parsing must give back the
-    domain value exactly. the previous system ran a value through escapeTypstText and then
+    domain value exactly. The previous system ran a value through escapeTypstText and then
     escapeXml, which put a literal backslash into an Agenzia delle Entrate record --
     that is what this asserts cannot happen."""
     xml = FatturaPAExporter().to_bytes(
@@ -415,7 +415,7 @@ def test_a_customer_with_a_pec_but_no_sdi_gets_the_seven_zeroes_and_the_pec() ->
 
 
 def test_a_customer_with_neither_sdi_nor_pec_is_refused_by_field_name() -> None:
-    """the previous system produced an empty `CodiceDestinatario` here: an invalid file, generated
+    """The previous system produced an empty `CodiceDestinatario` here: an invalid file, generated
     without an error."""
     with pytest.raises(ValidationFailed) as caught:
         FatturaPAExporter().to_bytes(
@@ -430,7 +430,7 @@ def test_a_customer_with_neither_sdi_nor_pec_is_refused_by_field_name() -> None:
 
 @pytest.mark.parametrize("field", ["indirizzo", "cap", "comune", "provincia"])
 def test_a_missing_address_part_is_refused_by_field_name(field: str) -> None:
-    """These are four real columns on `customers`. the previous system guessed them out of one
+    """These are four real columns on `customers`. The previous system guessed them out of one
     free-text address with a regex over Italian street prefixes."""
     with pytest.raises(ValidationFailed) as caught:
         FatturaPAExporter().to_bytes(
@@ -540,7 +540,7 @@ def test_an_invoice_with_no_lines_is_refused() -> None:
 def test_a_fiscal_id_that_does_not_match_is_omitted_rather_than_malformed(
     raw: str | None, expected: str | None
 ) -> None:
-    """The highest-value line in the previous system's generator: a malformed `IdCodice` is an
+    """The highest-value line nel gestionale precedente's generator: a malformed `IdCodice` is an
     outright rejection, while an absent element often passes."""
     assert normalise_fiscal_id(raw) == expected
 

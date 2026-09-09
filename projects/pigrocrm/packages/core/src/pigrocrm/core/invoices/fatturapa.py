@@ -188,7 +188,7 @@ def check_party_exportable(party: PartySnapshot, entity: str) -> None:
     missing a CAP would already own a register number that can never produce a valid
     file, and the only remaining remedy would be an annulment.
 
-    the previous system guessed `indirizzo`, `cap`, `comune` and `provincia` out of one free-text
+    The previous system guessed `indirizzo`, `cap`, `comune` and `provincia` out of one free-text
     field with a regex over Italian street prefixes. They are four real columns on
     `customers`; nothing is guessed, and a missing one refuses.
     """
@@ -535,7 +535,7 @@ class FatturaPAExporter:
             destinatario = etree.SubElement(block, "CodiceDestinatario")
             destinatario.text = CODICE_DESTINATARIO_FALLBACK
         else:
-            # the previous system emitted an empty element here: an invalid file, produced with no
+            # The previous system emitted an empty element here: an invalid file, produced with no
             # error at all.
             raise ValidationFailed(
                 "customer",
@@ -740,7 +740,7 @@ class FatturaPAExporter:
         """
         linea = etree.SubElement(parent, "DettaglioLinee")
         numero = etree.SubElement(linea, "NumeroLinea")
-        # A real line number per real line. the previous system hardcoded 1, quantity 1 and the
+        # A real line number per real line. The previous system hardcoded 1, quantity 1 and the
         # whole total as the unit price, so the detail of the work never reached the
         # customer.
         numero.text = str(riga.numero_linea)
@@ -791,8 +791,8 @@ class FatturaPAExporter:
         esigibilita = etree.SubElement(riepilogo, "EsigibilitaIVA")
         esigibilita.text = ESIGIBILITA_IVA
         if group.natura and group.riferimento_normativo:
-            # A real normative reference, from the profile. the previous system sent the *description
-            # of the code* ("N2.2 (non soggette - altri casi)") in this field.
+            # A real normative reference, from the profile. The previous system sent the
+            # *description of the code* ("N2.2 (non soggette - altri casi)") in this field.
             self._text(
                 riepilogo,
                 "RiferimentoNormativo",
@@ -844,7 +844,7 @@ class FatturaPAExporter:
     def _iso(value: date) -> str:
         """A `date`'s own ISO form.
 
-        Deliberately not a timestamp conversion. the previous system's `formatIsoDate` called
+        Deliberately not a timestamp conversion. The previous system's `formatIsoDate` called
         `toISOString()`, i.e. projected an instant through UTC: an invoice created on
         31 December at 23:30 CET came out dated 1 January, so its fiscal year was
         wrong on an immutable document. There is no instant here to get wrong.

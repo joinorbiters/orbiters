@@ -1,7 +1,7 @@
 """The timesheet as a spreadsheet.
 
 The **shape** of this sheet is carried over from the previous system's `buildTimeTrackingXlsx`
-(`the reference copy/website/vite.config.js`): a four-row header block with merged cells,
+(`.reference-*/website/vite.config.js`): a four-row header block with merged cells,
 a bold header row on a grey fill, a frozen pane below it, and widths 14 / 10 / 80. None
 of that is deducible from a specification -- it is what makes the file usable rather
 than merely correct, tuned by years of somebody actually scrolling and filtering it.

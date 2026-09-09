@@ -56,8 +56,8 @@ class FiscalProfile(Base, PrimaryKeyMixin, TimestampMixin):
     # row -- a second fiscal profile would create two answers to "which regime am I in".
     #
     # Percentages, so Numeric(5, 2): `67.00`, not `0.67`. Stored the way its owner reads
-    # and types them, converted once where the tax is computed. The defaults are the previous system's
-    # own profile -- the migration of FORFETTARIO_PROFITABILITY_RATE (0.67),
+    # and types them, converted once where the tax is computed. The defaults are the previous
+    # system's own profile -- the migration of FORFETTARIO_PROFITABILITY_RATE (0.67),
     # FORFETTARIO_SUBSTITUTE_TAX_RATE (0.05) and FORFETTARIO_INPS_RATE (0.2607) out of
     # App.jsx and into the service layer, which slice 1 §14 assigns to this slice.
     #

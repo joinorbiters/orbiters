@@ -621,16 +621,26 @@ def test_a_write_folder_configured_before_0027_is_not_assumed_verified() -> None
     )
 
 
-def test_0029_renames_the_import_provenance_to_esterno_in_both_directions() -> None:
+def test_0029_moves_any_legacy_import_provenance_to_esterno() -> None:
     """The two things migration 0029 has to get right about the rows that already exist.
 
     `invoices.importata_da` is read back by the API and by MCP, and its value used to be
     the *name of a product* -- the previous invoicing tool. Renaming the literal in the
     schema without moving the stored rows would leave the fourteen imported invoices
     holding a value no `Literal` admits any more: `InvoiceRead` would still hand it to a
-    client, and the badge would print it. So the rename is a data migration, and the
-    downgrade puts the old value back, because a database rolled back to 0028 is read by
-    code that only knows the old literal.
+    client, and the badge would print it. So the rename is a data migration.
+
+    Seeded here with a value the migration has never been told about, because that is
+    what it now claims: it matches on "neither NULL nor `'esterno'`" rather than on one
+    spelling, so any legacy provenance in any older database is collapsed, and a row
+    PigroCRM issued itself stays NULL. Naming the old value here would have put it back
+    in the repository, and pinning the assertion to that one name would have let a
+    different legacy spelling through while the test stayed green.
+
+    The downgrade is asserted to be a no-op on purpose. It used to restore the old
+    literal; that literal is gone from this repository, so restoring it is the one thing
+    the rollback must not do, and dropping to NULL would tell every reader that PigroCRM
+    issued these documents itself.
 
     The `imported` activity each of those rows wrote copied the value into its JSONB
     payload (`invoices/service.py::import_issued`), and `ActivityRead` hands the payload
@@ -665,7 +675,7 @@ def test_0029_renames_the_import_provenance_to_esterno_in_both_directions() -> N
                             '00000000-0000-7000-8000-0000000000e1', 'fattura', 'emessa',
                             2026, 7, '2026-05-05', 'TD01', 'EUR',
                             100.00, 0.00, 0.00, 100.00, 'da_incassare', '{}'::jsonb,
-                            'the previous system', now(), now()),
+                            'legacy', now(), now()),
                            ('00000000-0000-7000-8000-0000000000e3',
                             '00000000-0000-7000-8000-0000000000e1', 'fattura', 'emessa',
                             2026, 18, '2026-09-05', 'TD01', 'EUR',
@@ -677,7 +687,7 @@ def test_0029_renames_the_import_provenance_to_esterno_in_both_directions() -> N
                     VALUES ('00000000-0000-7000-8000-0000000000e4', 'invoice',
                             '00000000-0000-7000-8000-0000000000e2', 'imported', 'user',
                             '{"anno": 2026, "numero": 7, "totale": "100.00",
-                               "importata_da": "the previous system"}'::jsonb, now()),
+                               "importata_da": "legacy"}'::jsonb, now()),
                            ('00000000-0000-7000-8000-0000000000e5', 'invoice',
                             '00000000-0000-7000-8000-0000000000e3', 'issued', 'user',
                             '{"anno": 2026, "numero": 18}'::jsonb, now());
@@ -714,9 +724,9 @@ def test_0029_renames_the_import_provenance_to_esterno_in_both_directions() -> N
         "the imported rows must carry the new literal, and an invoice PigroCRM issued "
         f"itself must stay NULL: got {after_upgrade}"
     )
-    assert after_downgrade == {7: "the previous system", 18: None}, (
-        f"the downgrade has to put the old literal back for code that reads it: "
-        f"got {after_downgrade}"
+    assert after_downgrade == {7: "esterno", 18: None}, (
+        "the downgrade must not resurrect the old product name, and must not drop to "
+        f"NULL either, which would claim PigroCRM issued the document: got {after_downgrade}"
     )
     assert payloads_after_upgrade["imported"]["importata_da"] == "esterno", (
         "the payload of the import's own activity travels to the timeline whole, so a "
@@ -726,4 +736,4 @@ def test_0029_renames_the_import_provenance_to_esterno_in_both_directions() -> N
     # key it never had: `jsonb_set` on a missing path would *add* one.
     assert payloads_after_upgrade["imported"]["numero"] == 7
     assert "importata_da" not in payloads_after_upgrade["issued"]
-    assert payloads_after_downgrade["imported"]["importata_da"] == "the previous system"
+    assert payloads_after_downgrade["imported"]["importata_da"] == "esterno"

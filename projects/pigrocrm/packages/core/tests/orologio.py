@@ -11,7 +11,7 @@ regression to `date.today()` changes the observable result and the test goes red
 Italy is ahead of UTC (CET is +01:00, CEST +02:00), so a UTC process is still on
 *yesterday* for the first hour of every Italian day. 00:30 in Rome on 1 January 2026 is
 23:30 UTC on 31 December 2025: the two clocks disagree about the day, the month and the
-year at once, which is the same shape as the the previous system defect `clock.py`'s docstring
+year at once, which is the same shape as the previous system's defect `clock.py`'s docstring
 describes -- an instant projected into the wrong zone landing a document in the wrong
 fiscal year.
 
