@@ -12,7 +12,7 @@ from pigrocrm.core.errors import DomainError, ValidationFailed
 from pigrocrm.core.validation import SafeStr
 from pigrocrm_api.deps import ACCESS_COOKIE, REFRESH_COOKIE, ActorDep, SessionDep, SettingsDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
-from pigrocrm_api.tenancy import cookie_path
+from pigrocrm_api.tenancy import cookie_path, cookie_paths_to_clear, first_cookie
 
 router = APIRouter(prefix="/api/auth", tags=["auth"], responses=PROBLEM_RESPONSES)
 
@@ -150,11 +150,11 @@ def _every_cookie_value(request: Request, name: str) -> list[str]:
     keeps.
 
     A browser holds one cookie per (name, domain, path), and it sends all of them that
-    match: a session opened at `/` before the root got its own name, and the one opened
-    at `/humancraft/` after, arrive as two `refresh_token=` pairs in one header. The
-    `SimpleCookie` parser behind `request.cookies` keeps the last of them, so a logout
-    that read only that one left the other alive. Parsed by hand because the values are
-    JWTs -- no `;`, no `=` beyond the first, nothing to quote."""
+    match: a session opened at `/` and one opened at `/humancraft/` arrive as two
+    `refresh_token=` pairs in one header. The `SimpleCookie` parser behind
+    `request.cookies` keeps the last of them, so a logout that read only that one left
+    the other alive. `tenancy.first_cookie` is the single-value sibling. Parsed by hand
+    because the values are JWTs -- no `;`, no `=` beyond the first, nothing to quote."""
     header = request.headers.get("cookie", "")
     values: list[str] = []
     for pair in header.split(";"):
@@ -187,13 +187,11 @@ def logout(
                 refresh_tokens.consume(payload.jti, payload.sub)
         except DomainError:
             pass
-    # Deleted at the path the request wore and, when that is a space's or the root's
-    # own name, at `/` as well: a cookie is only ever removed by a Set-Cookie with the
-    # same path, and a browser that still holds the pair a plain `/app/login` set
-    # before the prefix existed would otherwise keep sending it -- which is a session
-    # the person just said they do not want.
-    paths = {cookie_path(request), "/"}
-    for path in sorted(paths, key=len, reverse=True):
+    # Deleted at every path this installation ever set them at -- see
+    # `cookie_paths_to_clear`: a cookie is only ever removed by a Set-Cookie with the
+    # same path, and a pair left in another jar would keep the session the person just
+    # said they do not want.
+    for path in cookie_paths_to_clear(request):
         response.delete_cookie(ACCESS_COOKIE, path=path)
         response.delete_cookie(REFRESH_COOKIE, path=path)
 
@@ -202,7 +200,8 @@ def logout(
 def refresh(
     request: Request, response: Response, session: SessionDep, settings: SettingsDep
 ) -> UserRead:
-    token = request.cookies.get(REFRESH_COOKIE)
+    # The most specific one, like `get_actor`: a space's own before the root's.
+    token = first_cookie(request, REFRESH_COOKIE)
     if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Refresh token assente")
 

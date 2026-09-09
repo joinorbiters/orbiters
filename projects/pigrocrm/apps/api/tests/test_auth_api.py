@@ -27,6 +27,23 @@ def _create_deactivated_user(session: Session, email: str) -> None:
     users.update(user.id, UserUpdate(attivo=False), Actor.system())
 
 
+def _present_refresh_cookie(client: TestClient, token: str) -> None:
+    """Replaces the jar's refresh cookie with `token`, as a browser would.
+
+    `client.cookies.set` on its own adds a second entry next to the one the last
+    Set-Cookie left, and the two then travel in one header; a browser holds one cookie
+    per (name, domain, path) and would have overwritten it. The API reads the most
+    specific -- the first -- so a stale duplicate here would test the wrong token."""
+    # Removed by the exact (domain, path, name) the jar holds -- `http.cookiejar` files
+    # a dotless host as `testserver.local`, and `Cookies.delete` without a domain
+    # recurses forever in httpx -- then set again under the same domain.
+    existing = [c for c in client.cookies.jar if c.name == REFRESH_COOKIE]
+    for cookie in existing:
+        client.cookies.jar.clear(cookie.domain, cookie.path, cookie.name)
+    domain = existing[0].domain if existing else "testserver.local"
+    client.cookies.set(REFRESH_COOKIE, token, domain=domain, path="/")
+
+
 def test_login_sets_httponly_cookies(client: TestClient, admin_user) -> None:
     response = client.post("/api/auth/login", json=CREDENTIALS)
     assert response.status_code == 200
@@ -194,7 +211,7 @@ def test_refresh_rotation_makes_the_old_token_unusable(
     # Simulate presenting the token again after it has already been rotated away --
     # e.g. a copy an attacker made before rotation happened.
     _past_the_grace_window(monkeypatch)
-    logged_in.cookies.set(REFRESH_COOKIE, old_refresh_token)
+    _present_refresh_cookie(logged_in, old_refresh_token)
     replay = logged_in.post("/api/auth/refresh")
     assert replay.status_code == 401
 
@@ -220,7 +237,7 @@ def test_a_refresh_replayed_within_the_grace_window_answers_exactly_as_the_first
     first = logged_in.post("/api/auth/refresh")
     assert first.status_code == 200
 
-    logged_in.cookies.set(REFRESH_COOKIE, old_refresh_token)
+    _present_refresh_cookie(logged_in, old_refresh_token)
     second = logged_in.post("/api/auth/refresh")
 
     assert second.status_code == 200
@@ -237,7 +254,7 @@ def test_the_grace_window_leaves_the_rest_of_the_session_alive(logged_in: TestCl
     assert old_refresh_token is not None
 
     assert logged_in.post("/api/auth/refresh").status_code == 200
-    logged_in.cookies.set(REFRESH_COOKIE, old_refresh_token)
+    _present_refresh_cookie(logged_in, old_refresh_token)
     assert logged_in.post("/api/auth/refresh").status_code == 200
 
     assert logged_in.get("/api/auth/me").status_code == 200
@@ -253,7 +270,7 @@ def test_logout_invalidates_the_refresh_token_server_side(logged_in: TestClient)
 
     assert logged_in.post("/api/auth/logout").status_code == 204
 
-    logged_in.cookies.set(REFRESH_COOKIE, refresh_token)
+    _present_refresh_cookie(logged_in, refresh_token)
     response = logged_in.post("/api/auth/refresh")
     assert response.status_code == 401
 
@@ -279,7 +296,7 @@ def test_logout_consumes_every_refresh_token_the_browser_sends(
 
     for token in (first, second):
         again = TestClient(client.app, base_url="https://testserver")
-        again.cookies.set(REFRESH_COOKIE, token)
+        _present_refresh_cookie(again, token)
         assert again.post("/api/auth/refresh").status_code == 401
 
 

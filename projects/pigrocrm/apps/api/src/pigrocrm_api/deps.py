@@ -20,7 +20,7 @@ from pigrocrm.core.space_settings import SpaceSettingsService, apply_overrides
 from pigrocrm.core.storage import DocumentStorage, LocalFileStorage, storage_from_settings
 from pigrocrm.core.tenants import TenantService, ensure_tenants_database
 from pigrocrm.core.tenants.database import tenant_database_url
-from pigrocrm_api.tenancy import tenant_slug
+from pigrocrm_api.tenancy import first_cookie, tenant_slug
 
 ACCESS_COOKIE = "pigrocrm_access"
 REFRESH_COOKIE = "pigrocrm_refresh"
@@ -423,7 +423,7 @@ def get_actor(request: Request, session: SessionDep, settings: SettingsDep) -> A
         except DomainError as exc:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token non valido") from exc
 
-    token = request.cookies.get(ACCESS_COOKIE)
+    token = first_cookie(request, ACCESS_COOKIE)
     if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Autenticazione richiesta")
     try:
