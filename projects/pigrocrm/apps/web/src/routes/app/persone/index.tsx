@@ -81,6 +81,33 @@ export function PeoplePage({
     [customers.data],
   )
 
+  /**
+   * What the trigger shows, computed rather than left to Radix's automatic
+   * "match the selected `SelectItem`'s text" behaviour: that lookup only ever finds
+   * a match once the matching item has actually rendered, and while `customers` is
+   * loading -- or has failed -- `sortedCustomers` is empty, so a `customerId` from
+   * the URL has no `SelectItem` yet. Radix's own fallback for that case is blank,
+   * not the `placeholder`, which is reserved for a genuinely empty value -- so a
+   * real, valid company id in the URL rendered a blank trigger while its name was in
+   * flight, permanently if the request errored. Passing this as `SelectValue`'s
+   * children overrides its automatic lookup entirely (Radix's own escape hatch for
+   * "I decide what is shown"), and it never depends on `sortedCustomers` having
+   * rendered anything.
+   *
+   * `customerId === undefined` is checked first and unconditionally: "no company
+   * chosen" is a static fact about the URL, never something `/api/customers`
+   * loading or failing should override.
+   */
+  const companyLabel = (): string => {
+    if (customerId === undefined) return 'Tutte le aziende'
+    if (customers.isLoading) return 'Caricamento aziende…'
+    if (customers.isError) return 'Azienda non disponibile'
+    return (
+      sortedCustomers.find((customer) => customer.id === customerId)?.ragione_sociale ??
+      'Azienda non disponibile'
+    )
+  }
+
   // Recomputed every render, not memoised -- same call as `CustomersPage`'s
   // identical line: `schema.data?.custom_fields` only changes when the schema
   // query itself refetches, and building a handful of plain objects is not
@@ -145,7 +172,7 @@ export function PeoplePage({
               aria-label="Filtra per azienda"
               disabled={customers.isLoading || customers.isError}
             >
-              <SelectValue />
+              <SelectValue>{companyLabel()}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={ALL_COMPANIES}>Tutte le aziende</SelectItem>
