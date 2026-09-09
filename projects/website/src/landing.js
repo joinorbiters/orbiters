@@ -1,25 +1,18 @@
-/* The landing's own script: it mounts the field behind the hero, and that is all.
+/* The landing's own script: it mounts the field behind the page, and that is all.
  *
- * Still, not drifting: a page that scrolls has enough movement of its own, and the
- * only motion this system spends is on Orbiters, where the field is the whole page.
- * No entrance animation either -- the initial state is the final state, so the page
- * reads the same with the script, without it, and with reduced motion.
+ * The same field as the community page on `/`, with the same options -- Ivan's ruling
+ * of 2026-09-09: the two pages share one background. The canvas is fixed and the
+ * page scrolls over it; `animate` drifts it slowly and field.js itself stands still
+ * when the reader asked for reduced motion. No entrance animation: the initial state
+ * is the final state, so the page reads the same with the script and without it.
  */
 ;(function () {
   function start() {
     var field = window.__pigroField
-    var canvas = document.getElementById('hero-field')
+    var canvas = document.getElementById('field')
     if (!field || !canvas || typeof canvas.getContext !== 'function') return
     var cell = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--landing-cell'))
-    field.mount(canvas, {
-      cell: cell || 16,
-      seed: 7,
-      /* A streak from the upper left down to the lower right, denser to the right
-         of the box so the tiles frame the text rather than sit behind it. */
-      band: function (u, v) {
-        return 1 - Math.abs((u * 1.1 - v * 0.9 - 0.25) * 1.5) - (u < 0.45 ? (0.45 - u) * 1.2 : 0)
-      },
-    })
+    field.mount(canvas, { cell: cell || 16, animate: true })
   }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', start)

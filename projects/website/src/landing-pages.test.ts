@@ -140,8 +140,11 @@ describe('index.html', () => {
     expect(page).toMatch(/href="\/termini"/)
   })
 
-  it('mounts the field behind the hero, from the shared script', () => {
-    expect(page).toMatch(/<canvas id="hero-field" aria-hidden="true">/)
+  it('mounts the same field as the community page behind the whole page, from the shared script', () => {
+    // Ivan, 2026-09-09: `/pigrocrm` has the same background as `/`. One fixed canvas
+    // right after <body>, the same id, the same mount options in landing.js.
+    expect(page).toMatch(/<body>\s*(?:<!--[\s\S]*?-->\s*)?<canvas id="field" aria-hidden="true"><\/canvas>/)
+    expect(page).not.toContain('hero-field')
     expect(page).toMatch(/<script type="module" src="\.\/field\.js"><\/script>\s*<script type="module" src="\.\/landing\.js">/)
   })
 

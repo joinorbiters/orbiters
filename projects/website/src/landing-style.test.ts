@@ -114,13 +114,16 @@ describe('the landing shares the product system', () => {
     expect(rule('.kicker::before')).toMatch(/display:\s*inline-block/)
   })
 
-  it('gives the hero its own stacking context for the field behind it', () => {
-    expect(rule('.hero')).toMatch(/isolation:\s*isolate/)
-  })
-
-  it('keeps the field inert and behind the text', () => {
-    expect(rule('#hero-field')).toMatch(/z-index:\s*-1/)
-    expect(rule('#hero-field')).toMatch(/pointer-events:\s*none/)
+  it('paints the same field as the community page: fixed, behind everything, inert', () => {
+    // Ivan, 2026-09-09: `/pigrocrm` shares its background with `/`. The rule is the
+    // twin of `#field` in orbiters.css, declaration for declaration.
+    for (const sheet of [css, orbiters]) {
+      expect(rule('#field', sheet)).toMatch(/position:\s*fixed/)
+      expect(rule('#field', sheet)).toMatch(/inset:\s*0/)
+      expect(rule('#field', sheet)).toMatch(/z-index:\s*-1/)
+      expect(rule('#field', sheet)).toMatch(/pointer-events:\s*none/)
+    }
+    expect(css).not.toMatch(/hero-field|isolation/)
   })
 
   it('keeps the call to action square, saturated once, and ink on hover', () => {

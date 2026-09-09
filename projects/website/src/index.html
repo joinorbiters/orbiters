@@ -27,6 +27,10 @@
     <script type="module" src="./consent.js"></script>
   </head>
   <body>
+    <!-- The same field as the community page on `/`: fixed behind the whole page, drifting
+      slowly, drawn by the shared script. Decoration the page never depends on. -->
+    <canvas id="field" aria-hidden="true"></canvas>
+
     <header class="wrap top">
       <a class="brand" href="/"><span class="glyph" aria-hidden="true"></span>Orbiters</a>
       <a class="quiet-link" href="/app/">Accedi</a>
@@ -34,7 +38,6 @@
 
     <main>
       <section class="hero">
-        <canvas id="hero-field" aria-hidden="true"></canvas>
         <div class="wrap">
           <div class="box">
             <p class="kicker">Orbiters</p>
