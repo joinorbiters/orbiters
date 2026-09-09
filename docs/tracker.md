@@ -23,6 +23,16 @@ are not part of this repo's flow.
 | Area labels | group **Area**, exactly one, Linear enforces it because it is a group: `area:api`, `area:brand`, `area:ci`, `area:core`, `area:infra`, `area:mcp`, `area:repo`, `area:web`, `area:website` |
 | Other flat labels | `flagship` for headline work, `parallel` for an issue a parallel agent can take without colliding |
 
+The two lists above are the board's, checked against `list_issue_labels` with
+`includeGroups: true` on 2026-09-09, and the board is the authority: an earlier version of
+this page named `Bug` and `core`, and an issue filed with those names failed with "Could
+not find labels" (ORB-33). Five of the type labels carry a description on the board, and
+it is the one to apply: `fix` is something that does not do what it says it does;
+`feature` is new behaviour a user or an agent can observe; `refactor` is existing behaviour
+made better with no new capability; `chore` is maintenance with no change in behaviour;
+`docs` is documentation that stands on its own. `test`, `ci`, `design`, `security` and
+`spike` mean what their names say.
+
 The four current projects, each with a lead and both of us as members:
 
 - `Website v1 - the public site, live and correct on a phone`. Lead: Lorenzo.
