@@ -36,7 +36,6 @@
 # Node (see "Load-bearing" above)
 **/node_modules/
 **/dist/
-**/dist-landing/
 **/.tanstack/
 **/*.tsbuildinfo
 

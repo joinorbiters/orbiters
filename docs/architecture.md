@@ -7,8 +7,7 @@ person does not have to reverse-engineer the reasoning from the directory names.
 
 ```
 projects/<name>/     one project owns everything under here
-shared/ts/<name>/    a TypeScript library used by more than one project
-shared/py/<name>/    a Python package used by more than one project
+shared/<name>/       code or assets used by more than one project (today: brand)
 tooling/<name>/      configuration shared by every project
 docs/                this directory: about the monorepo, never about a project
 ```
