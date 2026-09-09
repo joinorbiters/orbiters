@@ -21914,6 +21914,11 @@ export interface operations {
                 /** @description Fine del periodo, YYYY-MM-DD */
                 to: string;
                 customer_id?: string | null;
+                /**
+                 * @description Data a cui attribuire i ricavi: `emissione` (la data della fattura) o `competenza` (il periodo di competenza, quando c'è)
+                 * @default emissione
+                 */
+                base?: "emissione" | "competenza";
             };
             header?: never;
             path?: never;
