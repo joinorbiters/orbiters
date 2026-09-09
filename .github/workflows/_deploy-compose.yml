@@ -1,0 +1,214 @@
+# One deploy mechanism for every project in the monorepo that ships as a Docker
+# Compose stack over ssh. A project does not write a deploy workflow: it writes a
+# caller with two jobs, one per environment, and passes the four values below.
+#
+# Everything that differs between a preview and a production stack -- which host,
+# which user, which directory -- is a **GitHub Environment secret**, not an input and
+# not a repository secret with a longer name. That is the whole reason this file can
+# stay one file:
+#
+#   * `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH`, `DEPLOY_SSH_KEY` are read by name,
+#     always the same four names, and GitHub resolves them from whichever environment
+#     the calling job named. Ten projects with two environments each are forty secrets
+#     with four names, not forty names.
+#   * The caller MUST pass `secrets: inherit`. A reusable workflow resolves an
+#     environment's secrets only when the caller inherits: measured on this repository
+#     before this file was written, a job with `environment:` and no `inherit` reads
+#     every one of them as the empty string, silently, and the first thing that fails
+#     is ssh with no host. The "Verify" step below therefore fails loudly instead.
+#   * Environments also give the Deployments tab a real history per environment, and
+#     the day this repository is on a paid plan they are where a required reviewer on
+#     production goes, with no change to this file.
+name: _deploy-compose
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: GitHub environment holding the four DEPLOY_* secrets.
+        type: string
+        required: true
+      compose-dir:
+        description: Directory of the compose file, relative to the deploy root.
+        type: string
+        required: true
+      compose-project:
+        description: Compose project name. Never let it default to the directory name.
+        type: string
+        required: true
+      health-url:
+        description: URL curled on the host until it answers 200, from inside the host.
+        type: string
+        required: true
+      url:
+        description: Public URL, shown on the environment in the Actions UI.
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ inputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify the environment is configured
+        # Four missing secrets produce four confusing failures further down (ssh to an
+        # empty host, rsync to `@:`), and an inherited-secrets mistake produces all
+        # four at once. Name them here instead.
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          missing=()
+          [ -z "$DEPLOY_HOST" ] && missing+=(DEPLOY_HOST)
+          [ -z "$DEPLOY_USER" ] && missing+=(DEPLOY_USER)
+          [ -z "$DEPLOY_PATH" ] && missing+=(DEPLOY_PATH)
+          [ -z "$DEPLOY_SSH_KEY" ] && missing+=(DEPLOY_SSH_KEY)
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf '::error::Environment %s is missing: %s. If all four are missing, the caller is not passing `secrets: inherit`.\n' \
+              "${{ inputs.environment }}" "${missing[*]}"
+            exit 1
+          fi
+
+      - name: Refuse to deploy a commit CI has not passed
+        # A deploy workflow is not a status check and nothing stops it from running on
+        # a red commit, so it asks. A tag deploys the commit it points at, which is
+        # normally a commit main already built, and this finds that same run.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            run=$(gh api "repos/${REPO}/actions/workflows/ci.yml/runs?head_sha=${SHA}&per_page=10" \
+              --jq '.workflow_runs | sort_by(.created_at) | last // empty')
+            if [ -n "$run" ]; then
+              status=$(printf '%s' "$run" | jq -r .status)
+              conclusion=$(printf '%s' "$run" | jq -r .conclusion)
+              url=$(printf '%s' "$run" | jq -r .html_url)
+              echo "ci.yml for ${SHA}: status=${status} conclusion=${conclusion} (${url})"
+              if [ "$status" = completed ]; then
+                [ "$conclusion" = success ] && exit 0
+                echo "::error::CI concluded ${conclusion} for ${SHA}. See ${url}. Refusing to deploy."
+                exit 1
+              fi
+            fi
+            sleep 30
+          done
+          echo "::error::No completed ci.yml run for ${SHA} after 30 minutes. Refusing to deploy an unverified commit."
+          exit 1
+
+      - name: Configure SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+      - name: Sync sources
+        # The whole repository, not just the project: the uv and pnpm workspace roots
+        # are at the top and both image builds use the repository root as their build
+        # context. `.env` is excluded, so each environment's directory keeps its own,
+        # and so are the data and var directories in case an installation put them
+        # inside the checkout rather than outside it.
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p \"${DEPLOY_PATH}\""
+          rsync -az --delete \
+            --exclude '.git' --exclude '.github' \
+            --exclude '.env' --exclude '.reference-acme' \
+            --exclude 'node_modules' --exclude 'dist' --exclude '.venv' \
+            --exclude 'data' --exclude 'var' \
+            ./ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}"
+
+      - name: Build and start the stack
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          COMPOSE_DIR: ${{ inputs.compose-dir }}
+          COMPOSE_PROJECT: ${{ inputs.compose-project }}
+        run: |
+          ssh "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "DEPLOY_PATH='${DEPLOY_PATH}' COMPOSE_DIR='${COMPOSE_DIR}' COMPOSE_PROJECT='${COMPOSE_PROJECT}' bash -s" <<'SSH'
+            set -euo pipefail
+            cd "${DEPLOY_PATH}/${COMPOSE_DIR}"
+            if docker compose version >/dev/null 2>&1; then
+              COMPOSE="docker compose"
+            elif command -v docker-compose >/dev/null 2>&1; then
+              COMPOSE="docker-compose"
+            else
+              echo "::error::Docker Compose is not installed on this host."
+              exit 1
+            fi
+            # Two things that must never be left to a default. The env file: compose
+            # reads `.env` from the directory of its own file, which in this monorepo
+            # is two levels below the deploy root where the environment's `.env`
+            # lives. The project name: compose otherwise derives it from the directory
+            # name, so moving a project in the repository would silently orphan a
+            # running stack and build a second one beside it.
+            $COMPOSE -p "${COMPOSE_PROJECT}" --env-file "${DEPLOY_PATH}/.env" up -d --build
+          SSH
+
+      - name: Check the deployed code answers
+        # A deploy that reports success without asking the server anything reports
+        # success when the container failed to start.
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          HEALTH_URL: ${{ inputs.health-url }}
+          COMPOSE_PROJECT: ${{ inputs.compose-project }}
+        run: |
+          ssh "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "HEALTH_URL='${HEALTH_URL}' COMPOSE_PROJECT='${COMPOSE_PROJECT}' bash -s" <<'SSH'
+            set -uo pipefail
+            for attempt in $(seq 1 30); do
+              code=$(curl -s -o /dev/null -w '%{http_code}' "${HEALTH_URL}" || true)
+              if [ "$code" = 200 ]; then
+                echo "${HEALTH_URL} -> 200"
+                docker compose -p "${COMPOSE_PROJECT}" ps --format 'table {{.Name}}\t{{.Status}}'
+                exit 0
+              fi
+              sleep 5
+            done
+            echo "::error::${HEALTH_URL} did not answer 200 within 150 seconds (last: ${code})."
+            docker compose -p "${COMPOSE_PROJECT}" ps --format 'table {{.Name}}\t{{.Status}}' || true
+            docker compose -p "${COMPOSE_PROJECT}" logs --tail 50 || true
+            exit 1
+          SSH
+
+      - name: Record what is running
+        # `docker compose ps` says a stack is up; it does not say which commit it is.
+        # This file is what you read at 2am, and it is outside the rsync tree so a
+        # `--delete` cannot take it away.
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          RECORD: |
+            ref=${{ github.ref_name }}
+            sha=${{ github.sha }}
+            run=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            actor=${{ github.actor }}
+            environment=${{ inputs.environment }}
+        run: |
+          printf '%s' "$RECORD" | ssh "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "cat > '${DEPLOY_PATH}.deployed' && date -u '+deployed_at=%Y-%m-%dT%H:%M:%SZ' >> '${DEPLOY_PATH}.deployed' && cat '${DEPLOY_PATH}.deployed'"
