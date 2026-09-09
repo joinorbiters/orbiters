@@ -308,6 +308,47 @@ def test_the_pipeline_matches_the_repository_verbatim(seeded: Seeded) -> None:
     assert next(r for r in result.pipeline if r.stage_code == "lead").numero == 1
 
 
+def test_the_pipeline_carries_every_stage_and_says_which_kind_it_is(seeded: Seeded) -> None:
+    """The card draws the whole pipeline, not the open half of it.
+
+    A stage list that stops at the last open stage tells the reader nothing about where
+    the work ended up, and «Vinto» and «Perso» are the two stages a pipeline exists to
+    reach. They come back ordered by `posizione` like every other stage, and each row
+    declares its `stage_tipo` so the renderer can group them without matching `nome` --
+    a string the user is free to rename (residuo R15).
+    """
+    result = _dashboard(seeded.engine)
+    by_code = {row.stage_code: row for row in result.pipeline}
+    assert set(by_code) == {"lead", "contattato", "offerta", "negoziazione", "vinto", "perso"}
+    assert [row.posizione for row in result.pipeline] == sorted(
+        row.posizione for row in result.pipeline
+    )
+    assert by_code["lead"].stage_tipo == "open"
+    assert by_code["vinto"].stage_tipo == "won"
+    assert by_code["perso"].stage_tipo == "lost"
+    assert by_code["vinto"].numero == 1
+    assert by_code["perso"].numero == 1
+    assert by_code["vinto"].valore_totale == Decimal("5000.00")
+
+
+def test_the_closed_stages_count_what_sits_there_today_whatever_the_period(
+    seeded: Seeded,
+) -> None:
+    """`Vinto` and `Perso` here are a *place*, not a period.
+
+    The two closure figures above the card already answer "what closed between these two
+    dates"; the pipeline answers "where are the deals now". Filtering these rows by the
+    period would give the same card two meanings and make the counts disagree with the
+    drill-through, which is not period-filtered either.
+    """
+    seeded_deals = _dashboard(seeded.engine, date(2019, 1, 1), date(2019, 12, 31))
+    by_code = {row.stage_code: row for row in seeded_deals.pipeline}
+    assert by_code["vinto"].numero == 1
+    assert by_code["perso"].numero == 1
+    assert seeded_deals.chiusure.vinti == 0
+    assert seeded_deals.chiusure.persi == 0
+
+
 def test_the_closures_match_the_repository_verbatim(seeded: Seeded) -> None:
     da, a = _this_month()
     result = _dashboard(seeded.engine, da, a)

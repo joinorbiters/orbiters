@@ -64,8 +64,8 @@ class DealRepository:
         return deal
 
     def pipeline_summary(self) -> list[PipelineStageSummary]:
-        """Open deals per stage: count, `Σ valore_previsto`, count without a value, and
-        the weighted estimate.
+        """Deals per stage: count, `Σ valore_previsto`, count without a value, and the
+        weighted estimate.
 
         Lives in the repository rather than on `DealService` on purpose (spec §3): these
         aggregates have no business rule beyond `deleted_at IS NULL`, and putting them on
@@ -81,6 +81,15 @@ class DealRepository:
         A LEFT JOIN from `pipeline_stages`, so a stage with no deals comes back with
         zeroes: a missing stage and an empty stage render identically in a bar chart and
         the reader cannot tell which they are looking at.
+
+        **Every** configured stage, not only the open ones (2026-09-09): a card that stops
+        at the last open stage never says where the work ended up, and «Vinto» and «Perso»
+        are the two places a pipeline exists to reach. Each row carries its `stage_tipo` so
+        the renderer groups the closed ones by that rather than by `nome`, which the user
+        may rename. The closed rows count what sits in the stage *today* and are not
+        filtered by any period -- nothing here ever was; the period question is answered by
+        `closed_in_period`, above the same card, and one card with two meanings is how two
+        figures come to disagree.
         """
         rounded_weight = func.round(
             func.cast(Deal.valore_previsto, Numeric(20, 6))
@@ -93,6 +102,7 @@ class DealRepository:
                 PipelineStage.id,
                 PipelineStage.code,
                 PipelineStage.nome,
+                PipelineStage.tipo,
                 PipelineStage.posizione,
                 func.count(Deal.id).label("numero"),
                 func.coalesce(func.sum(Deal.valore_previsto), literal(0)).label("valore"),
@@ -110,11 +120,11 @@ class DealRepository:
                 Deal,
                 (Deal.pipeline_stage_id == PipelineStage.id) & Deal.deleted_at.is_(None),
             )
-            .where(PipelineStage.tipo == "open")
             .group_by(
                 PipelineStage.id,
                 PipelineStage.code,
                 PipelineStage.nome,
+                PipelineStage.tipo,
                 PipelineStage.posizione,
             )
             .order_by(PipelineStage.posizione, PipelineStage.id)
@@ -124,6 +134,7 @@ class DealRepository:
                 stage_id=str(row.id),
                 stage_code=row.code,
                 stage_nome=row.nome,
+                stage_tipo=row.tipo,
                 posizione=row.posizione,
                 numero=row.numero,
                 valore_totale=round_money(Decimal(row.valore)),

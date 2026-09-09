@@ -4910,6 +4910,8 @@ export interface components {
             stage_code: string | null;
             /** Stage Nome */
             stage_nome: string;
+            /** Stage Tipo */
+            stage_tipo: "open" | "won" | "lost";
             /** Posizione */
             posizione: number;
             /** Numero */
