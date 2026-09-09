@@ -23,7 +23,11 @@ from pigrocrm.core.errors import (
     PermissionDenied,
     ValidationFailed,
 )
-from pigrocrm.core.fiscal.schemas import FiscalProfileUpsert
+from pigrocrm.core.fiscal.schemas import (
+    DEFAULT_RIFERIMENTO_NORMATIVO,
+    RIFERIMENTO_NORMATIVO_EXTRA_UE,
+    FiscalProfileUpsert,
+)
 from pigrocrm.core.fiscal.service import FiscalProfileService
 from pigrocrm.core.invoices.models import Invoice
 from pigrocrm.core.invoices.naming import RIFERIMENTO_PROFORMA_RE
@@ -152,7 +156,62 @@ def test_the_regime_decides_the_line_natura(service: InvoiceService, customer_id
     assert riga.numero_linea == 1
     assert riga.aliquota_iva == Decimal("0.00")
     assert riga.natura == "N2.2"
-    assert riga.riferimento_normativo is not None
+    assert riga.riferimento_normativo == DEFAULT_RIFERIMENTO_NORMATIVO
+
+
+def _non_resident_customer(db_session: Session) -> UUID:
+    """The shape of ORB-32: a British company, no SDI code, no PEC, a postcode that is
+    not five digits and no province."""
+    customer = Customer(
+        ragione_sociale="Example Ltd",
+        partita_iva="GB123456789",
+        indirizzo="1 Old Street",
+        cap="EC1V 9HL",
+        comune="London",
+        provincia="",
+        nazione="GB",
+    )
+    db_session.add(customer)
+    db_session.flush()
+    return customer.id
+
+
+def test_a_non_resident_customer_gets_natura_n2_1_and_the_7_ter_reference(
+    service: InvoiceService, db_session: Session
+) -> None:
+    """ORB-32. The regime reads the customer's country: a service to a business outside
+    Italy is outside the scope of Italian VAT (art. 7-ter DPR 633/1972), so the line
+    carries `N2.1` and the 7-ter reference, not the domestic `N2.2` declaration."""
+    customer_id = _non_resident_customer(db_session)
+    invoice = service.create(
+        InvoiceCreate(customer_id=customer_id, tipo="proforma", righe=[_line()]), ADMIN
+    )
+    (riga,) = service.lines(invoice.id, ADMIN)
+    assert riga.aliquota_iva == Decimal("0.00")
+    assert riga.natura == "N2.1"
+    assert riga.riferimento_normativo == RIFERIMENTO_NORMATIVO_EXTRA_UE
+    assert "7-ter" in riga.riferimento_normativo
+
+
+def test_replacing_the_lines_reads_the_customer_s_country_again(
+    service: InvoiceService, db_session: Session
+) -> None:
+    """The natura is decided when the lines are computed, so a proforma created before
+    this fix, or before the customer's country was corrected, is repaired by replacing
+    its lines: that is the remedy for the proforma in ORB-32."""
+    customer_id = _non_resident_customer(db_session)
+    invoice = service.create(InvoiceCreate(customer_id=customer_id, righe=[_line()]), ADMIN)
+    customer = db_session.get(Customer, customer_id)
+    assert customer is not None
+    customer.nazione = "IT"
+    customer.provincia = "RM"
+    customer.cap = "00100"
+    db_session.flush()
+
+    service.replace_lines(invoice.id, [_line()], ADMIN)
+    (riga,) = service.lines(invoice.id, ADMIN)
+    assert riga.natura == "N2.2"
+    assert riga.riferimento_normativo == DEFAULT_RIFERIMENTO_NORMATIVO
 
 
 def test_a_non_zero_rate_under_the_forfettario_is_refused_by_field_name(

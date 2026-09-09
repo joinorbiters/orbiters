@@ -8,6 +8,7 @@ whole result of one call, and it could not render a proforma's PDF at all -- it 
 read the frozen, `issue`-only view (`_for_export`), which a proforma never populates.
 """
 
+from collections.abc import Callable
 from decimal import Decimal
 from uuid import UUID
 
@@ -145,3 +146,49 @@ def test_producing_artifacts_twice_is_idempotent_for_an_issued_fattura(
             {"id": artifact.document_id},
         ).scalar_one()
         assert versions == 1
+
+
+def _non_resident_customer(db_session: Session) -> UUID:
+    customer = Customer(
+        ragione_sociale="Example Ltd",
+        partita_iva="GB123456789",
+        indirizzo="1 Old Street",
+        cap="00000",  # the SdI convention for a foreign address; a real postcode is ORB-38
+        comune="London",
+        provincia="",
+        nazione="GB",
+    )
+    db_session.add(customer)
+    db_session.flush()
+    return customer.id
+
+
+def test_the_pdf_for_a_non_resident_customer_carries_the_7_ter_reference(
+    service: InvoiceService,
+    db_session: Session,
+    storage: LocalFileStorage,
+    extract_pdf_text: Callable[[LocalFileStorage, Session, UUID], str],
+) -> None:
+    """ORB-32, on the document the customer reads. The footer used to print the
+    profile's domestic declaration whatever the lines said; it now prints the
+    declaration the lines actually carry, so the PDF and the XML agree."""
+    invoice_id = _issue(service, _non_resident_customer(db_session))
+    pdf, _xml = service.produce_artifacts(invoice_id, ADMIN)
+    testo = extract_pdf_text(storage, db_session, pdf.document_id)
+    assert "7-ter" in testo
+    assert "DPR 633/1972" in testo
+    assert "L. 190/2014" not in testo
+
+
+def test_the_pdf_for_an_italian_customer_keeps_the_domestic_declaration(
+    service: InvoiceService,
+    customer_id: UUID,
+    db_session: Session,
+    storage: LocalFileStorage,
+    extract_pdf_text: Callable[[LocalFileStorage, Session, UUID], str],
+) -> None:
+    invoice_id = _issue(service, customer_id)
+    pdf, _xml = service.produce_artifacts(invoice_id, ADMIN)
+    testo = extract_pdf_text(storage, db_session, pdf.document_id)
+    assert "L. 190/2014" in testo
+    assert "7-ter" not in testo

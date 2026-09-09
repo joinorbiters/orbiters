@@ -20,6 +20,10 @@ from pigrocrm.core.errors import ValidationFailed
 from pigrocrm.core.fiscal.schemas import (
     CODICE_REGIME_RE,
     DEFAULT_RIFERIMENTO_NORMATIVO,
+    NATURA_NON_RESIDENTE,
+    PAESI_UE,
+    RIFERIMENTO_NORMATIVO_EXTRA_UE,
+    RIFERIMENTO_NORMATIVO_UE,
     FiscalSnapshot,
 )
 from pigrocrm.core.invoices.totals import RiepilogoGroup, round_money
@@ -33,7 +37,7 @@ class RegimeStrategy(Protocol):
     codice: str
 
     def resolve_line_vat(
-        self, requested: Decimal | None, profile: FiscalSnapshot
+        self, requested: Decimal | None, profile: FiscalSnapshot, *, nazione_cliente: str
     ) -> tuple[Decimal, str | None, str | None]:
         """`(aliquota_iva, natura, riferimento_normativo)` for one line.
 
@@ -42,6 +46,11 @@ class RegimeStrategy(Protocol):
         rate is rejected too. Returning them separately would let a caller pair them
         wrongly, and the table constraint `(aliquota_iva = 0) = (natura IS NOT NULL)`
         would then be the first thing to notice.
+
+        `nazione_cliente` is the customer's ISO 3166-1 country, because the `Natura`
+        of an untaxed operation depends on where the customer is established and not
+        only on the issuer's regime (ORB-32). Keyword-only and without a default, so
+        a caller cannot forget it and silently get the domestic answer.
         """
         ...
 
@@ -56,13 +65,23 @@ class RegimeStrategy(Protocol):
 
 
 class _Forfettario:
-    """`RF19`. No VAT, `Natura N2.2`, and the normative declaration on every line and
-    every summary group."""
+    """`RF19`. No VAT, and on every line and every summary group a `Natura` with its
+    normative declaration: `N2.2` and the profile's L. 190/2014 text for an Italian
+    customer; `N2.1` for a customer established abroad, whose service is outside the
+    territorial scope of Italian VAT under art. 7-ter DPR 633/1972 (ORB-32), with the
+    annotation art. 21 c. 6-bis prescribes for where they are: "inversione contabile"
+    inside the EU, "operazione non soggetta" outside it.
+
+    The country is the only thing read off the customer. A private consumer abroad
+    would be a different case again (7-ter is a business-to-business rule), and the
+    customer model does not tell a company from a person, so that case is named here
+    rather than guessed at: today every foreign customer of this product is a company.
+    """
 
     codice = "RF19"
 
     def resolve_line_vat(
-        self, requested: Decimal | None, profile: FiscalSnapshot
+        self, requested: Decimal | None, profile: FiscalSnapshot, *, nazione_cliente: str
     ) -> tuple[Decimal, str | None, str | None]:
         if requested is not None and requested != ZERO:
             raise ValidationFailed(
@@ -71,6 +90,15 @@ class _Forfettario:
                 f"il regime {self.codice} non applica IVA, quindi l'aliquota deve essere zero",
                 expected="0.00",
             )
+        # Normalised the way `_cessionario` reads it in `fatturapa.py`: `customers.nazione`
+        # is stored as typed, a lowercase `it` is still Italy, and an empty value is
+        # Italy too -- the column's own default -- rather than a foreign customer.
+        paese = (nazione_cliente or "").strip().upper() or "IT"
+        if paese != "IT":
+            riferimento = (
+                RIFERIMENTO_NORMATIVO_UE if paese in PAESI_UE else RIFERIMENTO_NORMATIVO_EXTRA_UE
+            )
+            return ZERO, NATURA_NON_RESIDENTE, riferimento
         natura = profile.natura_default or "N2.2"
         riferimento = profile.riferimento_normativo or DEFAULT_RIFERIMENTO_NORMATIVO
         return ZERO, natura, riferimento
@@ -100,8 +128,11 @@ class _Ordinario:
     codice = "RF01"
 
     def resolve_line_vat(
-        self, requested: Decimal | None, profile: FiscalSnapshot
+        self, requested: Decimal | None, profile: FiscalSnapshot, *, nazione_cliente: str
     ) -> tuple[Decimal, str | None, str | None]:
+        # The country is accepted and ignored: an ordinary regime taxes the operation
+        # whoever the customer is, and a foreign business customer would need the
+        # reverse-charge or non-taxable blocks this strategy deliberately does not have.
         aliquota = requested if requested is not None else profile.aliquota_iva_default
         if aliquota == ZERO:
             # The table constraint requires a `natura` whenever the rate is zero, and

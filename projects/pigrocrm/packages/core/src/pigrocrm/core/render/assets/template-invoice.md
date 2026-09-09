@@ -68,7 +68,7 @@
 #line(length: 100%, stroke: 0.6pt + divider)
 #v(10pt)
 
-#text(size: 8pt, fill: muted)[{{fiscale.riferimento_normativo}}]
+#text(size: 8pt, fill: muted)[{{fattura.dichiarazione_regime}}]
 
 #text(size: 8pt, fill: muted)[{{fattura.dichiarazione_bollo}}]
 ```
