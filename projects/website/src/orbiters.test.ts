@@ -65,7 +65,12 @@ describe('orbiters.html', () => {
       .replace(/\s+/g, ' ')
       .trim()
     expect(text.split(' ').length).toBeLessThan(90)
-    expect(text).toContain('Lascia l\'email')
+    // Since ORB-20 filling the form is the signup to Orbiters itself, not a place on a
+    // waiting list: the page says so, and says what we will write about, in the same
+    // words as the privacy policy.
+    expect(text).toContain('Iscriviti e sei dentro')
+    expect(text).toContain('solo di Orbiters')
+    expect(html).not.toMatch(/appena apriamo|Lascia l'email|lista d'attesa/)
     for (const word of ['freelance', 'fatturare']) {
       expect(text.toLowerCase()).toContain(word)
     }
