@@ -13,11 +13,23 @@
      page are the same grid. The system's 16px from a tablet up; 14px on a phone,
      where the field is the whole page and 16px tiles read as noise. */
   --orb-cell: 14px;
+  /* The box's hard shadow. One whole cell on a phone, where the box edges are laid on
+     the grid and a 10px step would take the right edge off it (ORB-18); 10px from a
+     tablet up, where the box floats centred and the step is the design's own. */
+  --orb-step: var(--orb-cell);
+  /* A viewport is almost never a whole number of cells. What is left over (`slack`)
+     is split between the two edges, so the grid starts at `origin` and the partial
+     column, when there is one, is half a cell at most on either side instead of a whole
+     clipped column on the right. orbiters.js does not repeat this arithmetic: it reads
+     the body's computed background-position, which is where the origin ends up. */
+  --orb-slack: mod(100vw, var(--orb-cell));
+  --orb-origin: round(down, var(--orb-slack) / 2, 1px);
 }
 
 @media (min-width: 48rem) {
   :root {
     --orb-cell: var(--system-cell);
+    --orb-step: 10px;
   }
 }
 * {
@@ -34,7 +46,9 @@ body {
   display: grid;
   grid-template-rows: 1fr auto;
   place-items: center;
-  padding: clamp(1rem, 4vw, 3rem);
+  /* One cell of ground around the box on a phone. The declaration below refines it
+     so that the box sits on the grid; this one is what a browser without mod() keeps. */
+  padding: var(--orb-cell);
   color: var(--orb-ink);
   font-family: var(--font-sans);
   font-weight: 300;
@@ -47,6 +61,29 @@ body {
     linear-gradient(to right, var(--orb-grid) 1px, transparent 1px),
     linear-gradient(to bottom, var(--orb-grid) 1px, transparent 1px);
   background-size: var(--orb-cell) var(--orb-cell);
+}
+
+/* On a phone the box is laid on the grid: its left border on the first grid line after
+   one whole column of ground, its right border on a grid line too, and the shadow (one
+   cell) followed by the same one column, give or take the odd pixel of slack. Written
+   as `origin + cell` on the left and `step + cell + the rest of the slack` on the right,
+   which is what makes the two gaps equal to the eye. Guarded, so that a browser without
+   mod() keeps the plain one-cell padding above instead of no padding at all. */
+@supports (padding: round(down, mod(100vw, 14px) / 2, 1px)) {
+  body {
+    background-position: var(--orb-origin) 0;
+    padding:
+      var(--orb-cell) calc(var(--orb-step) + var(--orb-cell) + var(--orb-slack) - var(--orb-origin))
+      calc(var(--orb-cell) + var(--orb-step)) calc(var(--orb-origin) + var(--orb-cell));
+  }
+}
+
+/* From a tablet up the box is narrower than the page and floats centred, so the
+   padding is the design's own breathing room rather than a grid measure. */
+@media (min-width: 48rem) {
+  body {
+    padding: clamp(1rem, 4vw, 3rem);
+  }
 }
 
 /* --- The field. Fixed, behind everything, and inert: it is decoration that the
@@ -66,7 +103,7 @@ body {
   width: min(100%, 30rem);
   background-color: #ffffff;
   border: 2px solid var(--orb-ink);
-  box-shadow: 10px 10px 0 var(--orb-ink);
+  box-shadow: var(--orb-step) var(--orb-step) 0 var(--orb-ink);
   padding: clamp(1.5rem, 4vw, 2.5rem);
   display: grid;
   gap: 1rem;
@@ -87,6 +124,8 @@ h1 {
   font-weight: 500;
   line-height: 1.1;
   letter-spacing: -0.02em;
+  /* Two lines of similar length when it wraps, never "soli." alone on the second. */
+  text-wrap: balance;
 }
 
 .lead {
@@ -125,6 +164,10 @@ h1 {
 
 .signup input,
 .signup button {
+  /* An input's intrinsic width is about twenty characters, and a grid column will not
+     shrink below it: at 430px wide the two-column row pushed the box to 485px and the
+     page scrolled sideways. Zero, so the column decides the width. */
+  min-width: 0;
   font: inherit;
   font-size: 1rem;
   line-height: 1.2;

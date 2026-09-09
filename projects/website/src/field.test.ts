@@ -8,6 +8,7 @@ type FieldWindow = Window & {
   __pigroField?: {
     noise: (x: number, y: number) => number
     diagonal: (u: number, v: number) => number
+    columns: (width: number, cell: number, origin: number) => number
     mount: (canvas: HTMLCanvasElement, options?: object) => void
   }
 }
@@ -49,6 +50,41 @@ describe('field.js', () => {
       expect(a).toBeGreaterThanOrEqual(0)
       expect(a).toBeLessThan(1)
     }
+  })
+
+  describe('the columns (ORB-18)', () => {
+    // The three phone widths the issue asks to be rendered, and the two cells the
+    // pages use. The origin is what orbiters.css computes: half the slack, floored.
+    const origin = (width: number, cell: number) => Math.floor((width % cell) / 2)
+
+    it.each([
+      [360, 14],
+      [390, 14],
+      [430, 14],
+      [375, 14],
+      [1280, 16],
+    ])('at %ipx with a %ipx cell, the last column is whole and inside the edge', (width, cell) => {
+      const cols = load().columns(width, cell, origin(width, cell))
+      const rightEdge = origin(width, cell) + cols * cell
+      // Painted only up to the last whole cell, and not a whole cell short of the edge.
+      expect(rightEdge).toBeLessThanOrEqual(width)
+      expect(width - rightEdge).toBeLessThan(cell)
+      // The strip left on the right is the strip left on the left, give or take one
+      // pixel when the slack is odd.
+      expect(Math.abs(width - rightEdge - origin(width, cell))).toBeLessThanOrEqual(1)
+    })
+
+    it('never rounds up: 390 wide is 27 columns of 14, not 28', () => {
+      const api = load()
+      // Math.ceil(390 / 14) is 28, and the 28th column was the one the viewport cut.
+      expect(api.columns(390, 14, 0)).toBe(27)
+      expect(api.columns(390, 14, 6)).toBe(27)
+      expect(api.columns(392, 14, 0)).toBe(28)
+    })
+
+    it('is zero, not negative, on a canvas narrower than its origin', () => {
+      expect(load().columns(3, 14, 6)).toBe(0)
+    })
   })
 
   it('the default band is a diagonal that empties out at the corners', () => {

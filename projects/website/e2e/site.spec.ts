@@ -112,6 +112,79 @@ test.describe('every page of the site', () => {
     expect(fonts[0]).toContain('outfit-variable-latin')
   })
 
+  // The community page on a phone (ORB-18): the box on the grid, equal gaps either side
+  // of it once the shadow is counted, whole tiles at both edges, and no sideways scroll.
+  // Three widths rather than one, because the slack a viewport leaves over the cell is
+  // different at each and the arithmetic has to hold for all of them.
+  for (const width of [360, 390, 430]) {
+    test.describe(`the community page at ${width} wide`, () => {
+      test.use({ viewport: { width, height: 844 }, deviceScaleFactor: 1 })
+
+      test('sits on its grid', async ({ page }) => {
+        await page.goto('/orbiters', { waitUntil: 'networkidle' })
+        const m = await page.evaluate(() => {
+          const cell = parseFloat(
+            getComputedStyle(document.documentElement).getPropertyValue('--orb-cell'),
+          )
+          const origin = parseFloat(getComputedStyle(document.body).backgroundPositionX)
+          const box = document.querySelector('.box') as HTMLElement
+          const rect = box.getBoundingClientRect()
+          const step = parseFloat(getComputedStyle(box).boxShadow.match(/(-?[\d.]+)px/)?.[1] ?? '')
+          const h1 = document.querySelector('h1') as HTMLElement
+          const range = document.createRange()
+          range.selectNodeContents(h1)
+          const lines = [...range.getClientRects()].map((line) => line.width)
+          // Which CSS-pixel columns of the canvas carry any paint at all.
+          const canvas = document.getElementById('field') as HTMLCanvasElement
+          const ctx = canvas.getContext('2d') as CanvasRenderingContext2D
+          const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height)
+          const painted: number[] = []
+          for (let x = 0; x < canvas.width; x += 1) {
+            for (let y = 0; y < canvas.height; y += 1) {
+              if ((data[(y * canvas.width + x) * 4 + 3] ?? 0) > 0) {
+                painted.push(x)
+                break
+              }
+            }
+          }
+          return {
+            innerWidth: window.innerWidth,
+            scrollWidth: document.documentElement.scrollWidth,
+            cell,
+            origin,
+            step,
+            left: rect.left,
+            right: rect.right,
+            lines,
+            firstPainted: Math.min(...painted),
+            lastPainted: Math.max(...painted) + 1,
+          }
+        })
+        expect(m.scrollWidth).toBe(m.innerWidth)
+        expect(m.cell).toBe(14)
+        // The grid is centred: what the cell does not divide is split between the edges.
+        expect(m.origin).toBe(Math.floor((m.innerWidth % m.cell) / 2))
+        // Both borders of the box on grid lines, one whole column in from the left.
+        expect(m.left).toBe(m.origin + m.cell)
+        expect((m.right - m.origin) % m.cell).toBe(0)
+        // The shadow is one cell, and what is left on the right after it is what is on
+        // the left, give or take the odd pixel of slack.
+        expect(m.step).toBe(m.cell)
+        const gapRight = m.innerWidth - m.right - m.step
+        expect(Math.abs(gapRight - m.left)).toBeLessThanOrEqual(1)
+        // Tiles: painted inside the first grid line and never past the last whole cell.
+        // A tile is inset one pixel in its cell, so the first paint is origin + 1 and
+        // the last is one short of a grid line.
+        expect(m.firstPainted).toBe(m.origin + 1)
+        expect(m.lastPainted).toBeLessThanOrEqual(m.innerWidth)
+        expect((m.lastPainted + 1 - m.origin) % m.cell).toBe(0)
+        // The title wraps to two lines of comparable length, never a word alone.
+        expect(m.lines).toHaveLength(2)
+        expect(Math.min(...m.lines) / Math.max(...m.lines)).toBeGreaterThan(0.5)
+      })
+    })
+  }
+
   test.describe('with JavaScript disabled', () => {
     test.use({ javaScriptEnabled: false })
 
