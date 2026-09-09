@@ -1,4 +1,4 @@
-import { BadgeEuro, Ban, Download, FileCheck2, RefreshCw, Send, Undo2 } from 'lucide-react'
+import { BadgeEuro, Ban, Download, FileCheck2, RefreshCw, Send, Trash2, Undo2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -19,6 +19,7 @@ import { toIsoDate } from '@/lib/dates'
 import {
   downloadInvoiceArtifact,
   useAnnulInvoice,
+  useDeleteInvoice,
   useIssueInvoice,
   useMarkTransmitted,
   useProduceArtifacts,
@@ -26,7 +27,15 @@ import {
   type Invoice,
 } from './queries'
 
-export function InvoiceActions({ invoice }: { invoice: Invoice }) {
+export function InvoiceActions({
+  invoice,
+  onDeleted,
+}: {
+  invoice: Invoice
+  /** Called once the server has accepted the delete: the page this bar sits on no
+   *  longer exists, so the caller decides where to go (the list, in practice). */
+  onDeleted?: () => void
+}) {
   const [problem, setProblem] = useState<ProblemDetail | null>(null)
   const [annulOpen, setAnnulOpen] = useState(false)
   const [motivo, setMotivo] = useState('')
@@ -43,11 +52,17 @@ export function InvoiceActions({ invoice }: { invoice: Invoice }) {
   const artifacts = useProduceArtifacts(invoice.id)
   const payment = useSetPaymentState(invoice.id)
   const transmitted = useMarkTransmitted(invoice.id)
+  const remove = useDeleteInvoice()
 
   const isDraftFattura = invoice.tipo === 'fattura' && invoice.stato === 'bozza'
   const isProformaReady = invoice.tipo === 'proforma' && invoice.stato === 'confermata'
   const canIssue = isDraftFattura || isProformaReady
   const isIssued = invoice.tipo === 'fattura' && invoice.stato === 'emessa'
+  // What never consumed a number can go (slice 3 §4: a draft is «cancellabile»): a
+  // draft fattura, and a proforma until it is consumed by the emission it precedes.
+  // The server (`soft_delete`, and the CHECK behind it) refuses everything else with a
+  // 409, so this mirrors the rule rather than owning it. An issued invoice is annulled.
+  const canDelete = isDraftFattura || (invoice.tipo === 'proforma' && invoice.stato !== 'consumata')
   // An invoice pigroCRM imported never had its own XML rendered here: the one on file is
   // whatever the system that issued it transmitted at the time, so offering to
   // regenerate it would silently replace a legally-filed document with a
@@ -97,6 +112,25 @@ export function InvoiceActions({ invoice }: { invoice: Invoice }) {
         onError: (error) => setProblem(toProblem(error)),
       },
     )
+  }
+
+  /**
+   * A soft delete, and one the person decides: `apps/mcp` deliberately has no tool for
+   * it. The confirm is against a misclick, the way «Emetti» has one; there is no reason
+   * to ask for, because nothing fiscal happened yet and the list is where you land.
+   */
+  function onDelete() {
+    const what = invoice.tipo === 'proforma' ? 'questa proforma' : 'questa bozza'
+    if (!window.confirm(`Eliminare ${what}? Non ha un numero, quindi non resta traccia nel registro.`))
+      return
+    setProblem(null)
+    remove.mutate(invoice.id, {
+      onSuccess: () => {
+        toast.success(invoice.tipo === 'proforma' ? 'Proforma eliminata' : 'Bozza eliminata')
+        onDeleted?.()
+      },
+      onError: (error) => setProblem(toProblem(error)),
+    })
   }
 
   function onAnnul() {
@@ -235,6 +269,13 @@ export function InvoiceActions({ invoice }: { invoice: Invoice }) {
           <Button variant="outline" onClick={() => void onDownload('pdf')}>
             <Download className="mr-2 size-4" />
             PDF proforma
+          </Button>
+        ) : null}
+
+        {canDelete ? (
+          <Button variant="destructive" onClick={onDelete} disabled={remove.isPending}>
+            <Trash2 className="mr-2 size-4" />
+            {invoice.tipo === 'proforma' ? 'Elimina proforma' : 'Elimina bozza'}
           </Button>
         ) : null}
       </div>

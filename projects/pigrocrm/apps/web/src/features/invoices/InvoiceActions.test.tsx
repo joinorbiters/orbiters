@@ -11,7 +11,10 @@ import { api } from '@/lib/api'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, api: { GET: vi.fn(), POST: vi.fn(), PUT: vi.fn(), PATCH: vi.fn() } }
+  return {
+    ...actual,
+    api: { GET: vi.fn(), POST: vi.fn(), PUT: vi.fn(), PATCH: vi.fn(), DELETE: vi.fn() },
+  }
 })
 vi.mock('sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
@@ -47,6 +50,7 @@ function wrap(children: ReactNode) {
 beforeEach(() => {
   vi.mocked(api.POST).mockReset()
   vi.mocked(api.PATCH).mockReset()
+  vi.mocked(api.DELETE).mockReset()
   vi.mocked(toast.success).mockReset()
   vi.mocked(toast.warning).mockReset()
   vi.spyOn(window, 'confirm').mockReturnValue(true)
@@ -119,8 +123,59 @@ describe('InvoiceActions', () => {
 
   it('says annulment keeps the number, rather than offering a delete', async () => {
     wrap(<InvoiceActions invoice={ISSUED} />)
+    expect(screen.queryByRole('button', { name: /elimina/i })).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /^annulla$/i }))
     expect(screen.getByText(/Il numero resta nel registro/)).toBeInTheDocument()
+  })
+
+  // --- deleting what never had a number (slice 3 §4) ---------------------------------------
+
+  it('deletes a draft after a confirmation, then hands the page back to its caller', async () => {
+    vi.mocked(api.DELETE).mockResolvedValue(ok(undefined))
+    const onDeleted = vi.fn()
+    wrap(<InvoiceActions invoice={DRAFT} onDeleted={onDeleted} />)
+    await userEvent.click(screen.getByRole('button', { name: /elimina bozza/i }))
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringMatching(/Eliminare questa bozza/))
+    await waitFor(() =>
+      expect(api.DELETE).toHaveBeenCalledWith('/api/invoices/{invoice_id}', {
+        params: { path: { invoice_id: 'inv-1' } },
+      }),
+    )
+    await waitFor(() => expect(onDeleted).toHaveBeenCalledTimes(1))
+    expect(toast.success).toHaveBeenCalledWith('Bozza eliminata')
+  })
+
+  it('does not delete when the confirmation is declined', async () => {
+    vi.mocked(window.confirm).mockReturnValue(false)
+    const onDeleted = vi.fn()
+    wrap(<InvoiceActions invoice={DRAFT} onDeleted={onDeleted} />)
+    await userEvent.click(screen.getByRole('button', { name: /elimina bozza/i }))
+    expect(api.DELETE).not.toHaveBeenCalled()
+    expect(onDeleted).not.toHaveBeenCalled()
+  })
+
+  it('offers to delete a proforma until it is consumed, and names it as such', async () => {
+    vi.mocked(api.DELETE).mockResolvedValue(ok(undefined))
+    const { unmount } = wrap(<InvoiceActions invoice={PROFORMA} />)
+    await userEvent.click(screen.getByRole('button', { name: /elimina proforma/i }))
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringMatching(/Eliminare questa proforma/))
+    await waitFor(() => expect(api.DELETE).toHaveBeenCalledTimes(1))
+    expect(toast.success).toHaveBeenCalledWith('Proforma eliminata')
+    unmount()
+    // Consumed by an emission: it is the antecedent of a numbered document and stays.
+    wrap(<InvoiceActions invoice={{ ...PROFORMA, stato: 'consumata' } as Invoice} />)
+    expect(screen.queryByRole('button', { name: /elimina/i })).not.toBeInTheDocument()
+  })
+
+  it('shows the server refusal and stays on the page when the delete is a 409', async () => {
+    vi.mocked(api.DELETE).mockResolvedValue(
+      failed({ detail: 'il documento e\u2019 stato emesso nel frattempo e non si elimina piu\u2019' }, 409),
+    )
+    const onDeleted = vi.fn()
+    wrap(<InvoiceActions invoice={DRAFT} onDeleted={onDeleted} />)
+    await userEvent.click(screen.getByRole('button', { name: /elimina bozza/i }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/non si elimina/))
+    expect(onDeleted).not.toHaveBeenCalled()
   })
 
   // --- the states after emission: collected, transmitted ---------------------------------
