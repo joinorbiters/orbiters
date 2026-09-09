@@ -28,9 +28,18 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Cancelling is right on a PR and wrong on the trunk, and the difference is not
+# taste. Every push to `main` is a candidate for deployment: `deploy-*.yml` refuses a
+# commit whose CI did not pass, and a cancelled run is not a pass. Observed on
+# 2026-09-09 (runs 34340411493, 34340433286, 34340694267): three pushes landed inside
+# four minutes, the account's concurrent-job ceiling put the first one's jobs in a
+# queue, and when it finally started six minutes later it cancelled the two newer
+# runs -- including the tip. The tip then had no verdict and could not deploy, which
+# is the same shape as a red trunk and harder to read. Grouping by commit on push
+# gives every trunk commit its own run and its own answer; a PR still keeps one.
 concurrency:
-  group: ci-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
