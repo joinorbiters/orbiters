@@ -98,6 +98,15 @@ code {
   padding-block: 1.25rem;
 }
 
+/* The header and the footer sit on the field, so each link carries a sliver of the
+   page's own ground behind it and stays readable over a dark tile: the same move
+   orbiters.css makes for its footer. */
+.top a,
+footer .quiet-link {
+  background-color: var(--landing-surface);
+  padding: 0.2rem 0.45rem;
+}
+
 .brand {
   display: inline-flex;
   align-items: center;
