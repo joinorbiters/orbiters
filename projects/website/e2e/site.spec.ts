@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-const PAGES = ['/', '/privacy', '/termini', '/orbiters'] as const
+const PAGES = ['/', '/pigrocrm', '/privacy', '/termini', '/orbiters'] as const
 const BUDGET_BYTES = 40 * 1024
 // The one host these pages may ever talk to besides their own: the ChatGPT Ads
 // measurement SDK. "May ever" is the whole subtlety -- `consent.js` injects it only
@@ -10,7 +10,7 @@ const PIXEL_HOST = 'bzrcdn.openai.com'
 const CONSENT_KEY = 'orbiters.consent'
 // The two pages that carry the notice, and therefore the two that can end up with the
 // pixel. `src/pixel.test.ts` owns which pages declare it.
-const MEASURED_PATHS = ['/', '/orbiters'] as const
+const MEASURED_PATHS = ['/', '/pigrocrm', '/orbiters'] as const
 
 test.describe('every page of the site', () => {
   for (const path of PAGES) {
@@ -131,6 +131,10 @@ test.describe('every page of the site', () => {
         for (const link of await page.locator('a[href^="/"]').all()) {
           const href = await link.getAttribute('href')
           expect(href).toBeTruthy()
+          // `/hub/` is the Orbiters hub (projects/hub), another deployable on the same
+          // origin: the host's nginx sends it there, the preview server here has nothing
+          // behind it. The link is verified where it resolves, not here.
+          if (href!.startsWith('/hub/')) continue
           const response = await page.request.get(href!)
           expect(response.status(), `${href} from ${path}`).toBeLessThan(400)
         }

@@ -27,14 +27,15 @@ pnpm --filter website lint
 | Page | Served at | What it is |
 |---|---|---|
 | `src/orbiters.html` | `joinorbiters.com/` | The community page and its signup form |
-| `src/index.html` | `/pigrocrm` | PigroCRM's own page |
+| `src/index.html` | `/pigrocrm` | The Orbiters landing: two doors into the hub, how it works, the perk |
 | `src/privacy.html` | `/privacy` | Privacy notice |
 | `src/termini.html` | `/termini` | Terms |
 
-The Orbiters form posts to `POST /api/orbiters/signups`, which is implemented in
-PigroCRM's API (`projects/pigrocrm/apps/api`) and reached on the same origin. That
-endpoint is the one thing this project does not own, and it is why the dev server
-proxies `/api`.
+The Orbiters form posts to `POST /api/orbiters/signups`, which since 2026-09-09 is
+implemented in the Orbiters hub's API (`projects/hub/apps/api`) and reached on the same
+origin. The landing's two calls to action point at `/hub/freelance` and `/hub/aziende`,
+the hub's wizards, on the same origin again. Those paths are the things this project
+does not own, and why the dev server proxies `/api` and leaves `/hub/` alone.
 
 ## Colour, typeface and the mark
 

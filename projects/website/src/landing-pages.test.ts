@@ -63,7 +63,12 @@ describe.each(PAGES)('%s', (name) => {
   })
 
   it('signs itself with the four-tile glyph before the name', () => {
-    expect(page).toMatch(/<a class="brand" href="\/"><span class="glyph" aria-hidden="true"><\/span>PigroCRM<\/a>/)
+    // The landing is Orbiters' since 2026-09-09 and signs as Orbiters; the two policy
+    // pages are the product's and keep its name.
+    const brand = name === 'index.html' ? 'Orbiters' : 'PigroCRM'
+    expect(page).toMatch(
+      new RegExp(`<a class="brand" href="/"><span class="glyph" aria-hidden="true"></span>${brand}</a>`),
+    )
   })
 
   it('has no entrance animation to fail', () => {
@@ -77,24 +82,57 @@ describe('index.html', () => {
   it('opens with the community and its claim, then presents the CRM as the perk', () => {
     // Since 2026-09-08 PigroCRM is what a member of Orbiters gets: the page says what
     // Orbiters is first, in its own words, and only then what the CRM does.
-    const claim = page.indexOf('La prima community per freelancer costruita da freelancer.')
+    const claim = page.indexOf('Freelance, ma non da soli.')
     const perk = page.indexOf('PigroCRM, il perk')
     expect(claim).toBeGreaterThan(0)
     expect(perk).toBeGreaterThan(claim)
+    expect(page).toContain('La prima community per freelancer costruita da freelancer.')
     expect(page).toContain('Gratis per chi è in community.')
   })
 
-  it('sends the visitor into the community first, and to their space second', () => {
-    expect(page).toMatch(/<a class="cta" href="\/orbiters">Entra in Orbiters<\/a>/)
+  it('has two doors in the hero, one per side of the marketplace, both into the hub', () => {
+    // The hub (projects/hub) is where somebody signs up since 2026-09-09: the freelancer
+    // wizard and the company wizard. Same origin, different deployable; the paths are
+    // relative so the page has one origin in every environment.
+    expect(page).toMatch(/<a class="cta" href="\/hub\/freelance">Entra come freelance<\/a>/)
+    expect(page).toMatch(/<a class="cta secondary" href="\/hub\/aziende">[^<]+<\/a>/)
+    // The old door, the email form on `/`, is not what this page sells any more.
+    expect(page).not.toMatch(/<a class="cta" href="\/orbiters">/)
+    // Whoever is already in still finds their space.
     expect(page).toContain('href="https://pigro.joinorbiters.com/app/registrati"')
     // No invented plan or trial: the one price is "be in the community".
     expect(page).not.toMatch(/Prova gratis|abbonamento|piano (Pro|Business)/i)
   })
 
+  it('explains itself in three steps and says what is inside', () => {
+    expect(page).toContain('Come funziona')
+    expect(page.match(/<li class="card">\s*<span class="step-number"/g)).toHaveLength(3)
+    expect(page).toContain('Cosa trovi dentro')
+  })
+
+  it('has one section for clients and testimonials, four tiles, all still placeholders', () => {
+    // Ivan's shape: «Ivan Sala ha lavorato per XYZ» plus a quote, one section for both
+    // sides. Until the real ones arrive every tile says so in the markup; when they do,
+    // the attribute goes and this assertion is rewritten to count the real ones.
+    expect(page).toContain('Hanno lavorato con noi')
+    const tiles = page.match(/<figure class="card testimonial"[^>]*>/g) ?? []
+    expect(tiles).toHaveLength(4)
+    for (const tile of tiles) expect(tile).toContain('data-placeholder="true"')
+    expect(page).toContain('<strong>Ivan Sala</strong> ha lavorato per <strong>XYZ</strong>')
+    expect(page.match(/<blockquote>/g)).toHaveLength(4)
+  })
+
   it('says who it is for, in the words that qualify a reader in fifteen seconds', () => {
-    for (const word of ['freelance', 'forfettario', 'self-hosted', 'gratis']) {
+    for (const word of ['freelance', 'forfettario', 'self-hosted', 'gratis', 'tariffa']) {
       expect(page.toLowerCase()).toContain(word)
     }
+  })
+
+  it('says where the CV goes before asking for it', () => {
+    // The wizard takes a CV; a landing that sends people there owes them one sentence
+    // about what happens to it, and the link to the rest.
+    expect(page).toMatch(/Il CV resta nel nostro database/)
+    expect(page).toMatch(/cancelliamo quando ce lo chiedi/)
   })
 
   it('links the two pages Google reads during verification', () => {
@@ -108,7 +146,7 @@ describe('index.html', () => {
   })
 
   it('collects nothing, and measures only after the visitor has agreed to it', () => {
-    // Nothing is typed on this page: the form lives on /orbiters. What arrived on
+    // Nothing is typed on this page: the forms live in the hub. What arrived on
     // 2026-09-09 is the measurement pixel, because this is a page an ad lands on -- so
     // "measures nothing" stopped being true, and pretending otherwise here would have
     // meant a test asserting the absence of a string that is in the file. What the page

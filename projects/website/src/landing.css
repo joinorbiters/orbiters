@@ -260,3 +260,91 @@ li {
   outline: 3px solid var(--landing-focus);
   outline-offset: 3px;
 }
+
+/* --- The Orbiters landing (2026-09-09): two doors in the hero, three steps, four
+   voices. Same system as above: hard edges, ink lines, offsets for shadows. */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+/* The second door: the same shape as the first, drawn in the ink instead of filled. */
+.cta.secondary {
+  background-color: #ffffff;
+  color: var(--landing-ink);
+  border-color: var(--landing-ink);
+}
+
+.cta.secondary:hover {
+  background-color: var(--landing-ink);
+  color: var(--landing-cta-ink);
+}
+
+.steps {
+  list-style: none;
+  padding: 0;
+  counter-reset: none;
+}
+
+/* A tile with the number in it, the size of two grid cells. */
+.step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  margin-bottom: 0.75rem;
+  background-color: var(--landing-ink);
+  color: var(--landing-cta-ink);
+  font-weight: 500;
+  font-size: 1rem;
+}
+
+.grid-2 {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+}
+
+.testimonial {
+  display: grid;
+  gap: 1rem;
+  align-content: start;
+}
+
+.testimonial blockquote p {
+  font-size: clamp(1.05rem, 0.4vw + 0.95rem, 1.2rem);
+  color: var(--landing-ink);
+}
+
+.who {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  font-size: 0.9375rem;
+  color: var(--landing-ink-quiet);
+}
+
+.who strong {
+  color: var(--landing-ink);
+  font-weight: 500;
+}
+
+.role {
+  font-size: 0.875rem;
+}
+
+/* The initial, on a tile the colour of the accent: the one saturated thing a card
+   carries, and the smallest. */
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 2.5rem;
+  height: 2.5rem;
+  background-color: var(--landing-cta);
+  color: var(--landing-cta-ink);
+  font-weight: 500;
+}
