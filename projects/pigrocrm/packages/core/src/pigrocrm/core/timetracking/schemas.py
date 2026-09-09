@@ -146,6 +146,46 @@ class TimeEntryPage(BaseModel):
     next_cursor: UUID | None
 
 
+class TimerStart(BaseModel):
+    """What a timer knows when it starts. Everything optional but the intent: a deal
+    can be chosen later, a description typed later, and `fatturabile` defaults the way a
+    freelancer's hour does."""
+
+    deal_id: UUID | None = None
+    descrizione: SafeStr = Field(default="", max_length=DESCRIZIONE_MAX_LENGTH)
+    fatturabile: bool = True
+
+
+class TimerUpdate(BaseModel):
+    """Changed while running: the person realises which deal this is, or what to call it."""
+
+    deal_id: UUID | None = None
+    descrizione: SafeStr | None = Field(default=None, max_length=DESCRIZIONE_MAX_LENGTH)
+    fatturabile: bool | None = None
+
+
+class TimerStop(BaseModel):
+    """What may still be decided at the moment of stopping. `data` is the calendar day the
+    entry lands on; absent, it is today in the emitter's zone (`today_local`), never the
+    UTC day the server happens to be in -- a timer stopped at 00:30 in Rome belongs to the
+    day that has just begun there."""
+
+    deal_id: UUID | None = None
+    descrizione: SafeStr | None = Field(default=None, max_length=DESCRIZIONE_MAX_LENGTH)
+    data: date | None = None
+
+
+class TimerRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    user_id: UUID
+    deal_id: UUID | None
+    descrizione: str
+    fatturabile: bool
+    started_at: datetime
+
+
 class CostCreate(BaseModel):
     deal_id: UUID | None = None
     category_id: UUID

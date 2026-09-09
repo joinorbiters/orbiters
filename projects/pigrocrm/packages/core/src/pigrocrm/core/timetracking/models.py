@@ -165,6 +165,36 @@ class TimeEntry(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     custom_fields: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
 
 
+class TimeTimer(Base, PrimaryKeyMixin, TimestampMixin):
+    """The one clock a person may have running: what they are working on right now.
+
+    One row per user, enforced by the unique index, because two simultaneous timers are
+    the error Toggl and Clockify both refuse -- a person is doing one thing. It is a live
+    session and not a record: stopping it *creates* a `TimeEntry` through the same
+    `TimeEntryService.create` every other write goes through (rates frozen, period locks
+    checked, activity recorded) and then the row is gone. Discarding it deletes the row
+    and writes nothing. So there is no soft delete and no history here -- the history is
+    the entry the stop produced.
+
+    `deal_id` is nullable, unlike on `TimeEntry`: Toggl lets a timer start before the
+    project is chosen, and a person who starts working on "una chiamata" and picks the
+    deal at stop time is not lying. The deal becomes mandatory the moment the timer
+    becomes an entry (`TimerService.stop`).
+
+    Slice 4 §13 argued *against* a timer. Ivan asked for one on 2026-09-09, with Toggl
+    and Clockify as the reference; the grid stays, this sits beside it.
+    """
+
+    __tablename__ = "time_timers"
+    __table_args__ = (Index("ux_time_timers_user", "user_id", unique=True),)
+
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    deal_id: Mapped[UUID | None] = mapped_column(ForeignKey("deals.id"), default=None)
+    descrizione: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    fatturabile: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class Cost(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     """Money that actually left, towards somebody else, with a receipt to prove it.
 

@@ -1041,6 +1041,73 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
 
     @mcp.tool()
     @guard
+    def get_running_timer() -> dict[str, Any] | None:
+        """Il timer in corso del titolare del token, o `null` se non ne ha uno: su quale
+        deal, con quale descrizione, da quando (`started_at`). Un timer è ciò che la
+        persona sta facendo adesso; le ore già registrate sono in `list_time_entries`."""
+        return timetracking.get_running_timer(context)
+
+    @mcp.tool()
+    @guard
+    def start_timer(
+        deal_id: str | None = None, descrizione: str = "", fatturabile: bool = True
+    ) -> dict[str, Any]:
+        """Avvia il cronometro per il titolare del token. Uno solo alla volta: se ce n'è
+        già uno in corso la chiamata fallisce, e va fermato (`stop_timer`) o scartato
+        (`discard_timer`) prima. Il deal può essere scelto anche dopo, con `update_timer`
+        o al momento dello stop; serve però un deal reale per registrare le ore, quindi
+        risolvilo con `search_deals` e non inventarlo."""
+        return timetracking.start_timer(
+            context,
+            {
+                "deal_id": UUID(deal_id) if deal_id else None,
+                "descrizione": descrizione,
+                "fatturabile": fatturabile,
+            },
+        )
+
+    @mcp.tool()
+    @guard
+    def update_timer(
+        deal_id: str | None = None,
+        descrizione: str | None = None,
+        fatturabile: bool | None = None,
+    ) -> dict[str, Any]:
+        """Cambia deal, descrizione o fatturabilità del timer in corso senza fermarlo."""
+        return timetracking.update_timer(
+            context,
+            {
+                "deal_id": UUID(deal_id) if deal_id else None,
+                "descrizione": descrizione,
+                "fatturabile": fatturabile,
+            },
+        )
+
+    @mcp.tool()
+    @guard
+    def stop_timer(
+        deal_id: str | None = None, descrizione: str | None = None, data: str | None = None
+    ) -> dict[str, Any]:
+        """Ferma il timer in corso e registra le ore trascorse come voce di ore, con la
+        tariffa congelata come farebbe `log_time`. `data` (YYYY-MM-DD) è il giorno su cui
+        registrarle, oggi se omessa. Restituisce la voce creata."""
+        return timetracking.stop_timer(
+            context,
+            {
+                "deal_id": UUID(deal_id) if deal_id else None,
+                "descrizione": descrizione,
+                "data": data,
+            },
+        )
+
+    @mcp.tool()
+    @guard
+    def discard_timer() -> dict[str, str]:
+        """Scarta il timer in corso senza registrare niente."""
+        return timetracking.discard_timer(context)
+
+    @mcp.tool()
+    @guard
     def get_deal_time_summary(deal_id: str) -> dict[str, Any]:
         """Ore totali, ore da fatturare, valore delle ore non fatturate, costo del
         lavoro e stato del deal. Il ricavo non è qui: il ricavo è la fattura."""
