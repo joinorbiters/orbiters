@@ -183,6 +183,13 @@ tested on a branch and is proven on the trunk instead.
   `docs/tracker.md`.
 - **Every project always carries a lead and both members.** A project created
   without a lead and without both members is incomplete.
+- **The assignee is a claim, and a card that is not yours stays untouched.** Both of
+  us run agents against the same board, so the only thing keeping two of them off
+  the same work is that field: you may work a card assigned to the account your
+  session writes as (`get_user` with `"me"`, checked once per session), a card with
+  no assignee that you filed yourself, or a card labelled `parallel`. Anything else
+  gets a comment at most, never an assignee change, a status change or a PR. Every
+  issue is filed with an assignee for the same reason: an empty one reads as free.
 - An issue carries exactly one `type` label and exactly one `area:*` label, both from
   enforced groups, so Linear drops a second one silently. Priority and effort are
   Linear's native fields and are never labels.
@@ -196,9 +203,9 @@ tested on a branch and is proven on the trunk instead.
   a pointer, not a link: the state is still moved by hand, with the evidence in a
   comment.
 
-Find the issue before you start, move it as you go, and close it only against
-evidence on the surface it is about. A defect you found and did not fix gets filed
-before you finish.
+Find the issue before you start, check it is yours, move it as you go, and close it
+only against evidence on the surface it is about. A defect you found and did not fix
+gets filed before you finish.
 
 ## Skills an agent is handed
 

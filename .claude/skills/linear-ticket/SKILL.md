@@ -11,17 +11,38 @@ Read it once per session. This skill is the sequence of calls and the traps. Con
 
 ## First call of the session
 
-The MCP server is `linear-orbiters`, the only Linear surface for this board. One read
-(`list_projects` or `list_issues` with `team: "Orbiters"`) and check the team that comes
-back is **Orbiters** (`ORB-`): two workspaces are enrolled on this machine, and filing a
-client's work in the wrong company's board is the failure mode.
+The MCP server is `linear-orbiters`, the only Linear surface for this board. Two reads
+before any write. `list_projects` or `list_issues` with `team: "Orbiters"`, and check the
+team that comes back is **Orbiters** (`ORB-`): two workspaces are enrolled on this
+machine, and filing a client's work in the wrong company's board is the failure mode.
+Then `get_user` with `query: "me"`, and keep the name it returns: it is the account this
+session writes as, it is what `assignee: "me"` will mean, and it is not necessarily the
+person talking to you. Both people on this team run agents against the same board.
 
-## Finding before filing
+## Finding before filing, and whether it is yours to take
 
 `list_issues` with `team: "Orbiters"` and `query: "<two or three words of the problem>"`,
-then with the `area:*` label. An issue that exists is used, moved and commented. A new
-one is filed only when none does and the work will outlive this run, and then **before**
-the work starts, never after (`docs/tracker.md`, The loop).
+then with the `area:*` label. Ask for `assignee` and `createdBy` in `fields`, because an
+issue that exists is not an issue that is available (`docs/tracker.md` § Who owns a
+card):
+
+- assigned to the account from the first call: yours, use it, move it, comment on it.
+- assigned to somebody else, or `In Progress` or `In Review` under their name: theirs.
+  Leave every field alone, add a comment only if you have something useful, and pick
+  other work. Never `assignee: "me"` on it, not even when you are about to fix exactly
+  that.
+- no assignee: it belongs to whoever filed it (`createdBy`), unless it carries
+  `parallel`, which means whoever is free may take it.
+
+Looking for something to work on rather than checking one card: `list_issues` with
+`assignee: "me"`, which does filter, and `label: "parallel"`. The unassigned list is not
+filterable: `assignee: null` and `assignee: "null"` are both accepted and both silently
+ignored, so the response still carries everybody's cards (measured 2026-09-09, against
+the tool's own description). Ask for `assignee` and `createdById` in `fields` and filter
+the rows yourself. Those lists together are the work you may start.
+
+A new issue is filed only when none exists and the work will outlive this run, and then
+**before** the work starts, never after (`docs/tracker.md`, The loop).
 
 ## Filing: one `save_issue` call
 
@@ -38,7 +59,7 @@ wrong.
 | `addLabels` | exactly two: one from the `type` group (`fix`, `feature`, `refactor`, `chore`, `docs`, `test`, `ci`, `design`, `security`, `spike`) and one from `Area` (`area:web`, `area:api`, `area:core`, `area:mcp`, `area:infra`, `area:ci`, `area:website`, `area:brand`, `area:repo`). Both are groups: a second label from the same group is silently dropped. Use `addLabels`, never `labels`: `labels` replaces the whole set. |
 | `priority` | 1 Urgent, 2 High, 3 Medium, 4 Low. A field, never a label. |
 | `estimate` | the team's points. |
-| `assignee` | `"me"` when you are about to work it. |
+| `assignee` | never omitted. `"me"` when you will do the work, the person who asked for it when they will. A card filed for later still gets one: an empty assignee reads as free to the other agent. |
 | `state` | `"In Progress"` when you start now, otherwise leave the default. |
 
 Label names are case-insensitive workspace-wide and a retired label keeps its name:
@@ -50,7 +71,9 @@ above; `list_issue_labels` with `includeGroups: true` is the source when in doub
 When each state applies, and what closes an issue, is `docs/tracker.md` § The loop; do
 not learn it from here. What that section leaves to the caller:
 
-- `In Progress` goes with `assignee: "me"` in the same call.
+- `In Progress` goes with `assignee: "me"` in the same call, and only on a card that is
+  already yours (§ Finding before filing). On somebody else's card both fields stay as
+  they are.
 - `In Review` is set by you when the PR opens, with a comment carrying the PR URL: the
   GitHub app is not approved on the org, so nothing does it for you.
 - `Done` takes a closing comment shaped as the `linear-content` skill says (`Evidence:`
@@ -58,6 +81,10 @@ not learn it from here. What that section leaves to the caller:
 - Won't-do is `Canceled` (one `l`), with the reason.
 
 `save_issue` accepts `state`; `get_issue` echoes it as `status`. Same field.
+
+`save_issue` overwrites `assignee` with whatever you send, with no compare-and-set and
+nothing in the response to say whose card it was a second earlier, and the field keeps no
+history you can read back. Reading the owner first is the only guard.
 
 ## Commenting
 
@@ -78,6 +105,10 @@ Not one that restates the issue list.
 `ORB-N` in a commit body or a comment is a pointer to an issue you have read. Never
 invent one. The branch is the issue's `gitBranchName`, read from `get_issue` (or
 `list_issues` with `fields: ["gitBranchName"]`), not typed by hand.
+
+That name is rendered for **whoever asked for it**, not for the assignee: the same card
+answers `fiorelorenzo/orb-41-...` to one of us and `ivansala/orb-41-...` to the other. So
+it is the branch to use once the card is yours, and it is never evidence that it is.
 
 ## What the tracker is not
 
