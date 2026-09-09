@@ -69,7 +69,14 @@ from pigrocrm.core.people.repository import PersonRepository
 from pigrocrm.core.people.schemas import PERSON_SORTS, PersonListQuery
 from pigrocrm.core.pipeline.models import PipelineStage
 
-pytestmark = pytest.mark.slow
+# `planner` as well as `slow`: every assertion in this file is about which plan Postgres
+# chooses, and that is a property of the machine it runs on. It passed two trunk runs and
+# then failed a third on a commit that touched no Python at all (34294151175, the four
+# `customers`/`ragione_sociale` cases), on a hosted runner with two cores and different
+# memory settings from the box where the margins were measured. CI deselects `planner`;
+# preflight runs it, on one known machine, which is the only place the answer means
+# anything. ORB-9 covers the family.
+pytestmark = [pytest.mark.slow, pytest.mark.planner]
 
 # Twenty thousand rows per ordered table. See the module docstring for why this is not the
 # 50 000 of `test_search_plan.py`, and `test_the_assertion_fails_without_the_index` for the
