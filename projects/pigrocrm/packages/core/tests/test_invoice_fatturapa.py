@@ -17,6 +17,7 @@ from pigrocrm.core.invoices.fatturapa import (
     _INDIRIZZO_MAX,
     FatturaPAExporter,
     check_party_exportable,
+    check_recipient_identity,
     normalise_fiscal_id,
 )
 from pigrocrm.core.invoices.schemas import (
@@ -927,3 +928,89 @@ def test_a_cap_that_is_not_five_digits_is_refused_by_the_pre_check() -> None:
     with pytest.raises(ValidationFailed) as caught:
         check_party_exportable(_cliente(cap="2012"), "customer")
     assert caught.value.details["field"] == "cap"
+
+
+# --- ORB-56: the pre-check refuses what the writer refuses ----------------------------
+
+
+@pytest.mark.parametrize(
+    ("field", "tag", "overrides"),
+    [
+        ("ragione_sociale", "Denominazione", {"ragione_sociale": "Акме ООО"}),
+        ("indirizzo", "Indirizzo", {"indirizzo": "Улица Ленина 5"}),
+        ("comune", "Comune", {"comune": "Москва"}),
+        ("pec", "PECDestinatario", {"codice_sdi": None, "pec": "acme€@pec.it"}),
+    ],
+)
+def test_a_value_outside_latin_1_is_refused_by_the_pre_check_with_the_writer_s_words(
+    field: str, tag: str, overrides: dict[str, object]
+) -> None:
+    """`_text` refused a code point outside Basic Latin and Latin-1 Supplement when
+    writing, and `check_party_exportable` had no counterpart: a name with a Cyrillic
+    letter or a euro sign passed the pre-check, `issue` spent a register number, and
+    `export_xml` then refused forever. The pre-check now applies the writer's own rule,
+    with the writer's own words, so the two cannot disagree on what a refusal says."""
+    cliente = _cliente(**overrides)
+    with pytest.raises(ValidationFailed) as pre:
+        check_party_exportable(cliente, "customer")
+    assert pre.value.details["field"] == field
+
+    value = getattr(cliente, field)
+    with pytest.raises(ValidationFailed) as writer:
+        FatturaPAExporter()._text(etree.Element("x"), tag, value, entity="customer", field=field)
+    assert writer.value.details == pre.value.details
+    assert f"FPR12 ammette in {tag}" in pre.value.details["reason"]
+
+
+def test_a_foreign_customer_with_no_usable_fiscal_identity_is_refused_before_the_number() -> None:
+    """A foreign customer with no VAT number and a fiscal code that is not an Italian
+    one got neither `IdFiscaleIVA` nor `CodiceFiscale`: both are `minOccurs="0"` in
+    `DatiAnagraficiCessionarioType`, so the file validated, and the SdI refused it with
+    control 00417 (at least one of the two must be present) after the number was spent.
+    The identifier a foreign country issues goes in `partita_iva`, which the writer
+    carries as `IdFiscaleIVA` with the customer's own `IdPaese`; `CodiceFiscale` is the
+    Italian register's code and a foreign one is never written there."""
+    cliente = _cliente_estero(partita_iva=None, codice_fiscale="DE-123/456/78901")
+    with pytest.raises(ValidationFailed) as pre:
+        check_recipient_identity(cliente)
+    assert pre.value.details["entity"] == "customer"
+    assert pre.value.details["field"] == "partita_iva"
+
+    with pytest.raises(ValidationFailed) as writer:
+        FatturaPAExporter().to_bytes(
+            _invoice([_line(1, "Advisory", "1.000000", "100.000000", "100.00")], cliente=cliente)
+        )
+    assert writer.value.details == pre.value.details
+
+
+def test_an_italian_customer_with_neither_vat_nor_fiscal_code_is_refused_before_the_number() -> (
+    None
+):
+    """The same control applies at home: an Italian customer whose VAT number does not
+    normalise and who has no fiscal code would be written with neither element."""
+    cliente = _cliente(partita_iva="1234567890", codice_fiscale=None)
+    with pytest.raises(ValidationFailed) as pre:
+        check_recipient_identity(cliente)
+    assert pre.value.details["field"] == "partita_iva"
+
+    with pytest.raises(ValidationFailed) as writer:
+        FatturaPAExporter().to_bytes(
+            _invoice([_line(1, "Consulenza", "1.000000", "100.000000", "100.00")], cliente=cliente)
+        )
+    assert writer.value.details == pre.value.details
+
+
+def test_a_foreign_customer_with_an_italian_fiscal_code_and_no_vat_is_exportable() -> None:
+    """The other half of control 00417: one of the two is enough. A foreign entity that
+    holds an Italian fiscal code and no VAT number gets `CodiceFiscale` alone, and the
+    pre-check lets it through for the same reason the writer does."""
+    cliente = _cliente_estero(partita_iva=None, codice_fiscale="RSSMRA80A01H501U")
+    check_recipient_identity(cliente)
+    xml = FatturaPAExporter().to_bytes(
+        _invoice([_line(1, "Advisory", "1.000000", "100.000000", "100.00")], cliente=cliente)
+    )
+    assert_valid(xml)
+    anagrafici = etree.fromstring(xml).find(".//CessionarioCommittente/DatiAnagrafici")
+    assert anagrafici is not None
+    assert anagrafici.find("IdFiscaleIVA") is None
+    assert anagrafici.findtext("CodiceFiscale") == "RSSMRA80A01H501U"

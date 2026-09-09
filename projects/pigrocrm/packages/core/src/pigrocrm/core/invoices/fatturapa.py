@@ -108,6 +108,15 @@ _LATIN_RE = re.compile(r"[\x00-\xff]*")
 # exactly as the previous system's own normalisation did.
 _FISCAL_ID_NOISE = re.compile(r"[^0-9A-Za-z]")
 
+# The two `entity` labels the checks in this module are called with, which are also the
+# two roles a party can hold on the document. The role decides one thing here: the
+# recipient's PEC is written into `PECDestinatario` and the issuer's email into `Email`,
+# and neither party's other address reaches the file at all. A pre-check that refused a
+# value the writer never emits would be its own kind of drift, so each role is checked
+# for the field it actually contributes.
+RECIPIENT_ENTITY = "customer"
+ISSUER_ENTITY = "emitter_profile"
+
 
 def normalise_fiscal_id(value: str | None) -> str | None:
     """An 11-digit VAT number or a 16-character fiscal code, or `None`.
@@ -233,6 +242,7 @@ def check_party_exportable(party: PartySnapshot, entity: str) -> None:
     # forever, leaving annulment as the only remedy. A refusal before the number is spent
     # costs the user one correction; a refusal after costs them a hole in the register.
     _check_widths(party, entity, italiano)
+    _check_latin(party, entity)
 
 
 def _check_widths(party: PartySnapshot, entity: str, italiano: bool) -> None:
@@ -275,6 +285,90 @@ def _check_widths(party: PartySnapshot, entity: str, italiano: bool) -> None:
         raise ValidationFailed(entity, "provincia", "sigla non valida", expected="due lettere")
 
 
+def _latin_message(tag: str) -> str:
+    """The refusal `_text` produces for a character outside the schema's Latin set.
+
+    One function, called by the writer and by the pre-check, for the same reason
+    `_indirizzo_xml` is one function: a message the two spell separately is a message
+    they can come to disagree about, and a user who is told two different things about
+    one field has to guess which one is the real rule.
+    """
+    return f"FPR12 ammette in {tag} solo caratteri latini di base o Latin-1"
+
+
+def _check_latin(party: PartySnapshot, entity: str) -> None:
+    """The character set, checked before a number is spent (ORB-56).
+
+    `_text` refuses a code point outside `String*LatinType` when it writes, and this
+    check had no counterpart: a `ragione_sociale` with a Cyrillic letter, or a PEC with
+    a euro sign in it, passed `check_party_exportable`, `issue` consumed a register
+    number, and every later `export_xml` refused forever. Same failure as ORB-38 and the
+    same remedy, on the other constraint the writer applies.
+
+    Each value is the one the writer will pass to `_text`, and each message is the one
+    `_text` would have produced, tag included, so the pre-check cannot be laxer than the
+    writer or describe the refusal differently.
+    """
+    campi: list[tuple[str, str, str]] = [
+        ("ragione_sociale", "Denominazione", party.ragione_sociale),
+        ("indirizzo", "Indirizzo", _indirizzo_xml(party)),
+        ("comune", "Comune", party.comune),
+    ]
+    # `Nazione`, `CAP`, `Provincia` and `CodiceDestinatario` carry patterns narrower than
+    # the Latin set and are already checked above; `IdCodice` and `CodiceFiscale` come out
+    # of the normalisers as alphanumerics. What is left is the one free-text contact each
+    # role contributes, and `RECIPIENT_ENTITY`/`ISSUER_ENTITY` say which.
+    if entity == RECIPIENT_ENTITY:
+        campi.append(("pec", "PECDestinatario", party.pec or ""))
+    elif entity == ISSUER_ENTITY:
+        campi.append(("email", "Email", party.email or ""))
+    for field, tag, value in campi:
+        if not _LATIN_RE.fullmatch(value):
+            raise ValidationFailed(
+                entity, field, _latin_message(tag), expected="solo caratteri latini"
+            )
+
+
+def check_recipient_identity(party: PartySnapshot) -> None:
+    """A recipient needs `IdFiscaleIVA` or `CodiceFiscale`, and the schema does not say so.
+
+    Both are `minOccurs="0"` in `DatiAnagraficiCessionarioType` (the vendored FPR12 1.2.3
+    XSD, unlike `DatiAnagraficiCedenteType` where `IdFiscaleIVA` is mandatory), so a
+    document with neither is schema-valid and the SdI refuses it anyway: control 00417 of
+    the Elenco dei controlli, "almeno uno dei campi 1.4.1.1 IdFiscaleIVA e 1.4.1.2
+    CodiceFiscale del Cessionario/Committente deve essere valorizzato". Spec 3 of slice 3
+    is the reason it has to be checked here: the export runs after the emission
+    transaction has committed, so a recipient the SdI will refuse would already own a
+    register number, and annulment would be the only remedy.
+
+    The hole it closes is a foreign customer with no VAT number whose `codice_fiscale`
+    holds a foreign identifier: `normalise_fiscal_id` answers `None` to anything that is
+    not one of Italy's two shapes -- correctly, since `CodiceFiscale` is the Italian
+    register's own code -- so the writer emitted neither element and nothing noticed. A
+    foreign register's number belongs in `partita_iva`, where `IdFiscaleIVA` carries it
+    with the customer's own `IdPaese`, and that is the field the refusal names.
+
+    Recipient-only, and a function of its own for the same reason `check_recipient_routing`
+    is one: the issuer's `IdFiscaleIVA` is mandatory in the schema and is already refused
+    by `_cedente`, with a message about being a VAT subject that would be wrong here.
+    """
+    paese = (party.nazione or "IT").strip().upper()
+    piva = (
+        normalise_fiscal_id(party.partita_iva)
+        if paese == "IT"
+        else normalise_foreign_fiscal_id(party.partita_iva)
+    )
+    if piva is not None or normalise_fiscal_id(party.codice_fiscale) is not None:
+        return
+    raise ValidationFailed(
+        RECIPIENT_ENTITY,
+        "partita_iva",
+        "serve un identificativo fiscale del cliente: lo SdI rifiuta una fattura senza "
+        "partita IVA e senza codice fiscale del cessionario",
+        expected="una partita IVA, anche estera, oppure un codice fiscale italiano",
+    )
+
+
 def check_recipient_routing(party: PartySnapshot) -> None:
     """A customer must have an SDI code or a PEC, or there is no `CodiceDestinatario`.
 
@@ -311,8 +405,9 @@ class FatturaPAExporter:
             )
         emittente = invoice.snapshot.emittente
         cliente = invoice.snapshot.cliente
-        check_party_exportable(emittente, "emitter_profile")
-        check_party_exportable(cliente, "customer")
+        check_party_exportable(emittente, ISSUER_ENTITY)
+        check_party_exportable(cliente, RECIPIENT_ENTITY)
+        check_recipient_identity(cliente)
 
         # `lxml-stubs` types `nsmap` as `Mapping[str, str]` here even though the
         # *property* it defines a few lines above is `Dict[Optional[str], str]` --
@@ -367,7 +462,7 @@ class FatturaPAExporter:
             raise ValidationFailed(
                 entity,
                 field,
-                f"FPR12 ammette in {tag} solo caratteri latini di base o Latin-1",
+                _latin_message(tag),
                 expected="solo caratteri latini",
             )
         if pattern is not None and not pattern.fullmatch(value):
@@ -630,6 +725,16 @@ class FatturaPAExporter:
                 )
 
     def _cessionario(self, header: etree._Element, cliente: PartySnapshot) -> None:
+        """Sequence: DatiAnagrafici(IdFiscaleIVA?, CodiceFiscale?, Anagrafica), Sede, ...
+
+        Both identifiers are optional in the schema and at least one of them is not
+        optional to the SdI, so `check_recipient_identity` is what stands between a
+        recipient with neither and a rejection after the number is spent. It runs in
+        `to_bytes` as well, and is called again here because this method is the one that
+        decides not to write an element: a check one call away from the decision it
+        guards is a check a later edit can walk past.
+        """
+        check_recipient_identity(cliente)
         cessionario = etree.SubElement(header, "CessionarioCommittente")
         anagrafici = etree.SubElement(cessionario, "DatiAnagrafici")
         paese = (cliente.nazione or "IT").strip().upper()
@@ -868,9 +973,12 @@ class FatturaPAExporter:
 __all__ = [
     "FPR12_NAMESPACE",
     "FORMATO_TRASMISSIONE",
+    "ISSUER_ENTITY",
     "NSMAP",
+    "RECIPIENT_ENTITY",
     "FatturaPAExporter",
     "check_party_exportable",
+    "check_recipient_identity",
     "check_recipient_routing",
     "normalise_fiscal_id",
 ]
