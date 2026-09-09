@@ -176,6 +176,50 @@ it('disables the «Azienda» select while the company list is still loading', as
 })
 
 /**
+ * The gap the re-review found in `feddc6a`: a `customerId` already in the URL has no
+ * `SelectItem` to match yet while `sortedCustomers` is still empty (loading, or
+ * permanently if the request errors), and Radix's own fallback for an unmatched value
+ * is blank -- not the `placeholder`, which only covers a genuinely empty value. A real,
+ * valid company id from the URL must never render as nothing.
+ */
+describe('the trigger label with a customer_id in the URL, before the company list arrives', () => {
+  it('shows a loading label rather than blank while /api/customers is in flight', async () => {
+    mockGet.mockImplementation(((path: string) =>
+      path === '/api/customers'
+        ? new Promise(() => {})
+        : Promise.resolve({
+            data: { items: [], next_cursor: null, custom_fields: [] },
+            response: new Response(null, { status: 200 }),
+          })) as never)
+
+    renderPage('cust-acme')
+    const filters = await screen.findByRole('search')
+    expect(within(filters).getByLabelText('Filtra per azienda')).toHaveTextContent(
+      'Caricamento aziende…',
+    )
+  })
+
+  it('shows an error label rather than blank when /api/customers fails, permanently', async () => {
+    mockGet.mockImplementation(((path: string) =>
+      path === '/api/customers'
+        ? Promise.resolve({
+            error: { detail: 'boom' },
+            response: new Response(null, { status: 500 }),
+          })
+        : Promise.resolve({
+            data: { items: [], next_cursor: null, custom_fields: [] },
+            response: new Response(null, { status: 200 }),
+          })) as never)
+
+    renderPage('cust-acme')
+    const filters = await screen.findByRole('search')
+    expect(
+      await within(filters).findByText('Azienda non disponibile'),
+    ).toBeInTheDocument()
+  })
+})
+
+/**
  * `GET /api/people`'s `customer_id` is typed `UUID | None` on the server
  * (`apps/api/src/pigrocrm_api/routers/people.py`), so a `?customer_id=` that is not a
  * UUID -- a stale bookmark, a typo, a hand-edited query string -- must never reach the
