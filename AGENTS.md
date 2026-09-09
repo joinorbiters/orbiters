@@ -136,10 +136,12 @@ stay off until their arming variable exists. The runbook is
   Anything written from now on, there included, is English.
 - A design decision that is a rule rather than a picture goes in
   `docs/design/DECISIONS.md`, as a row, with the date.
-- **The tracker is Linear**, team `Orbiters`, one project per monorepo project. An
-  issue points at a spec rather than copying it, carries exactly one `Area` label
-  (Linear allows one per group) and uses Linear's own priority field instead of a
-  priority label. A new project opens its own Linear project: `docs/adding-a-project.md` §9.
+- **The tracker is Linear, and using it is not optional.** Team `Orbiters`, one
+  project per monorepo project (`PigroCRM`, `Website`). Find the issue before you
+  start, move it as you go, and close it only against evidence on the surface it is
+  about. A defect you found and did not fix gets filed before you finish. Every
+  convention, from what a title says to which labels are legal, is in `docs/tracker.md`,
+  and a new project opens its own Linear project: `docs/adding-a-project.md` §9.
 
 ## What a human decides, not you
 
