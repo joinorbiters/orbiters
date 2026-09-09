@@ -25,6 +25,7 @@ products that need to agree on something agree through `shared/`.
 packages/core/   orbiters_core: models, migrations, services, the ad conversion
 apps/api/        orbiters_api: FastAPI, one process, its own database
 apps/mcp/        orbiters_mcp: stdio, the same services in process
+apps/web/        pnpm package `hub`: the SPA at joinorbiters.com/hub/ (wizards + admin)
 ```
 
 `packages/core` may import neither adapter, and neither adapter may import the other:

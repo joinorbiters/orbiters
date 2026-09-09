@@ -1,6 +1,5 @@
-# The Orbiters hub: its own Postgres, its own API. `web` (the hub SPA) joins this file
-# with step 4 of the hub spec. Run with `-p orbiters` so the project name never derives
-# from the directory (docs/adding-a-project.md §7).
+# The Orbiters hub: its own Postgres, its own API, its own SPA. Run with `-p orbiters`
+# so the project name never derives from the directory (docs/adding-a-project.md §7).
 services:
   db:
     image: postgres:17-alpine
@@ -37,6 +36,15 @@ services:
       ORBITERS_SIGNUP_URL: ${ORBITERS_SIGNUP_URL:-https://joinorbiters.com/}
       ORBITERS_OPENAI_CONVERSIONS_SEND_HASHED_EMAIL: ${ORBITERS_OPENAI_CONVERSIONS_SEND_HASHED_EMAIL:-false}
     ports:
-      # Loopback only: the host's nginx is what faces the internet. Until the hub has a
-      # web container, the API is what nginx proxies `/api/orbiters/` and `/api/hub/` to.
+      # Loopback only: the host's nginx is what faces the internet, and it proxies
+      # `/api/orbiters/signups` and `/api/hub/` here.
       - '${ORBITERS_API_PORT:-127.0.0.1:8084}:8000'
+
+  web:
+    build:
+      context: ../..
+      dockerfile: projects/hub/Dockerfile.web
+    restart: unless-stopped
+    ports:
+      # The SPA, at /hub/. The host's nginx proxies `/hub/` here.
+      - '${ORBITERS_WEB_PORT:-127.0.0.1:8085}:80'
