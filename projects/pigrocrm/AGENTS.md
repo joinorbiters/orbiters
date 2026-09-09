@@ -2,6 +2,8 @@
 
 The root [`AGENTS.md`](../../AGENTS.md) covers the monorepo: layout, the single
 lockfiles, the CI contract, commit conventions. This file is only about this project.
+Tracker: the **PigroCRM** project in Linear, conventions in `docs/tracker.md`. File
+what you find, and close nothing you have not verified.
 
 ## What it is
 

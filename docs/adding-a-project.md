@@ -202,3 +202,6 @@ that actually owns the fix.
 
 Priority is Linear's own field, not a label. Milestones belong to the project and are
 for outcomes that can be finished, not for phases of work that never end.
+
+`docs/tracker.md` holds the rest: how an issue is written, when it moves, what closes
+it, and the API details worth knowing before wasting a call.

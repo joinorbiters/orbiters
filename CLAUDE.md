@@ -11,6 +11,10 @@ than about the repository.
   path and read what came back.
 - Never widen a `preflight.json` glob to make a check stop selecting your diff. If a
   check is wrong, fix the check.
+- Never finish a run that found a defect without filing it in Linear, and never move
+  an issue to `Done` on a check you did not read. `docs/tracker.md` is the whole
+  contract; it takes two minutes and it is the difference between a board that is worth
+  opening and a list of stale cards.
 - Never edit `projects/<name>/` and the root workspace files in the same commit when
   the root change is a move: a commit that both moves and edits a file loses git's
   rename detection, and this repository is merged against a busy `main`.
