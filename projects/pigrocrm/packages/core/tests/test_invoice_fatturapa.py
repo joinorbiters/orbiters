@@ -14,6 +14,7 @@ from lxml import etree
 
 from pigrocrm.core.errors import ValidationFailed
 from pigrocrm.core.invoices.fatturapa import (
+    _INDIRIZZO_MAX,
     FatturaPAExporter,
     check_party_exportable,
     normalise_fiscal_id,
@@ -727,6 +728,137 @@ def test_a_missing_province_is_refused_in_italy_and_accepted_outside_it() -> Non
             )
         )
     assert caught.value.details["field"] == "provincia"
+
+
+# --- ORB-38: a foreign address is serialised the way the SdI expects it ---------------
+
+
+def test_a_foreign_postcode_is_written_as_00000_and_kept_in_the_address() -> None:
+    """ORB-38. FPR12's `CAP` is five digits and the technical specifications fill it
+    with `00000` for an address outside Italy; the real postcode has no element of its
+    own. Before this, `check_party_exportable` let `EC1V 9HL` through and `_sede`
+    applied the five-digit pattern to it, so the number was spent and the export failed
+    forever. The convention is applied by the writer, whatever the customer row holds:
+    a London company keeps its postcode in the record, the PDF prints it, and the XML
+    carries it at the end of `Indirizzo` so the document does not lose it."""
+    cliente = _cliente_estero(cap="EC1V 9HL")
+    check_party_exportable(cliente, "customer")
+
+    xml = FatturaPAExporter().to_bytes(
+        _invoice([_line(1, "Advisory", "1.000000", "100.000000", "100.00")], cliente=cliente)
+    )
+    assert_valid(xml)
+    sede = etree.fromstring(xml).find(".//CessionarioCommittente/Sede")
+    assert sede is not None
+    assert sede.findtext("CAP") == "00000"
+    assert sede.findtext("Indirizzo") == "1 Example Street, EC1V 9HL"
+    assert sede.findtext("Comune") == "London"
+    assert sede.find("Provincia") is None
+    assert sede.findtext("Nazione") == "GB"
+
+
+def test_a_foreign_postcode_already_stored_as_the_convention_is_not_repeated() -> None:
+    """`00000` is the SdI's placeholder, not a postcode: a record that already carries
+    it (every foreign customer entered before ORB-38 does) gets a plain `Indirizzo`."""
+    xml = FatturaPAExporter().to_bytes(
+        _invoice(
+            [_line(1, "Advisory", "1.000000", "100.000000", "100.00")],
+            cliente=_cliente_estero(cap="00000"),
+        )
+    )
+    sede = etree.fromstring(xml).find(".//CessionarioCommittente/Sede")
+    assert sede is not None
+    assert sede.findtext("CAP") == "00000"
+    assert sede.findtext("Indirizzo") == "1 Example Street"
+
+
+def test_a_foreign_address_without_a_postcode_is_still_exportable() -> None:
+    """A postcode is not something every country has, so its absence outside Italy is
+    not an omission: `CAP` is the placeholder and `Indirizzo` is the address alone."""
+    cliente = _cliente_estero(cap="")
+    check_party_exportable(cliente, "customer")
+    xml = FatturaPAExporter().to_bytes(
+        _invoice([_line(1, "Advisory", "1.000000", "100.000000", "100.00")], cliente=cliente)
+    )
+    assert_valid(xml)
+    sede = etree.fromstring(xml).find(".//CessionarioCommittente/Sede")
+    assert sede is not None
+    assert sede.findtext("CAP") == "00000"
+    assert sede.findtext("Indirizzo") == "1 Example Street"
+
+
+def test_a_province_stored_on_a_foreign_address_is_not_written() -> None:
+    """The specifications fill `Provincia` only when `Nazione` is `IT`: it is the code
+    of an Italian province, and a county or a state written there would be a false
+    statement to the SdI. So whatever the record holds for a foreign customer, the
+    element is omitted, and its shape is not a reason to refuse the emission."""
+    cliente = _cliente_estero(cap="EC1V 9HL", provincia="Greater London")
+    check_party_exportable(cliente, "customer")
+    xml = FatturaPAExporter().to_bytes(
+        _invoice([_line(1, "Advisory", "1.000000", "100.000000", "100.00")], cliente=cliente)
+    )
+    assert_valid(xml)
+    sede = etree.fromstring(xml).find(".//CessionarioCommittente/Sede")
+    assert sede is not None
+    assert sede.find("Provincia") is None
+
+
+def test_the_emitter_s_italian_address_is_untouched_by_the_foreign_convention() -> None:
+    """`_sede` writes both parties. The emitter is Italian and keeps its real CAP and
+    its province; a change that applied the placeholder to everybody would pass the
+    foreign tests above and misreport the issuer's own address."""
+    xml = FatturaPAExporter().to_bytes(
+        _invoice(
+            [_line(1, "Advisory", "1.000000", "100.000000", "100.00")],
+            cliente=_cliente_estero(cap="EC1V 9HL"),
+        )
+    )
+    sede = etree.fromstring(xml).find(".//CedentePrestatore/Sede")
+    assert sede is not None
+    assert sede.findtext("CAP") == "20124"
+    assert sede.findtext("Provincia") == "MI"
+    assert sede.findtext("Indirizzo") == "Via Vittorio Veneto 12"
+
+
+def test_an_italian_cap_that_is_not_five_digits_is_still_refused_before_the_number() -> None:
+    """The other direction of the same coherence: the convention is for a foreign
+    address only. An Italian customer with a British-looking postcode is a data error
+    and is refused by the pre-check, not written as `00000`."""
+    with pytest.raises(ValidationFailed) as caught:
+        check_party_exportable(_cliente(cap="EC1V 9HL"), "customer")
+    assert caught.value.details["field"] == "cap"
+
+
+def test_a_foreign_address_too_long_to_carry_its_postcode_is_refused_before_the_number() -> None:
+    """`Indirizzo` is `String60LatinType`, and it now carries the postcode as well. The
+    pre-check measures the same composite the writer emits, so a refusal happens before
+    the register number is consumed and names the field the user can shorten. It is
+    the whole reason `check_party_exportable` and `_sede` share one function for the
+    address text."""
+    lungo = "Flat 12, Bartholomew House, 20-22 Old Street, Clerkenwell"
+    assert len(lungo) <= _INDIRIZZO_MAX < len(f"{lungo}, EC1V 9HL")
+    cliente = _cliente_estero(indirizzo=lungo, cap="EC1V 9HL")
+
+    with pytest.raises(ValidationFailed) as caught:
+        check_party_exportable(cliente, "customer")
+    assert caught.value.details["field"] == "indirizzo"
+
+    with pytest.raises(ValidationFailed) as caught:
+        FatturaPAExporter().to_bytes(
+            _invoice([_line(1, "Advisory", "1.000000", "100.000000", "100.00")], cliente=cliente)
+        )
+    assert caught.value.details["field"] == "indirizzo"
+
+
+def test_a_missing_comune_is_refused_outside_italy_as_well() -> None:
+    """`Comune` is `String60LatinType`, one to sixty characters, and has no
+    `minOccurs="0"`: the schema wants a city for every address. The pre-check dropped it
+    from the mandatory list for a foreign party along with `cap` and `provincia`, which
+    let an emission through that `export_xml` could never serialise. Same hole as the
+    postcode, closed the same way."""
+    with pytest.raises(ValidationFailed) as caught:
+        check_party_exportable(_cliente_estero(comune=""), "customer")
+    assert caught.value.details["field"] == "comune"
 
 
 # --- the widths, checked before a number is spent -----------------------------------
