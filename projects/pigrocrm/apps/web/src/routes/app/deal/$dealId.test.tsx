@@ -115,7 +115,12 @@ describe('DealDetail', () => {
         ((path: string) => {
           if (path === '/api/deals/{deal_id}') return ok(DEAL)
           // `useStages` unwraps to a bare array, not to a page.
-          if (path === '/api/pipeline-stages') return ok([])
+          if (path === '/api/pipeline-stages')
+            return ok([
+              { id: 's1', nome: 'Lead', posizione: 1, tipo: 'open', code: null, probabilita_default: 10 },
+              { id: 'won', nome: 'Vinto', posizione: 4, tipo: 'won', code: 'won', probabilita_default: 100 },
+              { id: 'lost', nome: 'Perso', posizione: 5, tipo: 'lost', code: 'lost', probabilita_default: 0 },
+            ])
           // So does the timeline, which the Pipedrive-shaped page mounts in its right
           // column («Attività recenti», 2026-09-09). Handed a page envelope it would
           // render `{items: []}.map` and take the whole tree down with it, and every
@@ -135,8 +140,26 @@ describe('DealDetail', () => {
 
       const button = await screen.findByRole('button', { name: 'Nuova fattura' })
       // Before «Modifica»: creating is the thing this header is most often opened for.
-      const actions = screen.getAllByRole('button').map((element) => element.textContent)
-      expect(actions.indexOf('Nuova fattura')).toBeLessThan(actions.indexOf('Modifica'))
+      // The whole header, in order, and not just the two buttons a stage-less mock
+      // would leave standing: «Vinto» and «Perso» come from the pipeline, so a mock
+      // that answers `/api/pipeline-stages` with an empty array stubs away exactly
+      // the neighbours this assertion is about. After the four named actions comes
+      // the `⋯` menu (no label of its own) and then the stage bar.
+      const actions = screen.getAllByRole('button')
+      expect(actions.slice(0, 4).map((element) => element.textContent)).toEqual([
+        'Nuova fattura',
+        'Vinto',
+        'Perso',
+        'Modifica',
+      ])
+      // «Una sola cosa forte per schermata» (UI revision spec §92): exactly one filled
+      // button in this header, and it is the one Ivan asked for. `Button` stamps its
+      // variant on the element, so this reads the rendered fact rather than a class.
+      expect(
+        actions
+          .filter((element) => element.getAttribute('data-variant') === 'default')
+          .map((element) => element.textContent),
+      ).toEqual(['Nuova fattura'])
 
       await userEvent.click(button)
       const dialog = await screen.findByRole('dialog')
