@@ -82,11 +82,14 @@ describe('index.html', () => {
   it('opens with the community and its claim, then presents the CRM as the perk', () => {
     // Since 2026-09-08 PigroCRM is what a member of Orbiters gets: the page says what
     // Orbiters is first, in its own words, and only then what the CRM does.
-    const claim = page.indexOf('Freelance, ma non da soli.')
+    const claim = page.indexOf('Developer e CTO, ma non da soli.')
     const perk = page.indexOf('PigroCRM, il perk')
     expect(claim).toBeGreaterThan(0)
     expect(perk).toBeGreaterThan(claim)
-    expect(page).toContain('La prima community per freelancer costruita da freelancer.')
+    // The lead names the reader in the words of docs/design/positioning.md (ORB-24).
+    expect(page.replace(/\s+/g, ' ')).toContain(
+      'La community di chi fa software in proprio: developer, AI engineer, CTO e fractional CTO.',
+    )
     expect(page).toContain('Gratis per chi è in community.')
   })
 
@@ -94,7 +97,7 @@ describe('index.html', () => {
     // The hub (projects/hub) is where somebody signs up since 2026-09-09: the freelancer
     // wizard and the company wizard. Same origin, different deployable; the paths are
     // relative so the page has one origin in every environment.
-    expect(page).toMatch(/<a class="cta" href="\/hub\/freelance">Entra come freelance<\/a>/)
+    expect(page).toMatch(/<a class="cta" href="\/hub\/freelance">Entra come developer o CTO<\/a>/)
     expect(page).toMatch(/<a class="cta secondary" href="\/hub\/aziende">[^<]+<\/a>/)
     // The old door, the email form on `/`, is not what this page sells any more.
     expect(page).not.toMatch(/<a class="cta" href="\/orbiters">/)
@@ -123,9 +126,29 @@ describe('index.html', () => {
   })
 
   it('says who it is for, in the words that qualify a reader in fifteen seconds', () => {
-    for (const word of ['freelance', 'forfettario', 'self-hosted', 'gratis', 'tariffa']) {
+    // The words are docs/design/positioning.md's (ORB-24): the roles by name, the
+    // fiscal reality, the price.
+    for (const word of ['developer', 'ai engineer', 'fractional', 'forfettario', 'self-hosted', 'gratis', 'tariffa']) {
       expect(page.toLowerCase()).toContain(word)
     }
+    expect(page).toMatch(/\bCTO\b/)
+  })
+
+  it('keeps "freelance" as the fiscal category, never as the headline', () => {
+    // It stays in the sentence about forfettario, where it is the legal status, and in
+    // the hub's route, which is code. It is gone from what a share on LinkedIn shows and
+    // from what a visitor reads first.
+    const headlines = [
+      page.match(/<title>([^<]+)<\/title>/)?.[1],
+      meta(page, 'og:title'),
+      meta(page, 'description'),
+      meta(page, 'og:description'),
+      page.match(/<h1[^>]*>([^<]+)<\/h1>/)?.[1],
+      ...[...page.matchAll(/<a class="cta[^"]*" href="[^"]+">([^<]+)<\/a>/g)].map((m) => m[1]),
+    ]
+    expect(headlines.length).toBeGreaterThanOrEqual(9)
+    for (const headline of headlines) expect(headline?.toLowerCase()).not.toContain('freelance')
+    expect(page.toLowerCase()).toContain('freelance in italia, spesso in forfettario')
   })
 
   it('says where the CV goes before asking for it', () => {

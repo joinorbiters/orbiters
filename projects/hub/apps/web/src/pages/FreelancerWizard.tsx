@@ -132,7 +132,7 @@ export const FREELANCER_STEPS: Step<FreelancerApplication>[] = [
   {
     id: 'posizione',
     title: 'Cosa fai?',
-    hint: 'Il ruolo con cui ti presenti: «Backend developer», «Product designer», «CTO a tempo».',
+    hint: 'Il ruolo con cui ti presenti: «Backend developer», «AI engineer», «Fractional CTO».',
     render: ({ value, set, autoFocus }) => (
       <TextField
         aria-label="Posizione"

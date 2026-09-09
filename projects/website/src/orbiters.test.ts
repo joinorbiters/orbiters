@@ -71,8 +71,19 @@ describe('orbiters.html', () => {
     expect(text).toContain('Iscriviti e sei dentro')
     expect(text).toContain('solo di Orbiters')
     expect(html).not.toMatch(/appena apriamo|Lascia l'email|lista d'attesa/)
-    for (const word of ['freelance', 'fatturare']) {
+    // ORB-24: the reader is named in the words of docs/design/positioning.md, and
+    // "freelance" is no longer the headline. It may still appear as the fiscal category
+    // in a sentence; it may not be the title, the share card or the claim.
+    for (const word of ['developer', 'ai engineer', 'fatturare']) {
       expect(text.toLowerCase()).toContain(word)
+    }
+    expect(text).toMatch(/\bCTO\b/)
+    for (const headline of [
+      html.match(/<title>([^<]+)<\/title>/)?.[1],
+      meta('og:title'),
+      html.match(/<h1>([^<]+)<\/h1>/)?.[1],
+    ]) {
+      expect(headline?.toLowerCase()).not.toContain('freelance')
     }
   })
 
