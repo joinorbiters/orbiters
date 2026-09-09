@@ -110,16 +110,14 @@ code {
 
 /* --- Hero: the field behind, one box in front. */
 .hero {
-  position: relative;
-  /* Its own stacking context, so the canvas at z-index -1 sits behind the box and
-     in front of the page, whatever a later rule paints on main or the header. */
-  isolation: isolate;
   padding-block: clamp(3rem, 9vw, 8rem);
-  overflow: hidden;
 }
 
-#hero-field {
-  position: absolute;
+/* --- The field: the same one the community page on `/` has. Fixed, behind everything
+   on the page, inert: decoration the script fills in, never something the page
+   depends on. */
+#field {
+  position: fixed;
   inset: 0;
   width: 100%;
   height: 100%;
