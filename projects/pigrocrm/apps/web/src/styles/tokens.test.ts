@@ -1,8 +1,22 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
-const css = readFileSync(join(__dirname, 'tokens.css'), 'utf-8')
+/**
+ * The palette moved to `shared/brand` when the landing became its own project: the
+ * six colours and the typeface are the brand's and are read by both surfaces, while
+ * everything semantic here (`--primary`, the dark theme, the chart series, the radius
+ * scale) is this application's own. The contrast assertions below need both halves,
+ * so the file is checked as the browser sees it, imported palette included, rather
+ * than as two files that each look fine alone.
+ */
+const appCss = readFileSync(join(__dirname, 'tokens.css'), 'utf-8')
+const brandCss = readFileSync(
+  fileURLToPath(import.meta.resolve('@orbiters/brand/palette.css')),
+  'utf-8',
+)
+const css = `${brandCss}\n${appCss}`
 
 function hexToRgb(hex: string): [number, number, number] {
   const value = hex.replace('#', '')
@@ -155,10 +169,20 @@ describe('design tokens', () => {
     // decided it belongs to neither stylesheet: a second webfont is another
     // request and another licence check, it is illegible at small sizes, and a
     // handwritten accent on a page Google reads during OAuth verification looks
-    // unserious. landing/landing-tokens.test.ts asserts the same for the other
-    // stylesheet, so neither can regain it quietly.
+    // unserious. The landing asserts the same on its own side
+    // (projects/landing/src/landing-tokens.test.ts), so neither surface can regain
+    // it quietly.
     expect(css).not.toMatch(/Reenie/i)
-    const families = [...css.matchAll(/@font-face\s*\{[^}]*font-family:\s*'([^']+)'/g)].map((m) => m[1])
+    // The face itself is declared once, in `shared/brand/font.css`, and this file
+    // must not restate it: one @font-face for the brand, not one per surface.
+    expect(appCss).not.toMatch(/@font-face/)
+    const brandFont = readFileSync(
+      fileURLToPath(import.meta.resolve('@orbiters/brand/font.css')),
+      'utf-8',
+    )
+    const families = [...brandFont.matchAll(/@font-face\s*\{[^}]*font-family:\s*'([^']+)'/g)].map(
+      (m) => m[1],
+    )
     expect(families).toEqual(['Outfit'])
   })
 

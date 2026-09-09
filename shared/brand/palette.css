@@ -1,0 +1,33 @@
+/* The palette and the typeface stack: the single source of colour for every Orbiters
+   surface, the CRM and the community landing alike.
+
+   It lives in `shared/brand` rather than in either project because there must be one
+   source and no copy. The application reads it as part of its Tailwind theme; the
+   landing, which has no Tailwind at all, extracts these declarations at build time
+   (`projects/landing/src/palette-plugin.ts`) and injects them as plain custom
+   properties. A value pasted into a landing stylesheet is the failure both mechanisms
+   exist to prevent.
+
+   Not here, deliberately: `--radius`. The landing's visual system is square by
+   design, so a radius scale is the application's own and stays in its tokens.css. */
+@theme {
+  --color-watermelon: #ed254e;
+  /* White text on raw Watermelon measures 4.22:1 — enough for a UI component
+     (3:1) but short of the 4.5:1 body-text threshold, and that pair is live on
+     the primary button label and the default badge. Prussian Blue on top
+     doesn't fix it either (3.96:1), so this is a same-hue, same-saturation,
+     darker step (HSL h=347.7° s=84.7% l=53.7% -> l=48.7%): white on top is
+     4.67:1, and it still contrasts 4.58:1 against the light app background and
+     3.77:1 against the dark one. Watermelon itself is unchanged and remains
+     the brand colour for every accent/border/icon/non-text use. */
+  --color-watermelon-strong: #e5133e;
+  --color-royal-gold: #f9dc5c;
+  /* The page's ground: a neutral light grey (was Mint Cream #f4fffd until 2026-09-08,
+     a tint of cyan that read as "azzurrino" and made white cards and text sit less
+     well). Neutral, so the four coloured tokens are the only colour on the page. */
+  --color-paper: #f1f2f3;
+  --color-prussian-blue: #011936;
+  --color-charcoal-blue: #465362;
+
+  --font-sans: 'Outfit', ui-sans-serif, system-ui, sans-serif;
+}

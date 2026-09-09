@@ -35,9 +35,15 @@ was decided, and the reason is written down.
 packages/core/   the domain: models, services, migrations, rendering. Depends on neither adapter.
 apps/api/        FastAPI. Imports core.
 apps/mcp/        the MCP server, stdio. Imports core.
-apps/web/        Vite + React SPA (/app) and the landing page, one origin.
+apps/web/        Vite + React SPA, served under /app.
 deploy/          the nginx vhost and the server setup script.
 ```
+
+The landing pages are **not here**: they are their own project, `projects/landing`
+(joinorbiters.com and the pages the product signs itself with). Its built output is
+still copied into this project's web image and served at the document root, which is
+a serving arrangement and not a dependency of the application on it. The palette,
+the typeface and the brand mark both surfaces use live in `shared/brand`.
 
 **`packages/core` may import neither adapter, and neither adapter may import the
 other.** This is enforced twice and both are load-bearing: `ruff.toml`'s

@@ -1,26 +1,26 @@
 # PigroCRM
 
-> Il CRM che lavora al posto tuo.
+> The CRM that works in your place.
 
-CRM **AI-first** per freelancer, consulenti e piccole startup italiane. Ogni operazione disponibile
-nell'interfaccia web è accessibile anche via REST API e via **MCP** (Model Context Protocol),
-così un agente come Claude può fare tutto ciò che fai tu.
+**AI-first** CRM for Italian freelancers, consultants and small startups. Every operation available
+in the web interface is also accessible via REST API and via **MCP** (Model Context Protocol),
+so an agent like Claude can do everything you do.
 
-Copre l'intero ciclo senza cambiare applicazione:
+Covers the whole cycle without changing application:
 
 ```
 Contatto → Cliente → Deal → Offerta → Lavoro → Time Tracking → Fattura → Analisi economica
 ```
 
-## Principi
+## Principles
 
-- **Lean by default** — ogni funzionalità è usabile senza configurazione; le personalizzazioni sono opzionali.
-- **API first** — la UI usa esclusivamente le API pubbliche. Nessuna logica esiste solo nel frontend.
-- **MCP first** — il server MCP non è un adattatore aggiunto dopo: usa gli stessi servizi della UI, in-process.
-- **Nessuna duplicazione** — ogni dato è salvato una volta sola.
-- **Single-tenant dentro, più spazi fuori** — nessun servizio conosce i tenant. Chi si iscrive
-  dal login ottiene uno *spazio*, cioè un database Postgres a sé con lo stesso schema, servito
-  su `/<nome>/app` e `/<nome>/api`; l'installazione radice resta com'è. Vedi
+- **Lean by default** — every feature is usable without configuration; customization is optional.
+- **API first** — the UI uses exclusively the public APIs. No logic exists only in the frontend.
+- **MCP first** — the MCP server is not an adapter bolted on afterwards: it uses the same services as the UI, in-process.
+- **No duplication** — every piece of data is stored exactly once.
+- **Single-tenant inside, several spaces outside** — no service knows about tenants. Whoever signs up
+  from the login gets a *space*, that is a Postgres database of its own with the same schema, served
+  on `/<name>/app` and `/<name>/api`; the root installation stays as it is. See
   `docs/superpowers/specs/2026-09-08-spazi-un-database-per-tenant-design.md`.
 
 ## Stack
@@ -30,120 +30,120 @@ Contatto → Cliente → Deal → Offerta → Lavoro → Time Tracking → Fattu
 | Backend | Python · FastAPI · SQLAlchemy · Alembic |
 | Database | PostgreSQL |
 | Frontend | Vite · React · TypeScript · TanStack Router · shadcn/ui (Tailwind + Radix) |
-| Documenti | Pandoc + Typst |
+| Documents | Pandoc + Typst |
 | Deploy | Docker Compose · nginx · GitHub Actions |
 
 ## Deploy
 
-Un primo deploy fatto fuori ordine produce uno stack che si avvia ma in cui **nessuno riesce ad
-accedere**, senza un solo errore in un log a spiegare perché. I passaggi sotto vanno seguiti in
-quest'ordine.
+A first deploy done out of order produces a stack that starts up but where **nobody can
+log in**, without a single error in any log to explain why. The steps below have to be followed
+in this order.
 
-### Prerequisiti sul server
+### Prerequisites on the server
 
-- Docker Engine, il plugin Docker Compose e `certbot` (con il plugin nginx) installati.
-- Un record DNS che punti il dominio scelto a questo server.
-- L'utente che esegue il deploy deve appartenere al gruppo `docker` **e** deve essere `root` (o
-  avere sudo equivalente): `deploy/setup-server.sh` scrive in `/etc/nginx/sites-available/`,
-  crea il symlink in `sites-enabled/`, esegue `nginx -t` e `systemctl reload nginx`, tutte
-  operazioni che richiedono privilegi di root. `ci-deploy.yml` lancia questo stesso script via
-  SSH assumendo che l'utente configurato in `PIGROCRM_USER` lo sia già; questo repository non
-  prova a bypassare il requisito con `sudo` non interattivo, perché funzionerebbe solo assumendo
-  che ogni server di destinazione abbia già una regola sudoers passwordless preconfigurata per
-  esattamente questi comandi — una premessa non verificabile da qui, ed equivalente al requisito
-  di sopra sotto un altro nome.
-- **`pg_trgm`.** Le migrazioni eseguono `CREATE EXTENSION IF NOT EXISTS pg_trgm`
-  all'avvio dell'API. Sull'immagine `postgres:17-alpine` del compose l'utente
-  `pigrocrm` è superuser e funziona senza intervento. Su un PostgreSQL gestito serve
-  che il fornitore abbia `pg_trgm` in allowlist e che l'utente possa creare estensioni:
-  senza, **il deploy fallisce all'avvio** — che è il comportamento voluto, perché
-  l'alternativa è un'applicazione che parte e scansiona sequenzialmente in silenzio.
-  Sintomo esatto nei log: `permission denied to create extension "pg_trgm"`.
+- Docker Engine, the Docker Compose plugin and `certbot` (with the nginx plugin) installed.
+- A DNS record pointing the chosen domain to this server.
+- The user running the deploy has to belong to the `docker` group **and** has to be `root` (or
+  have sudo equivalent): `deploy/setup-server.sh` writes to `/etc/nginx/sites-available/`,
+  creates the symlink in `sites-enabled/`, runs `nginx -t` and `systemctl reload nginx`, all
+  operations that require root privileges. `ci-deploy.yml` runs this same script over
+  SSH assuming that the user configured in `PIGROCRM_USER` already has it; this repository does not
+  try to bypass the requirement with non-interactive `sudo`, because that would only work assuming
+  that every target server already has a passwordless sudoers rule preconfigured for
+  exactly these commands — an assumption that can't be verified from here, and is equivalent to the
+  requirement above under a different name.
+- **`pg_trgm`.** The migrations run `CREATE EXTENSION IF NOT EXISTS pg_trgm`
+  when the API starts up. On the compose's `postgres:17-alpine` image the user
+  `pigrocrm` is superuser and it works without intervention. On a managed PostgreSQL it takes
+  the provider having `pg_trgm` in its allowlist and the user being able to create extensions:
+  without that, **the deploy fails at start-up** — which is the intended behavior, because
+  the alternative is an application that starts up and scans sequentially in silence.
+  Exact symptom in the logs: `permission denied to create extension "pg_trgm"`.
 
 ### 1. `.env`
 
-Copia `.env.example` nella radice del repository **sul server** (non solo in locale) come
-`.env` e compila:
+Copy `.env.example` into the repository root **on the server** (not only locally) as
+`.env` and fill it in:
 
-- `POSTGRES_PASSWORD` — obbligatoria: `docker compose` si rifiuta di partire senza.
-- `PIGROCRM_JWT_SECRET` — genera un segreto vero (`openssl rand -hex 32`), diverso da
-  qualunque valore usato in sviluppo locale.
-- Lascia `PIGROCRM_COOKIE_SECURE` come sta: `docker-compose.yml` non la inoltra mai al
-  container `api`, di proposito (vedi il commento lì) — riguarda solo il flusso di sviluppo
-  locale più sopra nello stesso file.
+- `POSTGRES_PASSWORD` — required: `docker compose` refuses to start without it.
+- `PIGROCRM_JWT_SECRET` — generate a real secret (`openssl rand -hex 32`), different from
+  any value used in local development.
+- Leave `PIGROCRM_COOKIE_SECURE` as it is: `docker-compose.yml` never forwards it to the
+  `api` container, on purpose (see the comment there) — it only concerns the local
+  development flow further up in the same file.
 
-### 2. Avvia lo stack
+### 2. Start the stack
 
 ```
 cd projects/pigrocrm
 docker compose --env-file ../../.env up -d --build
 ```
 
-Il file compose sta nella cartella del progetto, ma il `.env` resta nella radice del
-repository (passo 1): senza `--env-file` compose lo cercherebbe accanto a sé, non
-troverebbe `POSTGRES_PASSWORD` e si rifiuterebbe di partire.
+The compose file lives in the project's folder, but the `.env` stays in the
+repository root (step 1): without `--env-file` compose would look for it next to itself, not
+find `POSTGRES_PASSWORD`, and refuse to start.
 
-Porta su `db` (Postgres), `api` (migra da solo all'avvio) e `web` (nginx con la SPA compilata,
-in ascolto solo su `127.0.0.1:8080` — non ancora raggiungibile da internet).
+Brings up `db` (Postgres), `api` (migrates itself at start-up) and `web` (nginx with the compiled SPA,
+listening only on `127.0.0.1:8080` — not yet reachable from the internet).
 
-### 3. Configura nginx sull'host
+### 3. Configure nginx on the host
 
 ```
 sudo bash deploy/setup-server.sh
 ```
 
-Scrive un vhost che fa da reverse proxy verso `127.0.0.1:8080`, per ora solo in HTTP. Usa il
-dominio di default (`pigrocrm.humancraft.tech`) a meno di impostare `PIGROCRM_DOMAIN`:
-`sudo PIGROCRM_DOMAIN=tuodominio.it bash deploy/setup-server.sh`, e va passato, perché il
-default non è il dominio di questo server.
+Writes a vhost that acts as a reverse proxy to `127.0.0.1:8080`, for now only over HTTP. Uses the
+default domain (`pigrocrm.humancraft.tech`) unless `PIGROCRM_DOMAIN` is set:
+`sudo PIGROCRM_DOMAIN=tuodominio.it bash deploy/setup-server.sh`, and it has to be passed, because the
+default is not this server's domain.
 
-**Passo una tantum: il deploy automatico non lo esegue.** Rilanciarlo a ogni push
-riscriverebbe il reverse proxy a ogni commit, e la protezione che dovrebbe salvare la
-configurazione TLS cerca un file chiamato come il dominio (`sites-available/tuodominio.it`).
-Se certbot ha lasciato il vhost con un altro nome, la guardia non lo trova e lo script
-aggiunge un secondo vhost con lo stesso `server_name`. Su questo host è esattamente il caso:
-il file si chiama `pigro.joinorbiters.conf`.
+**One-time step: the automatic deploy does not run it.** Re-running it on every push
+would rewrite the reverse proxy on every commit, and the guard that's meant to protect the
+TLS configuration looks for a file named after the domain (`sites-available/yourdomain.it`).
+If certbot has left the vhost under a different name, the guard doesn't find it and the script
+adds a second vhost with the same `server_name`. On this host that's exactly the case:
+the file is named `pigro.joinorbiters.conf`.
 
-### 4. Attiva TLS — prima di provare ad accedere
+### 4. Enable TLS — before trying to log in
 
 ```
 sudo certbot --nginx -d tuodominio.it
 ```
 
-(lo stesso dominio del passo precedente). Passo manuale e una tantum, non automatizzato da CI.
+(the same domain as the previous step). Manual, one-time step, not automated by CI.
 
-**Nessun login funziona prima di questo passo, e senza un solo errore visibile.**
-`cookie_secure` (`packages/core/src/pigrocrm/core/config.py`) vale `true` di default e
-`docker-compose.yml` non lo sovrascrive mai per il container `api`, di proposito — è la stessa
-protezione che impedisce a chi intercetta una rete non cifrata di rigiocare il cookie di
-sessione. Su semplice HTTP il browser scarta silenziosamente un cookie `Secure`: il login
-risponde comunque 200, ma ogni richiesta successiva risulta non autenticata (lo stesso
-meccanismo che `.env.example` descrive per Safari in sviluppo locale — qui capita di default,
-in produzione, sul primo deploy, in ogni browser).
+**No login works before this step, and without a single visible error.**
+`cookie_secure` (`packages/core/src/pigrocrm/core/config.py`) is `true` by default and
+`docker-compose.yml` never overrides it for the `api` container, on purpose — it's the same
+protection that stops whoever is intercepting an unencrypted network from replaying the session
+cookie. Over plain HTTP the browser silently drops a `Secure` cookie: the login still
+answers 200, but every following request comes back unauthenticated (the same
+mechanism that `.env.example` describes for Safari in local development, except here it happens by
+default, in production, on the first deploy, in every browser).
 
-### 5. Crea il primo amministratore
+### 5. Create the first administrator
 
-Non esiste nessun utente né password di default (la lezione diretta delle credenziali
-hardcoded di the previous system):
+There is no default user or password (the direct lesson from the previous system's
+hardcoded credentials):
 
 ```
-# I dati di Postgres stanno sull'host in PIGROCRM_DATA_DIR (vedi .env.example): un reset di
-# Docker non li tocca. Backup: `scripts/backup-db.sh` (pg_dumpall datato, ultimi 30 tenuti).
+# Postgres data lives on the host in PIGROCRM_DATA_DIR (see .env.example): a Docker reset
+# doesn't touch it. Backup: `scripts/backup-db.sh` (dated pg_dumpall, last 30 kept).
 docker compose exec api uv run --no-sync pigrocrm createadmin --email admin@tuodominio.it --nome "Nome Cognome"
 ```
 
-Chiede la password a terminale, due volte (mai come argomento o variabile d'ambiente).
-`--no-sync` non è decorativo: senza, `uv run` dentro il container risincronizza l'ambiente
-contro l'intero `pyproject.toml`, gruppo `dev` incluso (mypy, ruff, pytest, ...), scaricandoli
-dalla rete dentro un container di produzione già in esecuzione ad ogni singola invocazione
-(vedi il commento in `Dockerfile.api`).
+Asks for the password on the terminal, twice (never as an argument or environment variable).
+`--no-sync` isn't decorative: without it, `uv run` inside the container resyncs the environment
+against the whole `pyproject.toml`, including the `dev` group (mypy, ruff, pytest, ...), downloading them
+from the network inside a production container already running, on every single invocation
+(see the comment in `Dockerfile.api`).
 
-### 6. Accedi
+### 6. Log in
 
-`https://tuodominio.it/`, con le credenziali appena create.
+`https://tuodominio.it/`, with the credentials just created.
 
-## Stato
+## Status
 
-In sviluppo. Sostituirà [the previous system](https://example.com).
+In development. Will replace [the previous system](https://example.com).
 
-Le specifiche sono in [`docs/superpowers/specs/`](docs/superpowers/specs/).
+The specs are in [`docs/superpowers/specs/`](docs/superpowers/specs/).

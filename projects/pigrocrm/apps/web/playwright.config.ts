@@ -17,33 +17,16 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
+      // landing-served.spec.ts runs against the composed stack, through
+      // playwright.compose.config.ts, never against `pnpm dev`.
       testIgnore: /landing.*\.spec\.ts$/,
       use: { ...devices['Desktop Chrome'], baseURL: 'http://localhost:5173' },
     },
-    {
-      // The landing is a separate build served by a static server, so it needs its
-      // own origin. Splitting by project rather than by baseURL override keeps the
-      // app suite pointed at `pnpm dev` -- which now serves under /app/ -- without
-      // either suite knowing about the other.
-      name: 'landing',
-      testMatch: /landing\.spec\.ts$/,
-      use: { ...devices['Desktop Chrome'], baseURL: 'http://localhost:4173' },
-    },
   ],
-  webServer: [
-    {
-      command: 'pnpm dev',
-      url: 'http://localhost:5173/app/',
-      reuseExistingServer: !process.env.CI,
-      timeout: 60_000,
-    },
-    {
-      // `preview` serves dist-landing, so the build has to have happened. Chaining
-      // it here means the E2E command stays the one documented command.
-      command: 'pnpm build:landing && pnpm preview:landing',
-      url: 'http://localhost:4173/',
-      reuseExistingServer: !process.env.CI,
-      timeout: 120_000,
-    },
-  ],
+  webServer: {
+    command: 'pnpm dev',
+    url: 'http://localhost:5173/app/',
+    reuseExistingServer: !process.env.CI,
+    timeout: 60_000,
+  },
 })

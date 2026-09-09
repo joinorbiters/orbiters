@@ -114,10 +114,25 @@ stay off until their arming variable exists. The runbook is
   descriptions and issue bodies.
 - **Never add an AI co-author trailer** to a commit or a PR, in any form.
 - **No absolute paths** in committed code or tests. Derive them.
-- Repo-facing text is English. User-facing strings stay in the language the product
-  speaks, which for PigroCRM is Italian. The existing Italian design documents under
-  `projects/pigrocrm/docs/` are not being translated: they are a record of decisions
-  already taken.
+- **Everything in this repository is written in English.** Documentation, READMEs,
+  code, comments, docstrings, test names, commit messages, pull requests, and the
+  issues in Linear. No exceptions for "just this one file": a repository half in one
+  language is one nobody can hand to a contributor, and this one is meant to be
+  open-sourceable.
+
+  The line, and it is the only one: **what the product says to its users stays in the
+  user's language**, which for PigroCRM is Italian. That means the strings a person
+  reads or hears, not the code around them: UI copy, validation and error messages,
+  the OpenAPI descriptions rendered on the public docs page, every MCP tool, prompt
+  and resource description (an assistant reads those out to an Italian freelancer),
+  document templates and seeded content. When you cannot tell whether a docstring is
+  documentation or product surface, check whether a framework publishes it: a
+  `@mcp.tool()` or a FastAPI `description=` is the product speaking.
+
+  Two things are grandfathered, deliberately. The dated design records under
+  `projects/pigrocrm/docs/superpowers/` are a verbatim record of decisions already
+  taken and are not retranslated: rewriting a record is how a record stops being one.
+  Anything written from now on, there included, is English.
 - A design decision that is a rule rather than a picture goes in
   `docs/design/DECISIONS.md`, as a row, with the date.
 - **The tracker is Linear**, team `Orbiters`, one project per monorepo project. An

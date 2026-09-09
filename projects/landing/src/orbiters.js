@@ -57,7 +57,7 @@
     var url
     try {
       url = new URL(value)
-    } catch (error) {
+    } catch {
       return false
     }
     var host = url.hostname.toLowerCase()

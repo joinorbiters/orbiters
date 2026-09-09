@@ -1,12 +1,14 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+
+import { BRAND_TILES, BRAND_TILE_VARS } from '@orbiters/brand/mark'
 
 const css = readFileSync(join(__dirname, 'landing.css'), 'utf-8')
 const orbiters = readFileSync(join(__dirname, 'orbiters.css'), 'utf-8')
 const system = readFileSync(join(__dirname, 'system.css'), 'utf-8')
-const appTokens = readFileSync(join(__dirname, '../src/styles/tokens.css'), 'utf-8')
-const brandMark = readFileSync(join(__dirname, '../src/components/BrandMark.tsx'), 'utf-8')
+const appTokens = readFileSync(fileURLToPath(import.meta.resolve('@orbiters/brand/palette.css')), 'utf-8')
 
 /** The declarations of one rule, by exact selector. */
 function rule(selector: string, source = css): string {
@@ -69,20 +71,21 @@ describe('the landing shares the product system', () => {
     expect(rule('.card')).toMatch(/box-shadow:\s*6px 6px 0 var\(--landing-ink\)/)
   })
 
-  it('signs itself with the four tiles system.css draws once, and BrandMark repeats', () => {
+  it('signs itself with the four tiles of the brand mark, in reading order', () => {
     expect(css).not.toMatch(/\.glyph/)
     expect(orbiters).not.toMatch(/\.glyph/)
     const glyph = rule('.glyph', system)
-    expect(glyph).toMatch(/6px 0 0 var\(--color-royal-gold\)/)
-    expect(glyph).toMatch(/0 6px 0 var\(--color-watermelon\)/)
-    // The app's copy: ink, gold, watermelon, ink, in that reading order.
-    const tiles = [...brandMark.matchAll(/<span className="([^"]+)" \/>/g)].map((m) => m[1])
-    expect(tiles).toEqual([
-      'bg-foreground',
-      'bg-[var(--color-royal-gold)]',
-      'bg-[var(--color-watermelon)]',
-      'bg-foreground',
-    ])
+    // One element and three shadows: the tile itself is the first of the four.
+    const drawn = [
+      glyph.match(/background-color:\s*([^;]+);/)?.[1]?.trim(),
+      glyph.match(/6px 0 0 ([^,\n]+)/)?.[1]?.trim(),
+      glyph.match(/0 6px 0 ([^,\n]+)/)?.[1]?.trim(),
+      glyph.match(/6px 6px 0 ([^,;\n]+)/)?.[1]?.trim(),
+    ]
+    // Against `shared/brand`, not against the application's component: the mark is
+    // the brand's, and three surfaces draw it in three technologies. The application
+    // asserts the same order on its own side, in BrandMark.test.tsx.
+    expect(drawn).toEqual(BRAND_TILES.map((tile) => BRAND_TILE_VARS[tile]))
   })
 
   it('has no entrance animation and nothing tied to scroll', () => {

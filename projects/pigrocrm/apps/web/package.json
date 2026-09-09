@@ -6,8 +6,6 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build && tsc --noEmit",
-    "build:landing": "vite build --config vite.landing.config.ts",
-    "preview:landing": "vite preview --config vite.landing.config.ts",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -18,6 +16,7 @@
   },
   "dependencies": {
     "@dnd-kit/core": "6.3.1",
+    "@orbiters/brand": "workspace:*",
     "@tailwindcss/vite": "4.3.3",
     "@tanstack/react-query": "5.101.4",
     "@tanstack/react-router": "1.170.20",

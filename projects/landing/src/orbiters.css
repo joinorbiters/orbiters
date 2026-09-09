@@ -20,15 +20,6 @@
     --orb-cell: var(--system-cell);
   }
 }
-
-@font-face {
-  font-family: 'Outfit';
-  font-style: normal;
-  font-weight: 300 700;
-  font-display: swap;
-  src: url('../src/assets/fonts/outfit-variable-latin.woff2') format('woff2');
-}
-
 * {
   box-sizing: border-box;
   margin: 0;

@@ -1,0 +1,26 @@
+/* Self-hosted, not `@import url('https://fonts.googleapis.com/...')` (what this
+   file used until now): this is a self-hosted, single-tenant CRM sold to Italian
+   freelancers on exactly the promise of self-hosting, and fetching a typeface
+   from Google on every page load contradicts that outright — it hands every
+   visitor's IP and Referer to Google, breaks an offline or air-gapped install,
+   and puts a third party in the critical rendering path of a page that
+   otherwise needs nothing beyond this origin.
+   The woff2 below is Outfit's own variable font, fetched once from
+   fonts.gstatic.com and committed here instead of re-fetched from it forever
+   after — `fonts/outfit-variable-latin.woff2`, the "latin" subset
+   (U+0000–00FF plus a handful of symbols above it), which already covers every
+   character Italian text uses, including the accented vowels (à, è, é, ì, ò, ù).
+   One file for the whole 300–700 weight range `--font-sans` below needs, not
+   five near-duplicates: Google's own `css2` response for this exact family and
+   weight list points all five weights at this identical file, because Outfit
+   ships as a variable font — the `font-weight: 300 700` range on the
+   `@font-face` below is what that file already is, not an approximation of
+   five static cuts. Outfit is licensed under the SIL Open Font License 1.1,
+   which permits exactly this. */
+@font-face {
+  font-family: 'Outfit';
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url('./fonts/outfit-variable-latin.woff2') format('woff2');
+}
