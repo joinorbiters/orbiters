@@ -3,15 +3,17 @@ import getpass
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from typing import cast
 
 from sqlalchemy.orm import Session
 
-from pigrocrm.core.actor import Actor
+from pigrocrm.core.actor import Actor, Role
+from pigrocrm.core.auth.repository import UserRepository
 from pigrocrm.core.auth.schemas import UserCreate
 from pigrocrm.core.auth.service import UserService
 from pigrocrm.core.config import get_settings
 from pigrocrm.core.db import create_engine_from_settings, session_factory
-from pigrocrm.core.errors import Conflict, DomainError
+from pigrocrm.core.errors import Conflict, DomainError, ValidationFailed
 from pigrocrm.core.gmail.errors import GoogleCallFailed
 from pigrocrm.core.gmail.models import GoogleAccount
 from pigrocrm.core.gmail.repository import GmailRepository
@@ -112,30 +114,29 @@ def gmail_sync(email: str | None) -> int:
     `Actor.system()`, which has no id -- and `GmailSyncService.sync` refuses an actor
     with no id, correctly: there is one mailbox per user, and a sync that read "the
     first row in the table" would spend one person's Google quota under another's
-    consent. So this builds `Actor(id=<the mailbox owner>, type="system", role="admin")`:
-    the id says *whose* credential is being spent, and `type="system"` says nobody
-    pressed anything, which is what the timeline entry then records. The alternative --
-    the owner's own `user` actor -- would write a timeline that says a person
-    synchronised at 03:15, and the timeline exists not to say that.
+    consent. So this builds a *system* actor carrying the mailbox owner's id and the
+    owner's own role (`_cron_actor`): the id says *whose* credential is being spent, and
+    `type="system"` says nobody pressed anything, which is what the timeline entry then
+    records. The alternative -- the owner's own `user` actor -- would write a timeline
+    that says a person synchronised at 03:15, and the timeline exists not to say that.
 
     It widens nothing. `AGENT_FORBIDDEN_ACTIONS` is checked against `type == "mcp"`
     only, so a system actor was never subject to it and a personal access token gains
     nothing from this command existing; the credential an agent presents still resolves
-    to `type="mcp"` in `PatService.resolve`, whatever this process does. `role="admin"`
-    is what `Actor.system()` already carries and is read only by `require_write`, which
-    a cron with shell access to the container is past by definition.
+    to `type="mcp"` in `PatService.resolve`, whatever this process does.
 
     **Why the failures are caught here.** A traceback in a log nobody is watching is a
     failure that gets read as noise. Every foreseeable one -- no mailbox, an ambiguous
-    one, a revoked or expired consent, Gmail refusing the call -- is a sentence and a 1.
-    Anything else still raises, because an unforeseen failure deserves its stack.
+    one, a deactivated owner, a revoked or expired consent, Gmail refusing the call --
+    is a sentence and a 1. Anything else still raises, because an unforeseen failure
+    deserves its stack.
     """
     settings = get_settings()
     engine = create_engine_from_settings(settings)
     with session_factory(engine)() as session:
         try:
             account = _gmail_account(session, email)
-            actor = Actor(id=account.user_id, type="system", role="admin")
+            actor = _cron_actor(session, account)
             transport = GmailTransport()
             service = GmailSyncService(
                 session,
@@ -149,11 +150,63 @@ def gmail_sync(email: str | None) -> int:
             )
             report = service.sync(actor)
         except (DomainError, GoogleCallFailed) as exc:
-            message = exc.message if isinstance(exc, DomainError) else str(exc)
-            print(f"{_now()} gmail-sync: {message}", file=sys.stderr)
+            print(f"{_now()} gmail-sync: {_reason(exc)}", file=sys.stderr)
             return 1
         print(f"{_now()} gmail-sync {account.email_address}: {_outcome(report)}")
     return 0
+
+
+def _reason(exc: DomainError | GoogleCallFailed) -> str:
+    """The sentence, without the machine-readable prefix.
+
+    `DomainError` carries structured details and composes `message` for the adapters
+    that render them -- `Conflict` as `f"{entity}: {reason}"`. In a log an operator
+    reads, `google_account:` in front of «nessuna casella Google collegata» says
+    nothing they can act on, so the bare `reason` is printed when there is one.
+    """
+    if isinstance(exc, DomainError):
+        reason = exc.details.get("reason")
+        return reason if isinstance(reason, str) else exc.message
+    return str(exc)
+
+
+def _cron_actor(session: Session, account: GoogleAccount) -> Actor:
+    """Who the cron acts as: the mailbox's owner, with their own role, as the system.
+
+    Two refusals rather than an escalation, and they are different questions.
+
+    **A deactivated owner.** Deactivating somebody is, everywhere else in this product,
+    the moment they stop being able to make the CRM do anything: `deps.py`'s `get_actor`
+    turns their session down through this same `get_active`. A cron that kept
+    synchronising would go on spending the Google consent of a person the titolare has
+    just switched off, quietly, every fifteen minutes.
+
+    **The owner's real role.** `role="admin"` was convenient and wrong: it would let a
+    `readonly` owner's mailbox synchronise from cron while the Sincronizza button in
+    their own settings page refuses them. Whether the sync may run is a decision this
+    installation already made about that person, so the actor carries their role and
+    `sync`'s own `require_write` decides. The check below only exists to say it in
+    Italian first -- `PermissionDenied`'s message is written for an API, not for a log.
+    """
+    try:
+        user = UserRepository(session).get_active(account.user_id)
+    except ValidationFailed as exc:
+        raise Conflict(
+            "google_account",
+            f"la casella {account.email_address} appartiene a un utente disattivato: "
+            "il sync resta fermo finché non viene riattivato",
+        ) from exc
+    # `cast` and not a runtime check: `Actor` is a pydantic model and validates `role`
+    # against the same literal on construction, so a column holding something else
+    # raises there rather than travelling on unnoticed.
+    actor = Actor(id=user.id, type="system", role=cast(Role, user.ruolo))
+    if not actor.can_write:
+        raise Conflict(
+            "google_account",
+            f"{user.email} ha il ruolo {user.ruolo} e non può sincronizzare la casella "
+            f"{account.email_address}: il cron non agisce con più diritti del titolare",
+        )
+    return actor
 
 
 def _now() -> str:
@@ -188,8 +241,18 @@ def _gmail_account(session: Session, email: str | None) -> GoogleAccount:
     Never a guess. On the single-user install this is the only row and `--email` is
     noise; on an install with two, picking one would leave the other quietly
     unsynchronised and the log would look identical either way.
+
+    A mailbox somebody disconnected is not one of them, in the choice or in the list:
+    `usable` refuses it with «nessuna casella Google collegata», so listing it as
+    connected would name a mailbox that answers, one line later, that it does not
+    exist -- and would turn a single-mailbox install into an ambiguous one the day its
+    owner unhooked a second, older account.
     """
-    accounts = GmailRepository(session).all_accounts()
+    accounts = [
+        account
+        for account in GmailRepository(session).all_accounts()
+        if account.status != "disconnected"
+    ]
     if not accounts:
         raise Conflict("google_account", "nessuna casella Google collegata")
     if email is not None:

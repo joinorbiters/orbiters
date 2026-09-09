@@ -93,7 +93,32 @@ class GoogleAccountService:
                 configured=configured,
             )
 
-        read = GoogleAccountRead.model_validate(account)
+        # The seven days are Testing mode's, never this CRM's. `oauth.py._store` writes
+        # `consent_expires_at` only while `google_app_unverified` is on, and once the
+        # operator publishes the client -- Internal, or verified -- Google stops
+        # expiring the refresh token while the rows written before that keep their date.
+        # Read literally, an old row would go on asking somebody to renew a consent that
+        # is not going to lapse, and then declare it dead on a day nothing happened:
+        # exactly the class of defect this module exists to prevent, a true-sounding
+        # sentence about something that did not occur.
+        #
+        # So the prediction is dropped with the mode that made it, and only the
+        # prediction: `status` below is a fact somebody learned and is reported either
+        # way. The stale column is deliberately left in place rather than cleared -- it
+        # is the record of what was true under the consent that wrote it, and a
+        # migration that erased it would also erase the evidence for an install that
+        # went back to Testing.
+        #
+        # Filtered *here*, above the read model, and not only in the branches below.
+        # `GmailHealth.account` is what the settings page renders, and it printed the
+        # same prediction next to the address -- «Consenso da rinnovare entro il ...» --
+        # from this very field. Dropping it in the banner alone would have moved the
+        # sentence rather than removed it.
+        expires_at = account.consent_expires_at if self.settings.google_app_unverified else None
+
+        read = GoogleAccountRead.model_validate(account).model_copy(
+            update={"consent_expires_at": expires_at}
+        )
         missing = [
             scope for scope in (SCOPE_READONLY, SCOPE_SEND) if scope not in account.scopes_granted
         ]
@@ -110,23 +135,6 @@ class GoogleAccountService:
                 missing_scopes=missing,
                 configured=configured,
             )
-
-        # The seven days are Testing mode's, never this CRM's. `oauth.py._store` writes
-        # `consent_expires_at` only while `google_app_unverified` is on, and once the
-        # operator publishes the client -- Internal, or verified -- Google stops
-        # expiring the refresh token while the rows written before that keep their date.
-        # Read literally, an old row would go on asking somebody to renew a consent that
-        # is not going to lapse, and then declare it dead on a day nothing happened:
-        # exactly the class of defect this module exists to prevent, a true-sounding
-        # sentence about something that did not occur.
-        #
-        # So the prediction is dropped with the mode that made it, and only the
-        # prediction: `status` below is a fact somebody learned and is reported either
-        # way. The stale column is deliberately left in place rather than cleared -- it
-        # is the record of what was true under the consent that wrote it, and a
-        # migration that erased it would also erase the evidence for an install that
-        # went back to Testing.
-        expires_at = account.consent_expires_at if self.settings.google_app_unverified else None
 
         # Order matters, and it is an order of actionability. Revoked is the most final,
         # so it wins over everything below it.

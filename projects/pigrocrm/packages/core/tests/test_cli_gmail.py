@@ -21,14 +21,17 @@ socket is replaced.
 """
 
 from collections.abc import Iterator
+from urllib.parse import urlparse
 from uuid import UUID
 
 import pytest
-from fakes.fake_gmail import FakeGmail
+from fakes.fake_gmail import API_HOST, FakeGmail
 from fakes.gmail_fixtures import connected_account, gmail_settings
 from sqlalchemy import Engine, text
 
 import pigrocrm.core.cli as cli
+from pigrocrm.core.auth.models import User
+from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.db import session_factory
 from pigrocrm.core.gmail.repository import GmailRepository
 from pigrocrm.core.gmail.transport import GmailTransport
@@ -51,15 +54,36 @@ def cli_gmail(db_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[Fa
         connection.execute(text("delete from gmail_known_addresses"))
         connection.execute(text("delete from google_accounts"))
         connection.execute(text("delete from users where email like 'user-%@example.it'"))
+        connection.execute(text("delete from customers where ragione_sociale like 'CLI %'"))
 
 
-def _connect(engine: Engine, *, email_address: str, status: str = "active") -> UUID:
+def _connect(
+    engine: Engine,
+    *,
+    email_address: str,
+    status: str = "active",
+    ruolo: str = "admin",
+    attivo: bool = True,
+) -> UUID:
     """A mailbox the CLI's own session can see: committed, not merely flushed."""
     with session_factory(engine)() as session:
         account = connected_account(session, email_address=email_address, status=status)
         owner_id = account.user_id
+        owner = session.get(User, owner_id)
+        assert owner is not None
+        owner.ruolo = ruolo
+        owner.attivo = attivo
         session.commit()
     return owner_id
+
+
+def _correspondent(engine: Engine) -> None:
+    """One address in the roster, so the cycle really asks Gmail something. With an
+    empty roster no request is issued at all, which is the right behaviour and the
+    wrong starting point for a test about a request failing."""
+    with session_factory(engine)() as session:
+        session.add(Customer(ragione_sociale="CLI Acme", email="info@acme.it"))
+        session.commit()
 
 
 def _run(*args: str) -> int:
@@ -179,3 +203,116 @@ def test_a_cycle_already_running_is_reported_and_is_not_a_failure(
             repo.release_sync_lock(account.id)
 
     assert "già in corso" in capsys.readouterr().out
+
+
+def test_the_cron_does_not_act_for_a_deactivated_owner(
+    cli_gmail: FakeGmail, db_engine: Engine, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Deactivating somebody is, everywhere else in the product, the moment they stop
+    being able to make the CRM do anything -- `deps.py` turns their session down with
+    the same `get_active`. A cron that carried on would spend the Google consent of a
+    person the titolare has just switched off, every quarter of an hour, silently."""
+    _connect(db_engine, email_address="cron@example.it", attivo=False)
+
+    assert _run() == 1
+    err = capsys.readouterr().err
+    assert "disattivato" in err
+    assert "cron@example.it" in err
+
+
+def test_the_cron_does_not_synchronise_for_an_owner_who_could_not_press_the_button(
+    cli_gmail: FakeGmail, db_engine: Engine, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`role="admin"` on the system actor was convenient and wrong: it let a `readonly`
+    owner's mailbox synchronise from cron while their own Sincronizza button refuses
+    them. The actor carries the owner's real role, and the refusal is in Italian."""
+    _connect(db_engine, email_address="cron@example.it", ruolo="readonly")
+
+    assert _run() == 1
+    err = capsys.readouterr().err
+    assert "readonly" in err
+    assert "cron@example.it" in err
+
+
+def test_an_owner_who_can_write_still_runs(
+    cli_gmail: FakeGmail, db_engine: Engine, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The other half of the rule: `collaboratore` is a role that may synchronise, and
+    reading the owner's role must not have turned the check into "admin only"."""
+    _connect(db_engine, email_address="cron@example.it", ruolo="collaboratore")
+
+    assert _run() == 0
+    assert "cron@example.it" in capsys.readouterr().out
+
+
+def test_a_disconnected_mailbox_is_not_listed_as_connected(
+    cli_gmail: FakeGmail, db_engine: Engine, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """One active mailbox and one somebody unhooked is not an ambiguous installation.
+    Listing the disconnected one would name, as connected, a mailbox that answers
+    «nessuna casella Google collegata» one line later."""
+    _connect(db_engine, email_address="attiva@example.it")
+    _connect(db_engine, email_address="scollegata@example.it", status="disconnected")
+
+    assert _run() == 0
+    out = capsys.readouterr().out
+    assert "attiva@example.it" in out
+    assert "scollegata@example.it" not in out
+
+
+def test_the_error_line_carries_the_sentence_and_not_the_entity_prefix(
+    cli_gmail: FakeGmail, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`Conflict` composes `message` as "entity: reason" for the adapters that render
+    its details. In a log an operator reads, `google_account:` in front of the sentence
+    says nothing they can act on -- and the runbook prints these lines bare."""
+    assert _run() == 1
+    err = capsys.readouterr().err.strip()
+    assert err.endswith("gmail-sync: nessuna casella Google collegata")
+
+
+def test_gmail_not_configured_is_one_sentence_and_not_a_traceback(
+    cli_gmail: FakeGmail,
+    db_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A cron line left behind on an installation whose Google client was removed from
+    `.env`. It is a misconfiguration, so exit 1 -- but a readable one."""
+    _connect(db_engine, email_address="cron@example.it")
+    monkeypatch.setattr(cli, "get_settings", lambda: gmail_settings(google_client_id=""))
+
+    assert _run() == 1
+    assert "Gmail non è configurato" in capsys.readouterr().err
+
+
+def test_a_refusal_from_gmail_is_one_line_too(
+    cli_gmail: FakeGmail,
+    db_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The quota row of the runbook's table. `GmailSyncService.sync` does not convert
+    `GoogleCallFailed` into a `DomainError` (see that class's docstring), so without the
+    `except` in `cli.py` an exhausted Gmail quota would print a stack every fifteen
+    minutes -- which is how a log stops being read."""
+    _connect(db_engine, email_address="cron@example.it")
+    _correspondent(db_engine)
+
+    def exhausted(
+        method: str, url: str, headers: dict[str, str], body: bytes | None
+    ) -> tuple[int, bytes, dict[str, str]]:
+        # By host, so the token refresh still succeeds through the fake: it is the
+        # *listing* that has to fail here, and it is the first call after the refresh.
+        if urlparse(url).netloc == API_HOST:
+            return 429, b'{"error": {"status": "RESOURCE_EXHAUSTED"}}', {"Retry-After": "0"}
+        return cli_gmail(method, url, headers, body)
+
+    monkeypatch.setattr(
+        cli, "GmailTransport", lambda: GmailTransport(http=exhausted, sleep=lambda _: None)
+    )
+
+    assert _run() == 1
+    err = capsys.readouterr().err
+    assert "elenco dei messaggi fallita (429/RESOURCE_EXHAUSTED)" in err
+    assert "Traceback" not in err
