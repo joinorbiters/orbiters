@@ -708,7 +708,7 @@ class FatturaPAExporter:
     def _dati_beni_servizi(self, body: etree._Element, invoice: InvoiceForExport) -> None:
         beni = etree.SubElement(body, "DatiBeniServizi")
         for riga in invoice.righe:
-            self._dettaglio_linea(beni, riga)
+            self._dettaglio_linea(beni, riga, invoice)
         for group in build_riepilogo(
             [
                 ComputedLine(
@@ -729,14 +729,19 @@ class FatturaPAExporter:
         ):
             self._dati_riepilogo(beni, group)
 
-    def _dettaglio_linea(self, parent: etree._Element, riga: InvoiceLineRead) -> None:
+    def _dettaglio_linea(
+        self, parent: etree._Element, riga: InvoiceLineRead, invoice: InvoiceForExport
+    ) -> None:
         """Sequence: NumeroLinea, TipoCessionePrestazione?, CodiceArticolo*,
         Descrizione, Quantita?, UnitaMisura?, DataInizioPeriodo?, DataFinePeriodo?,
         PrezzoUnitario, ScontoMaggiorazione*, PrezzoTotale, AliquotaIVA, Ritenuta?,
         Natura?, RiferimentoAmministrazione?, AltriDatiGestionali*.
 
         `UnitaMisura` comes *after* `Quantita` and *before* `PrezzoUnitario`: getting
-        that wrong is a schema-invalid file with every value correct.
+        that wrong is a schema-invalid file with every value correct. The two period
+        dates sit between the two and are the invoice's, not the line's (ORB-61): the
+        period is header level on the row, and every line repeats it because the schema
+        has no place for it on the document.
         """
         linea = etree.SubElement(parent, "DettaglioLinee")
         numero = etree.SubElement(linea, "NumeroLinea")
@@ -762,6 +767,14 @@ class FatturaPAExporter:
                 entity="invoice_line",
                 field="unita_misura",
             )
+        if invoice.competenza_da is not None and invoice.competenza_a is not None:
+            # Both or neither, which the row's own CHECK already guarantees: an empty
+            # `<DataInizioPeriodo/>` would be a schema error, and a period invented from
+            # the emission date would be a fact nobody stated.
+            inizio = etree.SubElement(linea, "DataInizioPeriodo")
+            inizio.text = self._iso(invoice.competenza_da)
+            fine = etree.SubElement(linea, "DataFinePeriodo")
+            fine.text = self._iso(invoice.competenza_a)
         prezzo = etree.SubElement(linea, "PrezzoUnitario")
         prezzo.text = format_amount_8(riga.prezzo_unitario)
         # `ScontoMaggiorazione` is deliberately not emitted: the discount is already

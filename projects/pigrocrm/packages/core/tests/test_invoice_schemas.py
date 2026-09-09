@@ -116,13 +116,34 @@ def test_an_invoice_cannot_be_created_with_more_lines_than_the_bound() -> None:
         InvoiceCreate(customer_id=uuid4(), righe=[line] * (MAX_LINES + 1))
 
 
-def test_update_exposes_only_text_columns_and_custom_fields() -> None:
-    """A14 is sidestepped rather than reproduced: every native column on this schema
-    is text-shaped, so `""` is a real "clear it" spelling. No typed column -- numeric,
-    date or literal -- appears here, which is what removes the A14 shape from this
-    surface instead of hitting it again. `causale` is editable but only while the
-    invoice is a draft, which the service enforces with `ImmutableField`."""
-    assert set(InvoiceUpdate.model_fields) == {"causale", "note_interne", "custom_fields"}
+def test_update_exposes_the_editable_columns_and_custom_fields() -> None:
+    """Until ORB-61 every native column here was text-shaped and the docstring said A14
+    was sidestepped by that. Task 4B-1 retired A14 itself -- `supplied_changes` reads
+    `exclude_unset`, so an explicit `null` clears a typed column and an omitted key
+    leaves it alone -- which is what lets three `date` columns sit here: the accrual
+    period (cleared as a pair, the service checks) and a proforma's own document date
+    (never cleared, the service checks). All of them are editable only while the
+    document is a draft, which `InvoiceService.update` enforces with `ImmutableField`."""
+    assert set(InvoiceUpdate.model_fields) == {
+        "causale",
+        "note_interne",
+        "custom_fields",
+        "competenza_da",
+        "competenza_a",
+        "data_emissione",
+    }
+
+
+def test_the_accrual_period_is_carried_by_every_shape_that_reaches_a_document() -> None:
+    """Settable on creation and on import, read back, and part of what the exporter and
+    the PDF read -- the period is on the document (ORB-61), so a shape that dropped it
+    would print or export a document that says less than the row."""
+    from pigrocrm.core.invoices.schemas import InvoiceForExport, InvoiceImport, InvoiceRead
+
+    for model in (InvoiceCreate, InvoiceUpdate, InvoiceImport, InvoiceRead, InvoiceForExport):
+        assert {"competenza_da", "competenza_a"} <= set(model.model_fields), model.__name__
+    assert InvoiceCreate(customer_id=uuid4()).competenza_da is None
+    assert InvoiceForExport.model_fields["competenza_da"].default is None
 
 
 def test_the_list_query_limit_is_bounded_in_the_schema_not_only_the_router() -> None:

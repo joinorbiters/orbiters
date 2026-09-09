@@ -195,29 +195,42 @@ class InvoiceCreate(BaseModel):
     tipo: InvoiceTipo = "fattura"
     causale: SafeStr | None = Field(default=None, max_length=CAUSALE_MAX_LENGTH)
     note_interne: SafeStr | None = None
+    # A proforma's own document date (ORB-63): omitted means today in the issuer's
+    # calendar. Refused on a `fattura`, whose date is the register's and is decided at
+    # `issue` (spec 6.2). The service applies both rules; the schema only carries it.
+    data_emissione: date | None = None
+    # The accrual period (ORB-61): both or neither, in order, checked by the service
+    # against the merged row and by the table on every write path.
+    competenza_da: date | None = None
+    competenza_a: date | None = None
     righe: list[InvoiceLineIn] = Field(default_factory=list, max_length=MAX_LINES)
     custom_fields: dict[str, Any] = {}
 
 
 class InvoiceUpdate(BaseModel):
-    """Only what stays mutable after emission (spec 4).
+    """What a draft may still change, and what stays mutable after emission (spec 4).
 
-    Everything typed and clearable is absent, which removes the A14 shape from this
-    surface instead of reproducing it: lines are replaced in bulk, `stato_pagamento`
-    and `data_incasso` go through `set_payment_state`, and `stato` goes through
-    `issue`/`annul`. Both native fields here are text-shaped, so `""` is a real
-    "clear it" spelling for each.
+    Lines are replaced in bulk, `stato_pagamento` and `data_incasso` go through
+    `set_payment_state`, and `stato` goes through `issue`/`annul`. `supplied_changes`
+    reads this with `exclude_unset`, so an explicit `null` clears a column and an omitted
+    key leaves it alone -- which is what lets the three `date` columns sit here without
+    reproducing A14.
 
-    `causale` is on this schema because a draft has to be correctable before it is
-    issued, and it is frozen afterwards by `InvoiceService.update`, which raises
-    `ImmutableField` -- not by leaving it off the schema, which would have made a
-    draft's own subject line unfixable.
+    `causale`, the accrual period and a proforma's `data_emissione` are on this schema
+    because a draft has to be correctable before it is issued, and they are frozen
+    afterwards by `InvoiceService.update`, which raises `ImmutableField` -- not by
+    leaving them off the schema, which would have made a draft's own subject line
+    unfixable. The period is cleared as a pair and a proforma's date is never cleared;
+    a fattura's `data_emissione` is refused here outright, since `issue` owns it.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     causale: SafeStr | None = Field(default=None, max_length=CAUSALE_MAX_LENGTH)
     note_interne: SafeStr | None = None
+    data_emissione: date | None = None
+    competenza_da: date | None = None
+    competenza_a: date | None = None
     custom_fields: dict[str, Any] | None = None
 
 
@@ -355,6 +368,11 @@ class InvoiceImport(BaseModel):
     customer_id: UUID
     deal_id: UUID | None = None
     causale: SafeStr | None = Field(default=None, max_length=CAUSALE_MAX_LENGTH)
+    # Declared, like everything else about an imported document, when the source knew
+    # it; the previous system did not carry a period, so the usual import leaves both
+    # out and the row stays `NULL` (ORB-61).
+    competenza_da: date | None = None
+    competenza_a: date | None = None
     righe: list[InvoiceLineImport] = Field(min_length=1, max_length=MAX_LINES)
     imponibile: Decimal = Field(max_digits=MONEY_MAX_DIGITS, decimal_places=MONEY_DECIMAL_PLACES)
     imposta: Decimal = Field(max_digits=MONEY_MAX_DIGITS, decimal_places=MONEY_DECIMAL_PLACES)
@@ -416,6 +434,8 @@ class InvoiceRead(BaseModel):
     riferimento: str | None
     data_emissione: date | None
     data_scadenza: date | None
+    competenza_da: date | None
+    competenza_a: date | None
     tipo_documento: str
     divisa: str
     imponibile: Decimal
@@ -498,5 +518,10 @@ class InvoiceForExport(BaseModel):
     bollo: Decimal = Field(max_digits=MONEY_MAX_DIGITS, decimal_places=MONEY_DECIMAL_PLACES)
     totale: Decimal = Field(max_digits=MONEY_MAX_DIGITS, decimal_places=MONEY_DECIMAL_PLACES)
     causale: str | None = Field(default=None, max_length=CAUSALE_MAX_LENGTH)
+    # Read off the row, like `causale`, and frozen by the same rule: `InvoiceService.
+    # update` refuses both once the document has left the draft state, so what the
+    # exporter writes on every `DettaglioLinee` is what the document said at issue.
+    competenza_da: date | None = None
+    competenza_a: date | None = None
     snapshot: InvoiceSnapshot
     righe: tuple[InvoiceLineRead, ...]

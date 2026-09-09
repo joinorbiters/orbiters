@@ -16,6 +16,10 @@
 #v(12pt)
 
 #text(size: 9pt, fill: muted)[{{fattura.etichetta}}] | #text(size: 9pt, fill: muted)[Numero: {{fattura.numero}}] | #text(size: 9pt, fill: muted)[Data: {{fattura.data}}]
+{{#if fattura.periodo_competenza}}
+
+#text(size: 9pt, fill: muted)[Periodo di competenza: {{fattura.periodo_competenza}}]
+{{/if}}
 
 #v(10pt)
 

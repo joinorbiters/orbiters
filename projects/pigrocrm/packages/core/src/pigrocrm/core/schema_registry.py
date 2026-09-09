@@ -70,6 +70,8 @@ EXTRA_NATIVE_FIELDS: dict[str, tuple[str, ...]] = {
         "stato",
         "data_emissione",
         "data_scadenza",
+        "competenza_da",
+        "competenza_a",
         "tipo_documento",
         "divisa",
         "imponibile",

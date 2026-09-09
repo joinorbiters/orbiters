@@ -138,6 +138,7 @@ def _invoice(
     bollo: str = "0.00",
     causale: str | None = "Consulenza tecnica",
     numero: int = 7,
+    competenza: tuple[date, date] | None = None,
 ) -> InvoiceForExport:
     imponibile, imposta, totale = sum_totals(_build_riepilogo_from(righe))
     return InvoiceForExport(
@@ -152,6 +153,8 @@ def _invoice(
         bollo=Decimal(bollo),
         totale=totale,
         causale=causale,
+        competenza_da=competenza[0] if competenza else None,
+        competenza_a=competenza[1] if competenza else None,
         snapshot=InvoiceSnapshot(
             versione=SNAPSHOT_VERSIONE,
             emittente=emittente or EMITTENTE,
@@ -704,6 +707,44 @@ def test_a_stray_sdi_code_on_a_foreign_customer_does_not_route_the_file_to_it() 
     )
     root = etree.fromstring(xml)
     assert root.findtext(".//DatiTrasmissione/CodiceDestinatario") == "XXXXXXX"
+
+
+# --- the accrual period on every line (ORB-61) ---------------------------------------
+
+
+def _periodi(xml: bytes) -> list[tuple[str | None, str | None]]:
+    root = etree.fromstring(xml)
+    return [
+        (linea.findtext("DataInizioPeriodo"), linea.findtext("DataFinePeriodo"))
+        for linea in root.iter("DettaglioLinee")
+    ]
+
+
+def test_an_accrual_period_is_written_on_every_line_and_validates() -> None:
+    """`DataInizioPeriodo` and `DataFinePeriodo` sit between `UnitaMisura` and
+    `PrezzoUnitario` in the schema's own sequence: written anywhere else the file is
+    invalid with every value right, which is why the test validates rather than only
+    reading the two elements back."""
+    righe = [
+        _line(1, "Consulenza", "1.000000", "1500.000000", "1500.00", unita="ore"),
+        _line(2, "Sviluppo", "2.000000", "100.000000", "200.00"),
+    ]
+    xml = FatturaPAExporter().to_bytes(
+        _invoice(righe, competenza=(date(2026, 8, 1), date(2026, 8, 31)))
+    )
+    assert_valid(xml)
+    assert _periodi(xml) == [("2026-08-01", "2026-08-31")] * 2
+
+
+def test_without_a_period_no_line_carries_a_date() -> None:
+    """Both elements are optional and an absent period is not an empty one: writing
+    `<DataInizioPeriodo/>` would be a schema error, and a period equal to the emission
+    date would be a fact nobody stated."""
+    xml = FatturaPAExporter().to_bytes(
+        _invoice([_line(1, "Consulenza", "1.000000", "1500.000000", "1500.00")])
+    )
+    assert_valid(xml)
+    assert _periodi(xml) == [(None, None)]
 
 
 def test_a_missing_province_is_refused_in_italy_and_accepted_outside_it() -> None:
