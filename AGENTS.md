@@ -94,9 +94,18 @@ knowing before you edit it:
   contexts, and the PR becomes unmergeable rather than passing.
 
 Adding a project means adding one filter to `changes` and one or two jobs that call
-`_python-gate.yml` / `_node-gate.yml`. It must not mean another CI workflow file. A
-deploy workflow, on the other hand, is per project and named after it, so that two
-projects can never deploy each other by accident.
+`_python-gate.yml` / `_node-gate.yml`. It must not mean another CI workflow file.
+
+**Deploy is a fourth thing, and it is not a status check.** Two environments per
+project: preview on every push to `main` that touched the project, production only on
+a project-scoped tag, `<project>-v<semver>`. The mechanism is shared
+(`_deploy-compose.yml`); the trigger is per project (`deploy-<project>.yml`), so two
+projects can never deploy each other by accident. Per-environment configuration is a
+**GitHub Environment**, holding the same four secrets everywhere: `DEPLOY_HOST`,
+`DEPLOY_USER`, `DEPLOY_PATH`, `DEPLOY_SSH_KEY`. The caller must pass `secrets:
+inherit`, or a reusable workflow reads all four as empty strings. Both environments
+stay off until their arming variable exists. The runbook is
+`docs/adding-a-project.md` §7.
 
 ## Conventions
 

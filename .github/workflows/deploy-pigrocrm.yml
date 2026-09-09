@@ -1,198 +1,109 @@
-# Deploy, for PigroCRM only. One deploy workflow per project, named after it: a
-# monorepo's projects ship on their own schedules and must never be able to deploy
-# each other by accident.
+# Deploy, for PigroCRM only. One caller per project, named after it: projects in this
+# monorepo ship on their own schedules and must never be able to deploy each other.
+# The mechanism itself is in `_deploy-compose.yml`; this file is only the two rules
+# that say when, and the four values that say where.
 #
-# Everything about the target -- the secrets, the arming variable, the script that
-# runs on the far side -- is exactly what the previous single ci-deploy.yml did. Only
-# the paths changed, and the CI verification below is new.
+# **Preview on every push to main, production on a version tag.** A tag is the only
+# thing in this repository that means "this is a release": a push to main means the
+# trunk moved, which is worth seeing on a real server and is not worth putting in
+# front of the person who uses the CRM every day.
+#
+# Tags are project-scoped, `pigrocrm-v<semver>`, because a bare `v1.2.0` in a monorepo
+# does not say which project it releases:
+#
+#     git tag pigrocrm-v0.4.0 && git push origin pigrocrm-v0.4.0
+#
+# The tag deploys the commit it points at, and `_deploy-compose.yml` refuses to deploy
+# any commit whose `ci.yml` run is not green, so tagging a commit that main never built
+# green fails the deploy rather than shipping it.
 name: Deploy PigroCRM
 
 on:
   push:
     branches: [main]
-  workflow_dispatch:
-
-concurrency:
-  group: deploy-pigrocrm
-  cancel-in-progress: false
+    tags: ['pigrocrm-v*']
 
 permissions:
   contents: read
   actions: read
 
 jobs:
-  deploy:
-    # This is the one job that must never fire by accident. Two independent
-    # conditions both have to hold:
-    #
-    # 1. a real push to main, never a pull_request build and never an ad hoc
-    #    workflow_dispatch (that trigger exists so the job can be re-run against main
-    #    deliberately, and the condition below still refuses it -- change it here,
-    #    knowingly, if that is ever wanted);
-    # 2. vars.PIGROCRM_DEPLOY_ENABLED == 'true' -- a repository Actions *variable*
-    #    that does not exist on a fresh repository and is empty by default, so this
-    #    whole expression is false and the job reports "skipped" until a human
-    #    deliberately creates it. That is the actual arming switch: nothing else in
-    #    this file makes a deploy possible.
-    #
-    # `environment: production` below is a second, optional gate: it does nothing on
-    # its own, but once an admin adds required reviewers to an environment of that
-    # name in Settings -> Environments, every run waits for a human too.
-    if: |
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/main' &&
-      vars.PIGROCRM_DEPLOY_ENABLED == 'true'
+  # A push to main that touched only another project, or only the root README, must not
+  # rebuild this stack: a rebuild on the target host is minutes of a single shared core.
+  # This is the deploy-side twin of ci.yml's `changes` job, and the two lists are kept
+  # deliberately identical.
+  scope:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    environment: production
+    timeout-minutes: 5
+    outputs:
+      changed: ${{ steps.decide.outputs.changed }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Refuse to deploy a commit CI has not passed
-        # The previous workflow got this for free by putting deploy in the same file
-        # behind `needs:`. Split into its own workflow, that guarantee has to be
-        # re-established explicitly, or a red trunk deploys itself.
+      - id: decide
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 60); do
-            run=$(gh api "repos/${REPO}/actions/workflows/ci.yml/runs?head_sha=${SHA}&per_page=10" \
-              --jq '.workflow_runs | sort_by(.created_at) | last // empty')
-            if [ -n "$run" ]; then
-              status=$(printf '%s' "$run" | jq -r .status)
-              conclusion=$(printf '%s' "$run" | jq -r .conclusion)
-              url=$(printf '%s' "$run" | jq -r .html_url)
-              echo "ci.yml for ${SHA}: status=${status} conclusion=${conclusion} (${url})"
-              if [ "$status" = completed ]; then
-                [ "$conclusion" = success ] && exit 0
-                echo "::error::CI concluded ${conclusion} for ${SHA}. See ${url}. Refusing to deploy."
-                exit 1
-              fi
-            fi
-            sleep 30
-          done
-          echo "::error::No completed ci.yml run for ${SHA} after 30 minutes. Refusing to deploy an unverified commit."
-          exit 1
-
-      - name: Verify deploy secrets are configured
-        # Arming the workflow and configuring the target server are two separate,
-        # deliberate steps -- someone can flip PIGROCRM_DEPLOY_ENABLED on before the
-        # four secrets exist. Failing here with a plain list of what is missing beats
-        # letting ssh-keyscan and rsync stumble into it with a cryptic error.
-        env:
-          DEPLOY_HOST: ${{ secrets.PIGROCRM_HOST }}
-          DEPLOY_USER: ${{ secrets.PIGROCRM_USER }}
-          DEPLOY_PATH: ${{ secrets.PIGROCRM_DEPLOY_PATH }}
-          DEPLOY_KEY: ${{ secrets.PIGROCRM_SSH_PRIVATE_KEY }}
-        run: |
-          missing=()
-          [ -z "$DEPLOY_HOST" ] && missing+=(PIGROCRM_HOST)
-          [ -z "$DEPLOY_USER" ] && missing+=(PIGROCRM_USER)
-          [ -z "$DEPLOY_PATH" ] && missing+=(PIGROCRM_DEPLOY_PATH)
-          [ -z "$DEPLOY_KEY" ] && missing+=(PIGROCRM_SSH_PRIVATE_KEY)
-          if [ "${#missing[@]}" -gt 0 ]; then
-            printf '::error::PIGROCRM_DEPLOY_ENABLED is true but these secrets are missing: %s\n' "${missing[*]}"
-            exit 1
+          # A new branch, a force push or a first push has no usable `before`: deploy
+          # rather than guess, since a preview that ran once too often is cheap and a
+          # preview silently stuck on an old commit is not.
+          if [ -z "${BEFORE}" ] || [ "${BEFORE}" = "0000000000000000000000000000000000000000" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          files=$(gh api "repos/${REPO}/compare/${BEFORE}...${SHA}" --jq '.files[].filename' || echo UNKNOWN)
+          if [ "$files" = UNKNOWN ]; then
+            echo "compare failed; deploying rather than skipping"
+            echo "changed=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          printf '%s\n' "$files"
+          if printf '%s\n' "$files" | grep -qE '^(projects/pigrocrm/|pyproject\.toml|uv\.lock|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.dockerignore|\.github/workflows/(deploy-pigrocrm|_deploy-compose)\.yml)'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Configure SSH
-        env:
-          DEPLOY_HOST: ${{ secrets.PIGROCRM_HOST }}
-          DEPLOY_SSH_KEY: ${{ secrets.PIGROCRM_SSH_PRIVATE_KEY }}
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+  preview:
+    needs: scope
+    if: |
+      github.ref == 'refs/heads/main' &&
+      needs.scope.outputs.changed == 'true' &&
+      vars.PIGROCRM_PREVIEW_ENABLED == 'true'
+    # Preview supersedes itself: a newer commit on main makes an older, still queued
+    # preview pointless. It has its own group, never shared with production, so a
+    # preview can never cancel a release that is mid-flight.
+    concurrency:
+      group: deploy-pigrocrm-preview
+      cancel-in-progress: true
+    uses: ./.github/workflows/_deploy-compose.yml
+    with:
+      environment: pigrocrm-preview
+      compose-dir: projects/pigrocrm
+      compose-project: pigrocrm-preview
+      # Deliberately not /api/tenants/root: that one answers from settings alone and
+      # would report a healthy deploy with the database on the floor. This one reads
+      # the registry, so it fails when Postgres does.
+      health-url: http://127.0.0.1:8081/api/tenants/zzz-healthcheck/disponibile
+      url: https://preview.pigro.joinorbiters.com
+    secrets: inherit
 
-      - name: Sync sources
-        # Still the whole repository, not just projects/pigrocrm: the uv and pnpm
-        # workspace roots live at the top and the image builds need them. The server's
-        # own data directories (data/, var/) are excluded so a --delete never reaches
-        # the register or the documents -- they sit exactly where PIGROCRM_DATA_DIR
-        # and PIGROCRM_DOCUMENTS_DIR point, which by default is the repository root.
-        env:
-          DEPLOY_HOST: ${{ secrets.PIGROCRM_HOST }}
-          DEPLOY_USER: ${{ secrets.PIGROCRM_USER }}
-          DEPLOY_PATH: ${{ secrets.PIGROCRM_DEPLOY_PATH }}
-        run: |
-          ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p \"${DEPLOY_PATH}\""
-          rsync -az --delete \
-            --exclude '.git' --exclude '.github' \
-            --exclude '.env' --exclude 'the reference copy' \
-            --exclude 'node_modules' --exclude 'dist' --exclude '.venv' \
-            --exclude 'data' --exclude 'var' \
-            ./ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}"
-
-      - name: Deploy
-        env:
-          DEPLOY_HOST: ${{ secrets.PIGROCRM_HOST }}
-          DEPLOY_USER: ${{ secrets.PIGROCRM_USER }}
-          DEPLOY_PATH: ${{ secrets.PIGROCRM_DEPLOY_PATH }}
-        run: |
-          ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "DEPLOY_PATH='${DEPLOY_PATH}' bash -s" <<'SSH'
-            set -e
-            # The compose file moved into the project; its build context is still the
-            # repository root, which is why this cd goes down rather than the context
-            # coming up.
-            cd "${DEPLOY_PATH}/projects/pigrocrm"
-            if docker compose version >/dev/null 2>&1; then
-              COMPOSE="docker compose"
-            elif command -v docker-compose >/dev/null 2>&1; then
-              COMPOSE="docker-compose"
-            else
-              echo "Docker Compose non trovato" >&2
-              exit 1
-            fi
-            # The server's `.env` stays at the repository root (README §1, and rsync
-            # above never touches it), but compose reads `.env` from the directory of
-            # its own file, which is now two levels down: name it, or every
-            # `${POSTGRES_PASSWORD}` interpolation comes up empty and compose refuses
-            # to start.
-            $COMPOSE --env-file "${DEPLOY_PATH}/.env" up -d --build
-          SSH
-
-      # There used to be a "Configure nginx" step here, running deploy/setup-server.sh
-      # on every deploy. It is gone, and this is why.
-      #
-      # The script writes /etc/nginx/sites-available/${PIGROCRM_DOMAIN}, and the
-      # workflow passed no such variable, so it would have used the script's default,
-      # `pigrocrm.humancraft.tech`: a domain that is not this server's. The live host
-      # serves pigro.joinorbiters.com from a certbot-managed file named
-      # `pigro.joinorbiters.conf`, so the script's "already has TLS, leave it alone"
-      # guard would not have found it either -- it looks for a file named after the
-      # domain, and that is not how this one is named. Every deploy would have added a
-      # stray HTTP vhost, and with the right domain passed in it would have added a
-      # second vhost with a duplicate server_name instead.
-      #
-      # None of that was ever observed, because the deploy has never run. Provisioning
-      # nginx is a one-time bootstrap (README §3, then certbot in §4), not something a
-      # push should redo. A deploy that changes the reverse proxy on every commit is a
-      # deploy that can take the site down without touching the application.
-
-      - name: Check the site answers with the new code
-        # A deploy that reports success without asking the server anything is a deploy
-        # that reports success when the container failed to start.
-        env:
-          DEPLOY_HOST: ${{ secrets.PIGROCRM_HOST }}
-          DEPLOY_USER: ${{ secrets.PIGROCRM_USER }}
-        run: |
-          ssh "${DEPLOY_USER}@${DEPLOY_HOST}" 'bash -s' <<'SSH'
-            set -euo pipefail
-            for attempt in $(seq 1 30); do
-              code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/tenants/root || true)
-              if [ "$code" = 200 ]; then
-                echo "api risponde 200 su /api/tenants/root"
-                docker compose -p pigrocrm ps --format 'table {{.Name}}\t{{.Status}}'
-                exit 0
-              fi
-              sleep 5
-            done
-            echo "::error::L'API non ha risposto 200 su /api/tenants/root dopo 150 secondi."
-            docker compose -p pigrocrm ps --format 'table {{.Name}}\t{{.Status}}' || true
-            docker compose -p pigrocrm logs --tail 50 api || true
-            exit 1
-          SSH
+  production:
+    if: |
+      startsWith(github.ref, 'refs/tags/pigrocrm-v') &&
+      vars.PIGROCRM_DEPLOY_ENABLED == 'true'
+    # Releases queue, they never cancel each other, and they never share a group with
+    # preview: GitHub keeps only the newest pending run per group, so a chatty preview
+    # sharing this group would discard a queued release.
+    concurrency:
+      group: deploy-pigrocrm-production
+      cancel-in-progress: false
+    uses: ./.github/workflows/_deploy-compose.yml
+    with:
+      environment: pigrocrm-production
+      compose-dir: projects/pigrocrm
+      compose-project: pigrocrm
+      health-url: http://127.0.0.1:8080/api/tenants/zzz-healthcheck/disponibile
+      url: https://pigro.joinorbiters.com
+    secrets: inherit

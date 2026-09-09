@@ -131,10 +131,55 @@ tier is a hole, not a saving.
 
 ## 7. Deploy
 
-One workflow per project, named `deploy-<name>.yml`, gated on its own
-`vars.<NAME>_DEPLOY_ENABLED` variable and its own secrets. Never a shared deploy
-workflow: two projects that can deploy each other by accident is a matter of when,
-not whether.
+Two environments, two triggers, and no deploy logic of your own:
+
+- **preview** on every push to `main` that touched the project;
+- **production** on a version tag, `<name>-v<semver>`, never on a branch.
+
+A bare `v1.2.0` cannot work here: it does not say which project it releases. The tag
+is project-scoped for the same reason the directory is.
+
+The mechanism lives in `.github/workflows/_deploy-compose.yml` and is shared. What a
+project writes is a caller, `deploy-<name>.yml`, with one job per environment, each
+naming four things: the GitHub environment, the compose directory, the compose project
+name, and a health URL. Copy `deploy-pigrocrm.yml`; it is deliberately short.
+
+Three rules that are easy to get wrong and expensive to debug:
+
+1. **`secrets: inherit` on both jobs.** A reusable workflow reads an environment's
+   secrets only when the caller inherits. Without it every `DEPLOY_*` secret is the
+   empty string, silently. `_deploy-compose.yml` fails loudly on that, by design.
+2. **Never let compose derive its project name.** Pass `-p`. Otherwise the name comes
+   from the directory, and moving the project in the repository orphans the running
+   stack and starts a second one beside it.
+3. **A health URL that touches the database.** An endpoint answering from
+   configuration alone reports a healthy deploy with Postgres on the floor.
+
+### Where the per-environment configuration lives
+
+In **GitHub Environments**, named `<name>-preview` and `<name>-production`, each
+holding the same four secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH`,
+`DEPLOY_SSH_KEY`. Always those four names. Ten projects with two environments each are
+forty secrets and four names, instead of forty names to remember. Environments also
+give the Deployments tab a real per-environment history, and they are where a required
+reviewer on production goes the day the account is on a paid plan.
+
+```
+gh api -X PUT repos/joinorbiters/<repo>/environments/<name>-preview
+gh secret set DEPLOY_HOST --env <name>-preview --body '...'
+```
+
+The deploy stays off until its arming variable exists:
+`vars.<NAME>_PREVIEW_ENABLED` and `vars.<NAME>_DEPLOY_ENABLED`, both `'true'` to run.
+A fresh repository has neither, so nothing deploys by accident.
+
+### What the host needs
+
+One directory per environment, each with its own `.env`, its own data directory, its
+own ports, and its own compose project name. The `.env` is never in the repository and
+never rsynced: the deploy excludes it. Two environments on one host must share nothing
+but the host, which for PigroCRM means separate databases, separate secrets, and no
+production Google credentials in preview.
 
 ## 8. Documentation
 

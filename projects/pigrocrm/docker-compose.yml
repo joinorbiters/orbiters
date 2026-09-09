@@ -100,5 +100,9 @@ services:
     restart: unless-stopped
     depends_on: [api]
     ports:
-      - '127.0.0.1:8080:80'
+      # Overridable so a second environment (preview) can run the same stack on the
+      # same host without fighting for the port. Bound to the loopback in both cases:
+      # nginx on the host is what faces the internet, and publishing to 0.0.0.0 would
+      # walk straight past the firewall.
+      - '${PIGROCRM_WEB_PORT:-127.0.0.1:8080}:80'
 
