@@ -17,6 +17,30 @@
     <meta property="og:locale" content="it_IT" />
     <link rel="icon" type="image/svg+xml" href="./orbiters-logo.svg" />
     <link rel="stylesheet" href="./orbiters.css" />
+    <!-- ChatGPT Ads Measurement Pixel. Here and on orbiters.html, the two pages an ad
+      can land on, and on no other: privacy.html and termini.html have nothing to
+      measure, and a tracker on the privacy policy would be the worst place to put one.
+      One configuration script per page, as OpenAI requires.
+
+      The pixelId is a public identifier and sits here in the clear. The Conversions API
+      key is a secret and appears in no page: it lives in the server's .env and only the
+      API uses it (packages/core/.../orbiters/conversions.py). -->
+    <script>
+      !(function (w, d, s, u) {
+        if (w.oaiq) return
+        var q = function () {
+          q.q.push(arguments)
+        }
+        q.q = []
+        w.oaiq = q
+        var j = d.createElement(s)
+        j.async = 1
+        j.src = u
+        var f = d.getElementsByTagName(s)[0]
+        f.parentNode.insertBefore(j, f)
+      })(window, document, 'script', 'https://bzrcdn.openai.com/sdk/oaiq.min.js')
+      oaiq('init', { pixelId: '9r6qrnPxBV8WDVGtpuaqxh', debug: true })
+    </script>
   </head>
   <body>
     <canvas id="field" aria-hidden="true"></canvas>

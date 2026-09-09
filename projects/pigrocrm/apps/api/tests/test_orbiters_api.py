@@ -11,6 +11,7 @@ whether they are on the list. Whatever a test wants to know about a row, it read
 the database directly.
 """
 
+import json
 from collections.abc import Iterator
 
 import pytest
@@ -18,10 +19,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 
-from pigrocrm.core.config import Settings
+from pigrocrm.core.config import Settings, get_settings
 from pigrocrm.core.db import session_factory
 from pigrocrm.core.orbiters import ensure_orbiters_database
+from pigrocrm.core.orbiters.conversions import hashed_email
 from pigrocrm_api.deps import get_orbiters_session
+from pigrocrm_api.routers import orbiters as orbiters_router
 from pigrocrm_api.routers.orbiters import SIGNUPS_PER_MINUTE, reset_signup_rate_limit
 
 
@@ -254,3 +257,212 @@ def test_the_rate_limit_key_is_the_address_nginx_saw_not_the_one_the_client_wrot
     assert _client_key(req({"X-Forwarded-For": "forged-value, 203.0.113.9"})) == "203.0.113.9"
     assert _client_key(req({})) == "127.0.0.1"
     assert _client_key(req({}, client=None)) == "sconosciuto"
+
+
+# --- the ad conversion ------------------------------------------------------------------
+#
+# The row is what matters and the event is not allowed to touch it. So every test here
+# asserts two things at once: what reached OpenAI, and that the signup answered 201 and
+# was written whatever OpenAI did. `TestClient` runs background tasks before returning
+# from `post`, which is why the recorded calls can be read straight after it.
+
+PIXEL_ID = "9r6qrnPxBV8WDVGtpuaqxh"
+EVENT_ID = "8f14e45f-ceea-467a-9f36-dcd8b0eba0b1"
+
+
+class RecordingHttp:
+    """The seam `ConversionsPixel` posts through, remembered per call."""
+
+    def __init__(self, status: int = 200, raises: bool = False) -> None:
+        self.status = status
+        self.raises = raises
+        self.calls: list[tuple[str, str, dict[str, str], bytes]] = []
+
+    def __call__(
+        self, method: str, url: str, headers: dict[str, str], body: bytes
+    ) -> tuple[int, bytes]:
+        self.calls.append((method, url, headers, body))
+        if self.raises:
+            raise OSError("la rete non c'e'")
+        return self.status, b'{"ok":true}'
+
+    def event(self) -> dict[str, object]:
+        return dict(json.loads(self.calls[-1][3])["events"][0])
+
+
+@pytest.fixture
+def pixel(orbiters_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> Iterator[RecordingHttp]:
+    """A configured conversion source whose network is a recorder.
+
+    The settings are declared here rather than inherited: the client fixture's own
+    `Settings(_env_file=None)` has no pixel at all, which is the state
+    `test_an_installation_without_a_pixel_sends_nothing` relies on.
+    """
+    http = RecordingHttp()
+    orbiters_client.app.dependency_overrides[get_settings] = lambda: Settings(  # type: ignore[attr-defined]
+        openai_pixel_id=PIXEL_ID,
+        openai_conversions_api_key="sk-non-una-chiave-vera",
+        orbiters_signup_url="https://joinorbiters.com/orbiters",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    real = orbiters_router.pixel_from_settings
+
+    def with_recorder(settings: Settings):  # type: ignore[no-untyped-def]
+        built = real(settings)
+        if built is not None:
+            built.http = http
+        return built
+
+    monkeypatch.setattr(orbiters_router, "pixel_from_settings", with_recorder)
+    yield http
+    orbiters_client.app.dependency_overrides.pop(get_settings, None)  # type: ignore[attr-defined]
+
+
+def test_a_signup_measures_one_conversion_with_the_id_the_browser_used(
+    orbiters_client: TestClient, orbiters_session: Session, pixel: RecordingHttp
+) -> None:
+    response = orbiters_client.post(
+        "/api/orbiters/signups", json=_body("ada@studio.it", pixel_event_id=EVENT_ID)
+    )
+
+    assert response.status_code == 201, response.text
+    assert len(pixel.calls) == 1
+    event = pixel.event()
+    # The same id the pixel used in the browser: OpenAI deduplicates on it, so the two
+    # halves of this conversion are one conversion.
+    assert event["id"] == EVENT_ID
+    assert event["type"] == "registration_completed"
+    assert event["source_url"] == "https://joinorbiters.com/orbiters"
+    assert _row(orbiters_session, "ada@studio.it") == ("Ada", "Lovelace", None)
+
+
+def test_the_click_identifier_and_the_browser_cookie_reach_the_event(
+    orbiters_client: TestClient, pixel: RecordingHttp
+) -> None:
+    """`oppref` comes from the landing URL through the body; `__obref` is the SDK's own
+    first-party cookie, which the browser sends to this endpoint too. Without them the
+    server event is a conversion the platform cannot attribute to a click."""
+    response = orbiters_client.post(
+        "/api/orbiters/signups",
+        json=_body("ada@studio.it", pixel_event_id=EVENT_ID, oppref="clic-123"),
+        headers={
+            # Sent as a header rather than through the client's cookie jar: the jar
+            # applies its own domain and Secure policy, and what is under test is the
+            # route reading the cookie, not httpx storing one.
+            "Cookie": "__obref=ob-abc",
+            "X-Real-IP": "203.0.113.7",
+            "User-Agent": "Mozilla/5.0",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    event = pixel.event()
+    assert event["oppref"] == "clic-123"
+    assert event["user"] == {
+        "obref": "ob-abc",
+        "ip_address": "203.0.113.7",
+        "user_agent": "Mozilla/5.0",
+    }
+
+
+def test_an_address_the_proxy_could_not_name_is_left_out_rather_than_invented(
+    orbiters_client: TestClient, pixel: RecordingHttp
+) -> None:
+    """`_client_key` answers `"sconosciuto"` when there is no address to be had, which
+    is fine for a rate-limit bucket and is not an IP. Forwarding it would put a word
+    where a third party expects an address."""
+    response = orbiters_client.post(
+        "/api/orbiters/signups",
+        json=_body("ada@studio.it", pixel_event_id=EVENT_ID),
+        headers={"X-Real-IP": "non-un-indirizzo"},
+    )
+
+    assert response.status_code == 201, response.text
+    assert "ip_address" not in (pixel.event().get("user") or {})
+
+
+def test_the_subscribers_address_does_not_travel(
+    orbiters_client: TestClient, pixel: RecordingHttp
+) -> None:
+    """Not raw, not hashed. The installation has not asked for it -- and pasting a pixel
+    id must not be what starts sending an ad platform the mailing list."""
+    orbiters_client.post(
+        "/api/orbiters/signups", json=_body("ada@studio.it", pixel_event_id=EVENT_ID)
+    )
+
+    body = pixel.calls[-1][3].decode()
+    assert "ada@studio.it" not in body
+    assert hashed_email("ada@studio.it") not in body
+    assert "Lovelace" not in body
+
+
+def test_an_installation_without_a_pixel_sends_nothing(
+    orbiters_client: TestClient, orbiters_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default state of the product. Not an error, and not a request to nowhere: no
+    call is made at all."""
+    calls: list[object] = []
+    monkeypatch.setattr(
+        orbiters_router,
+        "pixel_from_settings",
+        lambda settings: calls.append(settings) or None,  # type: ignore[func-returns-value]
+    )
+    response = orbiters_client.post("/api/orbiters/signups", json=_body("ada@studio.it"))
+
+    assert response.status_code == 201, response.text
+    assert _row(orbiters_session, "ada@studio.it") == ("Ada", "Lovelace", None)
+
+
+def test_a_signup_without_a_pixel_event_id_still_converts(
+    orbiters_client: TestClient, pixel: RecordingHttp
+) -> None:
+    """A client that posted without the pixel -- JavaScript off, a script, a curl. The
+    event gets an id of its own, which makes it unpairable, and that is right: there is
+    no browser event to pair it with."""
+    response = orbiters_client.post("/api/orbiters/signups", json=_body("ada@studio.it"))
+
+    assert response.status_code == 201, response.text
+    assert pixel.event()["id"]
+
+
+@pytest.mark.parametrize("failure", [{"status": 500}, {"raises": True}])
+def test_a_failed_conversion_never_becomes_a_failed_signup(
+    orbiters_client: TestClient,
+    orbiters_session: Session,
+    pixel: RecordingHttp,
+    failure: dict[str, object],
+) -> None:
+    """OpenAI down, or refusing, or unreachable. The row is committed before the event
+    is even built and the event runs after the response has been sent: the person who
+    signed up is on the list and is told so."""
+    pixel.status = int(failure.get("status", 200))  # type: ignore[arg-type]
+    pixel.raises = bool(failure.get("raises", False))
+
+    response = orbiters_client.post(
+        "/api/orbiters/signups", json=_body("ada@studio.it", pixel_event_id=EVENT_ID)
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json() == {"ok": True}
+    assert _row(orbiters_session, "ada@studio.it") == ("Ada", "Lovelace", None)
+
+
+def test_a_malformed_event_id_is_refused_before_anything_is_written(
+    orbiters_client: TestClient, orbiters_session: Session, pixel: RecordingHttp
+) -> None:
+    """It is interpolated into a JSON body sent to a third party, so it is checked like
+    every other field of this public body -- and a 422 means no row and no event."""
+    response = orbiters_client.post(
+        "/api/orbiters/signups",
+        json=_body("ada@studio.it", pixel_event_id="../../etc/passwd"),
+    )
+
+    assert response.status_code == 422
+    assert pixel.calls == []
+    assert (
+        orbiters_session.execute(
+            text("SELECT count(*) FROM signups WHERE email = :email"),
+            {"email": "ada@studio.it"},
+        ).scalar()
+        == 0
+    )

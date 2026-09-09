@@ -34,16 +34,24 @@ describe.each(PAGES)('%s', (name) => {
     expect(meta(page, 'og:type')).toBe('website')
   })
 
-  it('requests nothing from another origin', () => {
+  it('requests nothing from another origin, bar the one script it declares', () => {
     for (const [, url] of page.matchAll(/(?:href|src)="(https?:\/\/[^"]+)"/g)) {
-      // An href the reader clicks -- the repository, or the hosted signup -- is fine;
-      // a subresource is not.
+      // An href the reader clicks -- the repository, the hosted signup, or OpenAI's
+      // own privacy policy, which the cookie section has to point at -- is fine; a
+      // subresource is not.
       expect(url, 'external subresource').toMatch(
-        /^https:\/\/(?:github\.com|pigro\.joinorbiters\.com|humancraft\.tech)\//,
+        /^https:\/\/(?:github\.com|pigro\.joinorbiters\.com|humancraft\.tech|openai\.com)\//,
       )
     }
     expect(page).not.toMatch(/fonts\.googleapis\.com|fonts\.gstatic\.com/)
     expect(page).not.toMatch(/<link[^>]+href="https?:/)
+    // Still no third-party tag written into the markup. Since 2026-09-09 index.html
+    // *does* fetch one script from another origin -- the ChatGPT Ads measurement SDK,
+    // injected by the inline snippet in its head -- and that is the single exception,
+    // owned by `pixel.test.ts`: which pages may carry it, which must not, and that no
+    // second analytics stack arrives beside it. Leaving this assertion as an
+    // unqualified "nothing from another origin" would have made it a sentence that
+    // passes while being false, which is worse than no assertion.
     expect(page).not.toMatch(/<script[^>]+src="https?:/)
   })
 
@@ -99,10 +107,16 @@ describe('index.html', () => {
     expect(page).toMatch(/<script type="module" src="\.\/field\.js"><\/script>\s*<script type="module" src="\.\/landing\.js">/)
   })
 
-  it('collects nothing and measures nothing', () => {
+  it('collects nothing, and the only thing it measures is the ad conversion', () => {
+    // Nothing is typed on this page: the form lives on /orbiters. What arrived on
+    // 2026-09-09 is the measurement pixel, because this is a page an ad lands on --
+    // so "measures nothing" stopped being true, and pretending otherwise here would
+    // have meant a test asserting the absence of a string that is in the file.
+    // `pixel.test.ts` holds what the pixel may do; this holds what stays absent.
     expect(page).not.toMatch(/<form/i)
     expect(page).not.toMatch(/<input/i)
-    expect(page).not.toMatch(/gtag|googletagmanager|analytics|plausible|fathom|hotjar|pixel/i)
+    expect(page).not.toMatch(/gtag|googletagmanager|plausible|fathom|hotjar/i)
+    expect(page.match(/oaiq\('init'/g)).toHaveLength(1)
   })
 })
 

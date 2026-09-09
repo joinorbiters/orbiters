@@ -2,7 +2,8 @@
  *
  * The page is complete without this file: the grid is CSS, the box is HTML. What is
  * added here is the drifting field on the canvas -- painted by the shared field.js,
- * loaded before this script -- and the fetch behind the button.
+ * loaded before this script -- the fetch behind the button, and the conversion event
+ * that follows a signup the API accepted (see pixel.test.ts).
  */
 ;(function () {
   var doc = document
@@ -34,6 +35,41 @@
       utm[UTM_KEYS[i]] = value
     }
     return utm
+  }
+
+  /* The identifier on the landing URL of an ad click, read at load like the utm_ keys
+     and passed on unchanged -- OpenAI's instruction -- only bounded. It is what lets the
+     *server* event be attributed: the browser one has the `__obref` cookie instead. */
+  var OPPREF_MAX_LENGTH = 512
+  function opprefFrom(search) {
+    var value = new URLSearchParams(search || '').get('oppref')
+    if (value === null) return null
+    value = value.trim().slice(0, OPPREF_MAX_LENGTH)
+    return value === '' ? null : value
+  }
+
+  /* One id per submitted form, for the browser event and the server one: OpenAI
+     deduplicates on (pixel id, event name, id), so the two halves are one conversion.
+     `randomUUID` wants a secure context, which the landing has; the fallback is for a
+     form reached over plain http, where a collision would merge two conversions. */
+  function eventId() {
+    var crypto = window.crypto
+    if (crypto && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+    return 'e-' + Date.now().toString(16) + '-' + Math.random().toString(16).slice(2, 14)
+  }
+
+  /* The browser half, and never in the way: the SDK comes from another origin and an
+     extension may remove it, which is no reason to show an error to whoever signed up. */
+  function measure(id) {
+    try {
+      if (typeof window.oaiq === 'function') {
+        window.oaiq('measure', 'registration_completed', { type: 'customer_action' }, {
+          event_id: id,
+        })
+      }
+    } catch {
+      /* A pixel that will not fire is not the problem of whoever signed up. */
+    }
   }
 
   /* The four fields, in the order the form reads them: the first one that is wrong is
@@ -77,7 +113,7 @@
     return 'email'
   }
 
-  function signup(form, note, utm) {
+  function signup(form, note, utm, oppref) {
     var inputs = {}
     for (var i = 0; i < FIELDS.length; i += 1) {
       inputs[FIELDS[i]] = form.querySelector('input[name="' + FIELDS[i] + '"]')
@@ -113,6 +149,10 @@
       var payload = { email: value.email, nome: value.nome, cognome: value.cognome }
       if (value.linkedin_url !== '') payload.linkedin_url = value.linkedin_url
       if (utm) payload.utm = utm
+      /* Always, even with the pixel blocked: the server event is sent anyway. */
+      var id = eventId()
+      payload.pixel_event_id = id
+      if (oppref) payload.oppref = oppref
       button.disabled = true
       fetch('/api/orbiters/signups', {
         method: 'POST',
@@ -137,6 +177,8 @@
           if (!response.ok) throw new Error(String(response.status))
           form.hidden = true
           say('Sei in orbita. Ti scriviamo noi.', 'done')
+          /* After the 201: the conversion is the signup stored, not the click. */
+          measure(id)
         })
         .catch(function () {
           say('Non siamo riusciti a salvarla. Riprova tra poco.', 'error')
@@ -152,10 +194,13 @@
     if (canvas && typeof canvas.getContext === 'function') field(canvas)
     var form = doc.getElementById('signup')
     var note = doc.getElementById('note')
-    if (form && note) signup(form, note, utmFrom(window.location.search))
+    if (form && note) {
+      var search = window.location.search
+      signup(form, note, utmFrom(search), opprefFrom(search))
+    }
   }
 
-  window.__orbiters = { utmFrom: utmFrom }
+  window.__orbiters = { utmFrom: utmFrom, opprefFrom: opprefFrom, eventId: eventId }
 
   if (doc.readyState === 'loading') {
     doc.addEventListener('DOMContentLoaded', start)

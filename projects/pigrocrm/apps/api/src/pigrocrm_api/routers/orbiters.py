@@ -16,16 +16,29 @@ Two properties follow from being public, and both live here:
 - A small per-client rate limit, below. There is no limiter anywhere else in this API
   (nothing else is unauthenticated), so this is the one that exists, and it is
   deliberately tiny rather than a dependency.
+
+The one thing this route does besides writing the row is measure the ad conversion, in a
+background task, after the response. `core/orbiters/conversions.py` says what is sent
+and what deliberately is not; the reason it is here rather than in `SignupService` is
+that everything it needs beyond the id -- the visitor's address, their user agent, the
+`__obref` cookie -- is a property of this HTTP request and of nothing else.
 """
 
+import ipaddress
 import threading
 import time
+from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 
-from pigrocrm.core.orbiters import SignupAck, SignupCreate, SignupService
-from pigrocrm_api.deps import OrbitersSessionDep
+from pigrocrm.core.orbiters import SignupAck, SignupCreate, SignupService, Visitor
+from pigrocrm.core.orbiters.conversions import pixel_from_settings
+from pigrocrm_api.deps import BaseSettingsDep, OrbitersSessionDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
+
+# The cookie the measurement SDK sets on our own domain. First-party, so the browser
+# sends it to this endpoint too, which is the only reason the server event can carry it.
+OBREF_COOKIE = "__obref"
 
 router = APIRouter(prefix="/api/orbiters", tags=["orbiters"], responses=PROBLEM_RESPONSES)
 
@@ -116,14 +129,77 @@ def _spend_one_signup(request: Request) -> None:
             _forget_the_quiet_ones(now)
 
 
+def _visitor_ip(request: Request) -> str | None:
+    """The visitor's address, or `None` when what we have is not one.
+
+    `_client_key` above answers the same question for the rate limiter, which needs
+    *a* key and is happy with `"sconosciuto"`. This one is a value forwarded to a third
+    party as an IP address, so a string that is not an IP must become no field at all
+    rather than nonsense in somebody else's database.
+    """
+    candidate = _client_key(request)
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        return None
+
+
+def _measure_the_conversion(
+    data: SignupCreate, request: Request, settings: BaseSettingsDep
+) -> None:
+    """Schedules nothing and decides nothing: builds the event and returns.
+
+    Called from a background task, so it runs *after* the response has been sent. Two
+    things follow, and both are the point: the person who signed up never waits for
+    OpenAI, and an outage there cannot turn a signup that was written into an error.
+
+    `BaseSettingsDep` and not `SettingsDep`: the second reads this database's
+    `space_settings` row and therefore opens a **CRM** session, and this router not
+    touching the CRM session is a property its own docstring states. The pixel is
+    configured in the environment anyway, so there is nothing in a space's settings
+    for the wider dependency to add.
+    """
+    pixel = pixel_from_settings(settings)
+    if pixel is None:
+        return
+    pixel.send(
+        # The id the landing already gave the browser event, so the two are one
+        # conversion. When there is none -- a client that posted without the pixel, a
+        # curl -- one is invented here: it makes the event unpairable, which is correct,
+        # since no browser event exists to pair it with.
+        event_id=data.pixel_event_id or uuid4().hex,
+        source_url=settings.orbiters_signup_url,
+        visitor=Visitor(
+            oppref=data.oppref,
+            obref=request.cookies.get(OBREF_COOKIE),
+            ip_address=_visitor_ip(request),
+            user_agent=request.headers.get("user-agent"),
+            email=data.email,
+        ),
+    )
+
+
 @router.post("/signups", response_model=SignupAck, status_code=status.HTTP_201_CREATED)
-def subscribe(data: SignupCreate, session: OrbitersSessionDep, request: Request) -> SignupAck:
+def subscribe(
+    data: SignupCreate,
+    session: OrbitersSessionDep,
+    request: Request,
+    settings: BaseSettingsDep,
+    background: BackgroundTasks,
+) -> SignupAck:
     """201 and `{"ok": true}`, whether the address was new or already on the list.
 
     The person is on the list either way, which is the only thing the page says and the
     only thing this answers: telling a caller *which* of the two happened is telling
     them whether an address they do not own is a subscriber.
+
+    The ad conversion is measured after the answer, never before it: see
+    `_measure_the_conversion`. It is scheduled even for an address already on the list,
+    because the browser fires its own event on the same submit and the two carry one id
+    -- suppressing the server half would not remove that event, it would only remove the
+    half that survives an ad blocker.
     """
     _spend_one_signup(request)
     SignupService(session).subscribe(data)
+    background.add_task(_measure_the_conversion, data, request, settings)
     return SignupAck()
