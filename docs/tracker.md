@@ -21,7 +21,8 @@ are not part of this repo's flow.
 | Statuses | `Backlog`, `Todo`, `In Progress`, `In Review`, `Done`, `Canceled` |
 | Type labels | group **type**, exactly one, Linear enforces it because it is a group: `feature`, `fix`, `refactor`, `test`, `chore`, `ci`, `docs`, `design`, `security`, `spike` |
 | Area labels | group **Area**, exactly one, Linear enforces it because it is a group: `area:api`, `area:brand`, `area:ci`, `area:core`, `area:infra`, `area:mcp`, `area:repo`, `area:web`, `area:website` |
-| Other flat labels | `flagship` for headline work, `parallel` for an issue a parallel agent can take without colliding |
+| Assignee | who owns the card and will do the work. A claim, not a hint: see § Who owns a card |
+| Other flat labels | `flagship` for headline work, `parallel` for an issue that collides with nothing, in the files or between us, so whoever is free may pick it up whoever filed it, as long as nobody has claimed it yet |
 
 The two lists above are the board's, checked against `list_issue_labels` with
 `includeGroups: true` on 2026-09-09, and the board is the authority: an earlier version of
@@ -60,6 +61,36 @@ issue that genuinely spans two areas is usually two issues, or belongs to the ar
 owns the fix. Note that the personal workspace does differ here, where the area labels were
 created flat from the start.
 
+## Who owns a card
+
+Two of us work this board, each running agents of their own, and the only thing that
+keeps two agents off the same work is the **assignee**. It is a claim, not a hint.
+
+- **A card assigned to somebody is theirs.** You do not assign it to yourself, do not
+  move its status, do not open a PR for it. If you believe it should be yours, say so in
+  a comment and stop there.
+- **A card with no assignee belongs to whoever filed it**, until they say otherwise. An
+  empty assignee is an omission, not an invitation.
+- **A card labelled `parallel` and not yet claimed may be picked up by whoever is
+  free**, whoever filed it. An assignee, or a status of `In Progress` or `In Review`,
+  wins over the label: `parallel` says the work collides with nothing, neither in the
+  files nor between us, not that somebody's started work is up for grabs.
+- So the cards you may work are: assigned to you, or unassigned and filed by you, or
+  labelled `parallel` and unclaimed. Nothing else, and there is no exception for "it is
+  quick".
+- **Being asked for a card by name does not make it yours.** The account this session
+  writes as is not always the person talking to you. When they are its assignee and you
+  are not, they reassign it, or add `parallel`, and then you proceed; you never make that
+  change yourself, and until it is made the card is theirs.
+- **The lead of a project does not own its issues.** The lead is who decides when a
+  question is a decision; the assignee is who does the work.
+
+`assignee` is therefore set on every issue you file, including work left for later,
+because a card nobody owns is one the other agent will reasonably take. On an update it
+is sent only when changing the owner is the point, since `save_issue` overwrites whatever
+it is given (§ API details). There is no `createdBy` filter in the API either, so an
+unassigned card's owner is not queryable without reading it.
+
 ## Reaching it
 
 Two skills in `.claude/skills/` carry this contract to the moment it is needed:
@@ -67,30 +98,38 @@ Two skills in `.claude/skills/` carry this contract to the moment it is needed:
 words are written). This file stays the source; a disagreement between it and a skill is
 a bug in the skill.
 
-
 The MCP server is `linear-orbiters`, enrolled per client outside this repository. It is
 the only Linear surface you should be using: no other server, and no browser session,
-reaches this team's board on Lorenzo's behalf.
+reaches this team's board.
 
-Before your first write in a session, make one read call (`list_projects` or
-`list_issues`) and check the team name that comes back. Two Linear workspaces are
-enrolled on this machine and the failure mode of picking the wrong one is filing a
-client's work in the wrong company's board.
+Before your first write in a session, two read calls. `list_projects` or `list_issues`,
+to check the team name that comes back: two Linear workspaces are enrolled on this
+machine and the failure mode of picking the wrong one is filing a client's work in the
+wrong company's board. Then `get_user` with `"me"`, to learn **which of us this session
+writes as**, because the token belongs to one account and both of us run agents against
+this board. Keep its `id`, not the display name: ownership is decided by comparing that
+id against `assigneeId` and `createdById`, which is one string equality against a value
+that cannot be re-rendered. That account is what `assignee: "me"` means, what "yours"
+means everywhere below, and it is not necessarily the person who is talking to you.
 
 ## The loop
 
-**Before starting work.** Search the board for the thing you are about to do. If an
-issue exists, use it. If it does not, and the work will outlive this run, file one
-before you start rather than after: an issue written afterwards is a summary, and it
-loses the reasons.
+**Before starting work.** Search the board for the thing you are about to do. Read who
+owns what comes back, since a card that exists is not automatically available: an issue
+that is yours you use, an issue that is somebody else's you leave. If nothing exists,
+and the work will outlive this run, file one before you start rather than after: an
+issue written afterwards is a summary, and it loses the reasons.
 
-**When you start.** Move it to `In Progress`. If you are working on somebody's behalf,
-assign it to yourself so two agents do not pick up the same card.
+**When you start.** Check the card is yours (§ Who owns a card): assigned to you,
+unassigned and filed by you, or labelled `parallel`. If it is somebody else's, leave it
+alone, comment if you have something to add, and pick another. If it is yours, move it
+to `In Progress` and set `assignee` to yourself in the same call, so the other agent can
+see it is taken.
 
 **While you work.** A comment when you learn something that changes the issue: a
 reproduction, a measurement, a cause that turned out to be different from the title, a
-decision that is now Lorenzo's. Comments are cheap and they are what makes an issue
-readable in a month.
+decision that is now the project's lead's. Comments are cheap and they are what makes an
+issue readable in a month.
 
 **When your PR is open.** Move the issue to `In Review`, the status for an issue whose
 PR is open on GitHub. Until the GitHub integration is approved on this org (see
@@ -116,9 +155,11 @@ would mislead a reader is worse.
   installs neither pandoc nor typst" rather than "add pandoc to CI". The fix is often
   not the one you first thought of, and a title written as a fix ages into a lie.
 - **Project**, its **milestone** (unless the issue genuinely belongs to no body of
-  work), one **area:\*** label, one **type** label, a **priority**, and an
-  **estimate**. `save_issue` takes all of this in the same call, so an issue that is
-  missing one of them is a mistake, not the accident of a skipped second call.
+  work), one **area:\*** label, one **type** label, a **priority**, an **estimate**, and
+  an **assignee**. `save_issue` takes all of this in the same call, so an issue that is
+  missing one of them is a mistake, not the accident of a skipped second call. The
+  assignee is yourself when you will do the work, the person who asked for it when they
+  will, and never empty: an unowned card is one the other agent will take.
 - A body with the evidence: what was observed, where (path and line, or the run URL),
   what it blocks, and what it needs. Point at a spec rather than copying it, since the
   copy will drift.
@@ -135,6 +176,11 @@ would mislead a reader is worse.
   that belongs to whoever owns that code.
 - **Do not close what you did not verify**, and do not move a card on somebody's promise
   that it works.
+- **Do not take a card that is not yours**, and do not hand your own to somebody else
+  without asking them. Assigned to another person, or `In Progress` or `In Review` under
+  their name, means hands off: no assignee change, no status change, no branch, no PR,
+  and nothing re-parented under it with `parentId` without asking.
+  Comment if you have something useful, then pick different work.
 - **One area per issue**, because both label families are groups and Linear allows only
   one label from a group. An issue that genuinely spans two areas is usually two issues,
   or belongs to the area that owns the fix. Do not spend a call trying to apply two: the
@@ -172,6 +218,22 @@ issue to `In Review` becomes something the PR does on its own rather than a manu
   label instead of creating a new one. If that happens, fix it by reusing the colliding
   label: update it by id with the new name and the right parent, do not try to create
   a second one.
+- `save_issue` **overwrites** `assignee` and `state` with whatever you send, silently
+  and with no compare-and-set. Nothing in the response says the card had been somebody
+  else's a second earlier, and the field keeps no history the MCP surface can read, so
+  reading the owner before you write is the only guard there is.
+- `gitBranchName` is rendered for **whoever reads the issue**, not for its assignee: the
+  same card comes back as `fiorelorenzo/orb-41-...` to one of us and `ivansala/orb-41-...`
+  to the other. A branch prefix therefore proves nothing about who owns the work.
+- `list_issues` filters on `assignee: "me"` correctly, and does **not** filter on an
+  empty one: `assignee: null` and `assignee: "null"` are both accepted and both silently
+  ignored, so the response carries everybody's cards while looking like an answer
+  (measured 2026-09-09, against the tool's own description). There is no `createdBy`
+  filter either. Ask for `assigneeId` and `createdById` in `fields` and filter the rows
+  yourself, and bound the call before you do: it defaults to 50 rows and pages with
+  `cursor`, so an unbounded one answers with a slice of a board already past ORB-58 that
+  reads like the whole of it. Narrow server-side first (`state: "Todo"`, then
+  `state: "Backlog"`) and raise `limit`.
 - Initiatives cannot be created from the MCP surface at all. `save_project` can attach
   an existing initiative with `addInitiatives`, but there is no `save_initiative`.
   Initiatives are created by hand in the Linear UI; automation only creates projects and
