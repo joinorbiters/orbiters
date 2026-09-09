@@ -4,12 +4,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
-from pigrocrm.core.orbiters.models import (
+from orbiters_core.models import (
     LINKEDIN_URL_MAX_LENGTH,
     NAME_MAX_LENGTH,
     UTM_MAX_LENGTH,
 )
-from pigrocrm.core.validation import SafeStr
+from orbiters_core.validation import SafeStr
 
 LINKEDIN_HOST = "linkedin.com"
 # What the landing sends in `oppref`, bounded to the same 512 characters it bounds it to

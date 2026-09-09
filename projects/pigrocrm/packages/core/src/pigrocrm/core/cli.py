@@ -21,7 +21,6 @@ from pigrocrm.core.gmail.schemas import SyncReport
 from pigrocrm.core.gmail.sync import GmailSyncService
 from pigrocrm.core.gmail.tokens import GoogleTokenClient
 from pigrocrm.core.gmail.transport import GmailTransport
-from pigrocrm.core.orbiters.conversions import pixel_from_settings
 
 
 def createadmin(email: str | None, nome: str | None) -> int:
@@ -276,44 +275,6 @@ def _mailbox_list(accounts: Sequence[GoogleAccount]) -> str:
     return ", ".join(account.email_address for account in accounts)
 
 
-def conversions_check() -> int:
-    """`pigrocrm conversions-check`: does the Conversions API key work?
-
-    Sends one event with `validate_only: true`, which asks OpenAI to check it and record
-    nothing. It exists because the real events are deliberately invisible: they are sent
-    from a background task, nothing in this codebase logs, and a wrong key would
-    therefore mean a campaign with no conversions and no sign anywhere that the key was
-    the reason. This is how somebody finds out in ten seconds instead of in a week.
-
-    Prints the status and nothing else: the key is not echoed, and OpenAI's answer about
-    our own event carries nothing of anybody's.
-    """
-    settings = get_settings()
-    pixel = pixel_from_settings(settings)
-    if pixel is None:
-        print(
-            "Nessun pixel configurato: servono PIGROCRM_OPENAI_PIXEL_ID e "
-            "PIGROCRM_OPENAI_CONVERSIONS_API_KEY.",
-            file=sys.stderr,
-        )
-        return 1
-    outcome = pixel.send(
-        # A validation-only event needs an id like any other, and this one must not look
-        # like a conversion in case the flag is ever ignored.
-        event_id=f"verifica-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}",
-        source_url=settings.orbiters_signup_url,
-        validate_only=True,
-    )
-    if outcome.sent:
-        print(f"La chiave funziona: evento validato ({outcome.status}), niente registrato.")
-        return 0
-    print(
-        f"OpenAI ha rifiutato la verifica: {outcome.status} {outcome.detail}".strip(),
-        file=sys.stderr,
-    )
-    return 1
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="pigrocrm")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -325,14 +286,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub.add_parser("seed-templates", help="Crea i template predefiniti, se mancano")
     sync = sub.add_parser("gmail-sync", help="Sincronizza la casella Google collegata (per cron)")
     sync.add_argument("--email", help="La casella da sincronizzare, se ne è collegata più di una")
-    sub.add_parser(
-        "conversions-check",
-        help="Verifica la chiave della Conversions API senza registrare una conversione",
-    )
 
     args = parser.parse_args(argv)
-    if args.command == "conversions-check":
-        return conversions_check()
     if args.command == "createadmin":
         return createadmin(args.email, args.nome)
     if args.command == "resetpassword":

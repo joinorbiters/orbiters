@@ -1,0 +1,26 @@
+[project]
+name = "orbiters-core"
+version = "0.1.0"
+requires-python = ">=3.13,<3.14"
+# The same pins as pigrocrm-core where the two overlap: one uv workspace resolves once
+# for every project, and two projects asking for two SQLAlchemys is what the workspace
+# exists to make impossible.
+dependencies = [
+  "sqlalchemy==2.0.51",
+  "alembic==1.19.0",
+  "psycopg[binary]==3.3.4",
+  "pydantic==2.13.4",
+  "pydantic-settings==2.14.2",
+  "email-validator==2.3.0",
+  "uuid-utils==0.17.0",
+]
+
+[project.scripts]
+orbiters = "orbiters_core.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/orbiters_core"]

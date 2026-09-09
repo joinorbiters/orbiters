@@ -1,0 +1,42 @@
+# The Orbiters hub: its own Postgres, its own API. `web` (the hub SPA) joins this file
+# with step 4 of the hub spec. Run with `-p orbiters` so the project name never derives
+# from the directory (docs/adding-a-project.md §7).
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-orbiters}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?serve una password}
+      POSTGRES_DB: ${POSTGRES_DB:-orbiters}
+    # On the host, never in a Docker-managed volume: the same decision PigroCRM took
+    # after a daemon reset scared everyone. Set ORBITERS_DATA_DIR outside the repository.
+    volumes:
+      - ${ORBITERS_DATA_DIR:-../../data/orbiters-postgres}:/var/lib/postgresql/data
+    ports:
+      - '${ORBITERS_DB_PORT:-127.0.0.1:55435}:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-orbiters}']
+      interval: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ../..
+      dockerfile: projects/hub/Dockerfile.api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ORBITERS_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-orbiters}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-orbiters}
+      # ChatGPT Ads, the server half of the signup conversion. Empty defaults: a site
+      # that runs no campaigns is the ordinary case, not a start-up failure.
+      ORBITERS_OPENAI_PIXEL_ID: ${ORBITERS_OPENAI_PIXEL_ID:-}
+      ORBITERS_OPENAI_CONVERSIONS_API_KEY: ${ORBITERS_OPENAI_CONVERSIONS_API_KEY:-}
+      ORBITERS_SIGNUP_URL: ${ORBITERS_SIGNUP_URL:-https://joinorbiters.com/}
+      ORBITERS_OPENAI_CONVERSIONS_SEND_HASHED_EMAIL: ${ORBITERS_OPENAI_CONVERSIONS_SEND_HASHED_EMAIL:-false}
+    ports:
+      # Loopback only: the host's nginx is what faces the internet. Until the hub has a
+      # web container, the API is what nginx proxies `/api/orbiters/` and `/api/hub/` to.
+      - '${ORBITERS_API_PORT:-127.0.0.1:8084}:8000'

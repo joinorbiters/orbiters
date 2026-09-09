@@ -1,10 +1,9 @@
-"""The one public write in the API: a signup for the Orbiters community.
+"""`POST /api/orbiters/signups`: a signup for the Orbiters community.
 
-No `ActorDep`, deliberately. The page that posts here is the landing, and its visitor
-has no account -- that is the whole point of the form. Everything else that protects
-the CRM stays where it was: this router reaches only the `orbiters` database
-(`OrbitersSessionDep`), never the CRM's session, so an unauthenticated request cannot
-touch a customer, a deal or an invoice through it.
+Public, deliberately: the page that posts here is the community site, and its visitor
+has no account -- that is the whole point of the form. The path is the one the website
+has always posted to; it moved here from PigroCRM's API on 2026-09-09 with its body,
+its answer and its limiter unchanged, so the form and the ad conversion never noticed.
 
 Two properties follow from being public, and both live here:
 
@@ -12,13 +11,12 @@ Two properties follow from being public, and both live here:
   and for an address already on the list. It used to be the stored row, which turned
   this endpoint into an oracle: post somebody else's address and the response handed
   back their real nome, cognome and LinkedIn profile. The whole row is admin-gated
-  (`list_orbiters_signups`) and stays that way.
-- A small per-client rate limit, below. There is no limiter anywhere else in this API
-  (nothing else is unauthenticated), so this is the one that exists, and it is
-  deliberately tiny rather than a dependency.
+  (the admin API of the hub, step 3 of its spec) and stays that way.
+- A small per-client rate limit, below, deliberately tiny rather than a dependency. The
+  public writes the hub grows (freelancers, companies) share it.
 
 The one thing this route does besides writing the row is measure the ad conversion, in a
-background task, after the response. `core/orbiters/conversions.py` says what is sent
+background task, after the response. `orbiters_core.conversions` says what is sent
 and what deliberately is not; the reason it is here rather than in `SignupService` is
 that everything it needs beyond the id -- the visitor's address, their user agent, the
 `__obref` cookie -- is a property of this HTTP request and of nothing else.
@@ -31,16 +29,16 @@ from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 
-from pigrocrm.core.orbiters import SignupAck, SignupCreate, SignupService, Visitor
-from pigrocrm.core.orbiters.conversions import pixel_from_settings
-from pigrocrm_api.deps import BaseSettingsDep, OrbitersSessionDep
-from pigrocrm_api.errors import PROBLEM_RESPONSES
+from orbiters_api.deps import SessionDep, SettingsDep
+from orbiters_core.conversions import Visitor, pixel_from_settings
+from orbiters_core.schemas import SignupAck, SignupCreate
+from orbiters_core.service import SignupService
 
 # The cookie the measurement SDK sets on our own domain. First-party, so the browser
 # sends it to this endpoint too, which is the only reason the server event can carry it.
 OBREF_COOKIE = "__obref"
 
-router = APIRouter(prefix="/api/orbiters", tags=["orbiters"], responses=PROBLEM_RESPONSES)
+router = APIRouter(prefix="/api/orbiters", tags=["orbiters"])
 
 # A person filling in a form needs two or three attempts, not five; five a minute
 # leaves room for a double click, a reload on a slow connection, and a household
@@ -72,8 +70,8 @@ def reset_signup_rate_limit() -> None:
 def _client_key(request: Request) -> str:
     """The visitor's address as far as it can be known.
 
-    nginx sets `X-Real-IP` and appends to `X-Forwarded-For` for this route
-    (deploy/nginx/orbiters-proxy.conf) and the API sees the proxy's own address, so
+    nginx sets `X-Real-IP` and appends to `X-Forwarded-For` for this route and the API
+    sees the proxy's own address, so
     without reading a header every visitor would share one bucket and five signups a
     minute would be the whole world's budget. `X-Real-IP` is what nginx observed; in
     `X-Forwarded-For` only the LAST hop is — the first is whatever the visitor typed,
@@ -144,20 +142,12 @@ def _visitor_ip(request: Request) -> str | None:
         return None
 
 
-def _measure_the_conversion(
-    data: SignupCreate, request: Request, settings: BaseSettingsDep
-) -> None:
+def _measure_the_conversion(data: SignupCreate, request: Request, settings: SettingsDep) -> None:
     """Schedules nothing and decides nothing: builds the event and returns.
 
     Called from a background task, so it runs *after* the response has been sent. Two
     things follow, and both are the point: the person who signed up never waits for
     OpenAI, and an outage there cannot turn a signup that was written into an error.
-
-    `BaseSettingsDep` and not `SettingsDep`: the second reads this database's
-    `space_settings` row and therefore opens a **CRM** session, and this router not
-    touching the CRM session is a property its own docstring states. The pixel is
-    configured in the environment anyway, so there is nothing in a space's settings
-    for the wider dependency to add.
     """
     pixel = pixel_from_settings(settings)
     if pixel is None:
@@ -168,7 +158,7 @@ def _measure_the_conversion(
         # curl -- one is invented here: it makes the event unpairable, which is correct,
         # since no browser event exists to pair it with.
         event_id=data.pixel_event_id or uuid4().hex,
-        source_url=settings.orbiters_signup_url,
+        source_url=settings.signup_url,
         visitor=Visitor(
             oppref=data.oppref,
             obref=request.cookies.get(OBREF_COOKIE),
@@ -182,9 +172,9 @@ def _measure_the_conversion(
 @router.post("/signups", response_model=SignupAck, status_code=status.HTTP_201_CREATED)
 def subscribe(
     data: SignupCreate,
-    session: OrbitersSessionDep,
+    session: SessionDep,
     request: Request,
-    settings: BaseSettingsDep,
+    settings: SettingsDep,
     background: BackgroundTasks,
 ) -> SignupAck:
     """201 and `{"ok": true}`, whether the address was new or already on the list.
