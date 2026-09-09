@@ -141,9 +141,9 @@ describe('DashboardPage', () => {
   })
 
   it('hands a changed tab back for the URL', async () => {
-    const { onSearchChange } = renderPage()
-    await userEvent.click(screen.getByRole('tab', { name: 'Economica' }))
-    expect(onSearchChange).toHaveBeenCalledWith({ tab: 'economica' })
+    const { onSearchChange } = renderPage({ ...SEARCH, tab: 'economica' })
+    await userEvent.click(screen.getByRole('tab', { name: 'Commerciale' }))
+    expect(onSearchChange).toHaveBeenCalledWith({ tab: 'commerciale' })
   })
 
   it('keeps a typed date in the URL too', () => {
@@ -177,7 +177,7 @@ describe('DashboardPage, two tabs', () => {
   it('offers exactly the commercial and economic tabs, and marks the current one', () => {
     renderPage({ ...SEARCH, tab: 'economica' })
     const tabs = screen.getAllByRole('tab').map((tab) => tab.textContent)
-    expect(tabs).toEqual(['Commerciale', 'Economica'])
+    expect(tabs).toEqual(['Economica', 'Commerciale'])
     expect(screen.getByRole('tab', { name: 'Economica' })).toHaveAttribute('aria-selected', 'true')
   })
 

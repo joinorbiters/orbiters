@@ -65,14 +65,14 @@ describe('validateDashboardSearch', () => {
     // The dashboard is the landing page; a 404 on the home screen because a query
     // parameter is missing would be absurd.
     expect(validateDashboardSearch({})).toEqual({
-      tab: 'commerciale',
+      tab: 'economica',
       da: '2026-03-01',
       a: '2026-03-31',
     })
   })
 
   it('falls back on an unknown tab rather than rendering nothing', () => {
-    expect(validateDashboardSearch({ tab: 'fiscale' }).tab).toBe('commerciale')
+    expect(validateDashboardSearch({ tab: 'fiscale' }).tab).toBe('economica')
   })
 
   it.each([
@@ -104,17 +104,17 @@ describe('validateDashboardSearch', () => {
     // here as well is how two interfaces start disagreeing -- and silently swapping the
     // bounds would answer a different question from the one the link asked.
     expect(validateDashboardSearch({ da: '2026-05-01', a: '2026-04-01' })).toEqual({
-      tab: 'commerciale',
+      tab: 'economica',
       da: '2026-05-01',
       a: '2026-04-01',
     })
   })
 
   it('offers the two tabs the dashboard has since 2026-09-08', () => {
-    expect(DASHBOARD_TABS.map((tab) => tab.id)).toEqual(['commerciale', 'economica'])
+    expect(DASHBOARD_TABS.map((tab) => tab.id)).toEqual(['economica', 'commerciale'])
   })
 
-  it('falls back to the commercial tab for a link that still names the retired operational one', () => {
-    expect(validateDashboardSearch({ tab: 'operativa' }).tab).toBe('commerciale')
+  it('falls back to the economic tab for a link that still names the retired operational one', () => {
+    expect(validateDashboardSearch({ tab: 'operativa' }).tab).toBe('economica')
   })
 })
