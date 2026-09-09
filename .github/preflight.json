@@ -152,6 +152,37 @@
       "why": "The hub's whole Python suite: a testcontainers Postgres brought to head by the hub's own migrations, about a minute. mypy is covered by pigrocrm-py-types, whose bare `uv run mypy` reads every source root in [tool.mypy] files."
     },
     {
+      "id": "hub-web-lint",
+      "run": "pnpm --filter hub lint",
+      "when": [
+        "projects/hub/apps/web/**",
+        "package.json",
+        "pnpm-workspace.yaml"
+      ]
+    },
+    {
+      "id": "hub-web-unit",
+      "run": "pnpm --filter hub test",
+      "when": [
+        "projects/hub/apps/web/**",
+        "shared/brand/**",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml"
+      ],
+      "why": "vitest, jsdom, fetch mocked: the wizard engine, the api client's error shapes, the freelancer wizard end to end."
+    },
+    {
+      "id": "hub-web-build",
+      "run": "pnpm --filter hub build",
+      "when": [
+        "projects/hub/apps/web/**",
+        "shared/brand/**",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml"
+      ],
+      "why": "vite build then tsc --noEmit, the same pair the node gate runs. The route tree is code, so nothing has to be generated first."
+    },
+    {
       "id": "website-types",
       "run": "pnpm --filter website exec tsc --noEmit",
       "when": [

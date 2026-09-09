@@ -1,0 +1,172 @@
+import { Upload } from 'lucide-react'
+import { useEffect, useRef, type ReactNode } from 'react'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
+import { cn } from '@/lib/utils'
+
+/** The controls a step renders: each one large, alone on its screen, focused on arrival. */
+
+export function TextField({
+  value,
+  onChange,
+  autoFocus,
+  ...rest
+}: {
+  value: string
+  onChange: (value: string) => void
+  autoFocus?: boolean
+  placeholder?: string
+  type?: string
+  inputMode?: 'text' | 'email' | 'decimal' | 'url'
+  'aria-label': string
+}) {
+  const ref = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (autoFocus) ref.current?.focus()
+  }, [autoFocus])
+  return (
+    <Input
+      ref={ref}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      className="h-12 text-lg md:text-lg"
+      {...rest}
+    />
+  )
+}
+
+export function LongTextField({
+  value,
+  onChange,
+  autoFocus,
+  ...rest
+}: {
+  value: string
+  onChange: (value: string) => void
+  autoFocus?: boolean
+  placeholder?: string
+  'aria-label': string
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => {
+    if (autoFocus) ref.current?.focus()
+  }, [autoFocus])
+  return (
+    <Textarea
+      ref={ref}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      rows={6}
+      className="text-base md:text-base"
+      {...rest}
+    />
+  )
+}
+
+/** A choice made by pressing one of a few large cards: the number key selects too. */
+export function ChoiceField<V extends string>({
+  value,
+  onChange,
+  options,
+}: {
+  value: V | ''
+  onChange: (value: V) => void
+  options: { value: V; label: string; hint?: string }[]
+}) {
+  return (
+    <div role="radiogroup" className="grid gap-3 sm:grid-cols-3">
+      {options.map((option, index) => (
+        <button
+          key={option.value}
+          type="button"
+          role="radio"
+          aria-checked={value === option.value}
+          onClick={() => onChange(option.value)}
+          className={cn(
+            'flex flex-col items-start gap-1 rounded-2xl border bg-card p-4 text-left transition-colors hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none',
+            value === option.value && 'border-foreground ring-2 ring-foreground/20',
+          )}
+        >
+          <span className="text-xs text-muted-foreground">{index + 1}</span>
+          <span className="font-medium">{option.label}</span>
+          {option.hint && <span className="text-sm text-muted-foreground">{option.hint}</span>}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/** Several lines, one per link, so the person is never asked how many they have. */
+export function LinksField({
+  value,
+  onChange,
+  autoFocus,
+}: {
+  value: string[]
+  onChange: (value: string[]) => void
+  autoFocus?: boolean
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => {
+    if (autoFocus) ref.current?.focus()
+  }, [autoFocus])
+  return (
+    <Textarea
+      ref={ref}
+      aria-label="Link aggiuntivi"
+      value={value.join('\n')}
+      onChange={(event) => onChange(event.target.value.split('\n'))}
+      rows={4}
+      placeholder={'https://github.com/…\nhttps://il-tuo-sito.it'}
+      className="text-base md:text-base"
+    />
+  )
+}
+
+/** The CV: drop it or pick it. A PDF, five megabytes at most, said before the server
+ *  has to say it. */
+export function FileField({
+  value,
+  onChange,
+  accept,
+  hint,
+}: {
+  value: File | null
+  onChange: (file: File | null) => void
+  accept: string
+  hint: ReactNode
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  return (
+    <div
+      className="flex flex-col items-center gap-3 rounded-2xl border border-dashed bg-card p-8 text-center"
+      onDragOver={(event) => event.preventDefault()}
+      onDrop={(event) => {
+        event.preventDefault()
+        onChange(event.dataTransfer.files[0] ?? null)
+      }}
+    >
+      <Upload className="size-6 text-muted-foreground" aria-hidden="true" />
+      {value ? (
+        <p className="text-sm">
+          <span className="font-medium">{value.name}</span>{' '}
+          <span className="text-muted-foreground">({Math.round(value.size / 1024)} KB)</span>
+        </p>
+      ) : (
+        <p className="text-sm text-muted-foreground">Trascina qui il file, oppure</p>
+      )}
+      <label className="cursor-pointer text-sm font-medium underline underline-offset-2">
+        {value ? 'Scegli un altro file' : 'Scegli il file'}
+        <input
+          ref={inputRef}
+          type="file"
+          accept={accept}
+          className="sr-only"
+          aria-label="CV"
+          onChange={(event) => onChange(event.target.files?.[0] ?? null)}
+        />
+      </label>
+      <p className="text-xs text-muted-foreground">{hint}</p>
+    </div>
+  )
+}

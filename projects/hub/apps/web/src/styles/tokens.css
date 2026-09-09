@@ -1,0 +1,87 @@
+/* The hub's stylesheet: PigroCRM's tokens, verbatim where they matter, so the two
+   products look like one family. The palette and the typeface come from shared/brand,
+   the semantic slots and the radius scale are copied from the CRM's tokens.css (a copy
+   on purpose -- the two products must be able to diverge, hub spec 2026-09-09).
+   No shadcn/tailwind.css and no tw-animate-css: the six primitives here need neither. */
+@import 'tailwindcss';
+@import '@orbiters/brand/font.css';
+@import '@orbiters/brand/palette.css';
+
+@theme {
+  --radius: 10px;
+}
+
+:root {
+  --background: var(--color-paper);
+  --foreground: var(--color-prussian-blue);
+  --card: #ffffff;
+  --card-foreground: var(--color-prussian-blue);
+  --popover: #ffffff;
+  --popover-foreground: var(--color-prussian-blue);
+  --primary: var(--color-watermelon-strong);
+  --primary-foreground: #ffffff;
+  --secondary: color-mix(in oklab, var(--color-charcoal-blue) 14%, #ffffff);
+  --secondary-foreground: var(--color-prussian-blue);
+  --muted: var(--color-paper);
+  --muted-foreground: var(--color-charcoal-blue);
+  --accent: var(--color-royal-gold);
+  --accent-foreground: var(--color-prussian-blue);
+  --destructive: var(--color-watermelon-strong);
+  --destructive-foreground: #ffffff;
+  --border: color-mix(in oklab, var(--color-prussian-blue) 12%, #ffffff);
+  --input: color-mix(in oklab, var(--color-prussian-blue) 20%, #ffffff);
+  --ring: var(--color-watermelon);
+  --shadow-ink-weak: color-mix(in oklab, var(--color-prussian-blue) 6%, transparent);
+  --shadow-ink: color-mix(in oklab, var(--color-prussian-blue) 8%, transparent);
+  --shadow-ink-strong: color-mix(in oklab, var(--color-prussian-blue) 12%, transparent);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+}
+
+@theme inline {
+  --shadow-xs: 0 1px 1px var(--shadow-ink-weak);
+  --shadow-sm: 0 1px 2px var(--shadow-ink);
+  --shadow-md: 0 4px 12px var(--shadow-ink);
+  --shadow-lg: 0 8px 24px var(--shadow-ink-strong);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
