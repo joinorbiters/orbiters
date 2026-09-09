@@ -12,9 +12,6 @@ export interface Draft {
   google_app_unverified: boolean
   storage_backend: 'local' | 'gdrive'
   mcp_full_access: boolean
-  solleciti_grace_days: string
-  solleciti_min_interval_days: string
-  solleciti_max_reminders: string
   gmail_backfill_days: string
 }
 
@@ -25,9 +22,6 @@ export function draftFrom(settings: SpaceSettings): Draft {
     google_app_unverified: settings.google_app_unverified,
     storage_backend: settings.storage_backend === 'gdrive' ? 'gdrive' : 'local',
     mcp_full_access: settings.mcp_full_access,
-    solleciti_grace_days: String(settings.solleciti_grace_days),
-    solleciti_min_interval_days: String(settings.solleciti_min_interval_days),
-    solleciti_max_reminders: String(settings.solleciti_max_reminders),
     gmail_backfill_days: String(settings.gmail_backfill_days),
   }
 }
@@ -44,12 +38,9 @@ export function changesBetween(saved: SpaceSettings, draft: Draft): SpaceSetting
   }
   if (draft.storage_backend !== saved.storage_backend) changes.storage_backend = draft.storage_backend
   if (draft.mcp_full_access !== saved.mcp_full_access) changes.mcp_full_access = draft.mcp_full_access
-  for (const key of [
-    'solleciti_grace_days',
-    'solleciti_min_interval_days',
-    'solleciti_max_reminders',
-    'gmail_backfill_days',
-  ] as const) {
+  // The three `solleciti_*` keys still exist on the API and keep their values; the form
+  // stopped editing them on 2026-09-09, when the Solleciti page left the interface.
+  for (const key of ['gmail_backfill_days'] as const) {
     const value = Number(draft[key])
     if (Number.isFinite(value) && value !== saved[key]) changes[key] = value
   }
