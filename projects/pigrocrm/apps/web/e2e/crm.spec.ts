@@ -70,7 +70,16 @@ test('creating a customer, a person and a deal, then moving it across the board'
   await page.getByLabel(/^Nome\b/).fill('Mario')
   await page.getByLabel('Cognome').fill('Rossi')
   await page.getByRole('button', { name: 'Salva' }).click()
-  await expect(page.getByText('Rossi')).toBeVisible()
+  // The row, not the page. What this step has to prove is that the person is in
+  // the people list, and `getByText('Rossi')` proves only that the string is
+  // somewhere on it -- satisfied just as well by the «Azienda» column, which
+  // renders `customer_ragione_sociale` (`features/people/columns.tsx`) and would
+  // read "Rossi Ingegneria ... Srl" for anyone linked to the customer
+  // `e2e/search.spec.ts` creates. The surname alone is also not unique to a
+  // person: `DataTable` draws real `<tr>` rows, so the row's own accessible name
+  // is the concatenation of its cells, and matching the full name inside it says
+  // "this person has a row" and nothing weaker.
+  await expect(page.getByRole('row', { name: /Mario Rossi/ })).toBeVisible()
 
   await page.goto('/app/deal')
   await page.getByRole('button', { name: /nuovo deal/i }).click()
