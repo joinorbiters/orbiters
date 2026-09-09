@@ -435,7 +435,7 @@ _BYTE: dict[Method, str] = {
 #    future slice could expose any of them -- which is exactly why they are not in the
 #    ban list and why each has to say so out loud.
 #
-#    Eight entries have left this block, and they are the reason it must stay small.
+#    Nine entries have left this block, and they are the reason it must stay small.
 #    `PeriodLockService.list_locks`, `TemplateService.preview`,
 #    `DocumentService.regenerate`, `soft_delete` and `restore` were all recorded here as
 #    "non ha ancora un tool" / "e' una decisione della persona" -- and each turned out to
@@ -449,10 +449,19 @@ _BYTE: dict[Method, str] = {
 #    one removal on this surface without an inverse, and it is allowed where
 #    `EmailDraftService.delete` below is not because nothing is lost with it: a proforma
 #    never took a number, its reference sequence tolerates a gap, and `get_invoice`
-#    showed everything needed to recreate it. A reason that only says "nobody wrote the
-#    tool" is a placeholder wearing the clothes of a decision; this category is for the
-#    ones that survive being asked why, and the only way to keep that true is to delete
-#    the ones that do not the moment the tool is written.
+#    showed everything needed to recreate it. `InvoiceService.update` left at ORB-61 as
+#    `update_proforma`: its reason here was "note interne e campi custom, congelati dopo
+#    l'emissione: nessuna audience agentica", and it was true of the two fields the
+#    method carried when it was written. The method now also moves a proforma's own
+#    document date (ORB-63) and its accrual period, the two header facts an agent that
+#    composes "la proforma di agosto" has to be able to state, and both are frozen by the
+#    service itself once the proforma is consumed. The tool is guarded like
+#    `replace_proforma_lines` (a proforma only, never a fattura) and passes only the keys
+#    it was given, so the notes and the custom fields the old reason named are still not
+#    reachable through it. A reason that only says "nobody wrote the tool" is a
+#    placeholder wearing the clothes of a decision; this category is for the ones that
+#    survive being asked why, and the only way to keep that true is to delete the ones
+#    that do not the moment the tool is written.
 _COPERTE_O_UMANE: dict[Method, str] = {
     ("AnalyticsService", "economic_overview"): (
         "la scheda economica della dashboard porta con se' la stima fiscale calcolata su "
@@ -484,8 +493,6 @@ _COPERTE_O_UMANE: dict[Method, str] = {
     "riscriverli su un documento gia' reso",
     ("DocumentService", "add_version"): "richiede byte gia' resi, che l'MCP non produce",
     ("FiscalProfileService", "get"): "describe_fiscal_profile espone gia' il regime",
-    ("InvoiceService", "update"): "note interne e campi custom, congelati dopo "
-    "l'emissione: nessuna audience agentica",
     ("InvoiceService", "confirm_proforma"): "e' la conferma umana che precede "
     "l'emissione: l'agente prepara, la persona conferma",
     ("TemplateService", "get"): "describe_template espone gia' il template",

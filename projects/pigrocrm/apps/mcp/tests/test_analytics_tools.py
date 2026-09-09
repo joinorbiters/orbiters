@@ -122,3 +122,21 @@ async def test_the_deal_resource_now_carries_revenue_and_margin(server, deal_wit
     # an agent a figure it will quote as final.
     assert "provvisorio" in rendered
     assert "- Margine %: non calcolabile, nessun ricavo fatturato" in rendered
+
+
+async def test_get_period_pnl_offers_the_accrual_reading_and_refuses_an_unknown_base(
+    server, deal_with_hours
+) -> None:
+    """ORB-61: `base` is a second reading of the same revenue, not a second report. The
+    two readings' arithmetic is proven in core; here the tool accepts the name, keeps the
+    default, and renders an unknown base as guidance rather than a pydantic dump."""
+    async with Client(server) as client:
+        default = await client.call_tool("get_period_pnl", {"da": DA, "a": A})
+        accrual = await client.call_tool("get_period_pnl", {"da": DA, "a": A, "base": "competenza"})
+        unknown = await client.call_tool("get_period_pnl", {"da": DA, "a": A, "base": "cassa"})
+    assert not default.is_error and not accrual.is_error
+    # No invoice in the fixture, so the hours are the same under both readings: costs and
+    # hours never move with the base.
+    assert accrual.structured_content["in_corso"] == default.structured_content["in_corso"]
+    assert unknown.is_error
+    assert "errors.pydantic.dev" not in unknown.content[0].text

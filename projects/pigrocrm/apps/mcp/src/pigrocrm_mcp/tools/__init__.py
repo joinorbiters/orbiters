@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from datetime import date
 from typing import Annotated, Any, cast
 from uuid import UUID
 
@@ -68,6 +69,14 @@ IsoDateStr = Annotated[
         {"anyOf": [{"type": "string", "format": "date"}, {"type": "null"}], "default": None}
     ),
 ]
+
+
+def _iso_date(value: str | None) -> date | None:
+    """An `IsoDateStr` argument as the `date` a core schema takes, or `None` when the
+    agent left it out. Called *inside* the guarded tool body, so a malformed string is a
+    `ValueError` the guard renders as guidance rather than a raw SDK rejection."""
+    return date.fromisoformat(value) if value else None
+
 
 # Final review item 9: the same runtime-permissive / schema-only-strict split as
 # `*Changes`/`IsoDateStr` above, applied to every remaining *scalar* numeric
@@ -867,18 +876,54 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
         righe: list[dict[str, Any]],
         deal_id: str | None = None,
         causale: str | None = None,
+        data_emissione: IsoDateStr = None,
+        competenza_da: IsoDateStr = None,
+        competenza_a: IsoDateStr = None,
     ) -> dict[str, Any]:
         """Crea una proforma. Una proforma non e' un documento fiscale: non prende un
         numero, non produce un file per il Sistema di Interscambio, e diventa una
-        fattura solo quando una persona la emette dall'applicazione."""
+        fattura solo quando una persona la emette dall'applicazione.
+
+        `data_emissione` (YYYY-MM-DD) e' la data che il documento porta: se manca e' oggi.
+        Non e' una data di registro, e la fattura che nascera' da questa proforma prendera'
+        la propria all'emissione. `competenza_da` e `competenza_a` (YYYY-MM-DD, insieme o
+        nessuno dei due) sono il periodo di competenza del lavoro fatturato, per esempio
+        il mese: finisce sul PDF, su ogni riga dell'XML della fattura e nel conto economico
+        letto per competenza."""
         return invoices.create_proforma(
             context,
             {
                 "customer_id": UUID(customer_id),
                 "deal_id": UUID(deal_id) if deal_id else None,
                 "causale": causale,
+                "data_emissione": _iso_date(data_emissione),
+                "competenza_da": _iso_date(competenza_da),
+                "competenza_a": _iso_date(competenza_a),
                 "righe": righe,
             },
+        )
+
+    @mcp.tool()
+    @guard
+    def update_proforma(
+        invoice_id: str,
+        causale: str | None = None,
+        data_emissione: IsoDateStr = None,
+        competenza_da: IsoDateStr = None,
+        competenza_a: IsoDateStr = None,
+    ) -> dict[str, Any]:
+        """Corregge l'intestazione di una proforma ancora modificabile: la causale, la
+        data del documento e il periodo di competenza. Si cambia solo cio' che si passa;
+        un campo omesso resta com'e', e da qui non si svuota niente. Rifiuta una fattura,
+        anche in bozza, e una proforma gia' consumata da un'emissione: cio' che e' entrato
+        nel registro non si ritocca. Le righe si cambiano con `replace_proforma_lines`."""
+        return invoices.update_proforma(
+            context,
+            invoice_id,
+            causale=causale,
+            data_emissione=_iso_date(data_emissione),
+            competenza_da=_iso_date(competenza_da),
+            competenza_a=_iso_date(competenza_a),
         )
 
     @mcp.tool()
@@ -1247,17 +1292,29 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
 
     @mcp.tool()
     @guard
-    def get_period_pnl(da: str, a: str, customer_id: str | None = None) -> dict[str, Any]:
+    def get_period_pnl(
+        da: str, a: str, customer_id: str | None = None, base: str = "emissione"
+    ) -> dict[str, Any]:
         """Conto economico di periodo, in due colonne: deal chiusi e deal in corso. Il
         numero riportabile è il primo. `periodo_chiuso` e `voci_scritte_in_ritardo` dicono
         se la cifra può ancora muoversi. Le spese generali stanno in una riga a parte e non
-        vengono ripartite su nessun deal."""
+        vengono ripartite su nessun deal.
+
+        `base` sceglie quale data colloca il ricavo di una fattura nel periodo, e sono due
+        letture dello stesso fatturato. `"emissione"` (predefinita) usa la data del
+        documento: è il ricavo come lo legge il fisco, e la lettura che i report fiscali
+        usano sempre. `"competenza"` usa il periodo di competenza dichiarato sulla fattura
+        (`competenza_da`), e la data di emissione per le fatture che non lo dichiarano:
+        serve quando si fattura in ritardo, così il lavoro di agosto emesso a settembre si
+        legge in agosto. Costi e ore restano attribuiti alla propria data in entrambe le
+        letture, e una proforma non è ricavo in nessuna delle due."""
         return timetracking.get_period_pnl(
             context,
             PeriodPnlQuery(
                 da=da,  # type: ignore[arg-type]
                 a=a,  # type: ignore[arg-type]
                 customer_id=UUID(customer_id) if customer_id else None,
+                base=base,  # type: ignore[arg-type]
             ),
         )
 

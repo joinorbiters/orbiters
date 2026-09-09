@@ -18,6 +18,7 @@ from pigrocrm.core.invoices.schemas import (
     InvoiceCreate,
     InvoiceLineIn,
     InvoiceListQuery,
+    InvoiceUpdate,
     PaymentState,
 )
 from pigrocrm.core.invoices.service import InvoiceService
@@ -110,6 +111,45 @@ def replace_proforma_lines(
     return service.replace_lines(
         identifier, [InvoiceLineIn(**riga) for riga in righe], context.actor
     ).model_dump(mode="json")
+
+
+def update_proforma(
+    context: McpContext,
+    invoice_id: str,
+    *,
+    causale: str | None,
+    data_emissione: date | None,
+    competenza_da: date | None,
+    competenza_a: date | None,
+) -> dict[str, Any]:
+    """The header of a proforma: causale, document date, accrual period (ORB-61, ORB-63).
+
+    Same guard as `replace_proforma_lines`, and for the same reason: a proforma is the
+    only document an agent shapes from here, and the service's own `ImmutableField`
+    refuses a `consumata` one after the guard has let its `tipo` through. `None` means
+    "not supplied" on this surface, never "clear it": only the keys with a value reach
+    `InvoiceUpdate`, so an agent cannot blank a period or a date by omission. Clearing a
+    period is the application's, where the two ends are one control.
+    """
+    service = _invoices(context)
+    identifier = UUID(invoice_id)
+    _require_proforma(service, identifier, context)
+    supplied: dict[str, Any] = {
+        key: value
+        for key, value in {
+            "causale": causale,
+            "data_emissione": data_emissione,
+            "competenza_da": competenza_da,
+            "competenza_a": competenza_a,
+        }.items()
+        if value is not None
+    }
+    # `model_validate` on the filtered dict rather than `InvoiceUpdate(**supplied)`: the
+    # keys that are absent must stay *unset*, which is what lets `supplied_changes` tell
+    # "not passed" from "clear it" -- and a keyword argument defaulted to `None` would be
+    # set to `None`, which on this schema means clear.
+    changes = InvoiceUpdate.model_validate(supplied)
+    return service.update(identifier, changes, context.actor).model_dump(mode="json")
 
 
 def discard_proforma(context: McpContext, invoice_id: str) -> dict[str, Any]:
