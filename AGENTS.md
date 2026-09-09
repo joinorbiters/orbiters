@@ -78,7 +78,12 @@ nothing when you are not. Narrow to one project by passing its paths as argument
    the full Python suite, Playwright, the images. `preflight --list` prints what your
    diff selects before you trust it; `preflight --install-hook` runs it on push.
 2. **`pull_request`** — one cheap gate per project, scoped by `dorny/paths-filter`.
-3. **`push` to `main`** — everything, unconditionally.
+3. **`push` to `main`** — the heavy tier (the corpus, the images), scoped by the
+   same filters. It was unconditional until 2026-09-09, when the measurement said
+   1,564 hosted minutes in eight days against a 2,000/month allowance on a private
+   repository. A push that cannot reach a project does not pay for that project's
+   suite, and each deploy's own `scope` job already decides from the same paths. When
+   a push has no reachable base commit the filters are skipped and everything runs.
 
 **A check that stops running on a PR must appear in `preflight.json`.** Verification
 did not get cheaper, it moved; a heavy check in neither tier is a hole.
