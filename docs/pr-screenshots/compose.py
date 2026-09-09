@@ -55,7 +55,13 @@ def main(argv: list[str]) -> int:
         "--crop-left", type=int, default=0, help="pixels to cut from the left of both frames"
     )
     parser.add_argument("--gap", type=int, default=24, help="pixels between the two frames")
-    parser.add_argument("--labels", default="Before,After", help="the two labels, comma separated")
+    parser.add_argument(
+        "--labels",
+        nargs=2,
+        default=("Before", "After"),
+        metavar=("BEFORE", "AFTER"),
+        help="the two labels",
+    )
     args = parser.parse_args(argv)
 
     before = Image.open(args.before).convert("RGB")
@@ -66,6 +72,13 @@ def main(argv: list[str]) -> int:
     if args.box:
         x, y, w, h = args.box
         x -= args.crop_left
+        if x < 0 or y < 0 or x + w > after.width or y + h > after.height:
+            # Pillow would clip a box that hangs off the frame and draw nothing, with a
+            # clean exit: the one failure this script exists to make loud.
+            parser.error(
+                f"--box falls outside the after frame after --crop-left {args.crop_left} "
+                f"({after.width}x{after.height})"
+            )
         draw = ImageDraw.Draw(after)
         for inset in range(4):
             draw.rectangle((x - inset, y - inset, x + w + inset, y + h + inset), outline=ANNOTATION)
@@ -82,11 +95,8 @@ def main(argv: list[str]) -> int:
     canvas = Image.new("RGB", (width, height + LABEL_HEIGHT), PAPER)
     draw = ImageDraw.Draw(canvas)
     font = _font(20)
-    labels = [s.strip() for s in args.labels.split(",")]
-    if len(labels) != 2:
-        parser.error("--labels wants exactly two labels")
-    draw.text((8, 12), labels[0], fill=INK, font=font)
-    draw.text((before.width + args.gap + 8, 12), labels[1], fill=INK, font=font)
+    draw.text((8, 12), args.labels[0], fill=INK, font=font)
+    draw.text((before.width + args.gap + 8, 12), args.labels[1], fill=INK, font=font)
     canvas.paste(before, (0, LABEL_HEIGHT))
     canvas.paste(after, (before.width + args.gap, LABEL_HEIGHT))
     canvas.save(args.out)
