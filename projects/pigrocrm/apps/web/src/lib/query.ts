@@ -49,6 +49,8 @@ export const queryKeys = {
   invoices: (params?: unknown) => ['invoices', params ?? {}] as const,
   invoice: (id: string) => ['invoice', id] as const,
   invoiceLines: (id: string) => ['invoice-lines', id] as const,
+  // Keyed by the document too: a regenerated PDF is a new version under the same id.
+  invoicePdf: (id: string, documentId: string) => ['invoice-pdf', id, documentId] as const,
   fiscalProfile: ['fiscal-profile'] as const,
   timeEntries: (params?: unknown) => ['time-entries', params ?? {}] as const,
   // One key per month, and the prefix `['calendario']` on purpose: a commitment whose
