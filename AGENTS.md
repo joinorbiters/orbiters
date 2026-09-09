@@ -15,16 +15,17 @@ dependency graph and their tooling as they honestly can.
 ```
 projects/<name>/     everything one project owns: its apps, its packages, its docs,
                      its Dockerfiles, its compose file, its deploy scripts
-shared/ts/<name>/    TypeScript libraries used by more than one project
-shared/py/<name>/    Python packages used by more than one project
+shared/<name>/       code or assets used by more than one project
 tooling/<name>/      configuration shared by every project
 docs/                documentation about the monorepo itself, never about a project
 ```
 
-`shared/` does not exist yet, and a directory is not created before something real
-goes in it. The workspace globs already point at those paths so that the first shared
-package lands where `docs/adding-a-project.md` says, instead of wherever it is
-invented.
+`shared/brand` is the first of those and shows what belongs there: the palette, the
+typeface and the brand mark, which the CRM and the community landing must agree on
+and neither can own. A project small enough to be a single artifact may be one package
+at its own root rather than growing an `apps/` directory with one entry in it, which is
+what `projects/landing` is. `tooling/` is still empty, and a directory is not created
+before something real goes in it.
 
 ## The dependency rule, which is the whole reason these projects live together
 
