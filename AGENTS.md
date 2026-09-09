@@ -82,8 +82,10 @@ nothing when you are not. Narrow to one project by passing its paths as argument
    same filters. It was unconditional until 2026-09-09, when the measurement said
    1,564 hosted minutes in eight days against a 2,000/month allowance on a private
    repository. A push that cannot reach a project does not pay for that project's
-   suite, and each deploy's own `scope` job already decides from the same paths. When
-   a push has no reachable base commit the filters are skipped and everything runs.
+   suite. When a push has no reachable base commit the filters are skipped and
+   everything runs. The `changes` job also publishes its verdict as the
+   `changed-paths` artifact, which is what each deploy reads instead of recomputing
+   the same paths for itself.
 
 **A check that stops running on a PR must appear in `preflight.json`.** Verification
 did not get cheaper, it moved; a heavy check in neither tier is a hole.
@@ -114,15 +116,26 @@ Adding a project means adding one filter to `changes` and one or two jobs that c
 `_python-gate.yml` / `_node-gate.yml`. It must not mean another CI workflow file.
 
 **Deploy is a fourth thing, and it is not a status check.** Two environments per
-project: preview on every push to `main` that touched the project, production only on
-a project-scoped tag, `<project>-v<semver>`. The mechanism is shared
-(`_deploy-compose.yml`); the trigger is per project (`deploy-<project>.yml`), so two
-projects can never deploy each other by accident. Per-environment configuration is a
-**GitHub Environment**, holding the same four secrets everywhere: `DEPLOY_HOST`,
-`DEPLOY_USER`, `DEPLOY_PATH`, `DEPLOY_SSH_KEY`. The caller must pass `secrets:
-inherit`, or a reusable workflow reads all four as empty strings. Both environments
-stay off until their arming variable exists. The runbook is
-`docs/adding-a-project.md` §7.
+project: preview when CI concludes green on `main` for a commit that touched the
+project, production only on a project-scoped tag, `<project>-v<semver>`. The
+mechanism is shared (`_deploy-compose.yml`); the trigger is per project
+(`deploy-<project>.yml`), so two projects can never deploy each other by accident.
+Per-environment configuration is a **GitHub Environment**, holding the same four
+secrets everywhere: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH`, `DEPLOY_SSH_KEY`.
+The caller must pass `secrets: inherit`, or a reusable workflow reads all four as
+empty strings. Both environments stay off until their arming variable exists. The
+runbook is `docs/adding-a-project.md` §7.
+
+**The preview triggers on `workflow_run`, and that is a cost decision with two
+consequences worth knowing.** It used to trigger on the push and then poll the API
+until CI finished, on a billed runner: measured on 2026-09-09, 458 of 514 billed
+seconds were that sleep and 51 were the deploy. Since the trigger is now CI's own
+completion, first: `github.sha` on that event is the branch tip when the event fired,
+not the commit that was verified, so the caller passes
+`github.event.workflow_run.head_sha` as the `ref` input and `_deploy-compose.yml`
+checks out, verifies and records that. Second: a `workflow_run` workflow only ever
+runs in the version on the default branch, so a change to a deploy file cannot be
+tested on a branch and is proven on the trunk instead.
 
 ## Conventions
 

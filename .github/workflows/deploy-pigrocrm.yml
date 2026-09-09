@@ -3,10 +3,16 @@
 # The mechanism itself is in `_deploy-compose.yml`; this file is only the two rules
 # that say when, and the four values that say where.
 #
-# **Preview on every push to main, production on a version tag.** A tag is the only
-# thing in this repository that means "this is a release": a push to main means the
-# trunk moved, which is worth seeing on a real server and is not worth putting in
+# **Preview when CI goes green on main, production on a version tag.** A tag is the
+# only thing in this repository that means "this is a release": a push to main means
+# the trunk moved, which is worth seeing on a real server and is not worth putting in
 # front of the person who uses the CRM every day.
+#
+# The preview used to trigger on the push itself and then sit on a billed runner
+# waiting for CI to finish, because it refuses to deploy an unverified commit.
+# Measured on 2026-09-09: 458 of 514 billed seconds were that wait, against 51 seconds
+# of deploying. Triggering on CI's completion buys the same guarantee for nothing, and
+# `_deploy-compose.yml` still asks the API rather than trusting the trigger.
 #
 # Tags are project-scoped, `pigrocrm-v<semver>`, because a bare `v1.2.0` in a monorepo
 # does not say which project it releases:
@@ -19,8 +25,11 @@
 name: Deploy PigroCRM
 
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
+  push:
     tags: ['pigrocrm-v*']
 
 permissions:
@@ -30,36 +39,43 @@ permissions:
 jobs:
   # A push to main that touched only another project, or only the root README, must not
   # rebuild this stack: a rebuild on the target host is minutes of a single shared core.
-  # This is the deploy-side twin of ci.yml's `changes` job, and the two lists are kept
-  # deliberately identical.
+  # The decision is not made here any more. `ci.yml`'s `changes` job already computed it
+  # from the same paths that select the image build, and published it as an artifact;
+  # this reads it. Before 2026-09-09 each deploy workflow carried its own hand-written
+  # copy of those paths as a grep, and PigroCRM's had already lost `shared/brand`.
   scope:
-    if: github.ref == 'refs/heads/main'
+    if: |
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       changed: ${{ steps.decide.outputs.changed }}
     steps:
+      # Fail open: a missing or unreadable verdict deploys. A preview that ran once too
+      # often is cheap, and a preview silently stuck on an old commit is not.
+      - uses: actions/download-artifact@v4
+        id: verdict
+        continue-on-error: true
+        with:
+          name: changed-paths
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
       - id: decide
         env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          BEFORE: ${{ github.event.before }}
-          SHA: ${{ github.sha }}
+          PROJECT: pigrocrm
         run: |
           set -euo pipefail
-          # A new branch, a force push or a first push has no usable `before`: deploy
-          # rather than guess, since a preview that ran once too often is cheap and a
-          # preview silently stuck on an old commit is not.
-          if [ -z "${BEFORE}" ] || [ "${BEFORE}" = "0000000000000000000000000000000000000000" ]; then
+          if [ ! -f changed-paths.json ]; then
+            echo "no verdict from CI run ${{ github.event.workflow_run.id }}; deploying rather than skipping"
             echo "changed=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          files=$(gh api "repos/${REPO}/compare/${BEFORE}...${SHA}" --jq '.files[].filename' || echo UNKNOWN)
-          if [ "$files" = UNKNOWN ]; then
-            echo "compare failed; deploying rather than skipping"
-            echo "changed=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          printf '%s\n' "$files"
-          if printf '%s\n' "$files" | grep -qE '^(projects/pigrocrm/|pyproject\.toml|uv\.lock|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.dockerignore|\.github/workflows/(deploy-pigrocrm|_deploy-compose)\.yml)'; then
+          cat changed-paths.json
+          all=$(jq -r '.all // ""' changed-paths.json)
+          mine=$(jq -r --arg p "$PROJECT" '.[$p] // ""' changed-paths.json)
+          if [ "$all" = true ] || [ "$mine" = true ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -68,7 +84,6 @@ jobs:
   preview:
     needs: scope
     if: |
-      github.ref == 'refs/heads/main' &&
       needs.scope.outputs.changed == 'true' &&
       vars.PIGROCRM_PREVIEW_ENABLED == 'true'
     # Preview supersedes itself: a newer commit on main makes an older, still queued
@@ -82,6 +97,9 @@ jobs:
       environment: pigrocrm-preview
       compose-dir: projects/pigrocrm
       compose-project: pigrocrm-preview
+      # The commit CI verified, not the branch tip: on a workflow_run event those are
+      # the same thing only until the next push lands.
+      ref: ${{ github.event.workflow_run.head_sha }}
       # Deliberately not /api/tenants/root: that one answers from settings alone and
       # would report a healthy deploy with the database on the floor. This one reads
       # the registry, so it fails when Postgres does.

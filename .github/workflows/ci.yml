@@ -75,6 +75,9 @@ jobs:
       hub_py: ${{ steps.filter.outputs.hub_py }}
       hub_web: ${{ steps.filter.outputs.hub_web }}
       hub_image: ${{ steps.filter.outputs.hub_image }}
+      pigrocrm_deploy: ${{ steps.filter.outputs.pigrocrm_deploy }}
+      website_deploy: ${{ steps.filter.outputs.website_deploy }}
+      hub_deploy: ${{ steps.filter.outputs.hub_deploy }}
     steps:
       - uses: actions/checkout@v4
         if: github.event_name != 'pull_request'
@@ -162,7 +165,7 @@ jobs:
             # carries. `projects/website/**` used to be here and is not a mistake
             # that was corrected: until 2026-09-09 the CRM's web image did build the
             # site, and now `website_image` below owns that.
-            pigrocrm_image:
+            pigrocrm_image: &pigrocrm_image
               - 'projects/pigrocrm/**'
               - 'shared/brand/**'
               - 'package.json'
@@ -172,7 +175,7 @@ jobs:
               - 'uv.lock'
               - '.dockerignore'
               - '.github/workflows/ci.yml'
-            website_image:
+            website_image: &website_image
               - 'projects/website/**'
               - 'shared/brand/**'
               - 'package.json'
@@ -180,7 +183,7 @@ jobs:
               - 'pnpm-workspace.yaml'
               - '.dockerignore'
               - '.github/workflows/ci.yml'
-            hub_image:
+            hub_image: &hub_image
               - 'projects/hub/**'
               - 'shared/brand/**'
               - 'package.json'
@@ -190,6 +193,51 @@ jobs:
               - 'uv.lock'
               - '.dockerignore'
               - '.github/workflows/ci.yml'
+            # What a deploy rebuilds, which is what its image copies in plus the two
+            # files that decide the deploy itself. The anchors are dorny/paths-filter's
+            # own documented reuse mechanism, and they exist so that the deploy-side
+            # list cannot drift from the image-side one: before 2026-09-09 each deploy
+            # workflow carried its own hand-written copy of these paths as a grep, and
+            # PigroCRM's had already lost `shared/brand`.
+            pigrocrm_deploy:
+              - *pigrocrm_image
+              - '.github/workflows/deploy-pigrocrm.yml'
+              - '.github/workflows/_deploy-compose.yml'
+            website_deploy:
+              - *website_image
+              - '.github/workflows/deploy-website.yml'
+              - '.github/workflows/_deploy-compose.yml'
+            hub_deploy:
+              - *hub_image
+              - '.github/workflows/deploy-hub.yml'
+              - '.github/workflows/_deploy-compose.yml'
+
+      # The deploy workflows used to answer "did this push touch my project?" for
+      # themselves, each with its own copy of the paths above, and each by waiting on
+      # a billed runner until this run finished. They are triggered by this run's
+      # completion now, and they read the verdict from here. One computation, one
+      # list, and a deploy that starts already knowing CI was green.
+      - name: Publish the verdict for the deploy workflows
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          cat > changed-paths.json <<JSON
+          {
+            "all": "${{ steps.base.outputs.all }}",
+            "pigrocrm": "${{ steps.filter.outputs.pigrocrm_deploy }}",
+            "website": "${{ steps.filter.outputs.website_deploy }}",
+            "hub": "${{ steps.filter.outputs.hub_deploy }}"
+          }
+          JSON
+          cat changed-paths.json
+
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push'
+        with:
+          name: changed-paths
+          path: changed-paths.json
+          # Read minutes after the run by the deploys and by nothing else.
+          retention-days: 1
 
   # Two guards, and neither is decoration.
   #

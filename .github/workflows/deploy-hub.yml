@@ -3,7 +3,7 @@
 # each other. The mechanism is `_deploy-compose.yml`; this file is the two rules that
 # say when and the four values that say where.
 #
-# Preview on every push to main that touched the hub, production on a version tag:
+# Preview when CI goes green on main, production on a version tag:
 #
 #     git tag hub-v0.1.0 && git push origin hub-v0.1.0
 #
@@ -17,8 +17,11 @@
 name: Deploy hub
 
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
+  push:
     tags: ['hub-v*']
 
 permissions:
@@ -26,34 +29,40 @@ permissions:
   actions: read
 
 jobs:
-  # A push that touched only another project must not rebuild this stack. The list
-  # below is the deploy-side twin of ci.yml's `hub_py` and `hub_web` filters, plus the
-  # image inputs and the two workflow files that decide this deploy.
+  # A push that touched only another project must not rebuild this stack. `ci.yml`'s
+  # `changes` job decided that already, from the same paths that select the hub image
+  # build, and published it; this reads the answer.
   scope:
-    if: github.ref == 'refs/heads/main'
+    if: |
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       changed: ${{ steps.decide.outputs.changed }}
     steps:
+      # Fail open: a missing verdict deploys rather than skips.
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: changed-paths
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
       - id: decide
         env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          BEFORE: ${{ github.event.before }}
-          SHA: ${{ github.sha }}
+          PROJECT: hub
         run: |
           set -euo pipefail
-          if [ -z "${BEFORE}" ] || [ "${BEFORE}" = "0000000000000000000000000000000000000000" ]; then
+          if [ ! -f changed-paths.json ]; then
+            echo "no verdict from CI run ${{ github.event.workflow_run.id }}; deploying rather than skipping"
             echo "changed=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          files=$(gh api "repos/${REPO}/compare/${BEFORE}...${SHA}" --jq '.files[].filename' || echo UNKNOWN)
-          if [ "$files" = UNKNOWN ]; then
-            echo "compare failed; deploying rather than skipping"
-            echo "changed=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          printf '%s\n' "$files"
-          if printf '%s\n' "$files" | grep -qE '^(projects/hub/|shared/brand/|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|pyproject\.toml|uv\.lock|\.dockerignore|\.github/workflows/(deploy-hub|_deploy-compose)\.yml)'; then
+          cat changed-paths.json
+          all=$(jq -r '.all // ""' changed-paths.json)
+          mine=$(jq -r --arg p "$PROJECT" '.[$p] // ""' changed-paths.json)
+          if [ "$all" = true ] || [ "$mine" = true ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -62,7 +71,6 @@ jobs:
   preview:
     needs: scope
     if: |
-      github.ref == 'refs/heads/main' &&
       needs.scope.outputs.changed == 'true' &&
       vars.HUB_PREVIEW_ENABLED == 'true'
     concurrency:
@@ -73,6 +81,7 @@ jobs:
       environment: hub-preview
       compose-dir: projects/hub
       compose-project: orbiters-preview
+      ref: ${{ github.event.workflow_run.head_sha }}
       # The API's probe touches the database (SELECT 1), so a green deploy means
       # Postgres is up and migrated, not only that uvicorn answered.
       health-url: http://127.0.0.1:8086/health

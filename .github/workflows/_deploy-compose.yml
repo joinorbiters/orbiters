@@ -45,6 +45,16 @@ on:
         type: string
         required: false
         default: ''
+      ref:
+        description: >-
+          Commit to deploy. A preview is triggered by CI finishing rather than by the
+          push itself, and on a `workflow_run` event `github.sha` is the branch tip at
+          the moment the event fired, which is a different commit as soon as anything
+          else has landed. The caller passes the head commit of the run that went
+          green; deploying anything else would ship a commit CI never verified.
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -59,6 +69,8 @@ jobs:
       url: ${{ inputs.url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Verify the environment is configured
         # Four missing secrets produce four confusing failures further down (ssh to an
@@ -83,12 +95,17 @@ jobs:
 
       - name: Refuse to deploy a commit CI has not passed
         # A deploy workflow is not a status check and nothing stops it from running on
-        # a red commit, so it asks. A tag deploys the commit it points at, which is
-        # normally a commit main already built, and this finds that same run.
+        # a red commit, so it asks. A preview arrives here already knowing the answer,
+        # since CI finishing green is what triggered it, and the loop then exits on its
+        # first request; a tag deploys the commit it points at, which is normally a
+        # commit main already built, and this finds that same run. Until 2026-09-09
+        # every preview reached this step while CI was still running and slept through
+        # it on a metered runner: measured on one preview, 458 of 514 billed seconds
+        # were this loop, against 51 seconds of actual deploying.
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
+          SHA: ${{ inputs.ref || github.sha }}
         run: |
           set -euo pipefail
           for attempt in $(seq 1 60); do
@@ -205,7 +222,7 @@ jobs:
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
           RECORD: |
             ref=${{ github.ref_name }}
-            sha=${{ github.sha }}
+            sha=${{ inputs.ref || github.sha }}
             run=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
             actor=${{ github.actor }}
             environment=${{ inputs.environment }}
