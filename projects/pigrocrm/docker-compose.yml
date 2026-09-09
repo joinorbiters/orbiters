@@ -72,6 +72,17 @@ services:
       PIGROCRM_PUBLIC_URL: ${PIGROCRM_PUBLIC_URL:-}
       PIGROCRM_GOOGLE_APP_UNVERIFIED: ${PIGROCRM_GOOGLE_APP_UNVERIFIED:-false}
       PIGROCRM_ORBITERS_DATABASE_URL: ${PIGROCRM_ORBITERS_DATABASE_URL:-}
+      # ChatGPT Ads, the server half of the Orbiters signup conversion. Named here
+      # because compose forwards only what a service lists: with these missing the API
+      # sees a bare `Settings()`, `pixel_from_settings` answers `None`, and no server
+      # event is ever sent -- silently, since nothing here logs. Empty defaults, so an
+      # installation that runs no campaigns is the ordinary case and not a start-up
+      # failure. The key is a secret and lives in the server's `.env`, never in a file
+      # of this repository (see .env.example).
+      PIGROCRM_OPENAI_PIXEL_ID: ${PIGROCRM_OPENAI_PIXEL_ID:-}
+      PIGROCRM_OPENAI_CONVERSIONS_API_KEY: ${PIGROCRM_OPENAI_CONVERSIONS_API_KEY:-}
+      PIGROCRM_ORBITERS_SIGNUP_URL: ${PIGROCRM_ORBITERS_SIGNUP_URL:-https://joinorbiters.com/orbiters}
+      PIGROCRM_OPENAI_CONVERSIONS_SEND_HASHED_EMAIL: ${PIGROCRM_OPENAI_CONVERSIONS_SEND_HASHED_EMAIL:-false}
       PIGROCRM_ROOT_SLUG: ${PIGROCRM_ROOT_SLUG:-}
       # PIGROCRM_COOKIE_SECURE is deliberately NOT set here -- do not add it.
       # .env (this same file, shared with the plain `uv run uvicorn`/`uv run pytest`
