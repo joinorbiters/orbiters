@@ -208,22 +208,27 @@ export function DealDetail() {
         actions={
           canWrite && (
             <>
-              {/* First, and the only filled button here: a deal's header is opened to
-                  invoice it far more often than to rename it. The dialog it opens has
-                  nothing left to ask but the causale -- the customer, the deal and the
-                  first line are all on this page already. `valore_previsto` is nullable
-                  (`DealRead`), and an absent one starts the line at an empty price
-                  rather than at a zero nobody typed. */}
+              {/* First, and the only filled button here -- everything after it, the two
+                  outcomes included, is an outline: a deal's header is opened to invoice
+                  it far more often than to rename it, or even to close it. The dialog it
+                  opens has nothing left to ask but the causale -- the customer, the deal
+                  and the first line are all on this page already. `valore_previsto` is
+                  nullable (`DealRead`), and an absent one starts the line at an empty
+                  price rather than at a zero nobody typed. */}
               <NewProformaButton
                 customerId={deal.customer_id}
                 dealId={deal.id}
                 prefill={{ descrizione: deal.nome, importo: deal.valore_previsto ?? '' }}
               />
               {/* Two outcomes, top right, only while the deal is still open: closing it
-                  is the one decision this page exists for. Reopening goes through the
-                  bar, which is also where the person sees which stage it goes back to. */}
+                  is the decision this page exists for, but «una sola cosa forte per
+                  schermata» (UI revision spec §92) means the strong slot above is
+                  already taken -- so both are outlines, and they are told apart by
+                  their icon and their word, not by their weight. Reopening goes through
+                  the bar, which is also where the person sees which stage it goes back
+                  to. */}
               {isOpen && won && (
-                <Button onClick={() => moveTo(won.id)} disabled={move.isPending}>
+                <Button variant="outline" onClick={() => moveTo(won.id)} disabled={move.isPending}>
                   <Trophy className="mr-2 size-4" />
                   Vinto
                 </Button>

@@ -142,25 +142,25 @@ from the network inside a production container already running, on every single 
 
 `https://tuodominio.it/`, with the credentials just created.
 
-### 7. Il cron del sync Gmail (solo se colleghi Gmail)
+### 7. The Gmail sync cron (only if you connect Gmail)
 
-Non c'è nessun demone e nessuna coda: il sync Gmail è un ciclo che parte, fa il suo lavoro
-e finisce. I quindici minuti li tiene cron, con una riga nel `crontab` dell'utente che
-possiede il deploy:
+There is no daemon and no queue: the Gmail sync is a loop that starts, does its work and
+ends. The fifteen minutes are cron's, one line in the `crontab` of the user that owns the
+deploy:
 
 ```
 */15 * * * * cd /opt/pigrocrm/projects/pigrocrm && docker compose --env-file ../../.env exec -T api uv run --no-sync pigrocrm gmail-sync >> /var/log/pigrocrm-gmail-sync.log 2>&1
 ```
 
-Ogni esecuzione scrive una riga sola, con l'ora davanti, l'indirizzo della casella e i
-soli contatori del ciclo (mai un oggetto, un corpo di messaggio o l'indirizzo di un
-corrispondente): esce `0` quando il ciclo è andato — o quando ne era già in corso un
-altro, che non è un errore — e `1` con una frase su `stderr` quando la casella manca, è
-ambigua, appartiene a un utente disattivato o il consenso è revocato. `--env-file ../../.env` e
-`--no-sync` valgono qui esattamente per i motivi del §1 e del §5.
+Every run writes a single line, with the time in front, the mailbox's address and the
+loop's counters and nothing else (never a subject, a message body or a correspondent's
+address): it exits `0` when the loop went through — or when another one was already
+running, which is not an error — and `1`, with a sentence on `stderr`, when the mailbox is
+missing, is ambiguous, belongs to a deactivated user or the consent has been revoked.
+`--env-file ../../.env` and `--no-sync` are here for exactly the reasons of §1 and §5.
 
-Il runbook con la tabella delle frasi di errore, cosa fare per ciascuna e il rapporto con
-la scadenza del consenso Google è
+The runbook — the table of error sentences, what to do about each one and how they relate
+to the expiry of the Google consent — is
 [`docs/superpowers/notes/2026-09-09-gmail-cron-runbook.md`](docs/superpowers/notes/2026-09-09-gmail-cron-runbook.md).
 
 ## Status
