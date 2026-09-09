@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import { expect, test } from '@playwright/test'
-import { killApi, loginAsAdmin, relaunchApi } from './helpers'
+import { killApi, loginAsAdmin, navigate, relaunchApi } from './helpers'
 
 const PIDFILE = process.env.PIGROCRM_E2E_API_PIDFILE ?? '/tmp/pigrocrm-e2e-api.pid'
 
@@ -94,7 +94,11 @@ test('a dead API reads as a failure on the Kanban board too, not an empty pipeli
   await killApi()
 
   try {
-    await page.getByRole('link', { name: 'Deal', exact: true }).click()
+    // Through the group, closed on the dashboard since the sidebar became grouped --
+    // see `helpers.ts::navigate`. Arriving *by clicking* rather than by `goto` is
+    // deliberate: the point is that `useDeals` mounts for the first time in this
+    // session and really does hit the dead API.
+    await navigate(page, 'Vendite', 'Deal')
     await expect(page).toHaveURL(/\/app\/deal/)
 
     await expect(page.getByRole('alert')).toBeVisible()

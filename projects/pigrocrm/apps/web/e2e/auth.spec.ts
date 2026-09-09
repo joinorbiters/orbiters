@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { logout } from './helpers'
 
 // Seeded by apps/web/scripts/e2e-setup.sh -- an admin, deliberately, so later specs
 // in this same run (e2e/crm.spec.ts, e2e/custom-fields.spec.ts, e2e/kanban.spec.ts)
@@ -39,6 +40,8 @@ test('a correct login reaches the dashboard and logout returns to login', async 
   await expect(page.getByText('E2E', { exact: true })).toBeVisible()
   await expect(page.getByRole('tab', { name: 'Commerciale' })).toBeVisible()
 
-  await page.getByRole('button', { name: 'Esci' }).click()
-  await expect(page).toHaveURL(/\/app\/login$/)
+  // Through the profile menu, which is where «Esci» has lived since the UI revision of
+  // 2026-09-08 -- see `helpers.ts::logout`. This spec spent thirty seconds waiting for a
+  // button by that name and then failed, on every run, for a month.
+  await logout(page)
 })

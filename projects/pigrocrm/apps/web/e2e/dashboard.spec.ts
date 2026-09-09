@@ -65,26 +65,30 @@ function currentMonth(): { da: string; a: string } {
 }
 
 /**
- * The commercial dashboard's «offerta accettata, deal non vinto» count.
+ * The «offerta accettata, deal non vinto» count, read from the API.
  *
- * Located through the paragraph that names it rather than by a test id, because the pairing
- * of the label with the number *is* the thing under test: a number found by an id could
- * drift under a different sentence and nothing here would notice. `CommercialTab.tsx`
- * deliberately renders this signal as a statement and not as a link — there is no document
- * list route for it to drill through to — which is why this one is read as text while the
- * operational signals below are read as links.
+ * It used to be read off the commercial tab, through the paragraph that named it. That
+ * paragraph is gone: the Home revision of 2026-09-09 left that tab with the first row and
+ * the pipeline and nothing else -- «no offers, no signals, no detail table», which
+ * `CommercialTab.test.tsx` now asserts as an absence. So this spec was asserting the
+ * visibility of a sentence the product had deliberately stopped printing, and timed out on
+ * every run.
+ *
+ * The figure itself did not go anywhere: `CommercialDashboard.offerte_accettate_deal_non_vinto`
+ * is still computed, still the permanent cross-check on automation A1, and still what makes
+ * the step below («the signal, after: down by one») worth asserting at all. Read where it
+ * lives now. When a screen prints it again, this helper is the one place to point back at
+ * the screen.
  */
-function signaleOfferteAccettate(page: Page) {
-  return page.locator('p', { hasText: /^Offerta accettata, deal non vinto:/ }).locator('strong')
-}
-
-async function readCount(locator: ReturnType<typeof signaleOfferteAccettate>): Promise<number> {
-  await expect(locator).toBeVisible()
-  const text = await locator.textContent()
-  const value = Number.parseInt(text ?? '', 10)
-  // A `NaN` compared with `>=` is silently false, so a locator that started matching
-  // something that is not a number would look like a product failure. Say so instead.
-  expect(Number.isInteger(value), `il segnale non è un numero: ${String(text)}`).toBe(true)
+async function readSignal(page: Page): Promise<number> {
+  const { da, a } = currentMonth()
+  const response = await page.request.get('/api/dashboard/commerciale', { params: { da, a } })
+  expect(response.status(), await response.text()).toBe(200)
+  const body = (await response.json()) as { offerte_accettate_deal_non_vinto: number }
+  const value = body.offerte_accettate_deal_non_vinto
+  // A `NaN` compared with `>=` is silently false, so a field that stopped being a number
+  // would look like a product failure. Say so instead.
+  expect(Number.isInteger(value), `il segnale non è un numero: ${String(value)}`).toBe(true)
   return value
 }
 
@@ -99,8 +103,7 @@ test.describe('il ciclo completo — metà umana', () => {
     // 1. The signal, before. At least one, and the fixture is what guarantees it: an
     //    assertion that would also pass at zero would pass against a signal wired to
     //    nothing.
-    await page.goto('/app/?tab=commerciale')
-    const before = await readCount(signaleOfferteAccettate(page))
+    const before = await readSignal(page)
     expect(before).toBeGreaterThanOrEqual(1)
 
     // 2. The human resolves the customer from a fragment of its VAT number — the palette,
@@ -123,7 +126,17 @@ test.describe('il ciclo completo — metà umana', () => {
     // The deal has not been won yet, and saying so here is what makes the assertion after
     // the acceptance mean something: without it, "Vinto is on screen" could have been true
     // all along.
-    await expect(page.getByText('Vinto', { exact: true })).toHaveCount(0)
+    //
+    // Read off the stage bar and not off the page: the Pipedrive-style deal page of
+    // 2026-09-09 put a «Vinto» *button* in the header (the outcome a person chooses by
+    // hand), so a page-wide `getByText('Vinto')` matched that button while the deal was
+    // still open -- and, worse, would have matched it again after the acceptance, making
+    // step 5 below pass whether or not automation A1 had ever run. `DealStageBar` says
+    // where the deal *is*: «Fase attuale: X» while it is open, the outcome's own word
+    // once it is closed.
+    const fase = page.getByRole('group', { name: 'Fase del deal' })
+    await expect(fase).toContainText('Fase attuale:')
+    await expect(fase).not.toContainText('Vinto')
 
     await page.getByRole('tab', { name: 'Documenti' }).click()
     await page.getByRole('link', { name: cycle.documentTitle }).click()
@@ -140,7 +153,7 @@ test.describe('il ciclo completo — metà umana', () => {
     //    browser asked for this — it is the whole claim §9.5 makes about an automation
     //    being a property of the write and not a job somebody has to notice.
     await page.goto(`/app/deal/${cycle.dealId}`)
-    await expect(page.getByText('Vinto', { exact: true })).toBeVisible()
+    await expect(page.getByRole('group', { name: 'Fase del deal' })).toContainText('Vinto')
 
     // 6. And it said so, once, attributed to the system and naming the human who triggered
     //    it. Two facts in one row, which is the point: "the system moved it" and "because
@@ -170,8 +183,7 @@ test.describe('il ciclo completo — metà umana', () => {
     //    cancel. What actually moves is the *stale* offer seeded before it: it was counted
     //    while its deal sat open, and winning that deal is exactly the repair this signal
     //    exists to ask for. If A1 had not fired, this number would be `before + 1`.
-    await page.goto('/app/?tab=commerciale')
-    await expect(signaleOfferteAccettate(page)).toHaveText(String(before - 1))
+    expect(await readSignal(page)).toBe(before - 1)
   })
 
   test('il segnale «Vinto ma da fatturare» e il suo elenco dicono lo stesso numero', async ({

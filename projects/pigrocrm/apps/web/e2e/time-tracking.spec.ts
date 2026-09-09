@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { expect, test } from '@playwright/test'
-import { loginAsAdmin, seedDealWithRate } from './helpers'
+import { loginAsAdmin, rowAction, seedDealWithRate } from './helpers'
 
 /**
  * Plan 4A's own definition of done, driven the way a user drives it. Deliberately not a
@@ -110,6 +110,12 @@ test.describe('time tracking', () => {
 
     async function apriLaSettimana(): Promise<void> {
       await page.goto('/app/ore')
+      // The grid is a tab now. `/app/ore` opens on «Registro» -- the timer bar and the
+      // week as a list -- since 2026-09-09, and the grid this spec drives is one click
+      // away under «Settimana». Without the click the page is perfectly healthy and
+      // `grid-total` simply is not on it, which is how this spec spent three minutes
+      // timing out on a screen that works.
+      await page.getByRole('tab', { name: 'Settimana' }).click()
       for (let passo = 0; passo < settimaneIndietro; passo += 1) {
         await page.getByRole('button', { name: 'Settimana precedente' }).click()
       }
@@ -230,8 +236,17 @@ test.describe('time tracking', () => {
     // that screen -- and it leaves the database as this test found it, so a second run
     // against a surviving database is not met by "il periodo è già chiuso".
     await page.goto('/app/impostazioni/periodi')
-    await page.getByRole('button', { name: 'Riapri' }).click()
-    await page.getByRole('button', { name: 'Conferma' }).click()
+    // «Riapri» moved behind the row's «⋯» (UI revision of 2026-09-08) and its
+    // confirmation stopped being a second button that swapped itself into the row:
+    // `PeriodsPanel` asks with a `window.confirm`. Playwright dismisses an unhandled
+    // dialog, which for a `confirm` means answering *no* -- so the old two-click
+    // sequence waited three minutes for a «Conferma» button that no longer exists, and
+    // simply removing it would have reopened nothing. The handler goes in before the
+    // click that raises the dialog.
+    page.once('dialog', (dialog) => {
+      void dialog.accept()
+    })
+    await rowAction(page, mesePerEsteso, 'Riapri')
     await expect(page.getByText('Nessun periodo chiuso.')).toBeVisible()
 
     await apriLaSettimana()
