@@ -186,7 +186,7 @@ describe('EconomicTab', () => {
     expect(screen.queryByRole('link', { name: /stima fiscale/i })).toBeNull()
   })
 
-  it('carries the whole «Stima fiscale» card, between the figures and the charts', async () => {
+  it('carries the whole «Stima fiscale» card, directly under the figures it explains', async () => {
     vi.mocked(api.GET).mockImplementation(byPath(RESPONSE) as never)
     const { container } = renderTab()
 
@@ -214,14 +214,21 @@ describe('EconomicTab', () => {
     // came from.
     expect(screen.getByRole('note')).toBeInTheDocument()
 
-    // Position asserted by document order: under the cards, before the charts. A card
-    // that answers "at which rates" only after the reader has scrolled past the bar
-    // charts is in the wrong place, and nothing but order can catch that.
+    // Position asserted by document order: charts, then the cards, then this card --
+    // immediately under the figures it explains, with nothing in between. The order of
+    // the first two is upstream's (2026-09-09: the shape of the year is read before its
+    // exact numbers); what this test owns is the last step. A card that answers "at
+    // which rates" only after the reader has scrolled past something else is in the
+    // wrong place, and nothing but order can catch that.
+    const grafico = screen.getByRole('figure', { name: 'Andamento economico 2026' })
     const cards = screen.getByRole('group', { name: 'Ricavi incassati' })
     const scheda = screen.getByText('Stima fiscale 2026')
-    const grafico = screen.getByRole('figure', { name: 'Andamento economico 2026' })
+    expect(grafico.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(cards.compareDocumentPosition(scheda) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(scheda.compareDocumentPosition(grafico) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // Nothing between the last figure and the card: the estimate is the next thing the
+    // eye meets after the grid, not a section further down the page.
+    const ultima = screen.getByRole('group', { name: 'Totale netto ricavi con proiezione' })
+    expect(ultima.compareDocumentPosition(scheda) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(container.textContent).not.toMatch(/Apri la stima fiscale/)
   })
 

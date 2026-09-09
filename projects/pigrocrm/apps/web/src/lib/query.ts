@@ -60,13 +60,10 @@ export const queryKeys = {
   costCategories: (includeArchived: boolean) => ['cost-categories', includeArchived] as const,
   periodLocks: (anno?: number) => ['period-locks', anno ?? null] as const,
   dealPnl: (dealId: string) => ['deal-pnl', dealId] as const,
-  dealBudget: (dealId: string, da: string, a: string) =>
-    ['deal-budget', dealId, da, a] as const,
   // Keyed on the whole query object, window included: the same customer read over two
   // different periods is two different answers, and a key that dropped the dates would
   // serve January's report for December's.
   periodPnl: (params?: unknown) => ['period-pnl', params ?? {}] as const,
-  budget: (params?: unknown) => ['budget', params ?? {}] as const,
   fiscalEstimate: (anno: number) => ['fiscal-estimate', anno] as const,
   // The term is part of the key so an in-flight response for "ross" cannot overwrite the
   // rendering of "rossi": TanStack Query discards the stale entry rather than the

@@ -120,12 +120,15 @@ export function EconomicTab({ periodo }: { periodo: Periodo }) {
         )}
       </div>
 
-      {/* The whole estimate, under the figures it explains: the cards say how much is owed,
-          this says out of what and at which rates. It reads the year on its own -- one
-          request, its own loading and error branches -- rather than taking the excerpt
+      {/* The whole estimate, immediately under the figures it explains: the cards say how
+          much is owed, this says out of what and at which rates, so it belongs against
+          them and not at the foot of the page. That the charts now come *first* is a
+          separate decision (2026-09-09: the shape of the year is read before its exact
+          numbers) and it does not move this card -- what the spec asked for is the card
+          against the figures, wherever the charts end up. It reads the year on its own --
+          one request, its own loading and error branches -- rather than taking the excerpt
           `panoramica` already carries, because a card that renders half of itself while the
-          other half loads is worse than a card that arrives whole. The charts sit above the
-          figures since 2026-09-09 and are not repeated here. */}
+          other half loads is worse than a card that arrives whole. */}
       <FiscalPanel anno={anno} />
     </div>
   )

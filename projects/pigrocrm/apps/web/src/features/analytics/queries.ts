@@ -15,10 +15,11 @@ import { queryKeys } from '@/lib/query'
 export type DealPnl = components['schemas']['DealPnl']
 export type PeriodPnl = components['schemas']['PeriodPnl']
 export type PnlTotals = components['schemas']['PnlTotals']
-export type BudgetVsActualRow = components['schemas']['BudgetVsActualRow']
-export type BudgetPage = components['schemas']['BudgetPage']
 
-export interface PeriodParams {
+/** The window every period-wide report is asked for. Not exported: the one hook that
+ *  takes it is called with an object literal, and a type nobody outside this module
+ *  names is one more thing to keep true for no reader. */
+interface PeriodParams {
   from: string
   to: string
   customer_id?: string
@@ -32,37 +33,10 @@ export function useDealPnl(dealId: string) {
   })
 }
 
-/**
- * One deal's row of the estimate-versus-actual report, served by the endpoint that
- * serves the list -- never recomputed here, which is how a detail page and a report
- * start showing different variances for the same deal.
- *
- * `da`/`a` rather than `from`/`to` as parameter names, because `from` reads as the
- * keyword; the wire names stay `from`/`to`, which is what the router declares.
- */
-export function useDealBudget(dealId: string, da: string, a: string) {
-  return useQuery({
-    queryKey: queryKeys.dealBudget(dealId, da, a),
-    queryFn: () =>
-      unwrap(
-        api.GET('/api/deals/{deal_id}/budget', {
-          params: { path: { deal_id: dealId }, query: { from: da, to: a } },
-        }),
-      ),
-  })
-}
-
 export function usePeriodPnl(params: PeriodParams) {
   return useQuery({
     queryKey: queryKeys.periodPnl(params),
     queryFn: () => unwrap(api.GET('/api/analytics/pnl', { params: { query: params } })),
-  })
-}
-
-export function useBudget(params: PeriodParams & { limit?: number; cursor?: string }) {
-  return useQuery({
-    queryKey: queryKeys.budget(params),
-    queryFn: () => unwrap(api.GET('/api/analytics/budget', { params: { query: params } })),
   })
 }
 

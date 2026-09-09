@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactElement, ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -116,6 +116,12 @@ describe('DealDetail', () => {
           if (path === '/api/deals/{deal_id}') return ok(DEAL)
           // `useStages` unwraps to a bare array, not to a page.
           if (path === '/api/pipeline-stages') return ok([])
+          // So does the timeline, which the Pipedrive-shaped page mounts in its right
+          // column («Attività recenti», 2026-09-09). Handed a page envelope it would
+          // render `{items: []}.map` and take the whole tree down with it, and every
+          // `getByRole` below would then fail on an empty body -- a mock shape reported
+          // as a missing button.
+          if (path.endsWith('/timeline')) return ok([])
           return ok({ items: [], next_cursor: null })
         }) as never,
       )
@@ -133,16 +139,19 @@ describe('DealDetail', () => {
       expect(actions.indexOf('Nuova fattura')).toBeLessThan(actions.indexOf('Modifica'))
 
       await userEvent.click(button)
-      expect(await screen.findByRole('dialog')).toBeInTheDocument()
+      const dialog = await screen.findByRole('dialog')
       // Neither picker: this dialog was opened from the record that answers both.
-      expect(screen.queryByLabelText(/^Cliente/)).not.toBeInTheDocument()
-      expect(screen.queryByLabelText(/^Deal/)).not.toBeInTheDocument()
-      expect(screen.getByLabelText('Descrizione riga 1')).toHaveValue('Sito vetrina')
-      expect(screen.getByLabelText('Prezzo unitario riga 1')).toHaveValue('4500.00')
+      expect(within(dialog).queryByLabelText(/^Cliente/)).not.toBeInTheDocument()
+      expect(within(dialog).queryByLabelText(/^Deal/)).not.toBeInTheDocument()
+      expect(within(dialog).getByLabelText('Descrizione riga 1')).toHaveValue('Sito vetrina')
+      expect(within(dialog).getByLabelText('Prezzo unitario riga 1')).toHaveValue('4500.00')
       // Both parties named out of the deal this page has already read: no second
       // request, and no «…» to watch resolve. `DealCustomerCard`'s own `useCustomer`
       // is no help here -- it lives in the Collegamenti tab, still unmounted.
-      expect(screen.getByText('ACME Srl')).toBeInTheDocument()
+      // Scoped to the dialog since the Pipedrive-shaped page (2026-09-09) also names the
+      // customer in its own Riepilogo: an unscoped query would match twice and say
+      // "found multiple" about a dialog that is in fact correct.
+      expect(within(dialog).getByText('ACME Srl')).toBeInTheDocument()
       expect(mockGet).not.toHaveBeenCalledWith('/api/customers/{customer_id}', expect.anything())
     })
 

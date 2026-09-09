@@ -3,8 +3,8 @@ import { QueryErrorBanner } from '@/components/QueryErrorBanner'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { NOT_COMPUTABLE, formatPercent } from '@/features/analytics/format'
-import { formatMoneyValue } from '@/features/time/columns'
 import { toProblem } from '@/lib/api'
+import { money as euro } from './format'
 import { useFiscalEstimate } from './queries'
 
 /** The screen that owns the three parameters this estimate is derived from -- the
@@ -31,9 +31,16 @@ function Row({ label, value, hint }: { label: string; value: string; hint?: stri
 /** A money line that the API could not compute, because one of its parameters is unset.
  *  «non calcolabile», never `0,00 €`: an estimated tax of zero reads as "you owe
  *  nothing", which is a claim nobody is in a position to make from a missing
- *  coefficient. */
+ *  coefficient.
+ *
+ *  The figure itself goes through `./format`'s `money`, this folder's own formatter,
+ *  which hands the API's decimal string to `Intl.NumberFormat` verbatim. Not
+ *  `features/time`'s `formatMoneyValue`, which reaches the same output through
+ *  `Number(value)`: identical on today's figures, and still the coercion criterion 14
+ *  bans in a dashboard module -- borrowed from another folder rather than written here,
+ *  which is how a rule stops applying without anybody deciding it should. */
 function money(value: string | null): string {
-  return value === null ? NOT_COMPUTABLE : formatMoneyValue(value)
+  return value === null ? NOT_COMPUTABLE : euro(value)
 }
 
 /**
@@ -54,13 +61,17 @@ function money(value: string | null): string {
  * kept its own clock while it was a screen of its own, which is the one thing that
  * changed when the Analisi section left the interface.
  *
- * `formatPercent` still comes from `features/analytics`, where the conto economico that
- * shares it lives, and not from `./format`: `src/test/no-browser-arithmetic.test.ts`
- * forbids a `Number()` anywhere under `features/dashboard/`, and that formatter has one
- * -- a display conversion of a value the API already divided and rounded, which its own
- * docstring argues at length. Copying it in here to satisfy the import would either
- * carry the coercion into a folder that bans it or duplicate a formatter this product
- * has exactly one of.
+ * `formatPercent` is the one import still taken from `features/analytics`, and it stays
+ * there on purpose: `./format`'s `percent` is not the same formatter. It renders
+ * «67,00%» where every screen of this product writes «67,00 %», and it answers a null
+ * with a dash where this card has to say «non calcolabile» -- a rate nobody has set is
+ * not a rate of nothing. So there is no dashboard-side equivalent to move to, and the
+ * alternative is a fourth copy of a formatter this product has exactly one of. It is
+ * also the one formatter left here whose implementation coerces (`Number()`, inside
+ * `features/analytics/format.ts`, on a value the API has already divided and rounded);
+ * `src/test/no-browser-arithmetic.test.ts` scans this folder's own source, so the
+ * import is legal either way, and the money formatter above moved to `./format`
+ * precisely because for money there *was* a local one to move to.
  */
 export function FiscalPanel({ anno }: { anno: number }) {
   const estimate = useFiscalEstimate(anno)
@@ -104,7 +115,7 @@ export function FiscalPanel({ anno }: { anno: number }) {
           <h2 className="mb-3 font-semibold">Stima fiscale {data.anno}</h2>
           <Row
             label="Ricavi incassabili"
-            value={formatMoneyValue(data.ricavi)}
+            value={money(data.ricavi)}
             hint="fatture emesse nell'anno"
           />
           <Row
