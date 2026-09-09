@@ -74,6 +74,7 @@ jobs:
       website_image: ${{ steps.filter.outputs.website_image }}
       hub_py: ${{ steps.filter.outputs.hub_py }}
       hub_web: ${{ steps.filter.outputs.hub_web }}
+      hub_image: ${{ steps.filter.outputs.hub_image }}
     steps:
       - uses: actions/checkout@v4
         if: github.event_name != 'pull_request'
@@ -177,6 +178,16 @@ jobs:
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
+              - '.dockerignore'
+              - '.github/workflows/ci.yml'
+            hub_image:
+              - 'projects/hub/**'
+              - 'shared/brand/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'pyproject.toml'
+              - 'uv.lock'
               - '.dockerignore'
               - '.github/workflows/ci.yml'
 
@@ -339,13 +350,29 @@ jobs:
         # no state and the one variable is a host port.
         run: docker compose build
 
+  hub-images:
+    name: hub · images build
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && (needs.changes.outputs.all == 'true' || needs.changes.outputs.hub_image == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build both images from the repository root context
+        working-directory: projects/hub
+        # Through compose, with `-p orbiters` as the deploy passes it (docs/adding-a-project.md
+        # §7), so this proves the same context and the same files the deploy uses.
+        env:
+          POSTGRES_PASSWORD: build-only-never-used
+        run: docker compose -p orbiters build
+
   ci:
     name: ci
     # `always()`, or a skipped dependency makes this job skip too and the check never
     # arrives. This is the only status check the repository should ever be asked to
     # require: every job name above can change forever without touching a ruleset.
     if: always()
-    needs: [changes, pigrocrm-py, pigrocrm-py-corpus, pigrocrm-web, website, hub-py, hub-web, pigrocrm-images, website-image]
+    needs: [changes, pigrocrm-py, pigrocrm-py-corpus, pigrocrm-web, website, hub-py, hub-web, pigrocrm-images, website-image, hub-images]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
