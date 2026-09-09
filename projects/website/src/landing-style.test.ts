@@ -91,8 +91,42 @@ describe('the landing shares the product system', () => {
   it('has no entrance animation and nothing tied to scroll', () => {
     // The initial state is the final state. Nothing to reveal means nothing that a
     // failed script can leave hidden, and nothing that accumulates on a long page.
+    // The one animation both pages carry, the title's cursor, is in system.css and
+    // is checked below: it decorates a word that is already there.
     expect(css).not.toMatch(/\.rise|data-hidden|@keyframes|animation:|transition:/)
     expect(css).not.toMatch(/animation-timeline|scroll\(\)|view\(\)/)
+  })
+
+  describe('the title\'s cursor (ORB-24)', () => {
+    it('is a bar of the ink, blinking in steps, only while the script types', () => {
+      const cursor = rule('h1 .role.is-typing::after', system)
+      expect(cursor).toMatch(/content:\s*''/)
+      expect(cursor).toMatch(/background-color:\s*currentColor/)
+      expect(cursor).toMatch(/animation:\s*blink 1s step-end infinite/)
+      expect(system).toMatch(/@keyframes blink\s*\{[^}]*50%\s*\{\s*opacity:\s*0;?\s*\}/)
+      // No hex, no other colour: the bar is the text's own.
+      expect(cursor).not.toMatch(/#[0-9a-fA-F]{3,8}\b|var\(--color/)
+    })
+
+    it('is gone under reduced motion, whatever the script did', () => {
+      expect(system).toMatch(
+        /@media \(prefers-reduced-motion: reduce\)\s*\{\s*h1 \.role::after\s*\{\s*display:\s*none;/,
+      )
+    })
+
+    it('leaves the sr-only text out of the layout, once, for both pages', () => {
+      expect(rule('.sr-only', system)).toMatch(/position:\s*absolute/)
+      expect(rule('.sr-only', system)).toMatch(/clip-path:\s*inset\(50%\)/)
+      expect(orbiters).not.toMatch(/\n\.sr-only\s*\{/)
+      expect(css).not.toMatch(/\n\.sr-only\s*\{/)
+    })
+
+    it('does not let the testimonial\'s role size reach the title', () => {
+      // `.role` was the testimonial caption's class before it was the title's word;
+      // the small size stays on the caption.
+      expect(rule('.who .role')).toMatch(/font-size:\s*0\.875rem/)
+      expect(css).not.toMatch(/\n\.role\s*\{/)
+    })
   })
 
   it('uses sentence-case kickers, not tracked-out capitals', () => {
