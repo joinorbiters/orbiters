@@ -125,10 +125,9 @@ export function InvoiceActions({
   }
 
   /**
-   * A soft delete, and one the person decides: `apps/mcp` deliberately has no tool for
-   * it. The confirm is against a misclick, the way «Emetti» has one. Unlike «Annulla»
-   * there is no motivo to ask for: nothing fiscal happened yet, and the list is where
-   * you land.
+   * The same soft delete `discard_proforma` performs from the MCP (ORB-37). Here the
+   * confirm is against a misclick, the way «Emetti» has one. Unlike «Annulla» there is
+   * no motivo to ask for: nothing fiscal happened yet, and the list is where you land.
    */
   function onDelete() {
     const what = invoice.tipo === 'proforma' ? 'questa proforma' : 'questa bozza'
