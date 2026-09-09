@@ -41,6 +41,20 @@ DEFAULT_RIFERIMENTO_NORMATIVO = (
     "L. 190/2014 - regime forfettario"
 )
 
+# The pair for a customer established outside Italy (ORB-32). A service to a business
+# abroad is outside the territorial scope of Italian VAT under art. 7-ter DPR 633/1972,
+# which the SdI codes as `N2.1`, not as the `N2.2` the forfettario's own declaration
+# covers: the accountant's tool issued 13/2026 to a GB company with N2.1 while every
+# domestic invoice carries N2.2, and the two registers have to agree. Constants rather
+# than profile columns because `fiscal_profile` describes the issuer, and this depends
+# on the customer; the text stays within FPR12's 100 characters for
+# `RiferimentoNormativo`, which is why it does not also spell out L. 190/2014.
+NATURA_NON_RESIDENTE = "N2.1"
+RIFERIMENTO_NORMATIVO_NON_RESIDENTE = (
+    "Operazione non soggetta a IVA in Italia ai sensi dell'art. 7-ter DPR 633/1972 "
+    "- regime forfettario"
+)
+
 # Values of law, not preferences: 77.47 EUR is the threshold above which the stamp
 # duty is due and 2.00 EUR is its amount. Configurable because the law has already
 # changed them once.
@@ -189,5 +203,7 @@ __all__ = [
     "FiscalProfileRead",
     "FiscalProfileUpsert",
     "FiscalSnapshot",
+    "NATURA_NON_RESIDENTE",
+    "RIFERIMENTO_NORMATIVO_NON_RESIDENTE",
     "SafeStr",
 ]

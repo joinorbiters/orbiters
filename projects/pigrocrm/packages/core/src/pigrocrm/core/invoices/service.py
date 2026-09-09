@@ -159,15 +159,19 @@ class InvoiceService:
 
     # ---- shared helpers -------------------------------------------------------
 
-    def _check_owner(self, customer_id: UUID, deal_id: UUID | None) -> None:
+    def _check_owner(self, customer_id: UUID, deal_id: UUID | None) -> Customer:
         """A syntactically valid but unknown UUID becomes this project's own
         `NotFound` instead of a raw `ForeignKeyViolation` reaching the caller from
         `flush()`. The nullable `deal_id` is checked too whenever a value is supplied
-        -- skipping a nullable FK is the defect `deals.owner_id` shipped with."""
-        if self.session.get(Customer, customer_id) is None:
+        -- skipping a nullable FK is the defect `deals.owner_id` shipped with.
+
+        Returns the customer, because the regime needs its country to pick the
+        `Natura` of every line (ORB-32) and the row has just been read anyway."""
+        customer = self.session.get(Customer, customer_id)
+        if customer is None:
             raise NotFound("customer", customer_id)
         if deal_id is None:
-            return
+            return customer
         deal = self.session.get(Deal, deal_id)
         if deal is None:
             raise NotFound("deal", deal_id)
@@ -178,6 +182,7 @@ class InvoiceService:
                 "il deal appartiene a un altro cliente",
                 expected=f"un deal del cliente {customer_id}",
             )
+        return customer
 
     def _regime(self) -> tuple[RegimeStrategy, FiscalSnapshot]:
         """The strategy and the parameters, read together so a caller cannot pair a
@@ -187,18 +192,24 @@ class InvoiceService:
         return resolve_regime(profile.codice_regime), profile
 
     def _computed_lines(
-        self, righe: Sequence[InvoiceLineIn], profile: FiscalSnapshot
+        self, righe: Sequence[InvoiceLineIn], profile: FiscalSnapshot, *, nazione_cliente: str
     ) -> tuple[ComputedLine, ...]:
         """Caller input plus the regime's answer, renumbered from 1.
 
         Renumbering here is what maintains contiguity: the unique constraint on
         `(invoice_id, numero_linea)` and the `>= 1` check are the database's half, and
         no single-row `CHECK` can see the other rows.
+
+        `nazione_cliente` is the customer's country as it is *now*: the `Natura` is
+        decided when the lines are computed and copied unchanged by `issue`, so a
+        proforma whose customer changed country is repaired by replacing its lines.
         """
         strategy = resolve_regime(profile.codice_regime)
         computed: list[ComputedLine] = []
         for index, riga in enumerate(righe, start=1):
-            aliquota, natura, riferimento = strategy.resolve_line_vat(riga.aliquota_iva, profile)
+            aliquota, natura, riferimento = strategy.resolve_line_vat(
+                riga.aliquota_iva, profile, nazione_cliente=nazione_cliente
+            )
             prezzo_totale = line_total(
                 quantita=riga.quantita,
                 prezzo_unitario=riga.prezzo_unitario,
@@ -344,7 +355,7 @@ class InvoiceService:
         cannot burn one -- not as a matter of care, but because there is nothing to
         burn until `issue` runs."""
         actor.require_write("create_invoice")
-        self._check_owner(data.customer_id, data.deal_id)
+        customer = self._check_owner(data.customer_id, data.deal_id)
         _, profile = self._regime()
 
         invoice = Invoice(
@@ -375,7 +386,7 @@ class InvoiceService:
             invoice.riferimento = proforma_riferimento(
                 oggi_in_italia().year, self.repo.next_proforma_sequence()
             )
-        computed = self._computed_lines(data.righe, profile)
+        computed = self._computed_lines(data.righe, profile, nazione_cliente=customer.nazione)
         self._apply_totals(invoice, computed, profile)
         self.repo.add(invoice)
         self._persist_lines(invoice, computed)
@@ -425,8 +436,9 @@ class InvoiceService:
         actor.require_write("replace_invoice_lines")
         invoice = self._require(invoice_id)
         self._require_editable(invoice, "righe")
+        customer = self._check_owner(invoice.customer_id, None)
         _, profile = self._regime()
-        computed = self._computed_lines(righe, profile)
+        computed = self._computed_lines(righe, profile, nazione_cliente=customer.nazione)
         self._apply_totals(invoice, computed, profile)
         self._persist_lines(invoice, computed)
         self.activities.record(
