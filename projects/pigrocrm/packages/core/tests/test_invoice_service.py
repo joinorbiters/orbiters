@@ -25,7 +25,7 @@ from pigrocrm.core.errors import (
 )
 from pigrocrm.core.fiscal.schemas import (
     DEFAULT_RIFERIMENTO_NORMATIVO,
-    RIFERIMENTO_NORMATIVO_NON_RESIDENTE,
+    RIFERIMENTO_NORMATIVO_EXTRA_UE,
     FiscalProfileUpsert,
 )
 from pigrocrm.core.fiscal.service import FiscalProfileService
@@ -189,7 +189,7 @@ def test_a_non_resident_customer_gets_natura_n2_1_and_the_7_ter_reference(
     (riga,) = service.lines(invoice.id, ADMIN)
     assert riga.aliquota_iva == Decimal("0.00")
     assert riga.natura == "N2.1"
-    assert riga.riferimento_normativo == RIFERIMENTO_NORMATIVO_NON_RESIDENTE
+    assert riga.riferimento_normativo == RIFERIMENTO_NORMATIVO_EXTRA_UE
     assert "7-ter" in riga.riferimento_normativo
 
 

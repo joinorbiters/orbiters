@@ -775,6 +775,31 @@ class InvoiceService:
                 "una fattura senza righe non si emette",
                 expected="almeno una riga",
             )
+        # The stored lines were computed when they were written, against the customer
+        # and the profile of that moment, and `issue` copies them rather than recomputing
+        # them because the amounts the customer agreed to must not move here. The
+        # `Natura` pair is different: it is a statement about the customer's country and
+        # the issuer's regime as they are *now*, and a draft or a proforma written before
+        # the customer's country was corrected (ORB-32) would otherwise consume a register
+        # number with the wrong one. So the regime is asked again and any disagreement
+        # refuses, here, before the counter is touched; `replace_lines` is the remedy and
+        # the message says so. `import_issued` is exempt by construction: it never reaches
+        # this method, and its lines are declared, not computed.
+        strategy = resolve_regime(profile.codice_regime)
+        for r in righe:
+            _, natura_attesa, riferimento_atteso = strategy.resolve_line_vat(
+                r.aliquota_iva, profile, nazione_cliente=snapshot.cliente.nazione
+            )
+            if (r.natura, r.riferimento_normativo) != (natura_attesa, riferimento_atteso):
+                raise ValidationFailed(
+                    ENTITY,
+                    "righe",
+                    f"la riga {r.numero_linea} porta natura {r.natura} e un riferimento "
+                    "normativo che non corrispondono al cliente e al profilo fiscale "
+                    "attuali: sostituisci le righe prima di emettere",
+                    expected=f"natura {natura_attesa} con il riferimento {riferimento_atteso!r}",
+                )
+
         computed = tuple(
             ComputedLine(
                 numero_linea=r.numero_linea,
@@ -839,7 +864,6 @@ class InvoiceService:
             self._persist_lines(target, computed)
             source.stato = "consumata"
 
-        strategy = resolve_regime(profile.codice_regime)
         target.stato = "emessa"
         target.anno = anno
         target.numero = numero

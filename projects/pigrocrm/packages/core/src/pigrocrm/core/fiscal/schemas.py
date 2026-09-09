@@ -41,19 +41,33 @@ DEFAULT_RIFERIMENTO_NORMATIVO = (
     "L. 190/2014 - regime forfettario"
 )
 
-# The pair for a customer established outside Italy (ORB-32). A service to a business
-# abroad is outside the territorial scope of Italian VAT under art. 7-ter DPR 633/1972,
-# which the SdI codes as `N2.1`, not as the `N2.2` the forfettario's own declaration
-# covers: the accountant's tool issued 13/2026 to a GB company with N2.1 while every
-# domestic invoice carries N2.2, and the two registers have to agree. Constants rather
-# than profile columns because `fiscal_profile` describes the issuer, and this depends
-# on the customer; the text stays within FPR12's 100 characters for
-# `RiferimentoNormativo`, which is why it does not also spell out L. 190/2014.
+# A customer established outside Italy (ORB-32). A service to a business abroad is
+# outside the territorial scope of Italian VAT under art. 7-ter DPR 633/1972, which the
+# SdI codes as `N2.1`, not as the `N2.2` the forfettario's own declaration covers: the
+# accountant's tool issued 13/2026 to a GB company with N2.1 while every domestic
+# invoice carries N2.2, and the two registers have to agree. The annotation the invoice
+# must carry is dictated by art. 21, comma 6-bis, DPR 633/1972 and differs by where the
+# customer is established: lett. a), a taxable customer in another EU member state,
+# "inversione contabile"; lett. b), a customer outside the EU, "operazione non
+# soggetta". Constants rather than profile columns because `fiscal_profile` describes
+# the issuer and this depends on the customer; both texts stay within FPR12's 100
+# characters for `RiferimentoNormativo`, which is why neither also spells out L. 190/2014.
 NATURA_NON_RESIDENTE = "N2.1"
-RIFERIMENTO_NORMATIVO_NON_RESIDENTE = (
+RIFERIMENTO_NORMATIVO_UE = "Inversione contabile - art. 7-ter DPR 633/1972 - regime forfettario"
+RIFERIMENTO_NORMATIVO_EXTRA_UE = (
     "Operazione non soggetta a IVA in Italia ai sensi dell'art. 7-ter DPR 633/1972 "
     "- regime forfettario"
 )
+
+# The 27 member states, ISO 3166-1 alpha-2 (Greece is `GR`, not the VAT prefix `EL`).
+# Italy is in the set because it is a member state; the strategy handles it first, so
+# membership here only ever decides between the two texts above for a foreign customer.
+PAESI_UE = frozenset(
+    {
+        "AT", "BE", "BG", "CY", "CZ", "DE", "DK", "EE", "ES", "FI", "FR", "GR", "HR", "HU",
+        "IE", "IT", "LT", "LU", "LV", "MT", "NL", "PL", "PT", "RO", "SE", "SI", "SK",
+    }
+)  # fmt: skip
 
 # Values of law, not preferences: 77.47 EUR is the threshold above which the stamp
 # duty is due and 2.00 EUR is its amount. Configurable because the law has already
@@ -204,6 +218,8 @@ __all__ = [
     "FiscalProfileUpsert",
     "FiscalSnapshot",
     "NATURA_NON_RESIDENTE",
-    "RIFERIMENTO_NORMATIVO_NON_RESIDENTE",
+    "PAESI_UE",
+    "RIFERIMENTO_NORMATIVO_EXTRA_UE",
+    "RIFERIMENTO_NORMATIVO_UE",
     "SafeStr",
 ]
