@@ -1,7 +1,20 @@
 from datetime import date, datetime
 from decimal import Decimal
+from uuid import UUID
 
-from sqlalchemy import Date, DateTime, Index, Integer, LargeBinary, Numeric, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    Numeric,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -137,3 +150,40 @@ class Company(Base, PrimaryKeyMixin, TimestampMixin, UtmMixin):
     note: Mapped[str | None] = mapped_column(Text, default=None)
 
     __table_args__ = (Index("ix_companies_created_at", "created_at"),)
+
+
+# ---- the admin area -------------------------------------------------------------------
+
+ADMIN_SESSION_TOKEN_HASH_LENGTH = 64  # sha256, hex
+
+
+class AdminUser(Base, PrimaryKeyMixin, TimestampMixin):
+    """Whoever reads the hub's admin area. Created by `orbiters createadmin`, never by a
+    form: the hub has no public account, only applicants and the people who read them."""
+
+    __tablename__ = "admin_users"
+
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    nome: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    attivo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    __table_args__ = (Index("uq_admin_users_email_lower", func.lower(email), unique=True),)
+
+
+class AdminSession(Base, PrimaryKeyMixin):
+    """One opaque cookie, stored hashed, sliding expiry. Not a JWT pair: the admin area is
+    a handful of people reading a handful of lists, and a database lookup per request is
+    cheaper than a second token, a rotation and a grace window to reason about. Revoking
+    is deleting the row, which a logout does."""
+
+    __tablename__ = "admin_sessions"
+
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("admin_users.id"), nullable=False, index=True)
+    token_hash: Mapped[str] = mapped_column(
+        String(ADMIN_SESSION_TOKEN_HASH_LENGTH), nullable=False, unique=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

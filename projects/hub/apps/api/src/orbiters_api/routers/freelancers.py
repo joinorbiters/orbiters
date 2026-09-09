@@ -15,7 +15,6 @@ from pydantic import ValidationError
 
 from orbiters_api.deps import SessionDep
 from orbiters_api.ratelimit import spend_one
-from orbiters_core.errors import ValidationFailed
 from orbiters_core.freelancers import FreelancerService
 from orbiters_core.schemas import Ack, FreelancerCreate, SignupUtm
 
@@ -87,17 +86,7 @@ def apply(
     except ValidationError as exc:
         raise _validation_422(exc) from exc
     content = cv.file.read()
-    try:
-        FreelancerService(session).apply(data, content, cv.filename or "", cv.content_type or "")
-    except ValidationFailed as exc:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=[
-                {
-                    "loc": ["body", exc.details["field"]],
-                    "msg": exc.details["reason"],
-                    "type": "value_error",
-                }
-            ],
-        ) from exc
+    # A CV that is not a small PDF raises `ValidationFailed`, which the app's handler
+    # renders as the same 422 shape as the fields above.
+    FreelancerService(session).apply(data, content, cv.filename or "", cv.content_type or "")
     return Ack()
