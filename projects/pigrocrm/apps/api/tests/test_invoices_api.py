@@ -387,3 +387,121 @@ def test_the_openapi_document_declares_invoice_as_an_entity_type(
     assert "/api/invoices" in schema["paths"]
     assert "InvoiceRead" in schema["components"]["schemas"]
     assert "FiscalProfileRead" in schema["components"]["schemas"]
+
+
+# --- the accrual period and the proforma's own date on the wire (ORB-61, ORB-63) ------
+
+
+def test_a_proforma_is_created_with_its_own_date_and_an_accrual_period(
+    logged_in: TestClient, customer: dict[str, Any], fiscal_profile: dict[str, Any]
+) -> None:
+    """The contract the web draft editor is written against: `data_emissione`,
+    `competenza_da` and `competenza_a` go in on POST and come back on every read."""
+    response = logged_in.post(
+        "/api/invoices",
+        json={
+            "customer_id": customer["id"],
+            "tipo": "proforma",
+            "causale": "FDE, agosto 2026",
+            "data_emissione": "2026-09-05",
+            "competenza_da": "2026-08-01",
+            "competenza_a": "2026-08-31",
+            "righe": [{"descrizione": "Consulenza", "prezzo_unitario": "1000.00"}],
+        },
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["data_emissione"] == "2026-09-05"
+    assert body["competenza_da"] == "2026-08-01"
+    assert body["competenza_a"] == "2026-08-31"
+
+    read = logged_in.get(f"/api/invoices/{body['id']}").json()
+    assert (read["competenza_da"], read["competenza_a"]) == ("2026-08-01", "2026-08-31")
+
+
+def test_a_proforma_defaults_to_today_and_a_fattura_draft_has_no_date(
+    logged_in: TestClient, customer: dict[str, Any], fiscal_profile: dict[str, Any]
+) -> None:
+    proforma = logged_in.post(
+        "/api/invoices", json={"customer_id": customer["id"], "tipo": "proforma"}
+    )
+    assert proforma.status_code == 201, proforma.text
+    assert proforma.json()["data_emissione"] == TODAY
+
+    draft = _draft(logged_in, customer["id"])
+    assert draft["data_emissione"] is None
+    assert draft["competenza_da"] is None and draft["competenza_a"] is None
+    refused = logged_in.post(
+        "/api/invoices",
+        json={"customer_id": customer["id"], "tipo": "fattura", "data_emissione": TODAY},
+    )
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["field"] == "data_emissione"
+
+
+def test_the_period_and_the_proforma_date_are_patched_on_a_draft(
+    logged_in: TestClient, customer: dict[str, Any], fiscal_profile: dict[str, Any]
+) -> None:
+    proforma = logged_in.post(
+        "/api/invoices",
+        json={
+            "customer_id": customer["id"],
+            "tipo": "proforma",
+            "righe": [{"descrizione": "Consulenza", "prezzo_unitario": "1000.00"}],
+        },
+    ).json()
+    patched = logged_in.patch(
+        f"/api/invoices/{proforma['id']}",
+        json={
+            "data_emissione": "2026-09-05",
+            "competenza_da": "2026-08-01",
+            "competenza_a": "2026-08-31",
+        },
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["data_emissione"] == "2026-09-05"
+    assert patched.json()["competenza_da"] == "2026-08-01"
+
+    # Half a period is a 422 naming the missing end, and the row is untouched.
+    half = logged_in.patch(f"/api/invoices/{proforma['id']}", json={"competenza_da": None})
+    assert half.status_code == 422, half.text
+    assert half.json()["field"] == "competenza_da"
+    assert logged_in.get(f"/api/invoices/{proforma['id']}").json()["competenza_da"] == (
+        "2026-08-01"
+    )
+    # Both ends as null clear the period.
+    cleared = logged_in.patch(
+        f"/api/invoices/{proforma['id']}", json={"competenza_da": None, "competenza_a": None}
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["competenza_da"] is None
+
+
+def test_the_period_is_frozen_once_issued_and_travels_to_the_xml(
+    logged_in: TestClient,
+    customer: dict[str, Any],
+    fiscal_profile: dict[str, Any],
+    emitter: dict[str, Any],
+) -> None:
+    draft = logged_in.post(
+        "/api/invoices",
+        json={
+            "customer_id": customer["id"],
+            "competenza_da": "2026-08-01",
+            "competenza_a": "2026-08-31",
+            "righe": [{"descrizione": "Consulenza", "prezzo_unitario": "1000.00"}],
+        },
+    ).json()
+    issued = logged_in.post(f"/api/invoices/{draft['id']}/issue", json={})
+    assert issued.status_code == 200, issued.text
+    assert issued.json()["competenza_da"] == "2026-08-01"
+
+    frozen = logged_in.patch(f"/api/invoices/{draft['id']}", json={"competenza_a": "2026-09-30"})
+    assert frozen.status_code == 409, frozen.text
+    assert frozen.json()["field"] == "competenza_a"
+
+    assert logged_in.post(f"/api/invoices/{draft['id']}/artifacts").status_code == 200
+    xml = logged_in.get(f"/api/invoices/{draft['id']}/xml")
+    assert xml.status_code == 200, xml.text
+    assert b"<DataInizioPeriodo>2026-08-01</DataInizioPeriodo>" in xml.content
+    assert b"<DataFinePeriodo>2026-08-31</DataFinePeriodo>" in xml.content

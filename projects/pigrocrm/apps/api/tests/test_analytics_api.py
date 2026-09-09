@@ -11,6 +11,7 @@ whole surface -- is admin-only and refuses hours already on an *issued* invoice 
 still rewriting a draft.
 """
 
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -511,3 +512,69 @@ def test_the_economic_overview_answers_everyone_and_keeps_the_estimate_for_admin
     other = collaborator_client.get("/api/analytics/panoramica", params={"anno": anno})
     assert other.status_code == 200, other.text
     assert other.json()["fiscale"] is None
+
+
+# --- the second reading of revenue, by accrual period (ORB-61) -----------------------
+
+
+def _ricavi(body: dict[str, Any]) -> str:
+    """The one deal's revenue, whichever column `deal_summary` put it in."""
+    column = body["chiusi"] if body["chiusi"]["deal"] else body["in_corso"]
+    ricavi: str = column["ricavi"]
+    return ricavi
+
+
+def test_the_period_report_takes_a_base_and_defaults_to_emission(
+    logged_in: TestClient, emitter: dict[str, Any]
+) -> None:
+    """`base=competenza` is a query parameter beside `from`/`to`; anything else is a 422
+    and an omitted one is the recorded default. The arithmetic of the two readings is
+    proven in `packages/core/tests/test_period_pnl.py`; this asserts the wire, with one
+    invoice issued today for last month's work so the two readings visibly differ."""
+    assert logged_in.put("/api/fiscal-profile", json={"codice_regime": "RF19"}).status_code == 200
+    deal_id, _ = _seed_deal_and_user(logged_in)
+    customer_id = logged_in.get(f"/api/deals/{deal_id}").json()["customer_id"]
+    primo = OGGI.replace(day=1)
+    fine_mese_prima = primo - timedelta(days=1)
+    draft = logged_in.post(
+        "/api/invoices",
+        json={
+            "customer_id": customer_id,
+            "deal_id": deal_id,
+            "competenza_da": fine_mese_prima.replace(day=1).isoformat(),
+            "competenza_a": fine_mese_prima.isoformat(),
+            "righe": [{"descrizione": "Consulenza", "prezzo_unitario": "1000.00"}],
+        },
+    )
+    assert draft.status_code == 201, draft.text
+    issued = logged_in.post(f"/api/invoices/{draft.json()['id']}/issue", json={})
+    assert issued.status_code == 200, issued.text
+
+    this_month = {"from": primo.isoformat(), "to": OGGI.isoformat()}
+    by_emission = logged_in.get("/api/analytics/pnl", params=this_month)
+    assert by_emission.status_code == 200, by_emission.text
+    by_accrual = logged_in.get("/api/analytics/pnl", params={**this_month, "base": "competenza"})
+    assert by_accrual.status_code == 200, by_accrual.text
+    assert _ricavi(by_emission.json()) == "1000.00"
+    assert _ricavi(by_accrual.json()) == "0.00"
+    last_month = {
+        "from": fine_mese_prima.replace(day=1).isoformat(),
+        "to": fine_mese_prima.isoformat(),
+        "base": "competenza",
+    }
+    assert _ricavi(logged_in.get("/api/analytics/pnl", params=last_month).json()) == "1000.00"
+
+    unknown = logged_in.get("/api/analytics/pnl", params={**this_month, "base": "cassa"})
+    assert unknown.status_code == 422, unknown.text
+
+
+def test_the_openapi_document_describes_the_base_parameter_in_italian(
+    logged_in: TestClient,
+) -> None:
+    paths: dict[str, Any] = logged_in.get("/openapi.json").json()["paths"]
+    params = {p["name"]: p for p in paths["/api/analytics/pnl"]["get"]["parameters"]}
+    assert "base" in params
+    assert params["base"]["required"] is False
+    assert set(params["base"]["schema"]["enum"]) == {"emissione", "competenza"}
+    assert params["base"]["schema"]["default"] == "emissione"
+    assert "competenza" in params["base"]["description"]
