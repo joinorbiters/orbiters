@@ -475,6 +475,67 @@ def test_issuing_a_confirmed_proforma_creates_a_new_row_and_consumes_the_proform
     assert [r.descrizione for r in service.lines(proforma.id, ADMIN)] == ["Consulenza"]
 
 
+# --- ORB-56: what the writer would refuse is refused here, before the number ---------
+
+
+def _nothing_consumed(db_session: Session) -> None:
+    """The counter row exists, because the lock creates it, and it still says zero."""
+    assert (
+        db_session.execute(
+            text("SELECT ultimo_numero FROM invoice_counters WHERE anno = :anno"),
+            {"anno": TODAY.year},
+        ).scalar_one()
+        == 0
+    )
+
+
+def test_a_name_outside_latin_1_is_refused_before_the_number_is_taken(
+    service: InvoiceService, db_session: Session
+) -> None:
+    """`_text` refuses a code point outside Basic Latin and Latin-1 Supplement when it
+    writes `Denominazione`; until ORB-56 the pre-check did not, so this customer was
+    issued, owned a register number, and could never be exported. Now the refusal comes
+    from `issue`, names the field, and the counter has not moved."""
+    customer_id = _customer(db_session, ragione_sociale="Акме ООО")
+    draft = _draft(service, customer_id)
+    with pytest.raises(ValidationFailed) as caught:
+        service.issue(draft, InvoiceIssue(), ADMIN)
+    assert caught.value.details["entity"] == "customer"
+    assert caught.value.details["field"] == "ragione_sociale"
+    _nothing_consumed(db_session)
+    again = service.get(draft, ADMIN)
+    assert again.stato == "bozza"
+    assert again.numero is None
+
+
+def test_a_foreign_customer_with_no_usable_fiscal_identity_is_refused_before_the_number_is_taken(
+    service: InvoiceService, db_session: Session
+) -> None:
+    """A foreign customer with no VAT number and a fiscal code that is not Italian would
+    be written with neither `IdFiscaleIVA` nor `CodiceFiscale`: schema-valid, and refused
+    by the SdI (control 00417) after the number was spent. Refused here instead, by the
+    field where the foreign identifier belongs."""
+    customer_id = _customer(
+        db_session,
+        partita_iva=None,
+        codice_fiscale="DE12345678901",
+        codice_sdi=None,
+        cap="EC1V 9HL",
+        comune="London",
+        provincia=None,
+        nazione="GB",
+    )
+    draft = _draft(service, customer_id)
+    with pytest.raises(ValidationFailed) as caught:
+        service.issue(draft, InvoiceIssue(), ADMIN)
+    assert caught.value.details["entity"] == "customer"
+    assert caught.value.details["field"] == "partita_iva"
+    _nothing_consumed(db_session)
+    again = service.get(draft, ADMIN)
+    assert again.stato == "bozza"
+    assert again.numero is None
+
+
 def test_an_unconfirmed_proforma_cannot_be_issued(
     service: InvoiceService, db_session: Session
 ) -> None:

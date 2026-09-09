@@ -40,6 +40,7 @@ from pigrocrm.core.invoices import pdf as invoice_pdf
 from pigrocrm.core.invoices.fatturapa import (
     FatturaPAExporter,
     check_party_exportable,
+    check_recipient_identity,
     check_recipient_routing,
     normalise_fiscal_id,
 )
@@ -864,6 +865,7 @@ class InvoiceService:
         check_party_exportable(snapshot.emittente, "emitter_profile")
         check_party_exportable(snapshot.cliente, "customer")
         check_recipient_routing(snapshot.cliente)
+        check_recipient_identity(snapshot.cliente)
 
         righe = self.repo.lines(source.id)
         if not righe:
@@ -2022,6 +2024,7 @@ class InvoiceService:
         check_party_exportable(export.snapshot.emittente, "emitter_profile")
         check_party_exportable(export.snapshot.cliente, "customer")
         check_recipient_routing(export.snapshot.cliente)
+        check_recipient_identity(export.snapshot.cliente)
 
         data = FatturaPAExporter().to_bytes(export)
         artifact = self._store_artifact(

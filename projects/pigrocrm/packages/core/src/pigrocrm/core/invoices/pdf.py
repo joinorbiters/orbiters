@@ -34,6 +34,42 @@ CODICE_DESTINATARIO_FALLBACK = "0000000"
 _EMPTY = ""
 
 
+def indirizzo_display(party: dict[str, Any]) -> str:
+    """The customer's address as one line, the way the country writes it (ORB-55).
+
+    Computed here rather than assembled in the template, which is the direction this
+    module already leans: every other value the template reads is a string this file
+    formatted, and `template-invoice.md` hard-coded `({{cliente.provincia}})` -- so a
+    London customer read `1 Old Street, EC1V 9HL London () GB` on the document, empty
+    parentheses and all. A template cannot make that decision well: the province is a
+    field of an Italian address and the parentheses are punctuation that belongs to it,
+    and `{{#if}}` around the pair would have to be repeated in every template that ever
+    prints an address.
+
+    Italy keeps the shape it always had, `CAP Comune (PR)`. Outside it, the postcode is
+    printed as the record holds it (`EC1V 9HL`, not the `00000` the XML carries -- see
+    `fatturapa.CAP_ESTERO`) and the province is not printed at all. An Italian record
+    with no province yet, which a proforma may well have, loses the parentheses rather
+    than printing them empty: the same defect in the domestic case.
+    """
+    nazione = (party.get("nazione") or "").strip().upper()
+    pezzi = [
+        pezzo
+        for pezzo in ((party.get("cap") or "").strip(), (party.get("comune") or "").strip())
+        if pezzo
+    ]
+    provincia = (party.get("provincia") or "").strip().upper()
+    if nazione == "IT" and provincia:
+        pezzi.append(f"({provincia})")
+    if nazione:
+        pezzi.append(nazione)
+    indirizzo = (party.get("indirizzo") or "").strip()
+    resto = " ".join(pezzi)
+    if indirizzo and resto:
+        return f"{indirizzo}, {resto}"
+    return indirizzo or resto
+
+
 def build_scope(export: InvoiceForExport, *, riferimento: str | None) -> dict[str, Any]:
     """What the template can read.
 
@@ -59,6 +95,7 @@ def build_scope(export: InvoiceForExport, *, riferimento: str | None) -> dict[st
         "cliente": {
             **cliente.model_dump(mode="json"),
             "codice_destinatario": codice_destinatario,
+            "indirizzo_display": indirizzo_display(cliente.model_dump(mode="json")),
         },
         "fiscale": fiscale.model_dump(mode="json"),
         "fattura": {
