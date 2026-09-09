@@ -413,9 +413,13 @@ class InvoiceRepository:
             # a different question from the one asked.
             stmt = stmt.where(*_overdue_predicate())
         if query.cursor:
-            stmt = stmt.where(Invoice.id > query.cursor)
+            stmt = stmt.where(Invoice.id < query.cursor)
         # Keyset pagination on a UUIDv7 id: ordered by creation, stable under inserts.
+        # Newest first since 2026-09-09 (Ivan's request): a register is read from the
+        # last number back, and the row a person has just created or issued is the one
+        # they came to look at. The cursor walks the same way, so a page never repeats
+        # a row and a fresh insert lands before the first page, not inside a later one.
         # No caller-supplied sort -- R9 is open and this adds no half-feature.
         return list(
-            self.session.execute(stmt.order_by(Invoice.id).limit(query.limit + 1)).scalars()
+            self.session.execute(stmt.order_by(Invoice.id.desc()).limit(query.limit + 1)).scalars()
         )
