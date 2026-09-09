@@ -34,10 +34,28 @@ on:
         required: false
         default: false
         type: boolean
+      job-name:
+        description: >-
+          Name of the inner job, which is half of the check name GitHub shows
+          ("<caller> / <this>"). A caller that runs this gate twice, once for the fast
+          tests and once for a slow subset, needs the two to be distinguishable.
+        required: false
+        default: lint · typecheck · test
+        type: string
+      lint:
+        description: run ruff. Off for a second call that only adds tests.
+        required: false
+        default: true
+        type: boolean
+      typecheck:
+        description: run mypy. Off for a second call that only adds tests.
+        required: false
+        default: true
+        type: boolean
 
 jobs:
   gate:
-    name: lint · typecheck · test
+    name: ${{ inputs.job-name }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -53,9 +71,11 @@ jobs:
       # Cheapest first, on purpose: lint and format are the checks most likely to
       # fail, and the cheapest to have failed. A retry is a whole round trip.
       - name: Lint
+        if: inputs.lint
         run: uv run ruff check ${{ inputs.lint-path }} && uv run ruff format --check ${{ inputs.lint-path }}
 
       - name: Type check
+        if: inputs.typecheck
         run: uv run mypy ${{ inputs.sources }}
 
       - name: Install the document renderer
@@ -84,5 +104,7 @@ jobs:
           pdftotext -v 2>&1 | head -1
 
       - name: Test
-        # testcontainers starts PostgreSQL itself; no service container needed.
+        # testcontainers starts PostgreSQL itself; no service container needed, and
+        # under `-n` each worker starts its own, which is what makes the workers
+        # independent rather than fighting over one database.
         run: uv run pytest -q ${{ inputs.pytest-args }} ${{ inputs.tests }}

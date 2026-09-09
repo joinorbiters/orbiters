@@ -123,12 +123,47 @@ jobs:
       # passed the same assertion on the devbox minutes earlier. It stays in preflight,
       # which runs on one known machine, and ORB-9 tracks making the assertion say what
       # it actually means instead of naming a plan.
-      pytest-args: ${{ github.event_name == 'pull_request' && '-m "not slow and not planner"' || '-m "not planner"' }}
+      #
+      # `slow` is not skipped on the trunk, it moved: the job below runs it in
+      # parallel with this one. Measured 2026-09-09, the two are 10m and 12m of a
+      # 17m serial suite locally, because the fifty-thousand-row corpus is built,
+      # vacuumed, deleted and vacuumed again around two files. Running them side by
+      # side makes the critical path the longer of the two instead of the sum.
+      #
+      # `-n auto --dist loadfile`: this suite waits on PostgreSQL far more than it
+      # computes (measured locally: 10m00 wall for 7m57 of CPU), so workers overlap
+      # almost perfectly. 10m00 -> 4m32 on the devbox, and each worker gets its own
+      # container from the session fixture, so they share no database. `loadfile`
+      # keeps a file's tests on one worker, which is what the module-scoped fixtures
+      # in this suite assume.
+      pytest-args: '-n auto --dist loadfile -m "not slow and not planner"'
       # Without Pandoc and Typst the document renderer shells out to nothing and
       # about thirty tests fail on "strumento di composizione non installato". They
       # had been failing on every run of the previous workflow, which is also why
       # `e2e` and `deploy` had never once executed: both sat behind this job.
       renderer: true
+
+  # Tier 3, and the reason the job above got faster. The two files behind the `slow`
+  # marker spend almost all of their time inside PostgreSQL building and vacuuming a
+  # fifty-thousand-row corpus, so this job is nearly free in CPU and pointless to merge
+  # with anything. Deliberately serial inside: every assertion in those files is about
+  # which plan the planner picks, and two heavy corpora built at once on a two-core
+  # runner is exactly the load that changes the answer.
+  pigrocrm-py-corpus:
+    name: pigrocrm · python corpus
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/_python-gate.yml
+    with:
+      job-name: the fifty-thousand-row corpus
+      # Lint and mypy already ran in the job above, on the same tree.
+      lint: false
+      typecheck: false
+      lint-path: projects/pigrocrm
+      sources: ''
+      tests: projects/pigrocrm/packages/core/tests
+      pytest-args: '-m "slow"'
+      # These two files render nothing: no pandoc, no typst, no poppler.
+      renderer: false
 
   pigrocrm-web:
     name: pigrocrm · web
@@ -188,7 +223,7 @@ jobs:
     # arrives. This is the only status check the repository should ever be asked to
     # require: every job name above can change forever without touching a ruleset.
     if: always()
-    needs: [changes, pigrocrm-py, pigrocrm-web, website, pigrocrm-images, website-image]
+    needs: [changes, pigrocrm-py, pigrocrm-py-corpus, pigrocrm-web, website, pigrocrm-images, website-image]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
