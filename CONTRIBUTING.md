@@ -32,6 +32,20 @@ Typst on `PATH`; without them about thirty tests fail with
 4. Open a pull request. CI runs a cheap, change-scoped gate on it; the full suite runs
    on the trunk after the merge.
 
+## Tracker
+
+Every change starts from an issue in Linear, team `Orbiters`. Linear is the source of
+truth: work that is not on the board did not happen. Four levels: an **initiative** is
+a product and is permanent; a **project** is a release with an end, closed when it
+ships; a **project milestone** is an outcome inside a release; an **issue** is one
+agent run, one PR. Every issue carries exactly one `type` label and exactly one `area:*`
+label, both from enforced groups, and priority and effort as Linear's own fields, never
+labels. Move the issue to
+`In Review` while its PR is open on GitHub, and leave a project status update whenever
+something changed that the issue list alone does not show. The GitHub integration is
+requested and pending on this org, so nothing closes itself yet: move the card by hand
+and put the evidence in a comment. Full conventions are in `docs/tracker.md`.
+
 ## Commits
 
 Conventional Commits, English, first person, written the way a person writes:

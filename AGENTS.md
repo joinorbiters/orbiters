@@ -145,8 +145,9 @@ tested on a branch and is proven on the trunk instead.
 - **Never add an AI co-author trailer** to a commit or a PR, in any form.
 - **No absolute paths** in committed code or tests. Derive them.
 - **Everything in this repository is written in English.** Documentation, READMEs,
-  code, comments, docstrings, test names, commit messages, pull requests, and the
-  issues in Linear. No exceptions for "just this one file": a repository half in one
+  code, comments, docstrings, test names, commit messages, pull requests, and
+  everything written into Linear: issue titles, descriptions, comments and project
+  updates. No exceptions for "just this one file": a repository half in one
   language is one nobody can hand to a contributor, and this one is meant to be
   open-sourceable.
 
@@ -165,12 +166,36 @@ tested on a branch and is proven on the trunk instead.
   Anything written from now on, there included, is English.
 - A design decision that is a rule rather than a picture goes in
   `docs/design/DECISIONS.md`, as a row, with the date.
-- **The tracker is Linear, and using it is not optional.** Team `Orbiters`, one
-  project per monorepo project (`PigroCRM`, `Website`). Find the issue before you
-  start, move it as you go, and close it only against evidence on the surface it is
-  about. A defect you found and did not fix gets filed before you finish. Every
-  convention, from what a title says to which labels are legal, is in `docs/tracker.md`,
-  and a new project opens its own Linear project: `docs/adding-a-project.md` §9.
+- **The tracker is Linear, and using it is not optional.** Team `Orbiters`, issue
+  prefix `ORB-`. Work that is not on the board did not happen, for either of us or
+  for any agent either of us runs, and there is no second tracker: the GitHub
+  issues and any GitHub Project on other repositories are not part of this repo's
+  flow.
+- Four levels, in order. An **initiative** is a product and is permanent: four
+  exist today (`Website`, `Hub`, `PigroCRM`, `Monorepo`). A **project** is a
+  release, or a body of work with an end, and it closes when it ships. A **project
+  milestone** is a coherent outcome inside a release, not an issue: epics are never
+  modelled as issues. An **issue** is one agent run, one PR, one worktree. The rest
+  of the convention, from what a title says to which labels are legal, is in
+  `docs/tracker.md`.
+- **Every project always carries a lead and both members.** A project created
+  without a lead and without both members is incomplete.
+- An issue carries exactly one `type` label and exactly one `area:*` label, both from
+  enforced groups, so Linear drops a second one silently. Priority and effort are
+  Linear's native fields and are never labels.
+- `In Review` is a status on the team, and it is where an issue sits while its PR
+  is open on GitHub.
+- **A project update is written whenever something changed that the issue list
+  alone does not show**: a milestone slipped, a health change, a decision, a
+  release. An update that only restates the board is noise.
+- Linear's GitHub app is requested and pending on this org; only the org owner can
+  approve it, so nothing closes itself yet. An issue reference in a commit body is
+  a pointer, not a link: the state is still moved by hand, with the evidence in a
+  comment.
+
+Find the issue before you start, move it as you go, and close it only against
+evidence on the surface it is about. A defect you found and did not fix gets filed
+before you finish.
 
 ## What a human decides, not you
 

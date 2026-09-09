@@ -15,6 +15,8 @@ than about the repository.
   an issue to `Done` on a check you did not read. `docs/tracker.md` is the whole
   contract; it takes two minutes and it is the difference between a board that is worth
   opening and a list of stale cards.
+- Linear is the constant source of truth, for you and for every human working here.
+  `linear-orbiters` is the only Linear surface for this repository.
 - Never edit `projects/<name>/` and the root workspace files in the same commit when
   the root change is a move: a commit that both moves and edits a file loses git's
   rename detection, and this repository is merged against a busy `main`.
