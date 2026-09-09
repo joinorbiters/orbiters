@@ -57,6 +57,7 @@ const DEAL = {
   id: 'd1',
   nome: 'Sito vetrina',
   customer_id: 'c1',
+  customer_ragione_sociale: 'ACME Srl',
   pipeline_stage_id: 's1',
   valore_previsto: '4500.00',
   probabilita: 50,
@@ -138,6 +139,11 @@ describe('DealDetail', () => {
       expect(screen.queryByLabelText(/^Deal/)).not.toBeInTheDocument()
       expect(screen.getByLabelText('Descrizione riga 1')).toHaveValue('Sito vetrina')
       expect(screen.getByLabelText('Prezzo unitario riga 1')).toHaveValue('4500.00')
+      // Both parties named out of the deal this page has already read: no second
+      // request, and no «…» to watch resolve. `DealCustomerCard`'s own `useCustomer`
+      // is no help here -- it lives in the Collegamenti tab, still unmounted.
+      expect(screen.getByText('ACME Srl')).toBeInTheDocument()
+      expect(mockGet).not.toHaveBeenCalledWith('/api/customers/{customer_id}', expect.anything())
     })
 
     it('is not offered to a reader', async () => {
