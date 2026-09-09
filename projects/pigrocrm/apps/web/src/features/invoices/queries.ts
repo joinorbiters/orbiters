@@ -194,8 +194,34 @@ function useInvoiceInvalidation() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.invoice(invoiceId) })
       void queryClient.invalidateQueries({ queryKey: queryKeys.invoiceLines(invoiceId) })
       void queryClient.invalidateQueries({ queryKey: queryKeys.timeline('invoice', invoiceId) })
+      // Prefix match: «Rigenera documenti» and emission store a new version under the
+      // same `pdf_document_id`, so the preview's key does not change on its own.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.invoicePdfs(invoiceId) })
     }
   }
+}
+
+/**
+ * The invoice's PDF as a `Blob`, for the preview beside the numbers (ORB-30). Through
+ * `fetchWithRefresh` like `downloadInvoiceArtifact` below, for the same three reasons:
+ * cookie, tenant prefix, one refresh on 401. The Blob is what is cached, never an
+ * object URL: a URL's life is the component's (it is revoked on unmount), a Blob's is
+ * the cache's, and confusing the two hands a revoked URL to the next mount.
+ */
+export function useInvoicePdf(invoice: Invoice) {
+  const documentId = invoice.pdf_document_id
+  return useQuery({
+    queryKey: queryKeys.invoicePdf(invoice.id, documentId ?? ''),
+    enabled: documentId !== null,
+    queryFn: async (): Promise<Blob> => {
+      const response = await fetchWithRefresh(`/api/invoices/${invoice.id}/pdf`)
+      if (!response.ok) {
+        const payload: unknown = await response.json().catch(() => null)
+        throw toProblem(payload, response.status)
+      }
+      return response.blob()
+    },
+  })
 }
 
 export function useCreateInvoice() {

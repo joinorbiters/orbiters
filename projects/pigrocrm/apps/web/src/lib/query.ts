@@ -49,6 +49,11 @@ export const queryKeys = {
   invoices: (params?: unknown) => ['invoices', params ?? {}] as const,
   invoice: (id: string) => ['invoice', id] as const,
   invoiceLines: (id: string) => ['invoice-lines', id] as const,
+  // The document id is in the key for the null -> id transition (a proforma's first
+  // render); a regeneration is a new *version* under the same id, so it is reached by
+  // invalidating the prefix `invoicePdfs(id)` instead (`useInvoiceInvalidation`).
+  invoicePdfs: (id: string) => ['invoice-pdf', id] as const,
+  invoicePdf: (id: string, documentId: string) => ['invoice-pdf', id, documentId] as const,
   fiscalProfile: ['fiscal-profile'] as const,
   timeEntries: (params?: unknown) => ['time-entries', params ?? {}] as const,
   // One key per month, and the prefix `['calendario']` on purpose: a commitment whose
