@@ -28,6 +28,7 @@ from pigrocrm.core.documents.schemas import (
     DocumentListQuery,
     DocumentPage,
     DocumentRead,
+    DocumentTextRead,
     DocumentTipo,
     DocumentUpdate,
     DocumentVersionRead,
@@ -44,6 +45,7 @@ from pigrocrm.core.storage.base import DocumentStorage
 from pigrocrm.core.templates.models import Template
 from pigrocrm.core.templates.renderer import DeclaredVariable, render_template
 from pigrocrm.core.templates.service import TemplateService
+from pigrocrm.core.text import file_text
 
 ENTITY: EntityType = "document"
 
@@ -53,6 +55,16 @@ ENTITY: EntityType = "document"
 # the same Literal.
 DOCUMENT_TIPI: frozenset[str] = frozenset(get_args(DocumentTipo))
 _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
+# How large a stored file may be for `extract_text` to parse it at all. `DIMENSIONE_MAX`
+# (100 MB) is what the archive accepts -- a zip of photos, a video somebody attached to
+# a deal -- and parsing one of those to answer "what is the codice destinatario" would
+# spend a hundred megabytes of this process on a file with no text in it. Same 20 MB as
+# `drive/reader.py::DOWNLOAD_MAX_BYTES` and `settings.gmail_attachment_max_bytes`,
+# because it is the same question about the same kind of file.
+TEXT_SOURCE_MAX_BYTES = 20_971_520
+_TESTO_TROPPO_GRANDE = (
+    "il documento supera {max_bytes} byte: scaricalo invece di leggerlo come testo"
+)
 _CUSTOMER_ID_FRAGMENT = 8
 
 # The offer lifecycle, as a table rather than a chain of `if`s: the UI reads it to
@@ -516,14 +528,89 @@ class DocumentService:
         input and reaches a `Content-Disposition` header, where a quote or a newline
         would be header injection.
         """
+        document, version = self._resolve_version(document_id, numero)
+        extension = ALLOWED_CONTENT_TYPES[version.content_type]
+        filename = f"{slugify_folder(document.titolo)}-v{version.numero}{extension}"
+        return self.storage.get(version.storage_key), version.content_type, filename
+
+    def _resolve_version(
+        self, document_id: UUID, numero: int | None
+    ) -> tuple[Document, DocumentVersion]:
+        """The document and the version a caller asked for -- `None` meaning "the
+        current one".
+
+        Shared by `download` and `extract_text` rather than written twice: the two differ
+        only in what they do with the bytes, and a second copy of "no `numero` means
+        `versione_corrente`" is a second place for that default to drift. A document
+        with no version at all (`versione_corrente is None`) and a `numero` nobody ever
+        uploaded answer the same `NotFound`, because to the caller they are the same
+        fact: that version is not there.
+        """
         document = self._require(document_id)
         wanted = numero if numero is not None else document.versione_corrente
         version = self.repo.version(document_id, wanted) if wanted else None
         if version is None:
             raise NotFound("document_version", f"{document_id}#{wanted}")
-        extension = ALLOWED_CONTENT_TYPES[version.content_type]
-        filename = f"{slugify_folder(document.titolo)}-v{version.numero}{extension}"
-        return self.storage.get(version.storage_key), version.content_type, filename
+        return document, version
+
+    def extract_text(
+        self, document_id: UUID, numero: int | None, actor: Actor, *, max_bytes: int | None = None
+    ) -> DocumentTextRead:
+        """The text of an archived document: a PDF, a `.docx`, a `.md`/`.txt`, an XML.
+
+        The point of this method is that a fact only written inside a signed order form
+        or a supplier's invoice -- a codice destinatario, an IBAN, the exact wording of
+        a clause -- is a fact somebody has to be able to *read* without leaving the CRM,
+        downloading the file and reading it by eye. `download` hands over bytes, which is
+        the right answer for a browser and no answer at all for an agent.
+
+        `extract_text` and not `read_text`, which is what `DriveReader` calls the same
+        operation on a file of the titolare's Drive: that name is one of the bare-name
+        bans in `test_mcp_invoice_ban.py`, and those bans are sound only while each name
+        is unique in the codebase. A second `read_text` would turn a ban on an operation
+        into a ban on a word, and would fail the build with a message about Drive over a
+        document sitting in our own storage.
+
+        The same extractor as Drive (`core/text.py`), on purpose: the bytes of a PDF do
+        not know which door they came in by, and one parser of somebody else's malformed
+        file is one place to fix it. Which means the same discipline holds here --
+        nothing raises on a strange file, a type this does not read comes back as the
+        empty string *with its mime*, and `troncato` says only whether something was
+        cut, never that the file had no text to begin with.
+
+        Two ceilings, like Drive's: the stored file is refused above
+        `TEXT_SOURCE_MAX_BYTES` (a 100 MB video in the archive is not a document to
+        extract, and `DIMENSIONE_MAX` lets one exist), and the text is cut at
+        `max_bytes`, defaulting to `settings.document_text_max_bytes`.
+
+        Reads nothing into the audit log: this is a read of content, like `download`,
+        and an `activities` row per read would put a client's document title and the
+        fact somebody read it into a timeline that exists to record changes.
+        """
+        document, version = self._resolve_version(document_id, numero)
+        if version.dimensione > TEXT_SOURCE_MAX_BYTES:
+            # Refused, not cut. Half a PDF is not a PDF: truncation is meaningful for
+            # text and meaningless for the bytes a parser has to see whole.
+            raise Conflict(
+                ENTITY,
+                _TESTO_TROPPO_GRANDE.format(max_bytes=TEXT_SOURCE_MAX_BYTES),
+                document_id=str(document_id),
+                numero=version.numero,
+                dimensione=version.dimensione,
+            )
+        limit = self.settings.document_text_max_bytes if max_bytes is None else max_bytes
+        estratto = file_text(
+            self.storage.get(version.storage_key), mime=version.content_type, max_bytes=limit
+        )
+        return DocumentTextRead(
+            document_id=document.id,
+            numero=version.numero,
+            titolo=document.titolo,
+            testo=estratto.testo,
+            mime=estratto.mime,
+            troncato=estratto.troncato,
+            provenienza=estratto.provenienza,
+        )
 
     # ---- template-driven documents ------------------------------------------
 

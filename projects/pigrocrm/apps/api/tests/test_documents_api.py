@@ -234,12 +234,46 @@ def test_a_non_admin_cannot_write_the_emitter_profile(collaborator_client: TestC
     assert response.status_code == 403
 
 
+def test_read_the_text_of_an_uploaded_file(logged_in: TestClient) -> None:
+    """The counterpart of the download: same file, same authorisation, but the answer
+    is what the file *says* rather than the file itself -- for a reader (an agent, a
+    preview panel) that cannot open a PDF."""
+    customer_id = _customer(logged_in)
+    document_id = logged_in.post(
+        "/api/documents", json={"customer_id": customer_id, "tipo": "documento", "titolo": "Doc"}
+    ).json()["id"]
+    logged_in.post(
+        f"/api/documents/{document_id}/versions",
+        files={"file": ("note.md", b"# Codice destinatario\n\nM5UXCR1\n", "text/markdown")},
+    )
+
+    response = logged_in.get(f"/api/documents/{document_id}/testo")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert "ABCDEFG" in body["testo"]
+    assert body["numero"] == 1
+    assert body["troncato"] is False
+    # The sentence that says whose words those are travels in the body, always.
+    assert "istruzione" in body["provenienza"]
+
+
+def test_reading_the_text_of_a_version_nobody_uploaded_is_a_404(logged_in: TestClient) -> None:
+    customer_id = _customer(logged_in)
+    document_id = logged_in.post(
+        "/api/documents", json={"customer_id": customer_id, "tipo": "documento", "titolo": "Doc"}
+    ).json()["id"]
+
+    assert logged_in.get(f"/api/documents/{document_id}/testo").status_code == 404
+
+
 def test_the_openapi_document_declares_the_new_routes(logged_in: TestClient) -> None:
     paths = logged_in.get("/openapi.json").json()["paths"]
     for path in (
         "/api/documents",
         "/api/documents/from-template",
         "/api/documents/{document_id}/download",
+        "/api/documents/{document_id}/testo",
         "/api/templates/{template_id}/describe",
         "/api/emitter",
     ):

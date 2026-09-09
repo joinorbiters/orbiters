@@ -15,6 +15,7 @@ from pigrocrm.core.documents.schemas import (
     DocumentListQuery,
     DocumentPage,
     DocumentRead,
+    DocumentTextRead,
     DocumentTipo,
     DocumentUpdate,
     DocumentVersionRead,
@@ -238,6 +239,27 @@ def download(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+@router.get("/{document_id}/testo", response_model=DocumentTextRead)
+def testo(
+    document_id: UUID,
+    session: SessionDep,
+    storage: StorageDep,
+    settings: SettingsDep,
+    actor: ActorDep,
+    numero: Annotated[int | None, Query(ge=1, le=100_000)] = None,
+) -> DocumentTextRead:
+    """The text of the file, for a reader that cannot open a PDF -- an agent, or a
+    preview panel that would otherwise have to embed one.
+
+    A separate route from `/download` rather than a `?formato=testo` on it: the two
+    return different things (a JSON body against an attachment with its own
+    `Content-Disposition`), and a single handler that branched on a query parameter
+    would be a route whose response type nobody can state. `numero` carries the same
+    bounds as the download's, from the same reasoning.
+    """
+    return DocumentService(session, storage, settings).extract_text(document_id, numero, actor)
 
 
 @router.get("/{document_id}/timeline", response_model=list[ActivityRead])
