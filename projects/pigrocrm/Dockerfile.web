@@ -20,7 +20,7 @@ COPY projects/pigrocrm/apps/web/package.json projects/pigrocrm/apps/web/
 # arrangement, not a source dependency, and it is transitional: the community site is
 # not the CRM's, and giving it its own image and its own vhost moves two live domains,
 # which is a change to make deliberately rather than as a side effect of a refactor.
-# ORB-13 carries it.
+# ORB-12 carries it.
 COPY projects/landing/package.json projects/landing/
 COPY shared/brand/package.json shared/brand/
 RUN pnpm install --frozen-lockfile --filter web... --filter landing...

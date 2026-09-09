@@ -56,5 +56,5 @@ restated here:
 Today the built output is copied into PigroCRM's web image and served at that origin's
 document root, which is why one certificate and one deploy cover both. That is a
 serving arrangement rather than a source dependency, and it is transitional: the
-community site is not the CRM's. ORB-13 covers giving this project its own image and
+community site is not the CRM's. ORB-12 covers giving this project its own image and
 its own vhost, which moves two live domains and is therefore a deliberate step.
