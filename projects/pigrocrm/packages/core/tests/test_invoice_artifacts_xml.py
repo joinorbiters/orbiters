@@ -422,3 +422,39 @@ def test_the_xml_for_an_italian_customer_keeps_n2_2_and_the_domestic_declaration
     assert body.findtext("DatiBeniServizi/DatiRiepilogo/RiferimentoNormativo") == (
         DEFAULT_RIFERIMENTO_NORMATIVO
     )
+
+
+# --- the accrual period reaches the stored file (ORB-61) ------------------------------
+
+
+def test_the_stored_xml_carries_the_frozen_accrual_period_on_every_line(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    """End to end: the period set on the draft is the one the exported, schema-valid
+    file says on each `DettaglioLinee`. The export reads the row `issue` froze, and the
+    two columns it reads are the ones `update` refuses to change after emission, so what
+    the file says is what the document said when it took its number."""
+    from datetime import date
+
+    draft = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            causale="Consulenza agosto",
+            competenza_da=date(2026, 8, 1),
+            competenza_a=date(2026, 8, 31),
+            righe=[
+                InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("1000.00")),
+                InvoiceLineIn(descrizione="Sviluppo", prezzo_unitario=Decimal("500.00")),
+            ],
+        ),
+        ADMIN,
+    )
+    invoice_id = service.issue(draft.id, InvoiceIssue(), ADMIN).id
+    artifact = service.export_xml(invoice_id, ADMIN)
+    data, _, _ = service.download(invoice_id, "xml", ADMIN)
+    assert hashlib.sha256(data).hexdigest() == artifact.hash_sha256
+    assert_valid(data)
+    linee = list(etree.fromstring(data).iter("DettaglioLinee"))
+    assert len(linee) == 2
+    assert [linea.findtext("DataInizioPeriodo") for linea in linee] == ["2026-08-01"] * 2
+    assert [linea.findtext("DataFinePeriodo") for linea in linee] == ["2026-08-31"] * 2

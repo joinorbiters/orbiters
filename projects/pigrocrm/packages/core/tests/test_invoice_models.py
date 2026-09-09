@@ -380,3 +380,39 @@ def test_the_proforma_sequence_exists_and_never_repeats(db_session: Session) -> 
     first = db_session.execute(text("SELECT nextval('proforma_riferimento_seq')")).scalar_one()
     second = db_session.execute(text("SELECT nextval('proforma_riferimento_seq')")).scalar_one()
     assert second == first + 1
+
+
+# --- the accrual period: both ends or neither, and in order (ORB-61) ----------------
+
+
+def test_an_accrual_period_needs_both_ends(db_session: Session, customer_id: UUID) -> None:
+    """`competenza_da` without `competenza_a` is not a period, and the table says so:
+    a fix-up script that writes one column is refused rather than leaving a half-period
+    the XML writer would have to guess an end for."""
+    _refuses(
+        db_session,
+        _draft(customer_id, competenza_da=date(2026, 8, 1)),
+        "ck_invoices_competenza_together",
+    )
+    _refuses(
+        db_session,
+        _draft(customer_id, competenza_a=date(2026, 8, 31)),
+        "ck_invoices_competenza_together",
+    )
+
+
+def test_an_accrual_period_cannot_end_before_it_starts(
+    db_session: Session, customer_id: UUID
+) -> None:
+    _refuses(
+        db_session,
+        _draft(customer_id, competenza_da=date(2026, 8, 31), competenza_a=date(2026, 8, 1)),
+        "ck_invoices_competenza_ordered",
+    )
+
+
+def test_a_one_day_accrual_period_is_a_period(db_session: Session, customer_id: UUID) -> None:
+    _add(
+        db_session,
+        _draft(customer_id, competenza_da=date(2026, 8, 20), competenza_a=date(2026, 8, 20)),
+    )

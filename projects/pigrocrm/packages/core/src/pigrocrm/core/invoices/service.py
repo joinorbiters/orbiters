@@ -349,6 +349,34 @@ class InvoiceService:
                 "si corregge con un annullamento e una nuova emissione, non con una modifica",
             )
 
+    @staticmethod
+    def _check_competenza(da: date | None, a: date | None) -> None:
+        """The accrual period as it will be stored: both ends or neither, in order.
+
+        Checked on the *merged* row by `update`, not on the request, because completing
+        a period whose other end is already stored is a one-field change. The two table
+        CHECKs (`ck_invoices_competenza_together`, `ck_invoices_competenza_ordered`)
+        refuse the same shapes on every other write path; this is what turns a
+        violation into a `ValidationFailed` naming the field instead of a poisoned
+        session.
+        """
+        if (da is None) != (a is None):
+            missing = "competenza_a" if a is None else "competenza_da"
+            raise ValidationFailed(
+                ENTITY,
+                missing,
+                "un periodo di competenza ha un inizio e una fine: indicali entrambi "
+                "oppure nessuno dei due",
+                expected="competenza_da e competenza_a insieme",
+            )
+        if da is not None and a is not None and a < da:
+            raise ValidationFailed(
+                ENTITY,
+                "competenza_a",
+                "il periodo di competenza finisce prima di cominciare",
+                expected=f"una data dal {da.isoformat()} in poi",
+            )
+
     # ---- writes ---------------------------------------------------------------
 
     def create(self, data: InvoiceCreate, actor: Actor) -> InvoiceRead:
@@ -358,6 +386,15 @@ class InvoiceService:
         actor.require_write("create_invoice")
         customer = self._check_owner(data.customer_id, data.deal_id)
         _, profile = self._regime()
+        self._check_competenza(data.competenza_da, data.competenza_a)
+        if data.tipo != "proforma" and data.data_emissione is not None:
+            raise ValidationFailed(
+                ENTITY,
+                "data_emissione",
+                "una bozza di fattura non ha data: la prende all'emissione, "
+                "quando entra nel registro",
+                expected="nessuna data, oppure tipo = 'proforma'",
+            )
 
         invoice = Invoice(
             customer_id=data.customer_id,
@@ -367,6 +404,8 @@ class InvoiceService:
             tipo_documento=TIPO_DOCUMENTO,
             divisa=DIVISA,
             causale=data.causale,
+            competenza_da=data.competenza_da,
+            competenza_a=data.competenza_a,
             note_interne=data.note_interne,
             imponibile=ZERO,
             imposta=ZERO,
@@ -387,6 +426,11 @@ class InvoiceService:
             invoice.riferimento = proforma_riferimento(
                 oggi_in_italia().year, self.repo.next_proforma_sequence()
             )
+            # A proforma's own document date (ORB-63): the sender's, stored here so the
+            # PDF stops printing the render day. Not a register date -- none of
+            # `_check_issue_date`'s limits apply, and the fattura born from this row
+            # takes its own date at `issue` -- which is why any date is accepted.
+            invoice.data_emissione = data.data_emissione or oggi_in_italia()
         computed = self._computed_lines(data.righe, profile, nazione_cliente=customer.nazione)
         self._apply_totals(invoice, computed, profile)
         self.repo.add(invoice)
@@ -412,6 +456,29 @@ class InvoiceService:
                 ENTITY,
                 sorted(frozen)[0],
                 f"campo congelato su un documento in stato '{invoice.stato}'",
+            )
+        if "data_emissione" in changes:
+            # Editable only on a proforma, and only ever to another date: a fattura's
+            # date is the register's and `issue` assigns it (spec 6.2), and a proforma
+            # without a date would put the render day back on its PDF (ORB-63).
+            if invoice.tipo != "proforma":
+                raise ValidationFailed(
+                    ENTITY,
+                    "data_emissione",
+                    "la data di una fattura la assegna l'emissione, non una modifica",
+                    expected="nessuna data su una bozza di fattura",
+                )
+            if changes["data_emissione"] is None:
+                raise ValidationFailed(
+                    ENTITY,
+                    "data_emissione",
+                    "una proforma porta sempre una data: si sposta, non si toglie",
+                    expected="una data",
+                )
+        if "competenza_da" in changes or "competenza_a" in changes:
+            self._check_competenza(
+                changes.get("competenza_da", invoice.competenza_da),
+                changes.get("competenza_a", invoice.competenza_a),
             )
         if data.custom_fields is not None:
             changes["custom_fields"] = self._update_custom_fields(invoice, data.custom_fields)
@@ -882,6 +949,11 @@ class InvoiceService:
                     tipo_documento=TIPO_DOCUMENTO,
                     divisa=DIVISA,
                     causale=source.causale,
+                    # The period is a fact about the work and travels with it. The
+                    # date does not: the proforma's `data_emissione` is the sender's
+                    # (ORB-63), and the fattura takes the register's below.
+                    competenza_da=source.competenza_da,
+                    competenza_a=source.competenza_a,
                     note_interne=source.note_interne,
                     imponibile=ZERO,
                     imposta=ZERO,
@@ -996,6 +1068,7 @@ class InvoiceService:
         actor.require_admin(IMPORT_ACTION)
         self._check_owner(data.customer_id, data.deal_id)
         self._check_import_date(data.data_emissione)
+        self._check_competenza(data.competenza_da, data.competenza_a)
         self._check_declared_totals(data)
         if data.anno != data.data_emissione.year:
             raise ValidationFailed(
@@ -1095,6 +1168,8 @@ class InvoiceService:
                 tipo_documento=TIPO_DOCUMENTO,
                 divisa=DIVISA,
                 causale=data.causale,
+                competenza_da=data.competenza_da,
+                competenza_a=data.competenza_a,
                 imponibile=data.imponibile,
                 imposta=data.imposta,
                 bollo=data.bollo,
@@ -1724,6 +1799,8 @@ class InvoiceService:
             bollo=invoice.bollo,
             totale=invoice.totale,
             causale=invoice.causale,
+            competenza_da=invoice.competenza_da,
+            competenza_a=invoice.competenza_a,
             snapshot=InvoiceSnapshot.model_validate(invoice.snapshot),
             righe=tuple(InvoiceLineRead.model_validate(r) for r in self.repo.lines(invoice.id)),
         )
@@ -1731,10 +1808,13 @@ class InvoiceService:
     def _for_export_proforma(self, invoice: Invoice, actor: Actor) -> InvoiceForExport:
         """A live view for a proforma's PDF: a proforma never freezes (only `issue`
         writes `snapshot`/`anno`/`numero`), so there is nothing to read back. Built
-        from the *current* customer/emitter/fiscal profile instead, and from
-        `created_at` converted to Europe/Rome -- not `oggi_in_italia()` -- so
-        re-rendering later reproduces the same displayed date rather than drifting
-        with the clock. `anno`/`numero` are placeholders that satisfy the schema's
+        from the *current* customer/emitter/fiscal profile instead, and dated with the
+        proforma's own `data_emissione` (ORB-63), which `create` sets and which the
+        sender may move while the document is a draft. The `created_at` fallback is
+        for a row written before migration 0033 by a path that skipped its backfill:
+        it is the civil date in Europe/Rome the PDF printed before the column was
+        filled, never `oggi_in_italia()`, so a re-render does not drift with the
+        clock. `anno`/`numero` are placeholders that satisfy the schema's
         non-nullable bounds; `build_scope` never reads them here because
         `riferimento is not None` skips the `numero_completo` branch entirely.
         """
@@ -1743,7 +1823,7 @@ class InvoiceService:
         return InvoiceForExport(
             anno=invoice.created_at.year,
             numero=1,
-            data_emissione=invoice.created_at.astimezone(ITALY_TZ).date(),
+            data_emissione=invoice.data_emissione or invoice.created_at.astimezone(ITALY_TZ).date(),
             data_scadenza=None,
             tipo_documento=invoice.tipo_documento,
             divisa=invoice.divisa,
@@ -1752,6 +1832,8 @@ class InvoiceService:
             bollo=invoice.bollo,
             totale=invoice.totale,
             causale=invoice.causale,
+            competenza_da=invoice.competenza_da,
+            competenza_a=invoice.competenza_a,
             snapshot=snapshot,
             righe=tuple(InvoiceLineRead.model_validate(r) for r in self.repo.lines(invoice.id)),
         )

@@ -4,7 +4,7 @@ move."""
 
 from datetime import date
 from decimal import Decimal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from periodo_fiscale import GIORNO_PRIMA, OGGI, PRIMO_DEL_MESE
@@ -15,6 +15,7 @@ from pigrocrm.core.analytics.schemas import PeriodPnlQuery
 from pigrocrm.core.analytics.service import AnalyticsService
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.errors import ValidationFailed
+from pigrocrm.core.storage.local import LocalFileStorage
 from pigrocrm.core.timetracking.costs import CostService
 from pigrocrm.core.timetracking.locks import PeriodLockService
 from pigrocrm.core.timetracking.schemas import (
@@ -293,3 +294,183 @@ def test_an_empty_window_returns_typed_zeros_and_a_null_percentage(db_session: S
     assert pnl.in_corso.deal == 0
     assert pnl.periodo_chiuso is False
     assert pnl.voci_scritte_in_ritardo == 0
+
+
+# --- the second reading: revenue by accrual period (ORB-61) --------------------------
+#
+# Invoicing runs late: August's work is issued in September, and by emission date it is
+# September's revenue. The default reading stays emission (§7.1 is a recorded decision,
+# and the fiscal reports keep it); `base="competenza"` is a second reading of the same
+# report that attributes each invoice to `coalesce(competenza_da, data_emissione)`.
+# Costs and hours are unaffected: each quantity still goes by its own date.
+
+# The month before the window, whole: the invoice issued today says its work belongs
+# here, so under the accrual reading its revenue lands here and nowhere else.
+MESE_PRECEDENTE = (GIORNO_PRIMA.replace(day=1), GIORNO_PRIMA)
+
+
+def _won_deal_with_period_invoice(
+    session: Session,
+    storage: LocalFileStorage,
+    *,
+    tipo: str = "fattura",
+    importo: Decimal = Decimal("2000.00"),
+) -> UUID:
+    """A closed-won deal whose single invoice is issued **today** for **last month's**
+    work; with `tipo="proforma"` the document is a dated, confirmed proforma instead,
+    which is not revenue under any reading (slice 3 §5: it never touches the register)."""
+    from pigrocrm.core.customers.models import Customer
+    from pigrocrm.core.emitter.schemas import EmitterProfileUpsert
+    from pigrocrm.core.emitter.service import EmitterProfileService
+    from pigrocrm.core.fiscal.schemas import FiscalProfileUpsert
+    from pigrocrm.core.fiscal.service import FiscalProfileService
+    from pigrocrm.core.invoices.schemas import InvoiceCreate, InvoiceIssue, InvoiceLineIn
+    from pigrocrm.core.invoices.service import InvoiceService
+    from pigrocrm.core.pipeline.models import PipelineStage
+
+    admin = Actor(id=None, type="system", role="admin")
+    FiscalProfileService(session).upsert(FiscalProfileUpsert(codice_regime="RF19"), admin)
+    EmitterProfileService(session).upsert(
+        EmitterProfileUpsert(
+            ragione_sociale="Studio Rossi",
+            partita_iva="01234567890",
+            indirizzo="Via Vittorio Veneto 12",
+            cap="20124",
+            comune="Milano",
+            provincia="MI",
+            nazione="IT",
+        ),
+        admin,
+    )
+    customer = Customer(
+        ragione_sociale=f"Acme {uuid4()}",
+        partita_iva="12345678901",
+        codice_sdi="ABCDEFG",
+        indirizzo="Corso Italia 5",
+        cap="00100",
+        comune="Roma",
+        provincia="RM",
+        nazione="IT",
+    )
+    session.add(customer)
+    session.flush()
+    stage = PipelineStage(nome=f"Vinto {uuid4()}", posizione=9, probabilita_default=100, tipo="won")
+    session.add(stage)
+    session.flush()
+    deal = Deal(
+        nome="Lavoro di agosto",
+        customer_id=customer.id,
+        pipeline_stage_id=stage.id,
+        probabilita=100,
+    )
+    session.add(deal)
+    session.flush()
+    service = InvoiceService(session, storage)
+    invoice = service.create(
+        InvoiceCreate(
+            customer_id=customer.id,
+            deal_id=deal.id,
+            tipo=tipo,  # type: ignore[arg-type]
+            competenza_da=MESE_PRECEDENTE[0],
+            competenza_a=MESE_PRECEDENTE[1],
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=importo)],
+            **({"data_emissione": OGGI} if tipo == "proforma" else {}),
+        ),
+        admin,
+    )
+    if tipo == "proforma":
+        service.confirm_proforma(invoice.id, admin)
+    else:
+        service.issue(invoice.id, InvoiceIssue(data_emissione=OGGI), admin)
+    deal_id: UUID = deal.id
+    return deal_id
+
+
+def test_by_default_revenue_follows_the_emission_date(
+    db_session: Session, local_storage: LocalFileStorage
+) -> None:
+    """The recorded decision (§7.1) is untouched: an omitted `base` reads exactly what
+    the report read before the second reading existed."""
+    _won_deal_with_period_invoice(db_session, local_storage)
+    service = AnalyticsService(db_session)
+    assert PeriodPnlQuery(da=OGGI, a=OGGI).base == "emissione"
+    this_month = service.period_pnl(PERIODO, READER)
+    last_month = service.period_pnl(
+        PeriodPnlQuery(da=MESE_PRECEDENTE[0], a=MESE_PRECEDENTE[1]), READER
+    )
+    assert this_month.chiusi.ricavi == Decimal("2000.00")
+    assert this_month.chiusi.deal == 1
+    assert last_month.chiusi.ricavi == Decimal("0.00")
+    assert last_month.chiusi.deal == 0
+    # The response says which reading produced it, so a figure read later is not
+    # mistaken for the other one.
+    assert this_month.base == "emissione"
+
+
+def test_by_accrual_period_the_revenue_lands_in_the_month_the_work_belongs_to(
+    db_session: Session, local_storage: LocalFileStorage, seeded_category_id: UUID
+) -> None:
+    """August's invoice issued in September is August's revenue under this reading, and
+    it leaves September, taking the deal with it: a deal listed in a window with no
+    figure in it would be revenue silently dropped. Costs keep their own date, so a cost
+    dated today stays in this month under both readings."""
+    deal_id = _won_deal_with_period_invoice(db_session, local_storage)
+    CostService(db_session).create(
+        CostCreate(
+            deal_id=deal_id,
+            category_id=seeded_category_id,
+            data=OGGI,
+            importo=Decimal("200.00"),
+            descrizione="Stampa",
+        ),
+        WRITER,
+    )
+    service = AnalyticsService(db_session)
+    this_month = service.period_pnl(
+        PeriodPnlQuery(da=PERIODO.da, a=PERIODO.a, base="competenza"), READER
+    )
+    last_month = service.period_pnl(
+        PeriodPnlQuery(da=MESE_PRECEDENTE[0], a=MESE_PRECEDENTE[1], base="competenza"), READER
+    )
+    assert last_month.base == "competenza"
+    assert last_month.chiusi.ricavi == Decimal("2000.00")
+    assert last_month.chiusi.deal == 1
+    assert last_month.chiusi.costi_diretti == Decimal("0.00")
+    # This month keeps the cost and loses the revenue: the deal is still active here
+    # (a cost dated today) and its column says what this month actually earned.
+    assert this_month.chiusi.ricavi == Decimal("0.00")
+    assert this_month.chiusi.costi_diretti == Decimal("200.00")
+    assert this_month.chiusi.deal == 1
+
+
+def test_an_invoice_with_no_period_falls_back_to_its_emission_date_under_both_readings(
+    db_session: Session, closed_deal_with_invoice: UUID
+) -> None:
+    """`coalesce(competenza_da, data_emissione)`: a document that never said what period
+    it was for is read by the only date it has, so the accrual reading of a register
+    with no periods is the emission reading, figure for figure."""
+    service = AnalyticsService(db_session)
+    emissione = service.period_pnl(PERIODO, READER)
+    competenza = service.period_pnl(
+        PeriodPnlQuery(da=PERIODO.da, a=PERIODO.a, base="competenza"), READER
+    )
+    assert emissione.chiusi.ricavi == Decimal("2000.00")
+    assert competenza.chiusi == emissione.chiusi
+    assert competenza.in_corso == emissione.in_corso
+
+
+def test_a_dated_proforma_is_not_revenue_under_either_reading(
+    db_session: Session, local_storage: LocalFileStorage
+) -> None:
+    """ORB-63 gives a proforma a `data_emissione` of its own. `_revenue_filter` selects
+    `tipo = 'fattura' AND stato = 'emessa'`, so a proforma dated inside the window, with
+    a period inside the window, contributes nothing to either column under either base;
+    the deal does not even appear, since a proforma is not activity the report counts."""
+    _won_deal_with_period_invoice(db_session, local_storage, tipo="proforma")
+    service = AnalyticsService(db_session)
+    for base in ("emissione", "competenza"):
+        for da, a in ((PERIODO.da, PERIODO.a), MESE_PRECEDENTE):
+            pnl = service.period_pnl(PeriodPnlQuery(da=da, a=a, base=base), READER)  # type: ignore[arg-type]
+            assert pnl.chiusi.ricavi == Decimal("0.00"), (base, da)
+            assert pnl.in_corso.ricavi == Decimal("0.00"), (base, da)
+            assert pnl.chiusi.deal == 0 and pnl.in_corso.deal == 0, (base, da)

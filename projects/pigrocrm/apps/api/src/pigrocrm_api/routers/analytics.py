@@ -19,6 +19,7 @@ from pigrocrm.core.analytics.schemas import (
     FiscalEstimate,
     PeriodPnl,
     PeriodPnlQuery,
+    RevenueBase,
     UnbilledBacklog,
 )
 from pigrocrm.core.analytics.service import AnalyticsService
@@ -41,12 +42,24 @@ def period_pnl(
     da: FromDate,
     a: ToDate,
     customer_id: Annotated[UUID | None, Query()] = None,
+    base: Annotated[
+        RevenueBase,
+        Query(
+            description=(
+                "Quale data colloca il ricavo di una fattura nel periodo: 'emissione' "
+                "(la data del documento, predefinita) oppure 'competenza' (il periodo di "
+                "competenza dichiarato sulla fattura, con la data di emissione per chi non "
+                "lo dichiara). Costi e ore restano attribuiti alla propria data."
+            )
+        ),
+    ] = "emissione",
 ) -> PeriodPnl:
     """Two columns, closed deals and deals in progress. There is deliberately no combined
     total: adding a finished job's margin to a half-done one produces a figure that is
-    neither."""
+    neither. `base` picks which of the two readings of revenue the report gives
+    (ORB-61); everything else about it is the same."""
     return AnalyticsService(session).period_pnl(
-        PeriodPnlQuery(da=da, a=a, customer_id=customer_id), actor
+        PeriodPnlQuery(da=da, a=a, customer_id=customer_id, base=base), actor
     )
 
 

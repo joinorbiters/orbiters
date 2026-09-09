@@ -652,3 +652,151 @@ def test_list_is_the_last_method_of_the_service_class() -> None:
     ]
     assert names[-1] == "list"
     assert names.index("lines") < names.index("list")
+
+
+# --- the accrual period (ORB-61) ----------------------------------------------------
+
+
+def test_a_draft_may_carry_an_accrual_period(service: InvoiceService, customer_id: UUID) -> None:
+    """The month the work belongs to used to live only in the free text of the causale
+    ("FDE, agosto 2026"); now it is two dates the XML and the P&L can read."""
+    invoice = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            competenza_da=date(2026, 8, 1),
+            competenza_a=date(2026, 8, 31),
+        ),
+        ADMIN,
+    )
+    assert invoice.competenza_da == date(2026, 8, 1)
+    assert invoice.competenza_a == date(2026, 8, 31)
+    assert service.create(InvoiceCreate(customer_id=customer_id), ADMIN).competenza_da is None
+
+
+def test_half_an_accrual_period_is_refused_by_field_name(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    with pytest.raises(ValidationFailed) as caught:
+        service.create(
+            InvoiceCreate(customer_id=customer_id, competenza_da=date(2026, 8, 1)), ADMIN
+        )
+    assert caught.value.details["field"] == "competenza_a"
+    with pytest.raises(ValidationFailed) as caught:
+        service.create(
+            InvoiceCreate(customer_id=customer_id, competenza_a=date(2026, 8, 31)), ADMIN
+        )
+    assert caught.value.details["field"] == "competenza_da"
+
+
+def test_an_inverted_accrual_period_is_refused(service: InvoiceService, customer_id: UUID) -> None:
+    with pytest.raises(ValidationFailed) as caught:
+        service.create(
+            InvoiceCreate(
+                customer_id=customer_id,
+                competenza_da=date(2026, 8, 31),
+                competenza_a=date(2026, 8, 1),
+            ),
+            ADMIN,
+        )
+    assert caught.value.details["field"] == "competenza_a"
+
+
+def test_the_accrual_period_is_editable_on_a_draft_one_end_at_a_time(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    """The rule is checked on the merged row, not on the request: completing a period
+    whose other end is already stored is one field, and so is moving one end."""
+    invoice = service.create(InvoiceCreate(customer_id=customer_id), ADMIN)
+    with pytest.raises(ValidationFailed) as caught:
+        service.update(invoice.id, InvoiceUpdate(competenza_da=date(2026, 8, 1)), ADMIN)
+    assert caught.value.details["field"] == "competenza_a"
+
+    updated = service.update(
+        invoice.id,
+        InvoiceUpdate(competenza_da=date(2026, 8, 1), competenza_a=date(2026, 8, 31)),
+        ADMIN,
+    )
+    assert (updated.competenza_da, updated.competenza_a) == (date(2026, 8, 1), date(2026, 8, 31))
+    moved = service.update(invoice.id, InvoiceUpdate(competenza_a=date(2026, 9, 30)), ADMIN)
+    assert (moved.competenza_da, moved.competenza_a) == (date(2026, 8, 1), date(2026, 9, 30))
+    with pytest.raises(ValidationFailed):
+        service.update(invoice.id, InvoiceUpdate(competenza_a=date(2026, 7, 31)), ADMIN)
+
+
+def test_the_accrual_period_is_cleared_as_a_pair(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    invoice = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            competenza_da=date(2026, 8, 1),
+            competenza_a=date(2026, 8, 31),
+        ),
+        ADMIN,
+    )
+    with pytest.raises(ValidationFailed) as caught:
+        service.update(invoice.id, InvoiceUpdate(competenza_da=None), ADMIN)
+    assert caught.value.details["field"] == "competenza_da"
+    cleared = service.update(
+        invoice.id, InvoiceUpdate(competenza_da=None, competenza_a=None), ADMIN
+    )
+    assert cleared.competenza_da is None and cleared.competenza_a is None
+
+
+# --- a proforma has a document date of its own (ORB-63) ------------------------------
+
+
+def test_a_new_proforma_is_dated_today_in_the_issuer_s_calendar(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    """The PDF used to print the render day, so the same proforma re-rendered tomorrow
+    said tomorrow. The date is the sender's and it is stored at creation."""
+    from pigrocrm.core.clock import oggi_in_italia
+
+    proforma = service.create(InvoiceCreate(customer_id=customer_id, tipo="proforma"), ADMIN)
+    assert proforma.data_emissione == oggi_in_italia()
+
+
+def test_a_proforma_may_be_created_with_its_own_date(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    """Not a register date: no monotonicity, no closed-year rule, and a date in another
+    year is fine, because the proforma touches no register (spec 5)."""
+    proforma = service.create(
+        InvoiceCreate(customer_id=customer_id, tipo="proforma", data_emissione=date(2025, 12, 31)),
+        ADMIN,
+    )
+    assert proforma.data_emissione == date(2025, 12, 31)
+
+
+def test_a_fattura_draft_takes_its_date_at_issue_not_at_creation(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    with pytest.raises(ValidationFailed) as caught:
+        service.create(
+            InvoiceCreate(customer_id=customer_id, tipo="fattura", data_emissione=date(2026, 8, 1)),
+            ADMIN,
+        )
+    assert caught.value.details["field"] == "data_emissione"
+    draft = service.create(InvoiceCreate(customer_id=customer_id), ADMIN)
+    assert draft.data_emissione is None
+    with pytest.raises(ValidationFailed) as caught:
+        service.update(draft.id, InvoiceUpdate(data_emissione=date(2026, 8, 1)), ADMIN)
+    assert caught.value.details["field"] == "data_emissione"
+
+
+def test_a_proforma_date_is_editable_while_a_draft_and_never_cleared(
+    service: InvoiceService, customer_id: UUID
+) -> None:
+    proforma = service.create(InvoiceCreate(customer_id=customer_id, tipo="proforma"), ADMIN)
+    moved = service.update(proforma.id, InvoiceUpdate(data_emissione=date(2026, 8, 31)), ADMIN)
+    assert moved.data_emissione == date(2026, 8, 31)
+    # `confermata` is still a draft for this purpose: the amount is agreed, the document
+    # is still the sender's to date.
+    service.replace_lines(proforma.id, [_line()], ADMIN)
+    service.confirm_proforma(proforma.id, ADMIN)
+    moved = service.update(proforma.id, InvoiceUpdate(data_emissione=date(2026, 9, 1)), ADMIN)
+    assert moved.data_emissione == date(2026, 9, 1)
+    with pytest.raises(ValidationFailed) as caught:
+        service.update(proforma.id, InvoiceUpdate(data_emissione=None), ADMIN)
+    assert caught.value.details["field"] == "data_emissione"

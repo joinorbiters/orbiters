@@ -16,9 +16,10 @@ from decimal import Decimal
 from typing import Any, TypeVar
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, Select, func, select
+from sqlalchemy import ColumnElement, Select, SQLColumnExpression, func, select
 from sqlalchemy.orm import InstrumentedAttribute, Session
 
+from pigrocrm.core.analytics.schemas import RevenueBase
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.invoices.models import Invoice, InvoiceLine
 from pigrocrm.core.money import ZERO_MONEY, line_value, round_money, sum_hours, sum_money
@@ -48,6 +49,18 @@ def _revenue_filter() -> tuple[ColumnElement[bool], ...]:
         Invoice.stato == "emessa",
         Invoice.deleted_at.is_(None),
     )
+
+
+def _revenue_date(base: RevenueBase) -> SQLColumnExpression[date | None]:
+    """The date that puts an invoice's revenue in a period, for the two readings the
+    period P&L offers (ORB-61). `emissione` is the recorded default (§7.1);
+    `competenza` is `coalesce(competenza_da, data_emissione)`, so a document that never
+    declared a period is read by the one date it has and a register with no periods
+    reads the same under both. Nothing else in this module takes a base: the fiscal
+    and cash figures are by emission or by collection and stay that way."""
+    if base == "competenza":
+        return func.coalesce(Invoice.competenza_da, Invoice.data_emissione)
+    return Invoice.data_emissione
 
 
 class AnalyticsRepository:
@@ -99,18 +112,19 @@ class AnalyticsRepository:
         scoped: _S = stmt.where(column.in_(select(Deal.id).where(Deal.customer_id == customer_id)))
         return scoped
 
-    def revenue_in_range(self, da: date, a: date, customer_id: UUID | None) -> dict[UUID, Decimal]:
+    def revenue_in_range(
+        self, da: date, a: date, customer_id: UUID | None, base: RevenueBase = "emissione"
+    ) -> dict[UUID, Decimal]:
         """Revenue is attributed to the period by **its own** date -- `data_emissione` --
         not by the deal's date, which does not exist, and not by one common date, which
-        none of the three quantities has (§7.4)."""
+        none of the three quantities has (§7.4). `base="competenza"` is the second
+        reading (ORB-61): the accrual period the document declares, falling back to the
+        emission date for a document that declared none. Same filter, same figure,
+        different month."""
+        when = _revenue_date(base)
         stmt = (
             select(Invoice.deal_id, func.coalesce(func.sum(Invoice.imponibile), 0))
-            .where(
-                Invoice.deal_id.isnot(None),
-                Invoice.data_emissione >= da,
-                Invoice.data_emissione <= a,
-                *_revenue_filter(),
-            )
+            .where(Invoice.deal_id.isnot(None), when >= da, when <= a, *_revenue_filter())
             .group_by(Invoice.deal_id)
         )
         stmt = self._customer_scope(stmt, customer_id, Invoice.deal_id)
@@ -298,7 +312,14 @@ class AnalyticsRepository:
     def monthly_bozze(self, anno: int) -> dict[int, Decimal]:
         """`Σ totale` of what is written but not yet an issued invoice: draft invoices and
         live proformas (not the ones already turned into an invoice, which would count
-        twice). By issue date, or the day they were created when there is none."""
+        twice). By the document's own date, or the day it was created when it has none.
+
+        Since ORB-63 a proforma always has one: `data_emissione` is the date the sender
+        put on the document, so a proforma dated 5 September for August's work is
+        September's projected money whatever day it was typed in, exactly as the fattura
+        it becomes will be. A `fattura` draft still has no date until `issue` and stays
+        bucketed by the day it was created; `created_at` is the fallback for it alone.
+        """
         when = func.coalesce(Invoice.data_emissione, func.date(Invoice.created_at))
         month = func.extract("month", when)
         year = func.extract("year", when)
@@ -343,19 +364,21 @@ class AnalyticsRepository:
             )
         )
 
-    def deals_in_range(self, da: date, a: date, customer_id: UUID | None) -> list[Deal]:
+    def deals_in_range(
+        self, da: date, a: date, customer_id: UUID | None, base: RevenueBase = "emissione"
+    ) -> list[Deal]:
         """Every deal with any activity in the window -- an issued invoice, a cost or an
         hour. Not "every deal": a period report listing deals with nothing in the period
         is the unbounded growth residual B3 describes, and the window is what bounds it.
+
+        `base` has to be the one `revenue_in_range` was asked with: an invoice that the
+        accrual reading puts in August makes its deal active in August, and a deal
+        absent from this list is revenue the report silently drops.
         """
+        when = _revenue_date(base)
         active = (
             select(Invoice.deal_id.label("deal_id"))
-            .where(
-                Invoice.deal_id.isnot(None),
-                Invoice.data_emissione >= da,
-                Invoice.data_emissione <= a,
-                *_revenue_filter(),
-            )
+            .where(Invoice.deal_id.isnot(None), when >= da, when <= a, *_revenue_filter())
             .union(
                 select(Cost.deal_id.label("deal_id")).where(
                     Cost.deal_id.isnot(None),

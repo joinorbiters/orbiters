@@ -8,6 +8,7 @@ whole result of one call, and it could not render a proforma's PDF at all -- it 
 read the frozen, `issue`-only view (`_for_export`), which a proforma never populates.
 """
 
+import subprocess
 from collections.abc import Callable
 from decimal import Decimal
 from uuid import UUID
@@ -290,3 +291,88 @@ def test_a_proforma_consumed_between_the_read_and_the_write_is_a_conflict(
     assert documents.get(pdf.document_id, ADMIN).id == pdf.document_id
     listed = documents.list(DocumentListQuery(customer_id=customer_id), ADMIN).items
     assert pdf.document_id in [item.id for item in listed]
+
+
+# --- the accrual period and the proforma's own date on the PDF (ORB-61, ORB-63) -------
+
+
+def test_the_pdf_prints_the_accrual_period_when_the_document_has_one(
+    service: InvoiceService,
+    customer_id: UUID,
+    db_session: Session,
+    storage: LocalFileStorage,
+    extract_pdf_text: Callable[[LocalFileStorage, Session, UUID], str],
+) -> None:
+    from datetime import date
+
+    draft = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            causale="Consulenza",
+            competenza_da=date(2026, 8, 1),
+            competenza_a=date(2026, 8, 31),
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("1000.00"))],
+        ),
+        ADMIN,
+    )
+    invoice_id = service.issue(draft.id, InvoiceIssue(), ADMIN).id
+    pdf, _xml = service.produce_artifacts(invoice_id, ADMIN)
+    testo = extract_pdf_text(storage, db_session, pdf.document_id)
+    assert "Periodo di competenza: 01/08/2026 - 31/08/2026" in testo
+
+
+def test_a_document_without_a_period_prints_no_period_line(
+    service: InvoiceService,
+    customer_id: UUID,
+    db_session: Session,
+    storage: LocalFileStorage,
+    extract_pdf_text: Callable[[LocalFileStorage, Session, UUID], str],
+) -> None:
+    invoice_id = _issue(service, customer_id)
+    pdf, _xml = service.produce_artifacts(invoice_id, ADMIN)
+    assert "Periodo di competenza" not in extract_pdf_text(storage, db_session, pdf.document_id)
+
+
+def test_the_proforma_pdf_prints_its_own_date_and_its_period_not_the_render_day(
+    service: InvoiceService,
+    customer_id: UUID,
+    db_session: Session,
+    storage: LocalFileStorage,
+    extract_pdf_text: Callable[[LocalFileStorage, Session, UUID], str],
+) -> None:
+    """ORB-63: PROV-2026-0002 rendered on 2026-09-09 said 2026-09-09 and would have
+    said tomorrow tomorrow. The date printed is the one stored on the row, which the
+    sender chose, and a re-render after moving it prints the moved date."""
+    from datetime import date
+
+    from pigrocrm.core.invoices.schemas import InvoiceUpdate
+
+    proforma = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            tipo="proforma",
+            data_emissione=date(2025, 12, 31),
+            competenza_da=date(2025, 12, 1),
+            competenza_a=date(2025, 12, 31),
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("500.00"))],
+        ),
+        ADMIN,
+    )
+    (pdf,) = service.produce_artifacts(proforma.id, ADMIN)
+    testo = extract_pdf_text(storage, db_session, pdf.document_id)
+    assert "Data: 2025-12-31" in testo
+    assert "Periodo di competenza: 01/12/2025 - 31/12/2025" in testo
+
+    # A proforma's PDF has no expected hash (it is not a fiscal identity), so the
+    # re-render lands as version 2 of the same document; `download` serves the current
+    # version, which is what the customer receives, so that is what is read back here.
+    service.update(proforma.id, InvoiceUpdate(data_emissione=date(2026, 1, 2)), ADMIN)
+    (again,) = service.produce_artifacts(proforma.id, ADMIN)
+    assert again.document_id == pdf.document_id
+    assert again.version_numero == 2
+    data, _, _ = service.download(proforma.id, "pdf", ADMIN)
+    testo = subprocess.run(
+        ["pdftotext", "-layout", "-", "-"], input=data, capture_output=True, check=True
+    ).stdout.decode("utf-8", errors="replace")
+    assert "Data: 2026-01-02" in testo
+    assert "Data: 2025-12-31" not in testo

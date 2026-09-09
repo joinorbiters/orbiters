@@ -53,10 +53,21 @@ class DealPnl(BaseModel):
     fatture_emesse: int
 
 
+# Which date puts an invoice's revenue in a period. `emissione` is the recorded decision
+# (§7.1: revenue is what was invoiced, by the document's own date) and the default; the
+# fiscal reports never take the other. `competenza` reads the same revenue by the accrual
+# period the document declares, `coalesce(competenza_da, data_emissione)`, because
+# invoicing runs late and August's work issued in September must be readable in August
+# (ORB-61; `docs/design/DECISIONS.md`, 2026-09-09). Costs and hours ignore it: each
+# quantity is attributed by its own date whatever the base.
+RevenueBase = Literal["emissione", "competenza"]
+
+
 class PeriodPnlQuery(BaseModel):
     da: date
     a: date
     customer_id: UUID | None = None
+    base: RevenueBase = "emissione"
 
 
 class PnlTotals(BaseModel):
@@ -79,6 +90,9 @@ class PeriodPnl(BaseModel):
     da: date
     a: date
     customer_id: UUID | None
+    # Echoed from the query, so a reader of the figure knows which of the two readings
+    # of revenue produced it (ORB-61) without keeping the request beside the response.
+    base: RevenueBase
     chiusi: PnlTotals
     in_corso: PnlTotals
     # A cost with `deal_id IS NULL`: it enters the period P&L in a row of its own and is

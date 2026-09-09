@@ -100,6 +100,38 @@ def test_a_draft_counts_as_a_draft_and_a_paid_invoice_never_twice(
     assert overview.da_incassare == Decimal("0.00")
 
 
+def test_a_proforma_is_projected_in_the_month_of_its_own_date(
+    db_session: Session, local_storage: LocalFileStorage, draft_invoice_line_id: UUID
+) -> None:
+    """ORB-63 gives a proforma a document date, and `monthly_bozze` buckets by it: a
+    proforma the sender dated in another month is that month's projected money, whatever
+    day it was typed in. The fattura draft beside it has no date until `issue` and stays
+    in the month it was created, which is this one."""
+    from datetime import date
+    from decimal import Decimal as D
+
+    from pigrocrm.core.invoices.schemas import InvoiceCreate, InvoiceLineIn
+
+    draft_id = _invoice_of(db_session, draft_invoice_line_id)
+    service = InvoiceService(db_session, local_storage)
+    customer_id = service.get(draft_id, ADMIN).customer_id
+    altro_mese = 1 if OGGI.month != 1 else 2
+    service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            tipo="proforma",
+            data_emissione=date(OGGI.year, altro_mese, 15),
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=D("333.00"))],
+        ),
+        ADMIN,
+    )
+    overview = AnalyticsService(db_session).cash_overview(OGGI.year, COLLABORATORE)
+    by_month = {m.mese: m.bozze for m in overview.mesi}
+    assert by_month[altro_mese] == D("333.00")
+    assert by_month[OGGI.month] == overview.bozze - D("333.00")
+    assert by_month[OGGI.month] > D("0.00")
+
+
 def test_the_overview_keeps_the_estimate_from_everyone_but_an_admin_with_a_profile(
     db_session: Session,
 ) -> None:

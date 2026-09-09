@@ -737,3 +737,137 @@ def test_0029_moves_any_legacy_import_provenance_to_esterno() -> None:
     assert payloads_after_upgrade["imported"]["numero"] == 7
     assert "importata_da" not in payloads_after_upgrade["issued"]
     assert payloads_after_downgrade["imported"]["importata_da"] == "esterno"
+
+
+def _competenza_checks(url: str) -> set[str]:
+    engine: Engine = create_engine(url)
+    try:
+        with engine.connect() as connection:
+            return set(
+                connection.execute(
+                    text(
+                        "SELECT conname FROM pg_constraint "
+                        "WHERE conrelid = 'invoices'::regclass "
+                        "AND conname LIKE 'ck_invoices_competenza%'"
+                    )
+                ).scalars()
+            )
+    finally:
+        engine.dispose()
+
+
+def _proforma_dates(url: str) -> dict[str, date | None]:
+    engine: Engine = create_engine(url)
+    try:
+        with engine.connect() as connection:
+            return dict(
+                connection.execute(
+                    text(
+                        "SELECT coalesce(riferimento, numero::text, 'bozza'), data_emissione "
+                        "FROM invoices"
+                    )
+                ).all()
+            )
+    finally:
+        engine.dispose()
+
+
+def test_0033_dates_every_undated_proforma_in_rome_and_touches_no_fattura() -> None:
+    """The backfill of migration 0033 (ORB-63), asserted on rows planted at 0032.
+
+    A proforma used to keep `data_emissione` `NULL` until a fattura was issued from it,
+    and its PDF printed the Europe/Rome civil date of `created_at`. The backfill has to
+    write exactly that date -- so no proforma anyone has already received changes its
+    date -- and it has to be the *Rome* date: a row created at 22:30 UTC on 30 June is a
+    document dated 1 July, and one created at 23:30 UTC on New Year's Eve belongs to the
+    next year. `date(created_at)` would have said June and December. The two fattura
+    rows are the other half of the assertion: a draft's `NULL` means "not yet issued"
+    and must stay, and an issued row's date is a register entry the migration may not
+    look at.
+
+    Then the round trip. The downgrade drops the two period columns and their CHECKs and
+    deliberately leaves the dates in place (its docstring says why), so upgrading again
+    must find them already set and move nothing: the `WHERE data_emissione IS NULL` is
+    what makes the UPDATE idempotent, and this is where that is proven rather than read.
+    """
+    with PostgresContainer("postgres:17-alpine", driver="psycopg") as container:
+        url = container.get_connection_url()
+        config = _alembic_config(url)
+        upgrade(config, "0032")
+
+        engine: Engine = create_engine(url)
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO customers (id, ragione_sociale, nazione, custom_fields,
+                                           created_at, updated_at)
+                    VALUES ('00000000-0000-7000-8000-0000000000f1', 'Cliente Uno', 'IT',
+                            '{}'::jsonb, now(), now());
+
+                    INSERT INTO invoices (id, customer_id, tipo, stato, anno, numero,
+                                          riferimento, data_emissione, tipo_documento,
+                                          divisa, imponibile, imposta, bollo, totale,
+                                          stato_pagamento, custom_fields,
+                                          created_at, updated_at)
+                    VALUES ('00000000-0000-7000-8000-0000000000f2',
+                            '00000000-0000-7000-8000-0000000000f1', 'proforma', 'bozza',
+                            NULL, NULL, 'PROV-2026-0001', NULL, 'TD01', 'EUR',
+                            100.00, 0.00, 0.00, 100.00, 'da_incassare', '{}'::jsonb,
+                            '2026-06-30T22:30:00Z', '2026-06-30T22:30:00Z'),
+                           ('00000000-0000-7000-8000-0000000000f3',
+                            '00000000-0000-7000-8000-0000000000f1', 'proforma', 'confermata',
+                            NULL, NULL, 'PROV-2025-0009', NULL, 'TD01', 'EUR',
+                            100.00, 0.00, 0.00, 100.00, 'da_incassare', '{}'::jsonb,
+                            '2025-12-31T23:30:00Z', '2025-12-31T23:30:00Z'),
+                           ('00000000-0000-7000-8000-0000000000f4',
+                            '00000000-0000-7000-8000-0000000000f1', 'fattura', 'bozza',
+                            NULL, NULL, NULL, NULL, 'TD01', 'EUR',
+                            100.00, 0.00, 0.00, 100.00, 'da_incassare', '{}'::jsonb,
+                            '2026-06-30T22:30:00Z', '2026-06-30T22:30:00Z'),
+                           ('00000000-0000-7000-8000-0000000000f5',
+                            '00000000-0000-7000-8000-0000000000f1', 'fattura', 'emessa',
+                            2026, 1, NULL, '2026-05-05', 'TD01', 'EUR',
+                            100.00, 0.00, 0.00, 100.00, 'da_incassare', '{}'::jsonb,
+                            '2026-05-05T10:00:00Z', '2026-05-05T10:00:00Z');
+                    """
+                )
+            )
+        engine.dispose()
+        assert _competenza_checks(url) == set()
+
+        upgrade(config, "0033")
+        after_upgrade = _proforma_dates(url)
+        checks_after_upgrade = _competenza_checks(url)
+
+        downgrade(config, "0032")
+        after_downgrade = _proforma_dates(url)
+        checks_after_downgrade = _competenza_checks(url)
+
+        upgrade(config, "0033")
+        after_second_upgrade = _proforma_dates(url)
+        checks_after_second_upgrade = _competenza_checks(url)
+
+    expected = {
+        "PROV-2026-0001": date(2026, 7, 1),
+        "PROV-2025-0009": date(2026, 1, 1),
+        "bozza": None,
+        "1": date(2026, 5, 5),
+    }
+    assert after_upgrade == expected, (
+        "every undated proforma takes the Europe/Rome civil date of its created_at, a "
+        f"fattura draft stays NULL and an issued fattura keeps its date: got {after_upgrade}"
+    )
+    assert checks_after_upgrade == {
+        "ck_invoices_competenza_together",
+        "ck_invoices_competenza_ordered",
+    }
+    assert after_downgrade == expected, (
+        f"the downgrade leaves the proforma dates in place on purpose: got {after_downgrade}"
+    )
+    assert checks_after_downgrade == set()
+    assert after_second_upgrade == expected, (
+        "the UPDATE is idempotent: a date already set is not moved again, so a second "
+        f"upgrade changes nothing: got {after_second_upgrade}"
+    )
+    assert checks_after_second_upgrade == checks_after_upgrade

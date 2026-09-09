@@ -71,6 +71,9 @@ def build_scope(export: InvoiceForExport, *, riferimento: str | None) -> dict[st
             "data": export.data_emissione.isoformat(),
             "data_scadenza": (export.data_scadenza.isoformat() if export.data_scadenza else _EMPTY),
             "causale": export.causale or _EMPTY,
+            # The whole line, or nothing: the template wraps it in `{{#if}}`, so a
+            # document with no period prints no label with an empty value after it.
+            "periodo_competenza": _periodo_competenza(export),
             "imponibile": format_amount_2(export.imponibile),
             "imposta": format_amount_2(export.imposta),
             "bollo": format_amount_2(export.bollo),
@@ -91,6 +94,15 @@ def build_scope(export: InvoiceForExport, *, riferimento: str | None) -> dict[st
             for riga in export.righe
         ],
     }
+
+
+def _periodo_competenza(export: InvoiceForExport) -> str:
+    """`dd/mm/yyyy - dd/mm/yyyy`, the way an Italian reader writes a span of days, or
+    `""` when the document has no period (ORB-61). Both ends or neither is the row's
+    own CHECK, so a half period cannot reach this function."""
+    if export.competenza_da is None or export.competenza_a is None:
+        return _EMPTY
+    return f"{export.competenza_da:%d/%m/%Y} - {export.competenza_a:%d/%m/%Y}"
 
 
 def _dichiarazione_regime(export: InvoiceForExport) -> str:

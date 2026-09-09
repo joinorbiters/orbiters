@@ -78,6 +78,13 @@ class Invoice(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     # invoice issued on 31 December at 23:30 CET into the next year.
     data_emissione: Mapped[date | None] = mapped_column(Date, default=None)
     data_scadenza: Mapped[date | None] = mapped_column(Date, default=None)
+    # The accrual period: the days the work belongs to, as opposed to the day the
+    # document was issued (ORB-61). Header level, because every real case so far has
+    # been one month for the whole document; a per-line period would be a second place
+    # for the same fact. Both or neither, in order -- the two CHECKs below -- and frozen
+    # at issue like `causale`, since the XML writes it on every `DettaglioLinee`.
+    competenza_da: Mapped[date | None] = mapped_column(Date, default=None)
+    competenza_a: Mapped[date | None] = mapped_column(Date, default=None)
     tipo_documento: Mapped[str] = mapped_column(String(4), nullable=False, default="TD01")
     divisa: Mapped[str] = mapped_column(String(3), nullable=False, default="EUR")
     # Derived by the service and stored. Never recomputed by a client: a total computed
@@ -159,6 +166,16 @@ class Invoice(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
         CheckConstraint(
             "data_incasso IS NULL OR stato_pagamento = 'incassato'",
             name="ck_invoices_incasso_requires_state",
+        ),
+        # A half period is not a period: the XML writer would have to invent the other
+        # end. Two constraints rather than one so the violation names which rule broke.
+        CheckConstraint(
+            "(competenza_da IS NULL) = (competenza_a IS NULL)",
+            name="ck_invoices_competenza_together",
+        ),
+        CheckConstraint(
+            "competenza_da IS NULL OR competenza_da <= competenza_a",
+            name="ck_invoices_competenza_ordered",
         ),
         # Spec 4: what never consumed a number is deletable; what consumed one is not,
         # not even by direct SQL -- and neither is a `consumata` proforma, which is the

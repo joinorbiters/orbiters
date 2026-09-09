@@ -19,7 +19,13 @@ from pigrocrm.core.clock import oggi_in_italia
 from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.emitter.schemas import EmitterProfileUpsert
 from pigrocrm.core.emitter.service import EmitterProfileService
-from pigrocrm.core.errors import Conflict, NotFound, PermissionDenied, ValidationFailed
+from pigrocrm.core.errors import (
+    Conflict,
+    ImmutableField,
+    NotFound,
+    PermissionDenied,
+    ValidationFailed,
+)
 from pigrocrm.core.fiscal.schemas import FiscalProfileUpsert
 from pigrocrm.core.fiscal.service import FiscalProfileService
 from pigrocrm.core.invoices.schemas import (
@@ -27,6 +33,7 @@ from pigrocrm.core.invoices.schemas import (
     InvoiceCreate,
     InvoiceIssue,
     InvoiceLineIn,
+    InvoiceUpdate,
 )
 from pigrocrm.core.invoices.service import InvoiceService
 from pigrocrm.core.storage.local import LocalFileStorage
@@ -515,3 +522,60 @@ def test_a_missing_invoice_is_not_found(service: InvoiceService) -> None:
 
     with pytest.raises(NotFound):
         service.issue(uuid4(), InvoiceIssue(), ADMIN)
+
+
+# --- the accrual period and the proforma date across the emission (ORB-61, ORB-63) -
+
+
+def test_the_accrual_period_is_frozen_at_issue_like_the_causale(
+    service: InvoiceService, db_session: Session
+) -> None:
+    customer_id = _customer(db_session)
+    draft = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            competenza_da=date(2026, 8, 1),
+            competenza_a=date(2026, 8, 31),
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("500.00"))],
+        ),
+        ADMIN,
+    )
+    issued = service.issue(draft.id, InvoiceIssue(), ADMIN)
+    assert (issued.competenza_da, issued.competenza_a) == (date(2026, 8, 1), date(2026, 8, 31))
+    with pytest.raises(ImmutableField):
+        service.update(issued.id, InvoiceUpdate(competenza_a=date(2026, 9, 30)), ADMIN)
+    # And the document keeps what it said.
+    again = service.get(issued.id, ADMIN)
+    assert (again.competenza_da, again.competenza_a) == (date(2026, 8, 1), date(2026, 8, 31))
+
+
+def test_a_fattura_issued_from_a_proforma_inherits_the_period_and_takes_its_own_date(
+    service: InvoiceService, db_session: Session
+) -> None:
+    """The period is a fact about the work and travels with it; the date is a fact
+    about the register and is decided at issue (spec 6.2). A proforma dated last year
+    becomes a fattura dated today, for that year's August work."""
+    customer_id = _customer(db_session)
+    proforma = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            tipo="proforma",
+            data_emissione=date(2025, 9, 5),
+            competenza_da=date(2025, 8, 1),
+            competenza_a=date(2025, 8, 31),
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("500.00"))],
+        ),
+        ADMIN,
+    )
+    service.confirm_proforma(proforma.id, ADMIN)
+    issued = service.issue(proforma.id, InvoiceIssue(), ADMIN)
+    assert (issued.competenza_da, issued.competenza_a) == (date(2025, 8, 1), date(2025, 8, 31))
+    assert issued.data_emissione == oggi_in_italia()
+    assert issued.data_emissione != date(2025, 9, 5)
+    # The consumed proforma is frozen with the rest: its date is no longer the sender's
+    # to move, and neither is its period.
+    with pytest.raises(ImmutableField):
+        service.update(proforma.id, InvoiceUpdate(data_emissione=date(2025, 9, 6)), ADMIN)
+    with pytest.raises(ImmutableField):
+        service.update(proforma.id, InvoiceUpdate(competenza_a=date(2025, 9, 30)), ADMIN)
+    assert service.get(proforma.id, ADMIN).data_emissione == date(2025, 9, 5)
