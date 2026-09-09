@@ -12,6 +12,9 @@ from pigrocrm.core.orbiters.models import (
 from pigrocrm.core.validation import SafeStr
 
 LINKEDIN_HOST = "linkedin.com"
+# What the landing sends in `oppref`, bounded to the same 512 characters it bounds it to
+# (`orbiters.js`'s `OPPREF_MAX_LENGTH`). Not a column width: nothing stores this.
+OPPREF_MAX_LENGTH = 512
 
 # Characters that must never reach a stored value. C0 (tab, CR, LF included), DEL and
 # C1 are refused because `urllib.parse` strips tab/CR/LF from a URL *before* parsing
@@ -74,6 +77,31 @@ class SignupCreate(BaseModel):
     # normalisation -- because it is a person's own address for themselves.
     linkedin_url: SafeStr | None = Field(default=None, max_length=LINKEDIN_URL_MAX_LENGTH)
     utm: SignupUtm | None = None
+    # The two values below are for the conversion event and are **never stored**: no
+    # column, no migration, nothing in `SignupListItem`. They travel in this body only
+    # because the landing is where both are known, and because `extra="forbid"` above
+    # means a key the schema does not declare is a 422 -- so an undeclared field is not
+    # an option, and a stored one would be data nobody asked to keep.
+    #
+    # `pixel_event_id` is the id the landing generated for this submitted form and also
+    # passed to `oaiq("measure", ...)`. Deduplication is on (pixel id, event name, id),
+    # so the two halves of one conversion are one conversion only if this reaches the
+    # server unchanged. Constrained to what an id may be: it is interpolated into a JSON
+    # body sent to a third party, and there is no reason for it to contain anything else.
+    pixel_event_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_.:-]{8,64}$")
+    # OpenAI's own click identifier, from the landing URL. "Pass unchanged" is their
+    # instruction, so it is bounded and checked for control characters and nothing more:
+    # its shape is theirs to change, and a value we do not recognise is still the value
+    # that arrived.
+    oppref: SafeStr | None = Field(default=None, max_length=OPPREF_MAX_LENGTH)
+
+    @field_validator("oppref", mode="after")
+    @classmethod
+    def _oppref(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        trimmed = _reject_control_characters(value).strip()
+        return trimmed or None
 
     @field_validator("nome", "cognome", mode="after")
     @classmethod

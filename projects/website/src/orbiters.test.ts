@@ -71,9 +71,15 @@ describe('orbiters.html', () => {
     }
   })
 
-  it('requests nothing from another origin and measures nothing', () => {
+  it('writes no third-party tag into its markup, and stores nothing in the browser', () => {
+    // Until 2026-09-09 this said "measures nothing", and it was true. The page now
+    // carries the ChatGPT Ads pixel, because this is where the conversion happens --
+    // so what is left of the old rule is the part still worth enforcing: no tag
+    // written into the markup, no second analytics stack, and no state kept on the
+    // visitor's machine by our own script. Which pages may carry the pixel, and what
+    // it is allowed to do, is `pixel.test.ts`.
     expect(html).not.toMatch(/(?:href|src)="https?:/)
-    expect(html).not.toMatch(/gtag|googletagmanager|analytics|plausible|fathom|hotjar|pixel/i)
+    expect(html).not.toMatch(/gtag|googletagmanager|plausible|fathom|hotjar/i)
     expect(js).not.toMatch(/https?:\/\//)
     expect(js).not.toMatch(/localStorage|sessionStorage|document\.cookie|navigator\.sendBeacon/)
   })
@@ -120,9 +126,14 @@ describe('orbiters.css', () => {
 
 describe('orbiters.js', () => {
   it('stays small', () => {
-    // Commented source; Vite ships it at about 2.6 KB. The whole page, font aside,
-    // sits under 10 KB against the site's 40 KB budget (e2e/site.spec.ts).
-    expect(Buffer.byteLength(js, 'utf-8')).toBeLessThan(7 * 1024)
+    // Commented source, so most of these bytes never ship. The ceiling moved from 7 KB
+    // to 9 KB on 2026-09-09, when the file gained the conversion event: the oppref, the
+    // event id shared with the server, and the guarded `measure`. Raised by one step
+    // and not removed -- and the comments were cut back first, which is why it is 9 and
+    // not 12. What actually protects the visitor is the *shipped* budget, asserted per
+    // page in `e2e/site.spec.ts` (40 KB); this one keeps the source from quietly
+    // becoming an application.
+    expect(Buffer.byteLength(js, 'utf-8')).toBeLessThan(9 * 1024)
   })
 
   it('carries no colour of its own', () => {
@@ -160,6 +171,29 @@ describe('orbiters.js', () => {
       expect(load()('')).toBeNull()
       expect(load()('?ref=abc')).toBeNull()
       expect(js).toMatch(/if \(utm\) payload\.utm = utm/)
+    })
+  })
+
+  describe('the oppref of an ad click', () => {
+    function load(): (search: string) => string | null {
+      new Function(js)()
+      return (window as unknown as { __orbiters: { opprefFrom: (s: string) => string | null } })
+        .__orbiters.opprefFrom
+    }
+
+    it('is passed on unchanged, only bounded in length', () => {
+      // OpenAI's instruction is "pass unchanged": its shape is theirs to decide, and a
+      // value we did not recognise is still the value that arrived. So no parsing, no
+      // normalising -- a ceiling, and nothing else.
+      const opprefFrom = load()
+      expect(opprefFrom('?oppref=abc.DEF-123_%7Bx%7D')).toBe('abc.DEF-123_{x}')
+      expect(opprefFrom('?oppref=' + 'a'.repeat(600))).toBe('a'.repeat(512))
+    })
+
+    it('is nothing when the URL has none, or only spaces', () => {
+      expect(load()('')).toBeNull()
+      expect(load()('?utm_source=linkedin')).toBeNull()
+      expect(load()('?oppref=%20%20')).toBeNull()
     })
   })
 
@@ -231,24 +265,89 @@ describe('the form, once the script has hold of it', () => {
     mount()
     fill(filled)
     await submit()
-    expect(bodies).toEqual([{ email: 'ada@studio.it', nome: 'Ada', cognome: 'Lovelace' }])
+    const [body] = bodies
+    expect(typeof body.pixel_event_id).toBe('string')
+    expect(body).toEqual({
+      email: 'ada@studio.it',
+      nome: 'Ada',
+      cognome: 'Lovelace',
+      // Always present, even with the pixel blocked: the server event is sent either
+      // way, and this is what makes it the same conversion as the browser one.
+      pixel_event_id: body.pixel_event_id,
+    })
+    // No `oppref` key when the URL carried none, for the reason `utm` has none: an
+    // absent value is absent, not an empty string in a column.
+    expect(body).not.toHaveProperty('oppref')
     expect(note().textContent).toBe('Sei in orbita. Ti scriviamo noi.')
     expect((document.getElementById('signup') as HTMLFormElement).hidden).toBe(true)
   })
 
   it('sends the LinkedIn profile when there is one, alongside the attribution', async () => {
-    mount('?utm_source=linkedin')
+    mount('?utm_source=linkedin&oppref=clic-123')
     fill({ ...filled, linkedin_url: 'https://www.linkedin.com/in/ada' })
     await submit()
-    expect(bodies).toEqual([
-      {
-        email: 'ada@studio.it',
-        nome: 'Ada',
-        cognome: 'Lovelace',
-        linkedin_url: 'https://www.linkedin.com/in/ada',
-        utm: { utm_source: 'linkedin' },
-      },
+    const [body] = bodies
+    expect(body).toEqual({
+      email: 'ada@studio.it',
+      nome: 'Ada',
+      cognome: 'Lovelace',
+      linkedin_url: 'https://www.linkedin.com/in/ada',
+      utm: { utm_source: 'linkedin' },
+      // The click identifier travels to the API because the *server* event needs it:
+      // a request from our backend carries no cookie the ad platform set.
+      oppref: 'clic-123',
+      pixel_event_id: body.pixel_event_id,
+    })
+  })
+
+  it('measures the conversion once, with the id it sent to the API', async () => {
+    const calls: unknown[][] = []
+    vi.stubGlobal(
+      'oaiq',
+      vi.fn((...args: unknown[]) => {
+        calls.push(args)
+      }),
+    )
+    mount()
+    fill(filled)
+    await submit()
+    expect(calls).toEqual([
+      [
+        'measure',
+        'registration_completed',
+        { type: 'customer_action' },
+        { event_id: bodies[0].pixel_event_id },
+      ],
     ])
+  })
+
+  it('measures nothing when the API refused the signup', async () => {
+    const calls: unknown[][] = []
+    vi.stubGlobal(
+      'oaiq',
+      vi.fn((...args: unknown[]) => {
+        calls.push(args)
+      }),
+    )
+    mount('', refusedField('email'))
+    fill(filled)
+    await submit()
+    expect(calls).toEqual([])
+  })
+
+  it('still says the signup worked when the pixel is blocked or throws', async () => {
+    // An ad blocker replaces or removes the SDK. Whoever signed up is in orbit anyway,
+    // and must be told so.
+    vi.stubGlobal(
+      'oaiq',
+      vi.fn(() => {
+        throw new Error('bloccato da un estensione')
+      }),
+    )
+    mount()
+    fill(filled)
+    await submit()
+    expect(note().textContent).toBe('Sei in orbita. Ti scriviamo noi.')
   })
 
   it.each([
