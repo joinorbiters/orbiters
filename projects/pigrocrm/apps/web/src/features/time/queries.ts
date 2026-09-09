@@ -15,6 +15,10 @@ import { downloadDocument } from '@/features/documents/queries'
 export type TimeEntry = components['schemas']['TimeEntryRead']
 export type DealTimeSummary = components['schemas']['DealTimeSummary']
 export type RateDescription = components['schemas']['RateDescription']
+export type RunningTimer = components['schemas']['TimerRead']
+type TimerStartBody = components['schemas']['TimerStart']
+type TimerUpdateBody = components['schemas']['TimerUpdate']
+type TimerStopBody = components['schemas']['TimerStop']
 
 type TimeEntryCreateBody = components['schemas']['TimeEntryCreate']
 type TimeEntryUpdateBody = components['schemas']['TimeEntryUpdate']
@@ -203,5 +207,60 @@ export function useRenderTimeReportPdf() {
       })
       void queryClient.invalidateQueries({ queryKey: queryKeys.documents() })
     },
+  })
+}
+
+/**
+ * The running timer, the one thing on this screen that is *live*: `null` when nothing
+ * runs, which the API answers with a 200 rather than a 404 because that is the ordinary
+ * state of the page. Refetched every minute and on focus, so a clock started on the
+ * phone shows up on the laptop without a reload; the second-by-second tick is the
+ * component's own, computed from `started_at`, never a request.
+ */
+export function useRunningTimer(options: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: queryKeys.timer,
+    enabled: options.enabled ?? true,
+    queryFn: async (): Promise<RunningTimer | null> =>
+      (await unwrap(api.GET('/api/time-entries/timer'))) ?? null,
+    refetchInterval: 60_000,
+  })
+}
+
+export function useStartTimer() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: TimerStartBody) => unwrap(api.POST('/api/time-entries/timer/start', { body })),
+    onSuccess: (timer) => queryClient.setQueryData(queryKeys.timer, timer),
+  })
+}
+
+export function useUpdateTimer() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: TimerUpdateBody) => unwrap(api.PATCH('/api/time-entries/timer', { body })),
+    onSuccess: (timer) => queryClient.setQueryData(queryKeys.timer, timer),
+  })
+}
+
+/** Stopping answers with the entry the timer became, so the register and the deal's
+ *  summary are refreshed exactly as after any other write, and the timer key is set to
+ *  `null` rather than refetched -- the server has already said there is none. */
+export function useStopTimer() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: TimerStopBody) => unwrap(api.POST('/api/time-entries/timer/stop', { body })),
+    onSuccess: (entry) => {
+      queryClient.setQueryData(queryKeys.timer, null)
+      invalidateAfterWrite(queryClient, entry.deal_id)
+    },
+  })
+}
+
+export function useDiscardTimer() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => unwrap(api.DELETE('/api/time-entries/timer')),
+    onSuccess: () => queryClient.setQueryData(queryKeys.timer, null),
   })
 }

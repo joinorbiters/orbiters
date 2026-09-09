@@ -1,191 +1,116 @@
-import { ChevronLeft, ChevronRight, Clock } from 'lucide-react'
-import { useMemo, useState } from 'react'
-import { PageHeader } from '@/components/PageHeader'
-import { QueryErrorBanner } from '@/components/QueryErrorBanner'
-import { Button } from '@/components/ui/button'
-import { useDeals } from '@/features/deals/queries'
-import { useAuth } from '@/lib/auth'
+import { useMemo } from 'react'
+import type { Deal } from '@/features/deals/queries'
 import { formatHoursValue } from './columns'
-import { useTimeEntries } from './queries'
+import type { TimeEntry } from './queries'
 import { WeekGridRow } from './WeekGridRow'
-import { buildGrid, columnTotal, gridTotal, shiftWeek, weekDays } from './week'
+import { buildGrid, columnTotal, gridTotal, type WeekDay } from './week'
 
 /**
  * The screen that attacks the real failure mode. §13 argues it explicitly: the way a
  * freelancer's time tracking fails is not "I forgot to stop the timer", it is **"I never
- * entered Tuesday"**. A stopwatch needs a live-session entity, a recovery story for the
- * closed browser and another for the second device -- three mechanisms -- and does
- * nothing about Tuesday. A grid where a whole week is visibly incomplete does.
+ * entered Tuesday"**. A grid where a whole week is visibly incomplete does something
+ * about that, and it stays -- as the «Settimana» tab -- beside the timer that arrived on
+ * 2026-09-09.
+ *
+ * Since that day this is the table alone: the week, the header and the two reads belong
+ * to `TimePage`, which hands them down, so the register and the grid never disagree
+ * about which week or which rows they are showing.
  */
-export function WeekGrid() {
-  const { user } = useAuth()
-  const userId = user?.id
-  const [anchor, setAnchor] = useState(() => new Date())
-  const days = useMemo(() => weekDays(anchor), [anchor])
-
-  const entries = useTimeEntries(
-    { user_id: userId, da: days[0]?.iso, a: days[6]?.iso },
-    // See `useTimeEntries`' own docstring: an unfiltered list is answered, for an admin,
-    // with the whole team's hours, so this must not fire before the session is known.
-    { enabled: userId !== undefined },
-  )
-  const deals = useDeals()
-
-  const grid = useMemo(() => buildGrid(entries.data?.items ?? [], days), [entries.data, days])
-  const dealNames = useMemo(
-    () => new Map((deals.data?.items ?? []).map((deal) => [deal.id, deal.nome])),
-    [deals.data],
-  )
+export function WeekGrid({
+  days,
+  userId,
+  entries,
+  deals,
+}: {
+  days: WeekDay[]
+  userId: string
+  entries: TimeEntry[]
+  deals: Deal[]
+}) {
+  const grid = useMemo(() => buildGrid(entries, days), [entries, days])
+  const dealNames = useMemo(() => new Map(deals.map((deal) => [deal.id, deal.nome])), [deals])
   // Rows: every deal with an entry this week, plus every deal that exists, so a week can
   // be started from nothing rather than only continued. Deduplicated by id; ordered by
   // name through `localeCompare(..., 'it')`, so the row a person is looking for is where
   // the alphabet says it is and does not move when an hour is logged.
   const rows = useMemo(() => {
     const ids = new Set<string>([...grid.keys()])
-    for (const deal of deals.data?.items ?? []) ids.add(deal.id)
+    for (const deal of deals) ids.add(deal.id)
     return [...ids].sort((left, right) =>
       (dealNames.get(left) ?? '').localeCompare(dealNames.get(right) ?? '', 'it'),
     )
-  }, [grid, deals.data, dealNames])
-
-  // The page's intestazione (design spec §4), shared by all three branches below so a
-  // failed or pending week is still a page with a title and a way to move off it. The
-  // week being shown is the description rather than a second heading: it is what this
-  // title is *about*, and the three-button group is this page's primary action -- there
-  // is nothing to create here, only a week to choose.
-  const header = (
-    <PageHeader
-      icon={Clock}
-      title="Ore"
-      description={`${days[0]?.label} — ${days[6]?.label}`}
-      actions={
-        <>
-          <Button
-            variant="outline"
-            size="icon"
-            aria-label="Settimana precedente"
-            onClick={() => setAnchor((current) => shiftWeek(current, -1))}
-          >
-            <ChevronLeft className="size-4" />
-          </Button>
-          <Button variant="outline" onClick={() => setAnchor(new Date())}>
-            Questa settimana
-          </Button>
-          <Button
-            variant="outline"
-            size="icon"
-            aria-label="Settimana successiva"
-            onClick={() => setAnchor((current) => shiftWeek(current, 1))}
-          >
-            <ChevronRight className="size-4" />
-          </Button>
-        </>
-      }
-    />
-  )
-
-  // A failed request is neither "loading" nor "there is nothing here", and rendering a
-  // grid of empty cells for it would say the second -- a week with no hours in it, which
-  // is exactly the claim this screen is built to make loudly. The banner instead, and no
-  // grid at all: see `QueryErrorBanner`'s own docstring.
-  if (entries.isError || deals.isError) {
-    return (
-      <>
-        {header}
-        <div className="px-8 pb-8">
-          <QueryErrorBanner error={entries.error ?? deals.error} />
-        </div>
-      </>
-    )
-  }
-
-  // Same distinction on the other side: an empty grid drawn while the week is still in
-  // flight would be indistinguishable from a week nobody worked.
-  if (userId === undefined || entries.isPending || deals.isPending) {
-    return (
-      <>
-        {header}
-        <div className="px-8 pb-8">
-          <p className="text-sm text-muted-foreground">Caricamento…</p>
-        </div>
-      </>
-    )
-  }
+  }, [grid, deals, dealNames])
 
   return (
-    <>
-      {header}
-
-      <div className="space-y-4 px-8 pb-8">
-        <div className="overflow-x-auto rounded-lg border">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="border-b bg-muted/40">
-                <th scope="col" className="p-2 text-left font-medium">
-                  Deal
+    <div className="space-y-4">
+      <div className="overflow-x-auto rounded-lg border">
+        <table className="w-full border-collapse text-sm">
+          <thead>
+            <tr className="border-b bg-muted/40">
+              <th scope="col" className="p-2 text-left font-medium">
+                Deal
+              </th>
+              {days.map((day) => (
+                <th key={day.iso} scope="col" className="p-2 text-center font-medium">
+                  {/* The weekday abbreviation alone repeats every week; the day number
+                      under it is what tells somebody which week they are looking at
+                      without reading back up to the header. */}
+                  <span className="block">{day.short}</span>
+                  <span className="block text-xs text-muted-foreground">{day.iso.slice(8)}</span>
                 </th>
-                {days.map((day) => (
-                  <th key={day.iso} scope="col" className="p-2 text-center font-medium">
-                    {/* The weekday abbreviation alone repeats every week; the day number
-                        under it is what tells somebody which week they are looking at
-                        without reading back up to the header. */}
-                    <span className="block">{day.short}</span>
-                    <span className="block text-xs text-muted-foreground">{day.iso.slice(8)}</span>
-                  </th>
-                ))}
-                <th scope="col" className="p-2 text-right font-medium">
-                  Totale
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 ? (
-                <tr>
-                  <td colSpan={9} className="p-4 text-center text-muted-foreground">
-                    Nessun deal: creane uno per registrare le ore.
-                  </td>
-                </tr>
-              ) : (
-                rows.map((dealId) => (
-                  <WeekGridRow
-                    key={dealId}
-                    dealId={dealId}
-                    dealName={dealNames.get(dealId) ?? dealId}
-                    userId={userId}
-                    days={days}
-                    row={grid.get(dealId)}
-                  />
-                ))
-              )}
-            </tbody>
-            <tfoot>
-              <tr className="border-t bg-muted/40 font-medium">
-                <th scope="row" className="p-2 text-left">
-                  Totale
-                </th>
-                {days.map((day) => (
-                  <td
-                    key={day.iso}
-                    data-testid={`column-total-${day.iso}`}
-                    className="p-2 text-center tabular-nums"
-                  >
-                    {formatHoursValue(columnTotal(grid, day.iso))}
-                  </td>
-                ))}
-                <td data-testid="grid-total" className="p-2 text-right tabular-nums">
-                  {formatHoursValue(gridTotal(grid))}
+              ))}
+              <th scope="col" className="p-2 text-right font-medium">
+                Totale
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={9} className="p-4 text-center text-muted-foreground">
+                  Nessun deal: creane uno per registrare le ore.
                 </td>
               </tr>
-            </tfoot>
-          </table>
-        </div>
-
-        <p className="text-xs text-muted-foreground">
-          La tariffa viene congelata sulla voce quando la registri. Una cella con più voci
-          nello stesso giorno mostra la prima: l&apos;elenco completo è nella tab «Ore» del
-          deal.
-        </p>
+            ) : (
+              rows.map((dealId) => (
+                <WeekGridRow
+                  key={dealId}
+                  dealId={dealId}
+                  dealName={dealNames.get(dealId) ?? dealId}
+                  userId={userId}
+                  days={days}
+                  row={grid.get(dealId)}
+                />
+              ))
+            )}
+          </tbody>
+          <tfoot>
+            <tr className="border-t bg-muted/40 font-medium">
+              <th scope="row" className="p-2 text-left">
+                Totale
+              </th>
+              {days.map((day) => (
+                <td
+                  key={day.iso}
+                  data-testid={`column-total-${day.iso}`}
+                  className="p-2 text-center tabular-nums"
+                >
+                  {formatHoursValue(columnTotal(grid, day.iso))}
+                </td>
+              ))}
+              <td data-testid="grid-total" className="p-2 text-right tabular-nums">
+                {formatHoursValue(gridTotal(grid))}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
       </div>
-    </>
+
+      <p className="text-xs text-muted-foreground">
+        La tariffa viene congelata sulla voce quando la registri. Una cella con più voci
+        nello stesso giorno mostra la prima: l&apos;elenco completo è nella tab «Registro» e
+        nella tab «Ore» del deal.
+      </p>
+    </div>
   )
 }
