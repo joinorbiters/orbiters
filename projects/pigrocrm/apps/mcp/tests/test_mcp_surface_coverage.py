@@ -445,11 +445,14 @@ _BYTE: dict[Method, str] = {
 #    `draft_email` and `list_payment_reminder_candidates`. `InvoiceService.soft_delete`
 #    left at ORB-37 as `discard_proforma`: "a person's decision" had described a draft
 #    the same surface already creates and rewrites line by line, and the service plus
-#    the table CHECK refuse the delete for anything that consumed a number. A reason
-#    that only says
-#    "nobody wrote the tool" is a placeholder wearing the clothes of a decision; this
-#    category is for the ones that survive being asked why, and the only way to keep that
-#    true is to delete the ones that do not the moment the tool is written.
+#    the table CHECK refuse the delete for anything that consumed a number. It is the
+#    one removal on this surface without an inverse, and it is allowed where
+#    `EmailDraftService.delete` below is not because nothing is lost with it: a proforma
+#    never took a number, its reference sequence tolerates a gap, and `get_invoice`
+#    showed everything needed to recreate it. A reason that only says "nobody wrote the
+#    tool" is a placeholder wearing the clothes of a decision; this category is for the
+#    ones that survive being asked why, and the only way to keep that true is to delete
+#    the ones that do not the moment the tool is written.
 _COPERTE_O_UMANE: dict[Method, str] = {
     ("AnalyticsService", "economic_overview"): (
         "la scheda economica della dashboard porta con se' la stima fiscale calcolata su "

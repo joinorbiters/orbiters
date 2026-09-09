@@ -892,9 +892,9 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
     @guard
     def discard_proforma(invoice_id: str) -> dict[str, Any]:
         """Scarta una proforma: la toglie dagli elenchi senza cancellare nulla
-        fisicamente. Rifiuta una fattura, anche in bozza, e una proforma gia' consumata
-        da un'emissione: cio' che ha preso un numero non si scarta, si annulla
-        dall'applicazione."""
+        fisicamente, ma non si ripristina: se serve ancora, si ricrea. Rifiuta una
+        fattura, anche in bozza, e una proforma gia' consumata da un'emissione: cio'
+        che ha preso un numero non si scarta, si annulla dall'applicazione."""
         return invoices.discard_proforma(context, invoice_id)
 
     @mcp.tool()
