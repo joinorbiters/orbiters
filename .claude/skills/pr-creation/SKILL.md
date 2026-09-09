@@ -14,11 +14,18 @@ it and a document disagree, the document is right and the skill has a bug.
 
 ## Before the branch exists
 
-1. **A Linear issue exists and is `In Progress`.** Find it with `list_issues` or file it
-   with the `linear-ticket` skill. No issue, no branch: the issue is where the reasons
-   live, and a PR written first loses them.
+1. **A Linear issue exists, is yours, and is `In Progress`.** Find it with `list_issues`
+   or file it with the `linear-ticket` skill. No issue, no branch: the issue is where the
+   reasons live, and a PR written first loses them. Yours means what
+   `docs/tracker.md` § Who owns a card says: assigned to the account this session writes
+   as, or unassigned and filed by it, or labelled `parallel` and unclaimed. A card
+   assigned to the other person is not made yours by opening a PR for it, nor by their
+   having asked you for it, and a PR on their card is worse than no PR: it is their work
+   done twice.
 2. **The branch is Linear's.** Use the issue's `gitBranchName` (`ivansala/orb-42-...`),
-   in a git worktree of its own, never on `main` and never in the shared checkout:
+   which Linear renders for whoever reads the issue rather than for its assignee, so it
+   tells you nothing about ownership and is only the name to use once step 1 holds. In a
+   git worktree of its own, never on `main` and never in the shared checkout:
 
    ```bash
    git fetch origin
