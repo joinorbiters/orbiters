@@ -44,6 +44,9 @@ function press(label: string): void {
 beforeEach(() => {
   document.body.innerHTML = ''
   document.head.innerHTML = ''
+  // The room the notice asks for is written on the root element, which the two lines
+  // above do not touch.
+  document.documentElement.removeAttribute('style')
   window.localStorage.clear()
   delete (window as unknown as { oaiq?: unknown }).oaiq
 })
@@ -139,6 +142,86 @@ describe('once somebody refuses', () => {
     run()
     expect(notice()).toBeNull()
     expect(sdkScripts()).toHaveLength(0)
+  })
+})
+
+describe('while the notice is up, the page has room under it (ORB-18)', () => {
+  // The notice is fixed over the bottom of the viewport. On a phone the community page
+  // fits in one screen, so whatever the notice covered stayed covered until the visitor
+  // answered: the box's bottom edge at 390 wide, the last line of the note at 360. The
+  // script measures the notice and hands the page the same room; system.css spends it.
+  const ROOM = '--consent-room'
+  const room = () => document.documentElement.style.getPropertyValue(ROOM)
+
+  /** Lays the notice out by hand: jsdom does no layout, so every box measures zero. */
+  function layout(box: HTMLElement, top: number, height: number): void {
+    Object.defineProperty(box, 'offsetHeight', { configurable: true, value: height })
+    box.getBoundingClientRect = () => ({ top, height, bottom: top + height }) as DOMRect
+  }
+
+  it('writes the room on the root element as soon as the notice is shown', () => {
+    run()
+    // Measured, so in a DOM without layout it is zero rather than a guess; the point
+    // here is that the property exists from the first paint, not on some later event.
+    expect(room()).toBe('0px')
+  })
+
+  it('is the distance from the notice top to the bottom of the viewport, whole pixels', () => {
+    run()
+    // 768 tall (jsdom's default), the notice 81px high with its top at 678.6, so the
+    // 8px it keeps from the edge are in the room too: 768 - 678.6 = 89.4, rounded up.
+    layout(notice() as HTMLElement, 678.6, 81)
+    window.dispatchEvent(new Event('resize'))
+    expect(room()).toBe('90px')
+    // The sentence wraps to a third line on a narrower phone: a taller notice, more room.
+    layout(notice() as HTMLElement, 660.6, 99)
+    window.dispatchEvent(new Event('resize'))
+    expect(room()).toBe('108px')
+  })
+
+  it('takes the room away with the notice, on a yes and on a no', () => {
+    run()
+    layout(notice() as HTMLElement, 678.6, 81)
+    window.dispatchEvent(new Event('resize'))
+    press('Va bene')
+    expect(room()).toBe('')
+    // And the listener went with it: a later resize must not resurrect the room.
+    window.dispatchEvent(new Event('resize'))
+    expect(room()).toBe('')
+
+    document.body.innerHTML = ''
+    document.head.innerHTML = ''
+    window.localStorage.clear()
+    delete (window as unknown as { oaiq?: unknown }).oaiq
+    run()
+    press('No')
+    expect(room()).toBe('')
+  })
+
+  it('stops making room for a notice something else took out of the page', () => {
+    run()
+    layout(notice() as HTMLElement, 678.6, 81)
+    window.dispatchEvent(new Event('resize'))
+    expect(room()).toBe('90px')
+    ;(notice() as HTMLElement).remove()
+    window.dispatchEvent(new Event('resize'))
+    expect(room()).toBe('')
+  })
+
+  it('makes no room when there is no notice to make room for', () => {
+    window.localStorage.setItem(KEY, 'denied')
+    run()
+    expect(notice()).toBeNull()
+    expect(room()).toBe('')
+  })
+
+  it('is spent by the shared stylesheet at the end of the body, and only there', () => {
+    // The other half of the mechanism. A spacer, not body padding: on the community page
+    // the body is a grid with the box centred in its first row, and a spacer in the last
+    // row keeps the box centred in what is left above the notice.
+    const css = readFileSync(join(__dirname, 'system.css'), 'utf-8')
+    expect(css).toMatch(/body::after\s*\{[^}]*height:\s*var\(--consent-room, 0px\)/)
+    expect(js).toMatch(/var ROOM = '--consent-room'/)
   })
 })
 

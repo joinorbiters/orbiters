@@ -100,6 +100,39 @@
     return box
   }
 
+  /* The notice is fixed over the bottom of the viewport, and on a phone the whole
+     community page fits in one screen, so nothing scrolls out from under it: whatever it
+     covers stays covered until the visitor answers (ORB-18). So while it is up the page
+     is given the same room under its content. `--consent-room` on the root element is
+     the distance from the notice's top edge to the bottom of the viewport, measured
+     rather than guessed because the sentence wraps to one, two or three lines depending
+     on the width; system.css spends it at the end of the body. Measured again when the
+     notice changes size or the viewport does, and taken away with the notice. */
+  var ROOM = '--consent-room'
+
+  function room(box) {
+    var root = document.documentElement
+    var observer = null
+    function stop() {
+      if (observer) observer.disconnect()
+      window.removeEventListener('resize', measure)
+      root.style.removeProperty(ROOM)
+    }
+    function measure() {
+      /* Gone some other way than a click: no room for what is not there. */
+      if (!box.isConnected) return stop()
+      var covered = box.offsetHeight ? window.innerHeight - box.getBoundingClientRect().top : 0
+      root.style.setProperty(ROOM, Math.max(0, Math.ceil(covered)) + 'px')
+    }
+    if (typeof ResizeObserver === 'function') {
+      observer = new ResizeObserver(measure)
+      observer.observe(box)
+    }
+    window.addEventListener('resize', measure)
+    measure()
+    return stop
+  }
+
   function decide(decision, box) {
     remember(decision)
     if (decision === GRANTED) loadPixel()
@@ -112,7 +145,16 @@
     /* A refusal is final until the visitor clears their own storage: no pixel, and no
        second ask. */
     if (decision === DENIED) return
-    document.body.appendChild(notice(decide))
+    /* The room is released by the same click that removes the notice, here, so that a
+       second start() cannot orphan the first notice's observer and `decide` keeps no
+       state of its own. */
+    var stop = null
+    var box = notice(function (decision, clicked) {
+      if (stop) stop()
+      decide(decision, clicked)
+    })
+    document.body.appendChild(box)
+    stop = room(box)
   }
 
   window.__consent = { start: start, decide: decide, STORAGE_KEY: STORAGE_KEY }

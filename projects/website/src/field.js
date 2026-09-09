@@ -48,11 +48,17 @@
     return 1 - Math.abs((u + v - 1) * 1.6)
   }
 
+  /* Whole columns from `origin`, never rounded up: a half column is a clipped tile. */
+  function columns(width, cell, origin) {
+    return Math.max(0, Math.floor((width - origin) / cell))
+  }
+
   /**
    * Paints `canvas` with tiles. `options.cell` is the tile size in CSS pixels,
    * `options.band(u, v)` says how dense the field is at a point (0 = empty),
    * `options.animate` drifts the field slowly unless the reader asked for less
-   * motion, `options.seed` picks a different arrangement.
+   * motion, `options.seed` picks a different arrangement, `options.origin()` is
+   * the x of the page's first grid line when it is not zero.
    */
   function mount(canvas, options) {
     var ctx = canvas.getContext('2d')
@@ -67,7 +73,9 @@
     var cell = options.cell || 16
     var band = options.band || diagonal
     var seed = options.seed || 0
-    var cols, rows, dpr
+    /* No origin (the landing hero): paint to the edge. */
+    var originOf = options.origin
+    var cols, rows, dpr, origin
     var last = 0
 
     /* Returns false when nothing changed, so a resize event that moved no pixel --
@@ -81,7 +89,8 @@
       canvas.width = width
       canvas.height = height
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      cols = Math.ceil(canvas.clientWidth / cell)
+      origin = originOf ? originOf() || 0 : 0
+      cols = originOf ? columns(canvas.clientWidth, cell, origin) : Math.ceil(canvas.clientWidth / cell)
       rows = Math.ceil(canvas.clientHeight / cell)
       return true
     }
@@ -102,7 +111,7 @@
           var pick = v < 0.52 ? 0 : v < 0.6 ? 2 : v < 0.76 ? (fine > 0.55 ? 1 : 0) : 1
           if (v > 0.5 && hash(x, y) > 0.985) pick = 3
           ctx.fillStyle = colours[pick]
-          ctx.fillRect(x * cell + 1, y * cell + 1, cell - 2, cell - 2)
+          ctx.fillRect(origin + x * cell + 1, y * cell + 1, cell - 2, cell - 2)
         }
       }
     }
@@ -143,5 +152,5 @@
     window.setTimeout(tick, 125)
   }
 
-  window.__pigroField = { noise: noise, mount: mount, diagonal: diagonal }
+  window.__pigroField = { noise: noise, mount: mount, diagonal: diagonal, columns: columns }
 })()
