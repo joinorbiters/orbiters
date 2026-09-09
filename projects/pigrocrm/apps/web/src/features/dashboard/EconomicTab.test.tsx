@@ -69,7 +69,7 @@ const MESI = [
   month(4, '3990.00', '0.00', '0.00', '100.00'),
   month(5, '0.00', '0.00', '2500.00', '0.00'),
   month(6, '1200.00'),
-  month(7, '7980.00', '0.00', '0.00', '97.50'),
+  month(7, '6300.00', '0.00', '0.00', '97.50'),
   month(8, '7458.62', '6954.03', '0.00', '100.00'),
   month(9),
   month(10),
@@ -255,7 +255,7 @@ describe('EconomicTab', () => {
     )
     // The tallest month is labelled directly; the table carries every value.
     expect(within(andamento).getAllByTestId('segment').length).toBeGreaterThan(0)
-    expect(within(andamento).getByRole('table')).toHaveTextContent('7.980,00 €')
+    expect(within(andamento).getByRole('table')).toHaveTextContent('6.300,00 €')
   })
 
   it('shows how old the figures are', async () => {

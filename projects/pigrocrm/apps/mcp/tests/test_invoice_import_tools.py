@@ -90,7 +90,7 @@ async def test_import_registers_the_invoice_and_names_the_gaps(
 ) -> None:
     _seed_fiscal_and_emitter_profiles(mcp_session)
     customer = Customer(
-        ragione_sociale="Acme Srl",
+        ragione_sociale="Acme S.r.l.",
         partita_iva="12345678901",
         codice_sdi="ABCDEFG",
         indirizzo="Via Vittorio Veneto 12",
@@ -110,21 +110,21 @@ async def test_import_registers_the_invoice_and_names_the_gaps(
             "customer_id": str(customer.id),
             "righe": [
                 {
-                    "descrizione": "207571/0526/Consulenza AI CTO Safely A2A",
+                    "descrizione": "900142/0526/Consulenza AI CTO progetto Aurora",
                     "quantita": "20",
-                    "prezzo_unitario": "380",
-                    "prezzo_totale": "7600.00",
+                    "prezzo_unitario": "300",
+                    "prezzo_totale": "6000.00",
                     "aliquota_iva": "0",
                     "natura": "N2.2",
                 }
             ],
-            "imponibile": "7600.00",
+            "imponibile": "6000.00",
             "imposta": "0.00",
             # `bollo` is declared beside the total and never added to it: the identity is
             # `imponibile + imposta == totale`, the same one `sum_totals` stores for a
             # natively issued invoice.
             "bollo": "2.00",
-            "totale": "7600.00",
+            "totale": "6000.00",
         }
 
     async with Client(_server(mcp_session, tmp_path, full_access=True)) as client:

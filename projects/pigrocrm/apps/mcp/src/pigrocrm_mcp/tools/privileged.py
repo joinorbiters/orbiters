@@ -214,7 +214,7 @@ def register(
         `prezzo_totale` di riga e `imponibile + imposta` uguale a `totale`. Il `bollo` si
         dichiara a parte e **non** entra nel totale (lo assolve l'emittente in modo
         virtuale), esattamente come per una fattura emessa da PigroCRM. La descrizione
-        libera stampata sul documento originale (es. "207571/0426/...") va in `causale` e
+        libera stampata sul documento originale (es. "900142/0426/...") va in `causale` e
         nella `descrizione` della riga, mai in un campo a se stante: `InvoiceImport` non
         ha un `riferimento`, riservato alle proforma.
 

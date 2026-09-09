@@ -86,24 +86,24 @@ def _body(customer_id: str, numero: int, giorno: str) -> dict[str, Any]:
         "numero": numero,
         "data_emissione": giorno,
         "customer_id": customer_id,
-        "causale": "207571/0426/Consulenza AI CTO Safely A2A",
+        "causale": "900142/0426/Consulenza AI CTO progetto Aurora",
         "righe": [
             {
-                "descrizione": "207571/0426/Consulenza AI CTO Safely A2A",
+                "descrizione": "900142/0426/Consulenza AI CTO progetto Aurora",
                 "quantita": "9",
-                "prezzo_unitario": "380",
-                "prezzo_totale": "3420.00",
+                "prezzo_unitario": "300",
+                "prezzo_totale": "2700.00",
                 "aliquota_iva": "0",
                 "natura": "N2.2",
             }
         ],
-        "imponibile": "3420.00",
+        "imponibile": "2700.00",
         "imposta": "0.00",
         # The stamp is declared beside the total, never inside it: the identity the
         # service checks is `imponibile + imposta == totale` (slice 3 `sum_totals`, and
         # Acme's own register, whose «Totale» column always equals «Imp. Reddito»).
         "bollo": "2.00",
-        "totale": "3420.00",
+        "totale": "2700.00",
         "stato_pagamento": "incassato",
         "data_incasso": "2026-05-20",
     }
@@ -169,6 +169,6 @@ def test_a_number_beyond_the_register_is_a_422(
     router builds a service or the service takes the year's counter lock -- a 422 from
     the schema, not a 409 from the register."""
     response = logged_in.post(
-        "/api/invoices/import", json=_body(customer["id"], 207571, "2026-05-05")
+        "/api/invoices/import", json=_body(customer["id"], 900142, "2026-05-05")
     )
     assert response.status_code == 422, response.text

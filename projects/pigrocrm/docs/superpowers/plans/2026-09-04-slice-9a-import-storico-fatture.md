@@ -85,7 +85,7 @@ def test_an_invoice_records_where_it_was_imported_from(db_session: Session) -> N
         numero=7,
         data_emissione=date(2026, 5, 5),
         importata_da="acme",
-        imponibile=Decimal("3420.00"),
+        imponibile=Decimal("2700.00"),
         imposta=Decimal("0.00"),
         bollo=Decimal("2.00"),
         totale=Decimal("3422.00"),
@@ -249,10 +249,10 @@ from pigrocrm.core.invoices.schemas import InvoiceImport, InvoiceLineImport, Reg
 
 def _line(**overrides: object) -> dict[str, object]:
     base: dict[str, object] = {
-        "descrizione": "207571/0426/Consulenza AI CTO Safely A2A",
+        "descrizione": "900142/0426/Consulenza AI CTO progetto Aurora",
         "quantita": Decimal("9"),
-        "prezzo_unitario": Decimal("380"),
-        "prezzo_totale": Decimal("3420.00"),
+        "prezzo_unitario": Decimal("300"),
+        "prezzo_totale": Decimal("2700.00"),
         "aliquota_iva": Decimal("0"),
         "natura": "N2.2",
     }
@@ -267,7 +267,7 @@ def _import(**overrides: object) -> dict[str, object]:
         "data_emissione": date(2026, 5, 5),
         "customer_id": uuid4(),
         "righe": [_line()],
-        "imponibile": Decimal("3420.00"),
+        "imponibile": Decimal("2700.00"),
         "imposta": Decimal("0.00"),
         "bollo": Decimal("2.00"),
         "totale": Decimal("3422.00"),
@@ -295,7 +295,7 @@ def test_an_import_refuses_unknown_fields_and_a_zero_number() -> None:
 def test_an_imported_line_carries_its_own_natura_and_total() -> None:
     line = InvoiceLineImport(**_line())
     assert line.natura == "N2.2"
-    assert line.prezzo_totale == Decimal("3420.00")
+    assert line.prezzo_totale == Decimal("2700.00")
 
 
 def test_gaps_need_a_reason_each() -> None:
@@ -592,18 +592,18 @@ def _payload(customer_id: UUID, *, numero: int, giorno: date, **overrides: objec
         "data_emissione": giorno,
         "data_scadenza": date(giorno.year, giorno.month, 28),
         "customer_id": customer_id,
-        "causale": "207571/0426/Consulenza AI CTO Safely A2A",
+        "causale": "900142/0426/Consulenza AI CTO progetto Aurora",
         "righe": [
             {
-                "descrizione": "207571/0426/Consulenza AI CTO Safely A2A",
+                "descrizione": "900142/0426/Consulenza AI CTO progetto Aurora",
                 "quantita": Decimal("9"),
-                "prezzo_unitario": Decimal("380"),
-                "prezzo_totale": Decimal("3420.00"),
+                "prezzo_unitario": Decimal("300"),
+                "prezzo_totale": Decimal("2700.00"),
                 "aliquota_iva": Decimal("0"),
                 "natura": "N2.2",
             }
         ],
-        "imponibile": Decimal("3420.00"),
+        "imponibile": Decimal("2700.00"),
         "imposta": Decimal("0.00"),
         "bollo": Decimal("2.00"),
         "totale": Decimal("3422.00"),
@@ -630,7 +630,7 @@ def test_an_imported_invoice_is_issued_numbered_and_moves_the_counter(db_session
     assert read.xml_hash_sha256 is None and read.pdf_document_id is None
     assert db_session.get(InvoiceCounter, 2026).ultimo_numero == 7
     lines = service.repo.lines(read.id)
-    assert [(l.numero_linea, l.prezzo_totale, l.natura) for l in lines] == [(1, Decimal("3420.00"), "N2.2")]
+    assert [(l.numero_linea, l.prezzo_totale, l.natura) for l in lines] == [(1, Decimal("2700.00"), "N2.2")]
     row = db_session.get(Invoice, read.id)
     assert row.snapshot is not None and row.snapshot["versione"] == 1
 
@@ -1256,18 +1256,18 @@ def _body(customer_id: str, numero: int, giorno: str) -> dict[str, Any]:
         "numero": numero,
         "data_emissione": giorno,
         "customer_id": customer_id,
-        "causale": "207571/0426/Consulenza AI CTO Safely A2A",
+        "causale": "900142/0426/Consulenza AI CTO progetto Aurora",
         "righe": [
             {
-                "descrizione": "207571/0426/Consulenza AI CTO Safely A2A",
+                "descrizione": "900142/0426/Consulenza AI CTO progetto Aurora",
                 "quantita": "9",
-                "prezzo_unitario": "380",
-                "prezzo_totale": "3420.00",
+                "prezzo_unitario": "300",
+                "prezzo_totale": "2700.00",
                 "aliquota_iva": "0",
                 "natura": "N2.2",
             }
         ],
-        "imponibile": "3420.00",
+        "imponibile": "2700.00",
         "imposta": "0.00",
         "bollo": "2.00",
         "totale": "3422.00",
@@ -1431,13 +1431,13 @@ async def test_import_registers_the_invoice_and_names_the_gaps(mcp_session: Sess
     from conftest import _invoice_service  # seeds the two profiles the import freezes
 
     _invoice_service(mcp_session, LocalFileStorage(tmp_path))
-    customer = Customer(ragione_sociale="Acme Srl", partita_iva="12345678901", codice_sdi="ABCDEFG", indirizzo="Via Vittorio Veneto 12", cap="20154", comune="Milano", provincia="MI", nazione="IT")
+    customer = Customer(ragione_sociale="Acme S.r.l.", partita_iva="12345678901", codice_sdi="ABCDEFG", indirizzo="Via Vittorio Veneto 12", cap="20154", comune="Milano", provincia="MI", nazione="IT")
     mcp_session.add(customer)
     mcp_session.flush()
     dati = {
         "anno": 2026, "numero": 9, "data_emissione": "2026-06-05", "customer_id": str(customer.id),
-        "righe": [{"descrizione": "207571/0526/Consulenza AI CTO Safely A2A", "quantita": "20", "prezzo_unitario": "380", "prezzo_totale": "7600.00", "aliquota_iva": "0", "natura": "N2.2"}],
-        "imponibile": "7600.00", "imposta": "0.00", "bollo": "2.00", "totale": "7602.00",
+        "righe": [{"descrizione": "900142/0526/Consulenza AI CTO progetto Aurora", "quantita": "20", "prezzo_unitario": "300", "prezzo_totale": "6000.00", "aliquota_iva": "0", "natura": "N2.2"}],
+        "imponibile": "6000.00", "imposta": "0.00", "bollo": "2.00", "totale": "6002.00",
     }
     async with Client(_server(mcp_session, tmp_path, full_access=True)) as client:
         result = await client.call_tool("import_issued_invoice", {"dati": dati})
@@ -1577,26 +1577,28 @@ git commit -m "feat(web): imported-from-Acme badge; no XML or re-render on impor
 
 - [ ] **Step 1: Scrivere il dataset**
 
-Un array JSON di 14 oggetti nel formato di `InvoiceImport` con `customer_id` da risolvere per `ragione_sociale` (campo ausiliario `_cliente`, rimosso dallo script di invio). Valori noti dal registro Acme e dalle email; `data_scadenza`, `data_incasso` e `trasmessa_esternamente_il` da compilare dal titolare dove indicato `null`:
+Un array JSON di 14 oggetti nel formato di `InvoiceImport` con `customer_id` da risolvere per `ragione_sociale` (campo ausiliario `_cliente`, rimosso dallo script di invio). `data_scadenza`, `data_incasso` e `trasmessa_esternamente_il` da compilare dal titolare dove indicato `null`.
+
+> **I valori qui sotto sono sintetici.** Il dataset reale (clienti, importi, tariffe, id Drive dei PDF) è stato rimosso da questo repository il 2026-09-09, prima della pubblicazione, insieme al file JSON che questo task creava: erano dati di clienti veri e il fatturato di un anno. Quello che resta è la forma, che è ciò di cui il piano ha bisogno per essere leggibile: 14 righe, i buchi di registro 1, 4 e 6 assenti, una fattura su due righe, una verso l'estero con `natura` diversa, e tre righe sotto la soglia del bollo. Chi rieseguisse questo task su dati propri parte da qui.
 
 | numero | data | `_cliente` | descrizione riga | quantità × prezzo | imponibile | stato_pagamento |
 |---|---|---|---|---|---|---|
-| 2 | 2026-02-04 | Acme S.r.l. | Consulenza Acme | 1 × 250 | 250.00 | incassato |
-| 3 | 2026-02-04 | ACME Service S.r.l. | Servizi di consulenza ACME SRL (ODA 2026-012-HUM-OPS) | 1 × 1000 | 1000.00 | incassato |
-| 5 | 2026-04-07 | Francesco Paolo Acme | Consulenza AI prototipo POINT — anticipo | 1 × 2500 | 2748.62 (seconda riga: spese accessorie 248.62) | incassato; `trasmessa_esternamente_il: null` (non consegnata) |
-| 7 | 2026-05-05 | Acme Srl | 207571/0426/Consulenza AI CTO Safely A2A | 9 × 380 | 3420.00 | incassato |
-| 8 | 2026-05-05 | Acme Società Cooperativa | Servizi di consulenza Acme — pre-analisi Remote Console | 3 × 350 | 1050.00 | incassato |
-| 9 | 2026-06-05 | Acme Srl | 207571/0526/Consulenza AI CTO Safely A2A | 20 × 380 | 7600.00 | incassato |
-| 10 | 2026-06-05 | Acme Srl | 207571/0526/Rimborso spese | 1 × 140.72 | 140.72 | incassato |
-| 11 | 2026-07-13 | Acme Srl | 207571/0626/Consulenza AI CTO Safely A2A | 21 × 380 | 7980.00 | incassato |
-| 12 | 2026-07-13 | Acme Srl | 207571/0626/Rimborso hosting | 1 × 18.32 | 18.32 | incassato |
-| 13 | 2026-08-03 | Acme Srl | Consulting services for Example.com — July 2026 (pro-rata) | 1 × 5173.91 | 5173.91 | incassato |
-| 14 | 2026-08-03 | Acme Srl | 207621/0726/Consulenza AI CTO Safely A2A | 21 × 390 | 8190.00 | da_incassare (scaduta) |
-| 15 | 2026-08-03 | Acme Società Cooperativa | Consulenza Remote Console Acme — acconto 30% | 1 × 2640 | 2640.00 | da_incassare (scaduta) |
-| 16 | 2026-08-11 | Acme Società Cooperativa | Consulenza Remote Console Acme — 20% post UAT | 1 × 1760 | 1760.00 | da_incassare |
-| 17 | 2026-08-11 | Acme Srl | 207621/0726/Rimborso hosting | 1 × 20.12 | 20.12 | da_incassare |
+| 2 | 2026-02-04 | Alfa S.r.l. | Consulenza sito vetrina | 1 × 200 | 200.00 | incassato |
+| 3 | 2026-02-04 | Beta Service S.r.l. | Servizi di consulenza progetto Delta (ODA 2026-012-ACM-BET) | 1 × 900 | 900.00 | incassato |
+| 5 | 2026-04-07 | Mario Rossi | Consulenza AI prototipo Delta — anticipo | 1 × 2000 | 2200.00 (seconda riga: spese accessorie 200.00) | incassato; `trasmessa_esternamente_il: null` (non consegnata) |
+| 7 | 2026-05-05 | Acme S.r.l. | 900142/0426/Consulenza AI CTO progetto Aurora | 9 × 300 | 2700.00 | incassato |
+| 8 | 2026-05-05 | Gamma Società Cooperativa | Servizi di consulenza progetto Vega — pre-analisi console remota | 3 × 300 | 900.00 | incassato |
+| 9 | 2026-06-05 | Acme S.r.l. | 900142/0526/Consulenza AI CTO progetto Aurora | 20 × 300 | 6000.00 | incassato |
+| 10 | 2026-06-05 | Acme S.r.l. | 900142/0526/Rimborso spese | 1 × 60.50 | 60.50 | incassato |
+| 11 | 2026-07-13 | Acme S.r.l. | 900142/0626/Consulenza AI CTO progetto Aurora | 21 × 300 | 6300.00 | incassato |
+| 12 | 2026-07-13 | Acme S.r.l. | 900142/0626/Rimborso hosting | 1 × 15.00 | 15.00 | incassato |
+| 13 | 2026-08-03 | Example Ltd | Consulting services for project Vega — July 2026 (pro-rata) | 1 × 5000 | 5000.00 | incassato |
+| 14 | 2026-08-03 | Acme S.r.l. | 900143/0726/Consulenza AI CTO progetto Aurora | 21 × 310 | 6510.00 | da_incassare (scaduta) |
+| 15 | 2026-08-03 | Gamma Società Cooperativa | Consulenza console remota Vega — acconto 30% | 1 × 2500 | 2500.00 | da_incassare (scaduta) |
+| 16 | 2026-08-11 | Gamma Società Cooperativa | Consulenza console remota Vega — 20% post UAT | 1 × 1600 | 1600.00 | da_incassare |
+| 17 | 2026-08-11 | Acme S.r.l. | 900143/0726/Rimborso hosting | 1 × 20.00 | 20.00 | da_incassare |
 
-Per ogni riga: `aliquota_iva: "0"`, `natura: "N2.2"`, `imposta: "0.00"`; `bollo: "2.00"` sulle fatture con imponibile > 77,47 (tutte tranne 10, 12, 17) e `totale = imponibile + bollo`. **Il bollo va confermato dal titolare** contro i PDF: i totali nello screenshot Acme coincidono con l'imponibile (colonna «Totale» = «Imp. Reddito»), quindi è possibile che Acme non applicasse il bollo; in quel caso `bollo: "0.00"` e `totale = imponibile`. Il dataset nasce con `bollo: "0.00"` e una nota che lo dice. La fattura 13 (Acme, cliente UK) porta `natura: "N2.1"`.
+Per ogni riga: `aliquota_iva: "0"`, `natura: "N2.2"`, `imposta: "0.00"`; `bollo: "2.00"` sulle fatture con imponibile > 77,47 (tutte tranne 10, 12, 17) e `totale = imponibile + bollo`. **Il bollo va confermato dal titolare** contro i PDF: se il registro di partenza non lo applicava, `bollo: "0.00"` e `totale = imponibile`. Il dataset nasce con `bollo: "0.00"` e una nota che lo dice. La fattura 13 (cliente UK) porta `natura: "N2.1"`.
 
 - [ ] **Step 2: Scrivere il runbook**
 

@@ -559,7 +559,7 @@ def documento_con_pdf(mcp_session: Session, seeded_customer_id: str, tmp_path: P
     )
     service.add_version(
         document.id,
-        minimal_pdf(["Codice destinatario: ABCDEFG", "PEC: someone@example.com"]),
+        minimal_pdf(["Codice destinatario: ABCDEFG", "PEC: beta@pec.it"]),
         "application/pdf",
         Actor(id=None, type="system", role="admin"),
     )

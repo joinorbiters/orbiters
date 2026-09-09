@@ -25,26 +25,26 @@ from pigrocrm.core.gmail.query import (
 
 
 def test_a_domain_clause_asks_both_directions_with_an_at_sign() -> None:
-    """`@` is load-bearing: `from:acme.com` is a free-text search over display
-    names, which is the broad search spec 4 forbids. `from:@acme.com` is a match on
+    """`@` is load-bearing: `from:example.com` is a free-text search over display
+    names, which is the broad search spec 4 forbids. `from:@example.com` is a match on
     the address itself, and it is also what lets `messages_list_url` accept it."""
-    assert build_domain_clause("acme.com") == "(from:@acme.com OR to:@acme.com)"
+    assert build_domain_clause("example.com") == "(from:@example.com OR to:@example.com)"
 
 
 def test_a_domain_is_lowercased_and_stripped() -> None:
-    assert build_domain_clause("  Acme.COM ") == "(from:@acme.com OR to:@acme.com)"
+    assert build_domain_clause("  Example.COM ") == "(from:@example.com OR to:@example.com)"
 
 
 @pytest.mark.parametrize(
     "bad",
     [
         "",
-        "acme",
-        "acme.com OR from:ceo@rival.com",
-        "acme.com)",
-        "@acme.com",
-        "someone@example.com",
-        "acme labs.com",
+        "example",
+        "example.com OR from:ceo@rival.com",
+        "example.com)",
+        "@example.com",
+        "marco@example.com",
+        "example labs.com",
     ],
 )
 def test_a_domain_that_could_break_out_of_the_query_is_refused(bad: str) -> None:
@@ -53,9 +53,9 @@ def test_a_domain_that_could_break_out_of_the_query_is_refused(bad: str) -> None
 
 
 def test_the_discovery_query_is_one_the_list_url_accepts() -> None:
-    url = messages_list_url(discovery_query("acme.com"))
+    url = messages_list_url(discovery_query("example.com"))
     q = parse_qs(urlparse(url).query)["q"][0]
-    assert q == "(from:@acme.com OR to:@acme.com)"
+    assert q == "(from:@example.com OR to:@example.com)"
 
 
 # --- where the domain comes from ---------------------------------------------------
@@ -64,11 +64,11 @@ def test_the_discovery_query_is_one_the_list_url_accepts() -> None:
 @pytest.mark.parametrize(
     ("sito_web", "expected"),
     [
-        ("https://www.acme.com/", "acme.com"),
-        ("http://acme.com", "acme.com"),
-        ("acme.com", "acme.com"),
-        ("www.acme.com/about-us", "acme.com"),
-        ("HTTPS://WWW.Acme.com", "acme.com"),
+        ("https://www.example.com/", "example.com"),
+        ("http://example.com", "example.com"),
+        ("example.com", "example.com"),
+        ("www.example.com/about-us", "example.com"),
+        ("HTTPS://WWW.Example.com", "example.com"),
     ],
 )
 def test_the_domain_is_read_from_the_website(sito_web: str, expected: str) -> None:
@@ -76,11 +76,11 @@ def test_the_domain_is_read_from_the_website(sito_web: str, expected: str) -> No
 
 
 def test_without_a_website_the_domain_is_read_from_the_customer_email() -> None:
-    assert customer_domain(sito_web=None, email="someone@example.com") == "acme.com"
+    assert customer_domain(sito_web=None, email="info@example.com") == "example.com"
 
 
 def test_the_website_wins_over_the_email_when_both_exist() -> None:
-    assert customer_domain(sito_web="https://acme.com", email="x@gmail.com") == "acme.com"
+    assert customer_domain(sito_web="https://example.com", email="x@gmail.com") == "example.com"
 
 
 @pytest.mark.parametrize("email", ["ceo@gmail.com", "ceo@outlook.com", "ceo@yahoo.it"])
@@ -109,7 +109,7 @@ from pigrocrm.core.customers.models import Customer  # noqa: E402
 from pigrocrm.core.errors import AgentForbidden, Conflict, NotFound  # noqa: E402
 from pigrocrm.core.gmail.models import GmailMessage  # noqa: E402
 
-DOMAIN_CLAUSE = "(from:@acme.com OR to:@acme.com)"
+DOMAIN_CLAUSE = "(from:@example.com OR to:@example.com)"
 
 
 def _mail(
@@ -130,10 +130,10 @@ def _mail(
     )
 
 
-def _visum(session: Session, **overrides: object) -> Customer:
+def _example(session: Session, **overrides: object) -> Customer:
     fields: dict[str, object] = {
-        "ragione_sociale": "Acme Srl",
-        "sito_web": "https://www.acme.com/",
+        "ragione_sociale": "Example Ltd",
+        "sito_web": "https://www.example.com/",
     }
     fields.update(overrides)
     customer = Customer(**fields)
@@ -144,15 +144,15 @@ def _visum(session: Session, **overrides: object) -> Customer:
 
 def test_discovery_answers_who_at_the_domain_wrote_or_was_written_to(db_session: Session) -> None:
     account = connected_account(db_session)
-    customer = _visum(db_session)
+    customer = _example(db_session)
     fake = FakeGmail()
     fake.messages["m1"] = _mail(
-        1, frm="Acme Acme <someone@example.com>", to=MAILBOX, thread="t1", days_ago=30
+        1, frm="Marco Bianchi <marco@example.com>", to=MAILBOX, thread="t1", days_ago=30
     )
     fake.messages["m2"] = _mail(
         2,
         frm=MAILBOX,
-        to="someone@example.com, Acme Chen <someone@example.com>",
+        to="marco@example.com, Sarah Miller <sarah@example.com>",
         thread="t1",
         days_ago=2,
     )
@@ -160,33 +160,33 @@ def test_discovery_answers_who_at_the_domain_wrote_or_was_written_to(db_session:
 
     report = sync_service(db_session, fake).discover(customer.id, actor=actor_for(account))
 
-    assert report.dominio == "acme.com"
+    assert report.dominio == "example.com"
     assert report.threads_scanned == 1
     found = {row.indirizzo: row for row in report.corrispondenti}
-    assert set(found) == {"someone@example.com", "someone@example.com"}
-    acme = found["someone@example.com"]
-    assert acme.nome == "Acme Acme"
-    assert acme.messaggi == 2
-    assert acme.ultimo_messaggio == datetime.fromtimestamp(
+    assert set(found) == {"marco@example.com", "sarah@example.com"}
+    marco = found["marco@example.com"]
+    assert marco.nome == "Marco Bianchi"
+    assert marco.messaggi == 2
+    assert marco.ultimo_messaggio == datetime.fromtimestamp(
         fake.messages["m2"].internal_date_ms / 1000, tz=UTC
     )
-    assert found["someone@example.com"].nome == "Acme Chen"
-    assert found["someone@example.com"].messaggi == 1
+    assert found["sarah@example.com"].nome == "Sarah Miller"
+    assert found["sarah@example.com"].messaggi == 1
 
 
 def test_the_most_frequent_correspondent_comes_first(db_session: Session) -> None:
     account = connected_account(db_session)
-    customer = _visum(db_session)
+    customer = _example(db_session)
     fake = FakeGmail()
-    fake.messages["m1"] = _mail(1, frm="someone@example.com", to=MAILBOX, thread="t1")
-    fake.messages["m2"] = _mail(2, frm="someone@example.com", to=MAILBOX, thread="t2")
-    fake.messages["m3"] = _mail(3, frm="someone@example.com", to=MAILBOX, thread="t3")
+    fake.messages["m1"] = _mail(1, frm="sarah@example.com", to=MAILBOX, thread="t1")
+    fake.messages["m2"] = _mail(2, frm="marco@example.com", to=MAILBOX, thread="t2")
+    fake.messages["m3"] = _mail(3, frm="marco@example.com", to=MAILBOX, thread="t3")
 
     report = sync_service(db_session, fake).discover(customer.id, actor=actor_for(account))
 
     assert [row.indirizzo for row in report.corrispondenti] == [
-        "someone@example.com",
-        "someone@example.com",
+        "marco@example.com",
+        "sarah@example.com",
     ]
 
 
@@ -194,9 +194,9 @@ def test_discovery_stores_nothing_and_moves_no_watermark(db_session: Session) ->
     """Spec 4.2 survives intact: the mirror widens when a person adds an address, not
     when discovery finds one."""
     account = connected_account(db_session)
-    customer = _visum(db_session)
+    customer = _example(db_session)
     fake = FakeGmail()
-    fake.messages["m1"] = _mail(1, frm="someone@example.com", to=MAILBOX, thread="t1")
+    fake.messages["m1"] = _mail(1, frm="marco@example.com", to=MAILBOX, thread="t1")
 
     sync_service(db_session, fake).discover(customer.id, actor=actor_for(account))
 
@@ -212,9 +212,9 @@ def test_every_listing_discovery_issues_carries_the_domain_clause_and_nothing_el
     """The domain came from the record. Nothing typed by the caller reaches the `q`, and
     the connected mailbox is never asked about -- the widening that looks harmless."""
     account = connected_account(db_session)
-    customer = _visum(db_session)
+    customer = _example(db_session)
     fake = FakeGmail()
-    fake.messages["m1"] = _mail(1, frm="someone@example.com", to=MAILBOX, thread="t1")
+    fake.messages["m1"] = _mail(1, frm="marco@example.com", to=MAILBOX, thread="t1")
 
     sync_service(db_session, fake).discover(customer.id, actor=actor_for(account))
 
@@ -227,16 +227,14 @@ def test_every_listing_discovery_issues_carries_the_domain_clause_and_nothing_el
 def test_the_connected_mailbox_is_never_reported_as_a_correspondent(db_session: Session) -> None:
     """If the owner's own mailbox is at the customer's domain -- a contractor with an
     address there -- it is still the owner, not somebody to add to the CRM."""
-    account = connected_account(db_session, email_address="someone@example.com")
-    customer = _visum(db_session)
+    account = connected_account(db_session, email_address="ivan@example.com")
+    customer = _example(db_session)
     fake = FakeGmail()
-    fake.messages["m1"] = _mail(
-        1, frm="someone@example.com", to="someone@example.com", thread="t1"
-    )
+    fake.messages["m1"] = _mail(1, frm="marco@example.com", to="ivan@example.com", thread="t1")
 
     report = sync_service(db_session, fake).discover(customer.id, actor=actor_for(account))
 
-    assert [row.indirizzo for row in report.corrispondenti] == ["someone@example.com"]
+    assert [row.indirizzo for row in report.corrispondenti] == ["marco@example.com"]
 
 
 def test_addresses_already_in_the_crm_are_marked_as_known(db_session: Session) -> None:
@@ -244,29 +242,29 @@ def test_addresses_already_in_the_crm_are_marked_as_known(db_session: Session) -
     from pigrocrm.core.people.models import Person
 
     account = connected_account(db_session)
-    customer = _visum(db_session)
-    db_session.add(Person(nome="Acme", email="someone@example.com", customer_id=customer.id))
+    customer = _example(db_session)
+    db_session.add(Person(nome="Marco", email="Marco@Example.com", customer_id=customer.id))
     db_session.flush()
     fake = FakeGmail()
-    fake.messages["m1"] = _mail(1, frm="someone@example.com", to=MAILBOX, thread="t1")
-    fake.messages["m2"] = _mail(2, frm="someone@example.com", to=MAILBOX, thread="t2")
+    fake.messages["m1"] = _mail(1, frm="marco@example.com", to=MAILBOX, thread="t1")
+    fake.messages["m2"] = _mail(2, frm="sarah@example.com", to=MAILBOX, thread="t2")
 
     report = sync_service(db_session, fake).discover(customer.id, actor=actor_for(account))
 
     known = {row.indirizzo: row.gia_in_anagrafica for row in report.corrispondenti}
-    assert known == {"someone@example.com": True, "someone@example.com": False}
+    assert known == {"marco@example.com": True, "sarah@example.com": False}
 
 
 def test_a_customer_with_no_domain_is_a_conflict_not_an_empty_answer(db_session: Session) -> None:
     account = connected_account(db_session)
-    customer = _visum(db_session, sito_web=None, email="ceo@gmail.com")
+    customer = _example(db_session, sito_web=None, email="ceo@gmail.com")
     with pytest.raises(Conflict):
         sync_service(db_session, FakeGmail()).discover(customer.id, actor=actor_for(account))
 
 
 def test_an_archived_customer_is_not_found(db_session: Session) -> None:
     account = connected_account(db_session)
-    customer = _visum(db_session, deleted_at=datetime.now(UTC))
+    customer = _example(db_session, deleted_at=datetime.now(UTC))
     with pytest.raises(NotFound):
         sync_service(db_session, FakeGmail()).discover(customer.id, actor=actor_for(account))
 
@@ -278,9 +276,9 @@ def test_an_agent_without_full_access_is_refused_before_gmail_is_asked(
     a backfill. The `mcp_full_access` switch is what says this installation wants its
     agent to be able to do that."""
     account = connected_account(db_session)
-    customer = _visum(db_session)
+    customer = _example(db_session)
     fake = FakeGmail()
-    fake.messages["m1"] = _mail(1, frm="someone@example.com", to=MAILBOX, thread="t1")
+    fake.messages["m1"] = _mail(1, frm="marco@example.com", to=MAILBOX, thread="t1")
     agent = Actor(id=account.user_id, type="mcp", role="admin")
 
     with pytest.raises(AgentForbidden):
@@ -289,4 +287,4 @@ def test_an_agent_without_full_access_is_refused_before_gmail_is_asked(
 
     trusted = Actor(id=account.user_id, type="mcp", role="admin", full_access=True)
     report = sync_service(db_session, fake).discover(customer.id, actor=trusted)
-    assert [row.indirizzo for row in report.corrispondenti] == ["someone@example.com"]
+    assert [row.indirizzo for row in report.corrispondenti] == ["marco@example.com"]

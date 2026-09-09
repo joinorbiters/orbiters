@@ -135,10 +135,10 @@ def open_server(mcp_session: Session, owner: Actor, tmp_path: Path) -> Any:
     )
 
 
-def _visum(session: Session, **overrides: object) -> Customer:
+def _example(session: Session, **overrides: object) -> Customer:
     fields: dict[str, object] = {
-        "ragione_sociale": "Acme Srl",
-        "sito_web": "https://www.acme.com/",
+        "ragione_sociale": "Example Ltd",
+        "sito_web": "https://www.example.com/",
     }
     fields.update(overrides)
     customer = Customer(**fields)
@@ -187,12 +187,12 @@ async def test_the_tool_takes_a_customer_id_and_no_free_text(open_server: Any) -
 async def test_discovery_answers_the_addresses_at_the_customer_domain(
     open_server: Any, mcp_session: Session, connected_account: GoogleAccount, fake_gmail: FakeGmail
 ) -> None:
-    customer = _visum(mcp_session)
+    customer = _example(mcp_session)
     fake_gmail.messages["m1"] = _mail(
-        1, frm="Acme Acme <someone@example.com>", to=MAILBOX, thread="t1"
+        1, frm="Marco Bianchi <marco@example.com>", to=MAILBOX, thread="t1"
     )
     fake_gmail.messages["m2"] = _mail(
-        2, frm=MAILBOX, to="someone@example.com, someone@example.com", thread="t1"
+        2, frm=MAILBOX, to="sarah@example.com, marco@example.com", thread="t1"
     )
     fake_gmail.messages["m3"] = _mail(3, frm="estraneo@altrove.com", to=MAILBOX, thread="t9")
 
@@ -200,16 +200,16 @@ async def test_discovery_answers_the_addresses_at_the_customer_domain(
         result = await client.call_tool(TOOL, {"customer_id": str(customer.id)})
 
     report = _payload(result)
-    assert report["dominio"] == "acme.com"
+    assert report["dominio"] == "example.com"
     rows = {row["indirizzo"]: row for row in report["corrispondenti"]}
-    assert set(rows) == {"someone@example.com", "someone@example.com"}
-    assert rows["someone@example.com"]["nome"] == "Acme Acme"
-    assert rows["someone@example.com"]["messaggi"] == 2
-    assert rows["someone@example.com"]["gia_in_anagrafica"] is False
+    assert set(rows) == {"marco@example.com", "sarah@example.com"}
+    assert rows["marco@example.com"]["nome"] == "Marco Bianchi"
+    assert rows["marco@example.com"]["messaggi"] == 2
+    assert rows["marco@example.com"]["gia_in_anagrafica"] is False
     # And every listing Gmail received was the domain clause: nothing an agent passed.
     listings = [request for request in fake_gmail.requests if request.is_messages_list]
     assert listings
-    assert all(request.q == "(from:@acme.com OR to:@acme.com)" for request in listings)
+    assert all(request.q == "(from:@example.com OR to:@example.com)" for request in listings)
 
 
 async def test_discovery_stores_nothing(
@@ -217,8 +217,8 @@ async def test_discovery_stores_nothing(
 ) -> None:
     """Spec 4.2, unchanged: the mirror widens when a person puts an address on a Person,
     not because a tool found one."""
-    customer = _visum(mcp_session)
-    fake_gmail.messages["m1"] = _mail(1, frm="someone@example.com", to=MAILBOX, thread="t1")
+    customer = _example(mcp_session)
+    fake_gmail.messages["m1"] = _mail(1, frm="marco@example.com", to=MAILBOX, thread="t1")
 
     async with Client(open_server) as client:
         await client.call_tool(TOOL, {"customer_id": str(customer.id)})
@@ -229,7 +229,7 @@ async def test_discovery_stores_nothing(
 async def test_a_customer_without_a_domain_gets_guidance_not_a_stack_trace(
     open_server: Any, mcp_session: Session, connected_account: GoogleAccount, fake_gmail: FakeGmail
 ) -> None:
-    customer = _visum(mcp_session, sito_web=None, email="ceo@gmail.com")
+    customer = _example(mcp_session, sito_web=None, email="ceo@gmail.com")
 
     async with Client(open_server) as client:
         result = await client.call_tool(TOOL, {"customer_id": str(customer.id)})
@@ -264,7 +264,7 @@ def _archived_with_attachment(session: Session, account: GoogleAccount, fake: Fa
     fake.messages["m9"] = FakeMessage(
         id="m9",
         thread_id="t9",
-        headers={"From": "someone@example.com", "To": MAILBOX, "Subject": "Ordine"},
+        headers={"From": "cliente@example.com", "To": MAILBOX, "Subject": "Ordine"},
         body_text="In allegato il modulo firmato.",
         internal_date_ms=1_757_000_000_000,
         attachments=[
@@ -281,7 +281,7 @@ def _archived_with_attachment(session: Session, account: GoogleAccount, fake: Fa
         gmail_message_id="m9",
         gmail_thread_id="t9",
         direction="inbound",
-        from_address="someone@example.com",
+        from_address="cliente@example.com",
         to_addresses=[MAILBOX],
         cc_addresses=[],
         subject="Ordine",

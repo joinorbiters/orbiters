@@ -613,19 +613,19 @@ def test_two_exports_of_the_same_invoice_are_byte_identical() -> None:
 
 
 def _cliente_estero(**overrides: object) -> PartySnapshot:
-    """Acme Srl, London — the record that prompted this.
+    """A British customer, which is the shape that prompted this.
 
     A British VAT number of nine digits, no SDI code, no PEC, no province, and a
     postcode that is not five digits. Every one of those was a refusal until now, and
     together they made a foreign customer unrepresentable rather than merely awkward.
     """
     base: dict[str, object] = {
-        "ragione_sociale": "Acme Srl",
-        "partita_iva": "12345678901",
+        "ragione_sociale": "Example Ltd",
+        "partita_iva": "123456789",
         "codice_fiscale": None,
         "codice_sdi": None,
         "pec": None,
-        "indirizzo": "Via Vittorio Veneto 12",
+        "indirizzo": "1 Example Street",
         "cap": "00000",
         "comune": "London",
         "provincia": "",
@@ -666,7 +666,7 @@ def test_a_foreign_vat_is_announced_as_its_own_country() -> None:
     cessionario = root.find(".//CessionarioCommittente/DatiAnagrafici/IdFiscaleIVA")
     assert cessionario is not None
     assert cessionario.findtext("IdPaese") == "GB"
-    assert cessionario.findtext("IdCodice") == "12345678901"
+    assert cessionario.findtext("IdCodice") == "123456789"
 
     # And the emitter is still Italian: the parameter has a default for a reason, and a
     # change that read the country off the wrong party would pass the assertion above.

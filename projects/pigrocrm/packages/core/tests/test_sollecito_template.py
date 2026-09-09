@@ -9,6 +9,8 @@ below goes through the plain context, and why one test proves the difference rat
 than trusting a comment about it.
 """
 
+import re
+
 import pytest
 
 from pigrocrm.core.errors import ValidationFailed
@@ -103,8 +105,12 @@ def test_dropping_the_promise_leaves_no_double_space_or_orphan_line() -> None:
 def test_no_freelancers_name_appears_in_the_source() -> None:
     """Rifatta la sostanza: a CRM for Italian freelancers cannot carry one freelancer's
     name in its source -- and Acme carried it twice, verbatim, in two builders."""
-    for forbidden in ["Ivan Sala", "CTO", "+39 333 1234567", "humancraft"]:
+    for forbidden in ["Ivan Sala", "CTO", "humancraft"]:
         assert forbidden.lower() not in SOLLECITO_TEMPLATE_SOURCE.lower()
+    # The phone number that used to be pinned here by literal is gone from the repository,
+    # so the assertion is on the shape instead: no number of any form survives in the
+    # template. That is strictly stronger, since it also catches a different one arriving.
+    assert re.search(r"\+?\d[\d\s.]{8,}", SOLLECITO_TEMPLATE_SOURCE) is None
 
 
 def test_the_signature_comes_from_the_emitter_profile() -> None:
