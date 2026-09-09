@@ -42,20 +42,29 @@ Then run the app you changed from that worktree on a second port, beside your ow
 
 | App | Your worktree | The "before" worktree | Notes |
 |---|---|---|---|
-| CRM web (`projects/pigrocrm/apps/web`) | `pnpm --filter web dev` on 5173 | `pnpm --filter web dev -- --port 5175` | Both proxy `/api` to the one API on `localhost:8000`, so the data is identical by construction. Start the API once, from either worktree. |
-| Hub web (`projects/hub/apps/web`) | `pnpm --filter hub dev` on 5180 | `pnpm --filter hub dev -- --port 5182` | Both proxy `/api` to the hub API on 8084. The page lives under `/hub/`. |
-| Website (`projects/website`) | `pnpm --filter website preview` on 4173 | `pnpm --filter website build && pnpm --filter website preview -- --port 4175` | Static: build first, preview serves nginx's path map. |
+| CRM web (`projects/pigrocrm/apps/web`) | `pnpm --filter web dev` on 5173 | `pnpm --filter web dev --port 5175` | Both proxy `/api` to the one API on `localhost:8000`, so the data is identical by construction. Run the API from your own worktree. |
+| Hub web (`projects/hub/apps/web`) | `pnpm --filter hub dev` on 5180 | `pnpm --filter hub dev --port 5182` | Both proxy `/api` to the hub API on 8084. The page lives under `/hub/`. |
+| Website (`projects/website`) | `pnpm --filter website preview` on 4173 | `pnpm --filter website build && pnpm --filter website preview --port 4175` | Static: build first, preview serves nginx's path map. |
 
-A page behind the CRM's login needs a session: mint one the way the visual QA does
-(`~/pigrocrm-data/tools/mint_session.py` on Ivan's machine) and set the cookie on both
-origins, or log in once per origin in the same browser.
+No `--` before `--port`: pnpm 11 hands it to Vite literally, Vite reads it as the end of
+its options, and the port is ignored (the dev servers then bump to the next free port
+without a word; the website's preview has `strictPort` and dies). Read the `Local:` line
+Vite prints and open that URL, not the one you asked for.
+
+If the PR changes the API as well as the web, the before frame is "old web, new API"
+and can show a state `main` never had: say so under the pair.
+
+A page behind the CRM's login needs a session on both origins: log in once per origin
+in the same browser, or set the cookie with whatever session tool you use.
 
 Capture with the Playwright MCP: `browser_resize` to the same viewport for both frames
 (1440×900 for the CRM and the hub, 390×844 for the website when the change is about a
-phone), then `browser_take_screenshot` with a file name that says which frame it is:
-`before-invoice-detail.png`, `after-invoice-detail.png`. Set up the fixture you need (an
-issued invoice, a draft, a signup) **while you build the change**, not after the PR is
-open; the state is cheap to arrange while it is in your head.
+phone), then `browser_take_screenshot` with `scale: "css"`, so the pixels match the
+CSS-pixel rectangles `browser_snapshot` reports and a box measured there lands where it
+should (`"device"` doubles everything on a Retina display), and a file name that says
+which frame it is: `before-invoice-detail.png`, `after-invoice-detail.png`. Set up the
+fixture you need (an issued invoice, a draft, a signup) **while you build the change**,
+not after the PR is open; the state is cheap to arrange while it is in your head.
 
 Afterwards:
 
@@ -103,14 +112,14 @@ gh pr edit <n> --body-file body.md --attach ./pair-1-invoice-detail.png
 ```
 
 `--attach` repeats for several pairs and works on `gh pr create`, `gh pr edit` and
-`gh pr comment`. It does not combine with `--web`, and uploads stop at the first
-failure with a non-zero exit while the earlier files stay attached: read the exit code.
+`gh pr comment`. On a partial failure the files that uploaded stay attached, the URL is
+still printed and the exit code is non-zero: read the exit code, not the URL.
 
 ## Verify before calling it done
 
 ```bash
 body=$(gh pr view <n> --json body --jq .body)
-grep -o user-attachments <<<"$body" | wc -l || true     # must equal the pairs attached
+grep -o user-attachments <<<"$body" | wc -l     # pairs attached, plus any mention in prose
 if grep -o '](\./[^)]*)' <<<"$body"; then
   echo "ERROR: the paths above never got rewritten." >&2; false
 else
