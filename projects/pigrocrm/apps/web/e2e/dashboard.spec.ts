@@ -284,7 +284,7 @@ test.describe('il ciclo completo — metà umana', () => {
     await expect(page.getByLabel('Dal')).toHaveCount(1)
   })
 
-  test('la scheda economica mostra cassa e stima fiscale, con il rimando alla stima', async ({
+  test('la scheda economica mostra cassa, grafici e la stima fiscale per intero', async ({
     page,
   }) => {
     await loginAsAdmin(page)
@@ -292,6 +292,11 @@ test.describe('il ciclo completo — metà umana', () => {
     await expect(page.getByRole('group', { name: 'Ricavi incassati' })).toBeVisible()
     await expect(page.getByRole('figure', { name: /Andamento economico/ })).toBeVisible()
     await expect(page.getByRole('figure', { name: /Proiezione economica/ })).toBeVisible()
-    await expect(page.getByRole('link', { name: /stima fiscale/i }).first()).toBeVisible()
+    // The whole estimate is on this page since 2026-09-09, rather than a link to a screen
+    // of its own: the caveat the server sends, and the rows the rates are read from.
+    await expect(page.getByRole('note')).toContainText(/stima/i)
+    await expect(page.getByText(/^Stima fiscale \d{4}$/)).toBeVisible()
+    await expect(page.getByText('Ricavi incassabili')).toBeVisible()
+    await expect(page.getByRole('link', { name: /Apri la stima fiscale/i })).toHaveCount(0)
   })
 })

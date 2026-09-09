@@ -17,7 +17,6 @@ export type PeriodPnl = components['schemas']['PeriodPnl']
 export type PnlTotals = components['schemas']['PnlTotals']
 export type BudgetVsActualRow = components['schemas']['BudgetVsActualRow']
 export type BudgetPage = components['schemas']['BudgetPage']
-export type FiscalEstimate = components['schemas']['FiscalEstimate']
 
 export interface PeriodParams {
   from: string
@@ -64,13 +63,6 @@ export function useBudget(params: PeriodParams & { limit?: number; cursor?: stri
   return useQuery({
     queryKey: queryKeys.budget(params),
     queryFn: () => unwrap(api.GET('/api/analytics/budget', { params: { query: params } })),
-  })
-}
-
-export function useFiscalEstimate(anno: number) {
-  return useQuery({
-    queryKey: queryKeys.fiscalEstimate(anno),
-    queryFn: () => unwrap(api.GET('/api/analytics/fiscale', { params: { query: { anno } } })),
   })
 }
 

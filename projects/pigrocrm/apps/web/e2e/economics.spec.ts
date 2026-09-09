@@ -11,9 +11,13 @@ import { loginAsAdmin, seedDealWithRate } from './helpers'
  * still reports zero revenue and forty hours left to invoice -- a draft is not revenue,
  * which is the invoice-state reading of "already invoiced" that `billed_entry_ids`
  * implements and every figure downstream inherits. Then the same invoice is *issued*
- * from the invoice screen, and the same four figures move together on five separate
- * screens: the deal's conto economico, the deal's own budget row, the period margins,
- * and the annual fiscal estimate.
+ * from the invoice screen, and the same figures move together on the two screens that
+ * still report them: the deal's conto economico and the annual fiscal estimate, which is
+ * a card of Home → Economica since the Analisi section left the interface (2026-09-09).
+ * The period margins and the estimate-versus-actual report went with it -- their halves
+ * of this walk are gone from this file rather than retargeted, because the screens they
+ * asserted on no longer exist. `GET /api/analytics/*` still serves both, and
+ * `apps/mcp/tests/test_full_cycle.py` reads them the way an agent does.
  *
  * The MCP half of criterion 12 -- an agent preparing the hours and finding no tool to
  * bill them -- is `apps/mcp/tests/test_full_cycle.py`, which drives both adapters over
@@ -43,8 +47,8 @@ function centesimi(testo: string): number {
 
 /**
  * The one row of a conto economico (`features/analytics/PnlRows.tsx`'s `Row`, and the
- * identically-shaped one in `FiscalPanel.tsx`), addressed by its label and read for its
- * value.
+ * identically-shaped one in `features/dashboard/FiscalPanel.tsx`), addressed by its label
+ * and read for its value.
  *
  * `getByText` resolves to the *label span* rather than to the row or to any ancestor:
  * Playwright's text engine keeps only the smallest element whose own text matches, and
@@ -72,10 +76,11 @@ function meseCorrente(oggi: Date): string {
  * the second of a month it produces `[…-01, …-01, …-02]` rather than stepping into the
  * month before.
  *
- * The clamp matters because everything downstream is read over one month: the hours, the
- * emission and both `/analisi` windows. A date one month earlier would put the work
- * outside the window that is supposed to contain it, and only on two days out of thirty
- * -- the worst kind of failure to be handed by a suite. Repeating a day is harmless:
+ * The clamp matters because everything downstream is read over one span: the hours and
+ * the emission both have to land inside the year the annual estimate is read for. A date
+ * one month earlier would put the work outside the window that is supposed to contain it,
+ * and only on two days out of thirty -- the worst kind of failure to be handed by a
+ * suite. Repeating a day is harmless:
  * `time_entries` carries no uniqueness over `(deal, user, data)` by design (§4.1's
  * row-per-entry), which is the same property that lets one person log two sessions in
  * one afternoon.
@@ -124,16 +129,15 @@ test.describe('economics', () => {
     // Never a literal year anywhere in this file: `InvoiceService._check_issue_date`
     // refuses a `data_emissione` outside the current year, so a hard-coded `2026-03-10`
     // would be a spec that starts failing on the first of January. Everything is derived
-    // from `new Date()` -- the hours, the emission and the window all land in the same
-    // calendar month, which is the window every `/analisi` report opens on.
+    // from `new Date()` -- the hours and the emission land in the same calendar month, and
+    // therefore inside the year the annual estimate is read for.
     const oggi = new Date()
-    const mese = meseCorrente(oggi)
     const giorni = giorniDelMese(oggi, 3)
     const mesePerEsteso = `${MESI[oggi.getMonth()]} ${oggi.getFullYear()}`
 
     await loginAsAdmin(page)
 
-    // 1. What the two aggregate reports said *before* this test existed.
+    // 1. What the annual estimate said *before* this test existed.
     //
     // As a delta, not as a literal, and for the reason `time-tracking.spec.ts` states
     // for its own grid total: `apps/web/scripts/e2e.sh` does give every run a brand-new
@@ -141,11 +145,7 @@ test.describe('economics', () => {
     // the next person who runs the suite twice by hand against a stack they kept alive.
     // The per-deal assertions further down need no such care: they are scoped to a deal
     // whose name carries this run's own timestamp.
-    await page.goto('/app/analisi/margini')
-    const chiusiPrima = await importo(
-      riga(page.getByRole('group', { name: /^Deal chiusi/ }), 'Ricavi'),
-    )
-    await page.goto('/app/analisi/fiscale')
+    await page.goto('/app/?tab=economica')
     const ricaviFiscaliPrima = await importo(riga(page, 'Ricavi incassabili'))
 
     // 2. A deal that can actually be invoiced.
@@ -170,14 +170,6 @@ test.describe('economics', () => {
         nazione: 'IT',
       },
     })
-
-    // The estimate half of the preventivo/consuntivo report. Both columns, because the
-    // pro-rata needs both: a value estimate with no hours estimate has no progress to
-    // derive itself from (`pro_rata_non_calcolabile`).
-    const preventivo = await page.request.patch(`/api/deals/${dealId}`, {
-      data: { ore_preventivate: '60.00', valore_preventivato: '6000.00' },
-    })
-    expect(preventivo.status(), await preventivo.text()).toBe(200)
 
     const me = (await (await page.request.get('/api/auth/me')).json()) as { id: string }
     // Three sessions of eight hours, not one entry of twenty-four: `ck_time_entries_ore_range`
@@ -301,43 +293,12 @@ test.describe('economics', () => {
     // And there is nothing left to bill, so the button that would offer to is gone.
     await expect(page.getByRole('button', { name: 'Genera bozza di fattura' })).toHaveCount(0)
 
-    // 7. The estimate-versus-actual report, judged against the pro-rata.
-    await page.goto('/app/analisi/preventivo-consuntivo')
-    await page.getByLabel('Da', { exact: true }).fill(mese)
-    await page.getByLabel('A', { exact: true }).fill(mese)
-    // Cell by cell rather than by substring: `"0,00 €"` -- the variance, and the whole
-    // point of the pro-rata -- is a substring of `"6.000,00 €"` two columns to its left,
-    // so a `toContainText` would have passed on the wrong figure. The order is
-    // `buildBudgetColumns`'s own.
-    const celle = page.getByRole('row').filter({ hasText: nome }).getByRole('cell')
-    await expect(celle.nth(1)).toHaveText('60 / 24')
-    await expect(celle.nth(2)).toHaveText('40,00 %')
-    await expect(celle.nth(3)).toHaveText('6.000,00 €')
-    await expect(celle.nth(4)).toHaveText('2.400,00 €')
-    await expect(celle.nth(5)).toHaveText('2.400,00 €')
-    // Against the pro-rata (6.000 × 40%), so the variance is zero rather than the
-    // -3.600,00 € the full budget would report on a job that is 40% done and on track.
-    await expect(celle.nth(6)).toHaveText('0,00 €')
-    // The column that serves most: realised per hour against expected per hour.
-    await expect(celle.nth(7)).toHaveText('100,00 € / 100,00 €')
-
-    // 8. The period margins put it in the reportable column, and only there.
-    await page.goto('/app/analisi/margini')
-    await page.getByLabel('Da', { exact: true }).fill(mese)
-    await page.getByLabel('A', { exact: true }).fill(mese)
-    const chiusi = page.getByRole('group', { name: /^Deal chiusi/ })
-    const inCorso = page.getByRole('group', { name: /^Deal in corso/ })
-    await expect(chiusi).toContainText('dato riportabile')
-    await expect(inCorso).not.toContainText('dato riportabile')
-    await expect
-      .poll(async () => importo(riga(chiusi, 'Ricavi')))
-      .toBe(chiusiPrima + 240_000)
-    // No combined total anywhere, by design: adding a finished job's margin to a
-    // half-done one produces a figure that is neither.
-    await expect(page.getByText('Totale complessivo')).toHaveCount(0)
-
-    // 9. The same invoice reaches the annual estimate -- and it says «stima» first.
-    await page.goto('/app/analisi/fiscale')
+    // 7. The same invoice reaches the annual estimate -- and it says «stima» first.
+    //
+    // In Home → Economica, under the cards: the estimate is a card of the dashboard since
+    // the Analisi section left the interface, read for the year the period on screen
+    // names, which for a bare `/app/?tab=economica` is the current one.
+    await page.goto('/app/?tab=economica')
     await expect(page.getByRole('note')).toContainText(/stima/i)
     await expect
       .poll(async () => importo(riga(page, 'Ricavi incassabili')))

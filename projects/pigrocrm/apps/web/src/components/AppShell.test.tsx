@@ -115,7 +115,7 @@ describe('AppShell', () => {
   it('shows the top-level entries and the group headers in Italian', () => {
     renderShell()
     const nav = sidebar()
-    for (const label of ['Home', 'Analisi', 'Token']) {
+    for (const label of ['Home', 'Token']) {
       expect(nav.getByRole('link', { name: label })).toBeInTheDocument()
     }
     for (const label of ['Vendite', 'Amministrazione', 'Impostazioni']) {
@@ -159,17 +159,16 @@ describe('AppShell', () => {
     )
   })
 
-  it('keeps «Analisi» marked on each of its three tabs, not only on the first', () => {
-    // The entry used to point at `/app/analisi/margini`, so the prefix match covered
-    // `margini` and nothing else: on the fiscal and estimate-versus-actual tabs no
-    // sidebar entry at all was marked. It points at the layout route instead, whose
-    // index still redirects to `margini`, so the click behaves as before.
-    mockRoute.pathname = '/app/analisi/fiscale'
+  it('has no «Analisi» entry, expanded or collapsed', async () => {
+    // The section left the interface with the 2026-09-09 revision: the estimate it was
+    // read for is the «Stima fiscale» card in Home, and the two reports it also carried
+    // are gone from the UI (the API and the MCP tools are untouched). Asserted in both
+    // states, because the rail draws its own list of links and an entry surviving only
+    // there would be invisible to a check on the expanded sidebar alone.
     renderShell()
-    expect(sidebar().getByRole('link', { name: 'Analisi' })).toHaveAttribute(
-      'aria-current',
-      'page',
-    )
+    expect(sidebar().queryByRole('link', { name: 'Analisi' })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Comprimi il menu' }))
+    expect(sidebar().queryByRole('link', { name: 'Analisi' })).not.toBeInTheDocument()
   })
 
   it('opens the search palette from the sidebar field', async () => {
@@ -298,7 +297,7 @@ describe('AppShell', () => {
     const nav = sidebar()
     expect(nav.queryByRole('button', { name: 'Vendite' })).not.toBeInTheDocument()
     // The sub-items of the collapsible groups become icon links in the rail...
-    for (const label of ['Home', 'Clienti', 'Deal', 'Fatture', 'Ore', 'Analisi', 'Token']) {
+    for (const label of ['Home', 'Clienti', 'Deal', 'Fatture', 'Ore', 'Token']) {
       expect(nav.getByRole('link', { name: label })).toBeInTheDocument()
     }
     // ...except the settings tabs, which are tabs of one page and collapse to one link.
