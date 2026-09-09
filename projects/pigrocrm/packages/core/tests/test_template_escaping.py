@@ -641,7 +641,7 @@ def test_url_context_two_spellings_of_the_same_intent_now_agree_for_real(
 
 
 def test_xml_context_returns_the_domain_value_untouched() -> None:
-    """The tree serialiser is the one and only escaping pass. the previous system put a literal
+    """The tree serialiser is the one and only escaping pass. The previous system put a literal
     backslash into an Agenzia delle Entrate record by running a value through
     escapeTypstText and then escapeXml; there is no code path here that can stack
     two escapers, because this one substitutes nothing."""

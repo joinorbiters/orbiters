@@ -51,15 +51,15 @@ def _seed_fiscal_and_emitter_profiles(session: Session) -> None:
     if EmitterProfileRepository(session).get() is None:
         EmitterProfileService(session).upsert(
             EmitterProfileUpsert(
-                ragione_sociale="Humancraft di Ivan Sala",
-                partita_iva="14518240966",
+                ragione_sociale="Studio Rossi di Mario Rossi",
+                partita_iva="01234567890",
                 codice_fiscale="HMCRFT00A01H501K",
                 indirizzo="Via Vittorio Veneto 12",
                 cap="20124",
                 comune="Milano",
                 provincia="MI",
                 nazione="IT",
-                email="someone@example.com",
+                email="mario@example.com",
             ),
             admin,
         )
@@ -143,7 +143,10 @@ async def test_import_registers_the_invoice_and_names_the_gaps(
 
         gaps = await client.call_tool(
             "declare_invoice_register_gaps",
-            {"anno": 2026, "buchi": [{"numero": 2, "motivo": "annullata in the previous system"}]},
+            {
+                "anno": 2026,
+                "buchi": [{"numero": 2, "motivo": "annullata nel gestionale precedente"}],
+            },
         )
         gap_rows = _payload(gaps)
         rows = (
@@ -171,7 +174,10 @@ async def test_list_invoice_register_gaps_reads_what_was_declared(
     async with Client(_server(mcp_session, tmp_path, full_access=True)) as client:
         await client.call_tool(
             "declare_invoice_register_gaps",
-            {"anno": 2027, "buchi": [{"numero": 3, "motivo": "annullata in the previous system"}]},
+            {
+                "anno": 2027,
+                "buchi": [{"numero": 3, "motivo": "annullata nel gestionale precedente"}],
+            },
         )
 
     async with Client(_server(mcp_session, tmp_path, full_access=False)) as client:
@@ -179,4 +185,4 @@ async def test_list_invoice_register_gaps_reads_what_was_declared(
         rows = _payload(result)
         rows = rows["result"] if isinstance(rows, dict) and "result" in rows else rows
         assert rows[0]["numero"] == 3
-        assert rows[0]["motivo"] == "annullata in the previous system"
+        assert rows[0]["motivo"] == "annullata nel gestionale precedente"

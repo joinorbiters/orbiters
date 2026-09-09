@@ -76,8 +76,8 @@ def test_dates_are_dates_and_hours_are_numbers_with_their_format() -> None:
 
 
 def test_the_description_arrives_verbatim_with_its_newline_and_no_escaping() -> None:
-    """the previous system stored the description already escaped for Typst and wrote that same string
-    into the cell (`vite.config.js:1245`), so a client opened the spreadsheet and read
+    """The previous system stored the description already escaped for Typst and wrote that same
+    string into the cell (`vite.config.js:1245`), so a client opened the spreadsheet and read
     `Call con \\@mario su \\[fase 1\\]`. Nothing here escapes anything: a cell value is
     not markup."""
     sheet = _sheet()

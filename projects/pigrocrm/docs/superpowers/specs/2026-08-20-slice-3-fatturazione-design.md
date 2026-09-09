@@ -20,15 +20,15 @@ resta un posto dove si racconta il lavoro, non dove lo si chiude.
 Questo slice è anche il punto in cui si riscuote un investimento fatto due volte in anticipo. Le
 colonne fiscali di `customers` sono di prima classe da subito (`partita_iva`, `codice_fiscale`,
 `codice_sdi`, `pec`, `indirizzo`, `cap`, `comune`, `provincia`, `nazione`) proprio perché la
-FatturaPA si costruisce su quelle: the previous system le indovinava a runtime provando tre slug diversi per campo
+FatturaPA si costruisce su quelle: il gestionale precedente le indovinava a runtime provando tre slug diversi per campo
 su Attio, e ogni fattura era un tiro di dado sull'anagrafica. E lo slice 2 ha già costruito
 `emitter_profile`, che è la controparte emittente degli stessi dati.
 
 ---
 
-## 2. Cosa si porta da the previous system, e cosa si riscrive
+## 2. Cosa si porta dal gestionale precedente, e cosa si riscrive
 
-Il generatore `buildInvoiceXml` (`the reference copy/website/vite.config.js:1720-1889`) ha prodotto
+Il generatore `buildInvoiceXml` (`.reference-*/website/vite.config.js:1720-1889`) ha prodotto
 fatture accettate dal Sistema di Interscambio. Quel fatto vale più della documentazione dello schema,
 perché lo SdI applica controlli che lo schema non descrive e rifiuta combinazioni sintatticamente
 valide. **La conoscenza di dominio si porta; la macchina che la eseguiva no.** È lo stesso giudizio
@@ -51,7 +51,7 @@ guadagnato, il meccanismo dei placeholder era un difetto di progetto.
 | `Divisa` = `EUR`, `TipoDocumento` = `TD01` | |
 | `CondizioniPagamento TP02` e `ModalitaPagamento MP05` come default | Sono i valori giusti per questo emittente: pagamento in un'unica soluzione, bonifico |
 | `Anagrafica/Denominazione` anche per un cliente persona fisica con solo CF | FPR12 ammette `Nome`/`Cognome` in alternativa, ma `customers` ha una sola `ragione_sociale`: non c'è una scelta da fare |
-| Layout Typst della fattura (`the reference copy/offer/template-invoice.md`): griglia di testata, blocco Committente, tabella Dettaglio, tabella Modalità pagamento, divisore e piede | Portato nella struttura. L'identità Humancraft hardcodata diventa `emitter_profile`, la sintassi `[PLACEHOLDER]` diventa `{{}}`, la tabella Dettaglio a riga singola diventa un `{{#each righe}}` |
+| Layout Typst della fattura (`.reference-*/offer/template-invoice.md`): griglia di testata, blocco Committente, tabella Dettaglio, tabella Modalità pagamento, divisore e piede | Portato nella struttura. L'identità Studio Rossi hardcodata diventa `emitter_profile`, la sintassi `[PLACEHOLDER]` diventa `{{}}`, la tabella Dettaglio a riga singola diventa un `{{#each righe}}` |
 
 ### 2.2 Riscritto, e perché
 
@@ -225,7 +225,7 @@ mutabile, una sempre congelata.
 
 Nessun `float`, in nessun punto: `Decimal` nel servizio, `Numeric` in Postgres, e i totali **calcolati
 dal servizio e memorizzati**, mai ricalcolati dal frontend. Il totale calcolato nel browser è il
-difetto strutturale di the previous system citato nella spec dello slice 1 §2.2, e su una fattura costa di più.
+difetto strutturale del gestionale precedente citato nella spec dello slice 1 §2.2, e su una fattura costa di più.
 
 | Grandezza | Tipo | Perché |
 |---|---|---|
@@ -287,7 +287,7 @@ in corso: le due letture del §3 e del §8.1 non possono divergere.
 ## 7. Il regime fiscale
 
 Il regime forfettario non applica IVA e porta una dichiarazione normativa specifica — già visibile nel
-template di the previous system come stringa fissa. Il regime **guida** i totali e l'XML, e lo fa attraverso un dato,
+template del gestionale precedente come stringa fissa. Il regime **guida** i totali e l'XML, e lo fa attraverso un dato,
 non attraverso un `if` sparso nel generatore.
 
 ### 7.1 `fiscal_profile`
@@ -331,7 +331,7 @@ Una `RegimeStrategy` risolta dal `codice_regime` decide tre cose e nient'altro:
 | Bollo | `DatiBollo/BolloVirtuale = SI` **solo se** l'imponibile non soggetto supera `soglia_bollo`; altrimenti l'elemento `DatiBollo` è assente |
 
 Il bollo **non entra nel totale** e non si riaddebita al cliente: `DatiBollo` dichiara che l'imposta di
-bollo è assolta in modo virtuale dall'emittente. È ciò che the previous system fa e ciò che l'emittente fa davvero.
+bollo è assolta in modo virtuale dall'emittente. È ciò che il gestionale precedente fa e ciò che l'emittente fa davvero.
 Il riaddebito richiederebbe una riga con `Natura N1` (escluse ex art. 15 DPR 633/72), cioè una
 funzionalità con una sua semantica, e non si specifica a metà (§13).
 
@@ -456,7 +456,7 @@ Tre proprietà, che sono le tre riscritture del §2.2 rese architettura:
    preparati per Typst. Il contesto `xml` si aggiunge a `RenderContext` in
    `templates/escaping.py`, accanto a `markdown`, `typst`, `typst_string`, `url`, `verbatim`, in modo
    che il terzo bersaglio abbia la sua regola esplicita nello stesso posto degli altri due — e non una
-   regola implicita in un modulo diverso, che è come the previous system è arrivata al doppio escaping.
+   regola implicita in un modulo diverso, che è come il gestionale precedente è arrivata al doppio escaping.
 3. **Rifiuta i code point invalidi in XML 1.0** invece di produrre un file non parsabile. `SafeStr`
    ferma già il NUL a monte; qui si chiude la classe, non il caso singolo.
 
@@ -473,7 +473,7 @@ pinnate nell'immagine, render sincrono, nessun input utente su una riga di coman
 
 Due template nuovi, `fattura` e `proforma`, derivati dal layout di `template-invoice.md` con la tabella
 Dettaglio trasformata in `{{#each righe}}`. Il template della proforma porta la dichiarazione nel corpo
-(§5). Il piede riporta la dichiarazione del regime, che nel forfettario è dovuta e che oggi in the previous system è
+(§5). Il piede riporta la dichiarazione del regime, che nel forfettario è dovuta e che oggi nel gestionale precedente è
 una stringa fissa nel sorgente: viene da `fiscal_profile.riferimento_normativo`.
 
 ---

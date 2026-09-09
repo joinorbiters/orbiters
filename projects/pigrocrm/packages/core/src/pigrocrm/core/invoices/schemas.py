@@ -330,12 +330,12 @@ class InvoiceImport(BaseModel):
     of it: the stamp duty is declared alongside, validated non-negative, and never added
     to the total. `DatiBollo/BolloVirtuale` says the issuer settled it virtually (slice 3
     §6.1 rule 4 and §7.2), which is why `sum_totals` stores the same identity for a
-    natively issued invoice -- and the previous system's own register agrees: its «Totale» column always
-    equals «Imp. Reddito».
+    natively issued invoice -- and the previous system's own register agrees: its «Totale» column
+    always equals «Imp. Reddito».
 
     No `riferimento`: `invoices.riferimento` is constrained by
     `ck_invoices_riferimento_only_on_proforma` to `NULL` on every `tipo = 'fattura'`
-    row, and an import always produces a `fattura`. the previous system's free-text description
+    row, and an import always produces a `fattura`. The previous system's free-text description
     belongs in `causale` and in the line's own `descrizione`.
     """
 
@@ -344,8 +344,8 @@ class InvoiceImport(BaseModel):
     anno: int = Field(ge=2000, le=2100)
     # `le=MAX_NUMERO`, not merely `ge=1`. Here the number is *declared* by the caller and
     # the counter follows it (§3.2 rule 3), so nothing downstream re-derives it: a slipped
-    # five-digit value -- the previous system prints its own document ids as `900142`, one keystroke away
-    # from the register number -- would raise `ultimo_numero` to it irreversibly, make every
+    # five-digit value -- the previous system prints its own document ids as `900142`, one keystroke
+    # away from the register number -- would raise `ultimo_numero` to it irreversibly, make every
     # later export refuse (`InvoiceForExport` bounds `numero` at `MAX_NUMERO`, because the
     # SdI file name embeds `anno * 10000 + numero`), and turn `undeclared_gaps` into a
     # two-hundred-thousand-element list. Refused at the schema, before any lock is taken.

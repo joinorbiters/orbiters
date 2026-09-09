@@ -254,8 +254,8 @@ class InvoiceService:
         self, invoice: Invoice, computed: Sequence[ComputedLine], profile: FiscalSnapshot
     ) -> None:
         """Compute and **store**. Never recomputed by a client: a total computed in
-        the browser is the structural defect inherited from the previous system, and on an invoice it
-        costs more."""
+        the browser is the structural defect inherited from the previous system,
+        and on an invoice it costs more."""
         strategy = resolve_regime(profile.codice_regime)
         riepilogo = build_riepilogo(computed)
         imponibile, imposta, totale = sum_totals(riepilogo)
@@ -1220,9 +1220,9 @@ class InvoiceService:
         charging it to the customer would need a line of its own with `Natura N1`, which
         is out of scope. So an imported invoice is checked against the same identity a
         natively issued one satisfies -- anything else would make the two halves of the
-        same table disagree -- and the previous system's register is the confirming fact: its «Totale»
-        column always equals «Imp. Reddito». `bollo` is still checked (non-negative) and
-        still stored; it is simply never added.
+        same table disagree -- and the previous system's register is the confirming
+        fact: its «Totale» column always equals «Imp. Reddito». `bollo` is still
+        checked (non-negative) and still stored; it is simply never added.
         """
         somma_righe = round_money(sum((r.prezzo_totale for r in data.righe), Decimal("0")))
         if somma_righe != round_money(data.imponibile):
@@ -1570,8 +1570,9 @@ class InvoiceService:
         **From 1, not from the lowest number imported.** A year's register always starts
         at 1 -- that is what makes it a register -- so a missing 1 is exactly as much a
         hole as a missing 8, and bounding the scan below by `min(present)` made the one
-        hole an importer is most likely to leave the one hole nobody is told about. The
-        the previous system register of 2026 is the case in point: its lowest existing invoice is the
+        hole an importer is most likely to leave the one hole nobody is told about.
+        The previous system's register of 2026 is the case in point: its lowest
+        existing invoice is the
         2, and 1 has to be *declared* (it was never issued), not silently assumed away.
         The upper bound stays exclusive at `max(present)`: numbers above the highest one
         present are simply the future, and the counter hands them out next.

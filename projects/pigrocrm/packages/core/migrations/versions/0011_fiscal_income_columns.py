@@ -18,8 +18,8 @@ down_revision: str | Sequence[str] | None = "0010"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-# the previous system's own profile, the values the forfettario uses, as percentages: `67.00` and not
-# `0.67`. See `fiscal/schemas.py`, which carries the same three as schema defaults.
+# The previous system's own profile, the values the forfettario uses, as percentages: `67.00` and
+# not `0.67`. See `fiscal/schemas.py`, which carries the same three as schema defaults.
 DEFAULTS = (
     ("coefficiente_redditivita", "67.00"),
     ("aliquota_imposta_sostitutiva", "5.00"),

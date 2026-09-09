@@ -31,23 +31,23 @@ stati letti da nessuno. Il frontend li conosce già: `apps/web/src/features/deal
 esclude deliberatamente dalle colonne di tabella «until the slice 4 estimate-vs-actual report», e la
 scheda deal ha già una card «Preventivo». Il consuntivo è l'unica metà mancante.
 
-E infine: questo slice ospita l'ultimo pezzo di logica di the previous system che vive ancora nel browser. Lo slice
+E infine: questo slice ospita l'ultimo pezzo di logica del gestionale precedente che vive ancora nel browser. Lo slice
 1 §2.2 cita come giustificazione empirica dell'intera architettura tre costanti dentro `App.jsx`
 (`FORFETTARIO_INPS_RATE = 0.2607`, coefficiente 67%, sostitutiva 5%). Sono lì per calcolare un
 margine. Portarle in `packages/core` è il pagamento finale di quel debito.
 
 ---
 
-## 2. Cosa si porta da the previous system, e cosa si riscrive
+## 2. Cosa si porta dal gestionale precedente, e cosa si riscrive
 
 Il precedente è quello degli slice 2 e 3: **il contenuto guadagnato sul campo si porta, il
 meccanismo che lo eseguiva no.** Nello slice 3 quella lettura ha trovato tre bug vivi in codice che
 girava in produzione; qui ne ha trovati sette, elencati al §2.2 con la riga che li dimostra.
 
-Le fonti lette per intero: `the reference copy/website/vite.config.js` righe 1076-1265 (modello e
-persistenza delle voci), 3171-3362 (API `/api/time-tracking`), `the reference copy/offer/template-time-tracking.typ`,
-e `the reference copy/website/src/App.jsx` righe 1783-1963 (la vista `project-costs`, che è il P&L di
-the previous system).
+Le fonti lette per intero: `.reference-*/website/vite.config.js` righe 1076-1265 (modello e
+persistenza delle voci), 3171-3362 (API `/api/time-tracking`), `.reference-*/offer/template-time-tracking.typ`,
+e `.reference-*/website/src/App.jsx` righe 1783-1963 (la vista `project-costs`, che è il P&L di
+The previous system).
 
 ### 2.1 Portato
 
@@ -134,7 +134,7 @@ che ogni query di questo slice ha, ed è la cura che il residuo R7 chiede in gen
 **`deal_id` è obbligatorio.** Il budget vive sul deal (`ore_preventivate`, `valore_preventivato`), il
 ricavo arriva dalle fatture che hanno un `deal_id`, e il P&L è per deal. Un'ora agganciata solo a un
 cliente non avrebbe nessun preventivo contro cui confrontarsi e sfuggirebbe a ogni riga di questo
-slice; un'ora agganciata a niente è la voce fantasma che the previous system produce e che nessun export mostra
+slice; un'ora agganciata a niente è la voce fantasma che il gestionale precedente produce e che nessun export mostra
 (§2.2). Il lavoro interno non riferibile a un cliente resta fuori ambito (§13): tenerlo dentro
 significherebbe payroll, e payroll non è questo prodotto.
 
@@ -273,7 +273,7 @@ Le tre colonne su `fiscal_profile` **non** sono una seconda tabella. Lo slice 1 
 tabella consegnata dallo slice 3 §7.1 contiene i parametri che servivano alla FatturaPA e non quelli
 che servono al calcolo del reddito, che nessuno usava ancora. Sono lo stesso concetto, quindi vanno
 sulla stessa riga singola: un secondo profilo fiscale creerebbe due risposte alla domanda «in che
-regime sono». Default dal profilo attuale di the previous system: `67.00`, `5.00`, `26.07`.
+regime sono». Default dal profilo attuale del gestionale precedente: `67.00`, `5.00`, `26.07`.
 
 Come per lo slice 3 §7.1, **ogni modifica a queste colonne e alle tariffe scrive un'activity**. Il
 residuo R5 resta aperto in generale; qui si chiude per le tabelle che questo slice tocca, e non per
@@ -443,7 +443,7 @@ esiste (§3, decisione 2). Il §7.1 lo dice come regola e il §14 criterio 5 lo 
 calendario a cui il lavoro o la spesa appartengono, ed è quel giorno che determina in quale mese
 finiscono e quindi in quale rapporto e in quale periodo. `toISOString()` su un istante sposta di un
 giorno tutto ciò che accade dopo le 23:00 CET, e il 31 del mese sposta di un mese: è esattamente il
-difetto di the previous system al §2.2, ed è la stessa conclusione dello slice 3 §6.2 su `data_emissione`.
+difetto del gestionale precedente al §2.2, ed è la stessa conclusione dello slice 3 §6.2 su `data_emissione`.
 
 Ammessa la retrodatazione, e **senza il limite d'anno** che lo slice 3 §6.2 impone alla data di
 emissione. La differenza è nell'oggetto, non nella disciplina: là si scrive in un registro fiscale
@@ -564,13 +564,13 @@ Un costo con `deal_id IS NULL` è una **spesa generale**: entra nel P&L di perio
 **non viene ripartito su nessun deal**. Qualunque chiave di ripartizione — sul ricavo, sulle ore — è
 arbitraria, e ha una conseguenza precisa e inaccettabile: **il margine di un deal si muoverebbe
 quando viene fatturato un deal diverso**. È proprio la proprietà che rende un numero non riportabile,
-ed è il difetto che il P&L di the previous system ha per la fiscalità (§8).
+ed è il difetto che il P&L del gestionale precedente ha per la fiscalità (§8).
 
 ---
 
 ## 8. Il calcolo fiscale, spostato dove ha senso
 
-the previous system calcola, dentro `App.jsx` e per singola offerta:
+Il gestionale precedente calcola, dentro `App.jsx` e per singola offerta:
 
 ```js
 const taxableBase   = gross * FORFETTARIO_PROFITABILITY_RATE   // 0.67
@@ -594,7 +594,7 @@ const net           = gross - substituteTax - inps
 un report **di periodo**, mai per deal, in `packages/core`, che legge `fiscal_profile` e produce
 imponibile, imposta sostitutiva, contributi e reddito netto stimato per un anno. È la migrazione delle
 tre costanti da `App.jsx` al service layer che lo slice 1 §14 assegna a questo slice — con la
-correzione che il livello giusto non è quello che the previous system aveva scelto.
+correzione che il livello giusto non è quello che il gestionale precedente aveva scelto.
 
 Il report è dichiaratamente una **stima** e lo scrive in testa: minimale, massimale, altri redditi e
 acconti restano fuori (§13). Una stima etichettata è utile; una stima presentata come un consuntivo è
@@ -712,7 +712,7 @@ riscrivono tre cose:
 ### 10.3 Il giustificativo di un costo
 
 `costs.document_id` punta a un `document` dello slice 2, con il suo storage pluggable, il suo
-versioning e il suo hash. the previous system teneva l'allegato come base64 dentro il JSON dei costi
+versioning e il suo hash. Il gestionale precedente teneva l'allegato come base64 dentro il JSON dei costi
 (`parseBase64Payload`, `vite.config.js:1017`): il documentale esiste già e non si reinventa, che è la
 stessa conclusione dello slice 3 §8.4.
 

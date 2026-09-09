@@ -129,8 +129,8 @@ class GmailMessage(Base, PrimaryKeyMixin, TimestampMixin):
     The unique constraint on `(google_account_id, gmail_message_id)` is what makes the
     watermark's deliberate 24-hour overlap free and every re-run idempotent, *and* it is
     the only thing that holds when two cycles overlap in time: a `SELECT` before the
-    `INSERT` is a check both of them pass. the previous system kept its send record in a JSON file on
-    disk with a non-atomic read-modify-write, so two concurrent sends lost the count; a
+    `INSERT` is a check both of them pass. The previous system kept its send record in a JSON file
+    on disk with a non-atomic read-modify-write, so two concurrent sends lost the count; a
     unique constraint cannot lose anything.
 
     Like `GoogleAccount`, this class deliberately has no `__repr__`. `body_text` holds
@@ -244,7 +244,7 @@ class EmailDraft(Base, PrimaryKeyMixin, TimestampMixin):
     the `message_id_header` minted here is what makes an unknown send outcome resolvable
     by an exact lookup instead of a guess (spec 6.3).
 
-    the previous system kept this in a JSON file with a non-atomic read-modify-write, so two
+    The previous system kept this in a JSON file with a non-atomic read-modify-write, so two
     concurrent sends lost the count. The columns are the same ones -- they were the right
     columns -- on a support that cannot lose a write.
 
@@ -344,8 +344,8 @@ class PaymentReminder(Base, PrimaryKeyMixin, TimestampMixin):
     concurrent creates both pass the count that precedes them, and only the constraint
     stops the second -- which then becomes a `Conflict` instead of a second letter.
 
-    the previous system had none of this. `wasSent = emailSentCount > 0` chose between a courtesy copy
-    and a reminder, and nothing anywhere checked a due date, an interval or a ceiling.
+    The previous system had none of this. `wasSent = emailSentCount > 0` chose between a courtesy
+    copy and a reminder, and nothing anywhere checked a due date, an interval or a ceiling.
     Pressing the button ten times sent ten emails -- and the choice was wrong even when it
     worked: a courtesy copy resent because the first bounced became, on the second send, a
     letter of demand.

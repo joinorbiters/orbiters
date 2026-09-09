@@ -1,6 +1,6 @@
 <!-- packages/core/src/pigrocrm/core/render/assets/template-time-report.md
 
-The layout carried over from `the reference copy/offer/template-time-tracking.typ`. What
+The layout carried over from `.reference-*/offer/template-time-tracking.typ`. What
 is carried is the knowledge: the "Periodo / Data emissione" line, the Cliente + Offerta
 block, a three-column DATA · ORE · DESCRIZIONE table with the description at 0.7fr
 because it is the only column the client actually reads, the thin divider, and a footer

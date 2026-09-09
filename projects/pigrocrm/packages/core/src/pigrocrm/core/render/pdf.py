@@ -1,6 +1,6 @@
 """Pandoc, then Typst. Two subprocesses, no shell, no user input on either argv.
 
-the previous system ran a single `pandoc --pdf-engine=typst`. This runs the two stages separately
+The previous system ran a single `pandoc --pdf-engine=typst`. This runs the two stages separately
 so the intermediate .typ exists as a file we own -- which is the only way to satisfy
 spec 6's "l'errore contiene la riga del template", because Typst's diagnostics name a
 line in that file and nothing else can map it back.
@@ -28,7 +28,7 @@ RENDER_TIMEOUT_SECONDS = 30
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 PANDOC_TEMPLATE = ASSETS_DIR / "pandoc-template.typst"
 HEADER_TEMPLATE = ASSETS_DIR / "header.typ.template"
-# the previous system's own reader extensions, carried over unchanged: `raw_attribute` is what makes
+# The previous system's own reader extensions, carried over unchanged: `raw_attribute` is what makes
 # ```{=typst} a raw block rather than a code listing, and without it the whole
 # two-context escaping design has only one context.
 PANDOC_FROM = "markdown+link_attributes+pipe_tables+raw_attribute"
@@ -99,7 +99,7 @@ def build_header(profile: dict[str, Any]) -> str:
     Rendered through the same engine as the document body, so the issuer's own values
     get the same escaping -- an `@` in an email address is a Typst reference and would
     otherwise fail the compile, which is precisely the bug the previous system's `header.typ` worked
-    around by hand-writing `ivansala\\@humancraft.tech` in the source. `header.typ`
+    around by hand-writing `mario\\@example.com` in the source. `header.typ`
     itself is never handed to Pandoc (it reaches Typst directly, via
     `--include-in-header`), so the "markdown" context `render_template` applies by
     default here never goes through Pandoc's writer at all -- it is not the context

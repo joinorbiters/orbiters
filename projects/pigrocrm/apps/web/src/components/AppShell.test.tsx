@@ -51,7 +51,7 @@ vi.mock('@tanstack/react-router', () => ({
 
 const mockAuth = vi.hoisted(() => ({ ruolo: 'admin' as string }))
 vi.mock('@/lib/auth', () => ({
-  useAuth: () => ({ user: { nome: 'Ivan', email: 'm@example.com', ruolo: mockAuth.ruolo }, logout: vi.fn() }),
+  useAuth: () => ({ user: { nome: 'Mario', email: 'm@example.com', ruolo: mockAuth.ruolo }, logout: vi.fn() }),
   useIsAdmin: () => mockAuth.ruolo === 'admin',
 }))
 

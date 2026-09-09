@@ -51,18 +51,18 @@ sarebbe una finzione.
 
 ---
 
-## 2. Cosa si porta da the previous system, e cosa si rifà
+## 2. Cosa si porta dal gestionale precedente, e cosa si rifà
 
-the previous system manda email da Gmail e manda solleciti già oggi, in produzione. Vale lo stesso criterio
+Il gestionale precedente manda email da Gmail e manda solleciti già oggi, in produzione. Vale lo stesso criterio
 dello slice 2: **il contenuto conquistato si porta, il meccanismo sbagliato si rifà.** Nello slice 2
 il contenuto legale dell'offerta è stato portato intatto e la sintassi `[NOME_CLIENTE]` è stata
 sostituita, perché uno era materiale scritto e usato per davvero e l'altra era un difetto di
 progetto.
 
-| Elemento di the previous system | Decisione | Perché |
+| Elemento del gestionale precedente | Decisione | Perché |
 |---|---|---|
 | **Testo del sollecito e della copia di cortesia** — `buildReminderInvoiceEmailBody` / `buildCourtesyInvoiceEmailBody`, `website/src/App.jsx:2329-2372` | **Portato** | È testo mandato a clienti veri per anni, con la scaletta giusta: numero fattura, data, scadenza, importo, IBAN. Diventa un template `sollecito` del motore dello slice 2, con il livello di sollecito come variabile |
-| **La firma** (`Ivan Sala / CTO / mobile / web`), duplicata **verbatim** nei due builder | **Portata la forma, rifatta la sostanza** | Diventa un campo di `emitter_profile` (slice 2 §4.4). Stessa lezione dello slice 2 sull'header Typst: un CRM per freelance italiani non può avere il nome di un freelance nel sorgente — e non due volte |
+| **La firma** (`Mario Rossi / CTO / mobile / web`), duplicata **verbatim** nei due builder | **Portata la forma, rifatta la sostanza** | Diventa un campo di `emitter_profile` (slice 2 §4.4). Stessa lezione dello slice 2 sull'header Typst: un CRM per freelance italiani non può avere il nome di un freelance nel sorgente — e non due volte |
 | Inviare **come l'utente, dalla sua casella** (`COMPANY_EMAIL`, `vite.config.js:29`) | **Portato come principio** | Un'email che arriva da `noreply@` non ottiene risposte. È la decisione giusta, ed è la ragione per cui serve OAuth e non SMTP |
 | Chiamata a `POST /gmail/v1/users/me/messages/send` (`vite.config.js:5334`), unica chiamata Gmail di tutto il repo | **Portato l'endpoint** | È quello giusto. Ciò che manca è tutto attorno |
 | HTTP grezzo con `fetch`, nessuna libreria client Google (`GOOGLE_TOKEN_URL`, `vite.config.js:23-26`) | **Portato l'approccio** | Coincide con `gdrive.py` dello slice 2. Nessuna dipendenza `googleapis` in nessuno dei due |
@@ -76,7 +76,7 @@ progetto.
 | Il backend dentro `vite.config.js` (5.485 righe), in produzione servito da `vite preview` | **Non si porta** | Vale la critica dello slice 1 §2.2. Qui pesa il doppio: un client Gmail non testabile è un client Gmail non testato, e **in quel repo non esiste un solo test** |
 | Auth: credenziali in chiaro nel sorgente client, **API del tutto non autenticata** (`App.jsx:38-40`) | **Non si porta** | La password nascondeva l'interfaccia, non l'API. Rilevante qui perché lo slice 1 ha già risolto l'autenticazione, e il §8.4 dice cosa resta da fare **prima** di aggiungerci una credenziale Google |
 
-Due difetti di the previous system meritano più di una riga di tabella, perché sono esattamente i due problemi
+Due difetti del gestionale precedente meritano più di una riga di tabella, perché sono esattamente i due problemi
 che il §6.3 e il §7.3 esistono per risolvere — e non sono ipotesi, sono in produzione adesso.
 
 **Uno: l'invio avviene prima della persistenza, e la persistenza può fallire.** `vite.config.js`
@@ -96,7 +96,7 @@ dieci volte manda dieci email. E la scelta è sbagliata anche quando funziona: u
 cortesia rimandata perché la prima era rimbalzata diventa, al secondo invio, una lettera di
 sollecito.
 
-**Il precedente tecnico da seguire non è in the previous system, è in `packages/core/src/pigrocrm/core/storage/gdrive.py`**
+**Il precedente tecnico da seguire non è nel gestionale precedente, è in `packages/core/src/pigrocrm/core/storage/gdrive.py`**
 (slice 2, già in albero): chiamate HTTP con `urllib.request`, firma con `pyjwt[crypto]`, nessuna
 libreria client Google, e — soprattutto — un *seam* iniettabile (`HttpCall`) che
 `packages/core/tests/fakes/fake_drive.py` sostituisce con un finto del **trasporto**, non del
@@ -116,7 +116,7 @@ Da verificare **prima** di pianificare, non da assumere.
 | Un'entità fattura con importo, **data di scadenza** e **stato di pagamento** | Slice 3 | I solleciti (§7) non esistono. Non c'è modo di sapere cosa sollecitare. Il resto dello slice non è toccato |
 | `document_versions.storage_key` e `DocumentStorage.get` | Slice 2 | Si può inviare, ma senza allegati. L'invio dell'offerta — il caso d'uso che lo slice 2 §10 rimanda esplicitamente qui — non funziona |
 | Il motore di template `{{}}` con `#if` | Slice 2, **già in albero** | Corpo dell'email e testo del sollecito diventerebbero stringhe nel sorgente. Non accettabile |
-| Una **firma email testuale** nell'`emitter_profile` | Slice 2 §4.4 — ma vedi il §10: l'`emitter_profile` **in corso di implementazione** ha `firma_key`, che è la chiave storage di un'immagine di firma, non un blocco di testo | La firma tornerebbe hardcodata nel sorgente, come in the previous system, e duplicata in ogni template che la usa |
+| Una **firma email testuale** nell'`emitter_profile` | Slice 2 §4.4 — ma vedi il §10: l'`emitter_profile` **in corso di implementazione** ha `firma_key`, che è la chiave storage di un'immagine di firma, non un blocco di testo | La firma tornerebbe hardcodata nel sorgente, come nel gestionale precedente, e duplicata in ogni template che la usa |
 | **PAT con scope, scadenza e audit trail** | Residui 1A **R10** e **R5**, oggi aperti | Vedi §8.4: è un prerequisito bloccante, non un miglioramento desiderabile |
 | Un indice su `customers.email` | **Non esiste** oggi. `people.email` ce l'ha (`people/models.py`), `customers.email` no (`customers/models.py`) | La risoluzione di rilevanza (§4.2) fa una scansione sequenziale su `customers` a ogni messaggio. Da aggiungere in questo slice |
 
@@ -414,14 +414,14 @@ Quel `Message-ID` nostro serve a due cose, ed è la decisione tecnica centrale d
 rende il thread corretto quando il cliente risponde, e rende la riconciliazione del §6.3
 **esatta** invece che euristica.
 
-Tre regole sulla costruzione dell'RFC822, tutte e tre imparate dai difetti di the previous system elencati al §2:
+Tre regole sulla costruzione dell'RFC822, tutte e tre imparate dai difetti del gestionale precedente elencati al §2:
 
 1. **`Message-ID` sempre presente**, generato da noi, con la parte a destra della `@` derivata dal
    dominio configurato.
 2. **`In-Reply-To` e `References` valorizzati** quando si risponde o si sollecita dentro un thread
    esistente. Senza, il sollecito arriva al cliente come un messaggio slegato: chi lo riceve non
    vede la fattura sopra, e il primo effetto è che chiede di rimandarla.
-3. **Il corpo si dichiara `quoted-printable` o `base64`, con `charset="UTF-8"`. Mai `7bit`.** the previous system
+3. **Il corpo si dichiara `quoted-printable` o `base64`, con `charset="UTF-8"`. Mai `7bit`.** Il gestionale precedente
    dichiara `7bit` su testo che contiene `à` e `’`; funziona per caso, fino al primo client di posta
    che prende la dichiarazione alla lettera. Un test invia un corpo con accenti, virgolette
    tipografiche ed emoji e verifica che l'RFC822 prodotto si ri-decodifichi identico.
@@ -433,7 +433,7 @@ Due fallimenti diversi, che troppo spesso vengono trattati come uno.
 **(a) Gmail ha rifiutato.** Caso pulito: nulla è partito, `send_state='fallito'`, la bozza resta
 intatta con l'errore accanto, il composer si riapre con il testo dentro.
 
-**(b) Non sappiamo.** Timeout, connessione caduta, risposta persa — oppure, come in the previous system oggi,
+**(b) Non sappiamo.** Timeout, connessione caduta, risposta persa — oppure, come nel gestionale precedente oggi,
 Gmail ha accettato e **la scrittura successiva è fallita** (§2: `404 'Offerta non trovata per
 registrare l'invio email.'` con l'email già consegnata). Il messaggio **può** essere nella cartella
 Inviati dell'utente. Non si assume né l'una né l'altra cosa:
@@ -482,13 +482,13 @@ Una query, non un evento: `SollecitiService.candidates()` restituisce le fatture
 
 **Questa chiamata non manda niente.** Prepara la lista.
 
-Il confronto con the previous system è la giustificazione di ognuna delle quattro condizioni: là il sollecito è
+Il confronto con il gestionale precedente è la giustificazione di ognuna delle quattro condizioni: là il sollecito è
 scelto da `emailSentCount > 0`, cioè «è la seconda email», senza guardare né la scadenza né
 l'intervallo né un tetto (§2). Qui la scadenza è l'unica cosa che rende un sollecito legittimo,
 l'intervallo è l'unica cosa che lo rende sopportabile, e il tetto — `max_reminders`, default 3 —
 è ciò che impedisce a una fattura contestata di diventare una persecuzione automatica.
 
-**E c'è un segnale che the previous system non poteva avere.** Da quando il CRM legge la posta (§4), la lista
+**E c'è un segnale che il gestionale precedente non poteva avere.** Da quando il CRM legge la posta (§4), la lista
 delle candidate può dire *«il cliente ha risposto il 12 agosto»*, mostrando l'ultimo messaggio in
 entrata da quel cliente dopo la data della fattura. Non sopprime la candidata — una risposta non è
 un pagamento, e a volte la risposta è proprio ciò che va sollecitato — ma la mette in fondo alla
@@ -633,14 +633,14 @@ ordine di quanto sono vincolanti:
 
 Non è uno scopo: raccogliere email, misurare le visite, mostrare loghi di clienti inventati.
 
-### 9.2 Cosa si porta dal `website/` di the previous system — e la correzione necessaria
+### 9.2 Cosa si porta dal `website/` del gestionale precedente — e la correzione necessaria
 
 Prima di progettare, una correzione di fatto, perché cambia cosa c'è da studiare:
-**`the reference copy/website/` non è una landing page.** È l'intera applicazione the previous system — una SPA
+**`.reference-*/website/` non è una landing page.** È l'intera applicazione del gestionale precedente — una SPA
 React di un solo file (`src/App.jsx`, 6.784 righe, sette tab, nessun router) più il backend dentro
 `vite.config.js`. **In quel repository non esiste alcun sito di presentazione**: zero occorrenze di
 `hero`, `pricing`, `testimonial`, `signup`, nessun form di contatto, nessun link esterno tranne
-`humancraft.tech` dentro il testo della firma dell'email.
+`example.com` dentro il testo della firma dell'email.
 
 Quindi dal `website/` **non si porta nessun contenuto**. Si porta della **tecnica**, e sono cose
 buone che sarebbe stupido reinventare — mentre la palette e i caratteri non si portano affatto,
@@ -658,7 +658,7 @@ dietro.
 | Etichette-sopratitolo: `uppercase`, `letter-spacing: .24em`, `.75rem` (`App.css:83-89`) | **Portata.** Un dettaglio piccolo che fa molto del carattere «soft» di quel sistema |
 | Tipografia fluida con `clamp()` (`App.css:96-101`) | **Portata** |
 | **Google Fonts da CDN** — e caricato **due volte**, con due set diversi di famiglie di cui uno mai usato (`index.html:11-16` e `src/index.css:1`) | **Non si porta.** `tokens.css` documenta già per esteso perché: un prodotto venduto sulla promessa del self-hosting non può consegnare a Google l'IP di ogni visitatore, né rompersi in un'installazione offline. E un `@import` dentro il CSS blocca il rendering |
-| `<title>` e `<meta name="description">` **di un altro prodotto** — «Humancraft is the AI optimization platform…» (`index.html:7-17`) | **Trappola da nominare, non da portare.** È l'artefatto più simile a una landing in tutto il repo, ed è copia sbagliata rimasta dallo scaffold. La landing di questo slice ha `title`, `description` e Open Graph propri, e il §13 li verifica |
+| `<title>` e `<meta name="description">` **di un altro prodotto** — «Studio Rossi is the AI optimization platform…» (`index.html:7-17`) | **Trappola da nominare, non da portare.** È l'artefatto più simile a una landing in tutto il repo, ed è copia sbagliata rimasta dallo scaffold. La landing di questo slice ha `title`, `description` e Open Graph propri, e il §13 li verifica |
 
 ### 9.3 Da dove viene il soft, concretamente
 
@@ -685,13 +685,13 @@ meccanicamente impossibile, non sconsigliato.
 
 | Dimensione | Regola |
 |---|---|
-| **Superfici** | Nessun bordo. L'app separa con `--border` dappertutto; la landing separa con la tinta della superficie e con lo spazio. Default `border-width: 0`; qualunque linea visibile è un capello da `1px` in `color-mix(…, transparent)`, mai `--border`. Il rilievo viene dalle ombre di the previous system (§9.2) — grandi, morbide, a bassa opacità, in Prussian Blue trasparente — più il bordo-luce `inset 0 1px 0 rgba(255,255,255,.8)`. Bianco translucido all'85%, **senza `backdrop-filter`** |
-| **Grana** | La tecnica di the previous system (§9.2), ri-tinta: due pseudo-elementi sovrapposti, sotto il contenuto. Il primo, tre blooms radiali in `--landing-veil-warm` / `--landing-veil-gold` / `--landing-surface`; il secondo, una `repeating-linear-gradient` a 120°, `1px` ogni `10px`, `rgba(1,25,54,.04)` — cioè Prussian Blue, non nero — con `opacity .12` e `pointer-events: none`. **Zero byte, zero richieste, nessun asset binario**, che è il motivo per cui questa vince su un `feTurbulence` in `data:` URI. **Spenta sotto `@media (prefers-contrast: more)`**: la trama sta sopra il testo, e sopra il testo è contrasto in meno |
-| **Raggi** | Solo `--radius-2xl` e superiori della scala già spedita per i contenitori, `--radius-md`/`lg` per i campi, e `--landing-radius-pill: 999px` per la CTA. È la gerarchia a tre livelli di the previous system mappata sulla scala di `tokens.css`, non una scala nuova |
+| **Superfici** | Nessun bordo. L'app separa con `--border` dappertutto; la landing separa con la tinta della superficie e con lo spazio. Default `border-width: 0`; qualunque linea visibile è un capello da `1px` in `color-mix(…, transparent)`, mai `--border`. Il rilievo viene dalle ombre del gestionale precedente (§9.2) — grandi, morbide, a bassa opacità, in Prussian Blue trasparente — più il bordo-luce `inset 0 1px 0 rgba(255,255,255,.8)`. Bianco translucido all'85%, **senza `backdrop-filter`** |
+| **Grana** | La tecnica del gestionale precedente (§9.2), ri-tinta: due pseudo-elementi sovrapposti, sotto il contenuto. Il primo, tre blooms radiali in `--landing-veil-warm` / `--landing-veil-gold` / `--landing-surface`; il secondo, una `repeating-linear-gradient` a 120°, `1px` ogni `10px`, `rgba(1,25,54,.04)` — cioè Prussian Blue, non nero — con `opacity .12` e `pointer-events: none`. **Zero byte, zero richieste, nessun asset binario**, che è il motivo per cui questa vince su un `feTurbulence` in `data:` URI. **Spenta sotto `@media (prefers-contrast: more)`**: la trama sta sopra il testo, e sopra il testo è contrasto in meno |
+| **Raggi** | Solo `--radius-2xl` e superiori della scala già spedita per i contenitori, `--radius-md`/`lg` per i campi, e `--landing-radius-pill: 999px` per la CTA. È la gerarchia a tre livelli del gestionale precedente mappata sulla scala di `tokens.css`, non una scala nuova |
 | **Spazio** | Ritmo più largo di quello dell'app: padding verticale di sezione `clamp(4rem, 10vw, 9rem)`, misura del testo `62ch`. La calma viene dallo spazio, ed è la cosa più economica da azzeccare |
-| **Movimento** | Il `rise` di the previous system, accorciato: `IntersectionObserver` che aggiunge una classe, `opacity` + `translateY(12px)`, **`320ms`** invece di `0.6s`, `cubic-bezier(.2,.7,.2,1)`, sfalsamento `60ms`. **Nessun parallasse, nessuna trasformazione legata allo scroll**: combattono con chi legge e su un telefono costano. Tutto dentro `@media (prefers-reduced-motion: reduce)` che le annulla — la guardia c'era già in the previous system e si porta |
+| **Movimento** | Il `rise` del gestionale precedente, accorciato: `IntersectionObserver` che aggiunge una classe, `opacity` + `translateY(12px)`, **`320ms`** invece di `0.6s`, `cubic-bezier(.2,.7,.2,1)`, sfalsamento `60ms`. **Nessun parallasse, nessuna trasformazione legata allo scroll**: combattono con chi legge e su un telefono costano. Tutto dentro `@media (prefers-reduced-motion: reduce)` che le annulla — la guardia c'era già nel gestionale precedente e si porta |
 | **Movimento, la regola che conta** | Lo stato iniziale è **visibile**; è lo script ad applicare lo stato nascosto e poi a rimuoverlo. Il contrario — CSS che nasconde, JS che rivela — dà una pagina bianca quando lo script non parte |
-| **Carattere** | `Outfit` e nient'altro, dal **medesimo** woff2 già in `apps/web/src/assets/fonts/`, servito dal proprio origin. Riusato, non ri-aggiunto, e mai da CDN (§9.2). Tipografia fluida con `clamp()`; sopratitoli `uppercase` a `letter-spacing: .24em` / `.75rem`, portati da the previous system |
+| **Carattere** | `Outfit` e nient'altro, dal **medesimo** woff2 già in `apps/web/src/assets/fonts/`, servito dal proprio origin. Riusato, non ri-aggiunto, e mai da CDN (§9.2). Tipografia fluida con `clamp()`; sopratitoli `uppercase` a `letter-spacing: .24em` / `.75rem`, portati dal gestionale precedente |
 | **Watermelon** | Solo sulla CTA e sull'anello di focus. E sulla CTA è `--color-watermelon-strong`, non `--color-watermelon`: è precisamente ciò per cui la variante accessibile esiste |
 
 **`Reenie Beanie` resta assente**, e ora con una ragione argomentata invece di un rinvio: un
@@ -848,7 +848,7 @@ non solo su cosa è finito nel database.
 11. Allegati per 21 MB: rifiutati **prima** di comporre, con peso e limite nel messaggio.
 12. Un corpo con accenti, virgolette tipografiche ed emoji, e un oggetto con gli stessi: l'RFC822
     prodotto si ri-decodifica **identico** carattere per carattere. Nessun `Content-Transfer-Encoding:
-    7bit` su testo non ASCII, in nessun ramo. È il difetto vivo di the previous system (§2), verificato per non
+    7bit` su testo non ASCII, in nessun ramo. È il difetto vivo del gestionale precedente (§2), verificato per non
     riprodurlo.
 13. Un sollecito dentro un thread esistente porta `In-Reply-To` e `References` che puntano al
     `Message-ID` dell'invio originale.
@@ -893,7 +893,7 @@ non solo su cosa è finito nel database.
     verificati contro lo stack compose vero, non solo contro il dev server.
 25. Ogni pagina della landing ha `title`, `meta description`, `lang="it"` e Open Graph **propri e
     coerenti col prodotto**: il `title` contiene «PigroCRM» e la `description` **non** contiene
-    «AI optimization platform», la copia di un altro prodotto rimasta nello scaffold di the previous system
+    «AI optimization platform», la copia di un altro prodotto rimasta nello scaffold del gestionale precedente
     (§9.2). Non è pedanteria: è l'errore più facile da ripetere, ed è testo che Google legge in
     verifica.
 26. `/privacy` **nomina esplicitamente** `gmail.readonly` e `gmail.send` e dice cosa il prodotto fa

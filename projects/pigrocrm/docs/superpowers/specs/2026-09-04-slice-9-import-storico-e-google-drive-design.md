@@ -3,7 +3,7 @@
 **Data:** 2026-09-04
 **Prerequisiti:** slice 3 (fatturazione) e slice 5 (Gmail) in albero; profilo fiscale e profilo
 emittente configurati sull'installazione (oggi **mancano**: vedi §2.3).
-**Ambito:** (a) registrare nel CRM le fatture già emesse con il gestionale precedente (the previous system),
+**Ambito:** (a) registrare nel CRM le fatture già emesse con il gestionale precedente,
 senza consumare numeri né produrre XML; (b) leggere i documenti del Drive del titolare da MCP,
 importarli come documenti di clienti e deal, e scrivere su quel Drive i documenti che il CRM
 produce.
@@ -13,8 +13,8 @@ produce.
 ## 1. Perché adesso
 
 Il 4 settembre 2026 il CRM ha in anagrafica sei clienti, quattordici deal e la corrispondenza
-Gmail collegata, ma **zero fatture**: le quattordici emesse nel 2026 (numeri fino al 17) vivono nel registro di
-the previous system e nei PDF su Drive. Senza di esse lo scadenziario (slice 8), il P&L (slice 4) e il
+Gmail collegata, ma **zero fatture**: le quattordici emesse nel 2026 (numeri fino al 17) vivono nel registro del
+gestionale precedente e nei PDF su Drive. Senza di esse lo scadenziario (slice 8), il P&L (slice 4) e il
 prossimo numero progressivo sono sbagliati: la prima fattura emessa da PigroCRM sarebbe la
 **1/2026**, e il registro avrebbe due «1».
 
@@ -30,9 +30,9 @@ l'import deve poterlo allegare.
 
 | Domanda | Decisione | Alternative scartate |
 |---|---|---|
-| Come caricare le 14 fatture the previous system | **Import storico dedicato**: la fattura entra come `emessa`, marcata importata, con numero e data originali, senza XML/PDF generati | Solo contatore + note (niente scadenziario); re-emissione via proforma (numeri nuovi e XML duplicati verso lo SdI) |
+| Come caricare le 14 fatture del gestionale precedente | **Import storico dedicato**: la fattura entra come `emessa`, marcata importata, con numero e data originali, senza XML/PDF generati | Solo contatore + note (niente scadenziario); re-emissione via proforma (numeri nuovi e XML duplicati verso lo SdI) |
 | Perimetro Drive via MCP | **Lettura dei documenti esistenti + scrittura dei documenti CRM** su Drive. Nessuna scrittura libera di file arbitrari | Solo lettura; scrittura libera (bypassa template, numerazione e versioning) |
-| Credenziale per Drive | **OAuth dell'utente**, sullo stesso account Google già collegato per Gmail (`ivansala@humancraft.tech`) | Service account (avrebbe richiesto di condividere le cartelle con un indirizzo tecnico) |
+| Credenziale per Drive | **OAuth dell'utente**, sullo stesso account Google già collegato per Gmail (`mario@example.com`) | Service account (avrebbe richiesto di condividere le cartelle con un indirizzo tecnico) |
 
 La terza decisione contraddice una riga della spec dello slice 5 (§5.1: «Drive usa un service
 account: sono due credenziali distinte e restano distinte»). Il §5 di questo documento dice come
@@ -56,7 +56,7 @@ dal chiamante** e non dal contatore, e una nuova colonna:
 
 | Colonna | Tipo | Significato |
 |---|---|---|
-| `importata_da` | `String(20)` null | `'esterno'` per questo slice (era `'the previous system'`, rinominato dalla migrazione 0029: il valore raggiunge API e schermo, quindi non nomina nessun prodotto). `NULL` = emessa da PigroCRM. È il campo che dice «di questa fattura il CRM non ha prodotto né XML né PDF» |
+| `importata_da` | `String(20)` null | `'esterno'` per questo slice (rinominato dalla migrazione 0029, che ha tolto il nome del gestionale precedente: il valore raggiunge API e schermo, quindi non nomina nessun prodotto). `NULL` = emessa da PigroCRM. È il campo che dice «di questa fattura il CRM non ha prodotto né XML né PDF» |
 
 Tutto il resto è il modello dello slice 3: `imponibile`, `imposta`, `bollo`, `totale`,
 `data_emissione`, `data_scadenza`, `stato_pagamento`, `data_incasso`, `causale`,
@@ -64,7 +64,7 @@ Tutto il resto è il modello dello slice 3: `imponibile`, `imposta`, `bollo`, `t
 
 **Cosa non ha, per costruzione:** `xml_hash_sha256` (resta `NULL`), `xml_document_id` (resta
 `NULL`). `export_xml` su una fattura importata solleva `Conflict` con il testo «fattura importata
-da the previous system: l'XML è quello già trasmesso allo SdI dal gestionale precedente». Il PDF è
+dal gestionale precedente: l'XML è quello già trasmesso allo SdI dal gestionale precedente». Il PDF è
 **facoltativo** e, se c'è, è l'originale caricato (§3.5), mai un rendering nuovo: un PDF
 ricreato oggi con un layout diverso non sarebbe la fattura che il cliente ha ricevuto.
 
@@ -81,15 +81,15 @@ Le stesse dello slice 3, applicate ai numeri dichiarati:
 3. **Il contatore avanza, mai indietro.** Dopo ogni import, `InvoiceCounter(anno).ultimo_numero
    = max(ultimo_numero, numero)`. Con le fatture 2–17 importate il contatore 2026 vale 17 e la
    prossima emissione è la 18.
-4. **I buchi si dichiarano.** Nel registro the previous system del 2026 mancano 1, 4 e 6. L'import **non**
-   li inventa e non li blocca: il chiamante passa `buchi_dichiarati: [1, 4, 6]` con un motivo
-   testuale per ciascuno (es. «annullata in the previous system prima della trasmissione»). Il servizio scrive
+4. **I buchi si dichiarano.** Nel registro del gestionale precedente del 2026 mancano 1, 7 e 13. L'import **non**
+   li inventa e non li blocca: il chiamante passa `buchi_dichiarati: [1, 7, 13]` con un motivo
+   testuale per ciascuno (es. «annullata nel gestionale precedente prima della trasmissione»). Il servizio scrive
    una riga `invoice_register_gaps(anno, numero, motivo, dichiarato_da, dichiarato_il)`. Un
    numero mancante **non dichiarato** fra 1 e `ultimo_numero` è un errore
    dell'import, non un avviso: il registro senza buchi è la proprietà che lo slice 3 esiste per
    difendere, e un buco muto è indistinguibile da una fattura persa. Il limite inferiore è **1**,
    non il minimo importato: il registro di un anno comincia sempre dall'1, quindi un 1 mancante è
-   un buco esattamente come un 8 mancante — ed è proprio il caso del 2026 di the previous system, la cui prima
+   un buco esattamente come un 8 mancante — ed è proprio il caso del 2026 del gestionale precedente, la cui prima
    fattura è la 2.
 5. **Solo anni chiusi o l'anno corrente fino a oggi**: `data_emissione` non nel futuro.
 6. **Nessun import dopo la prima emissione nativa dello stesso anno**, salvo numeri inferiori
@@ -106,22 +106,22 @@ causale?,                                      # es. "900142/0426/Consulenza AI 
 righe: [{descrizione, quantita, prezzo_unitario, prezzo_totale, aliquota_iva, natura?}],
 imponibile, imposta, bollo, totale,           # dichiarati, non ricalcolati (vedi sotto)
 stato_pagamento, data_incasso?,
-trasmessa_esternamente_il?,                    # data di trasmissione SdI da the previous system
+trasmessa_esternamente_il?,                    # data di trasmissione SdI dal gestionale precedente
 pdf_sorgente?: {drive_file_id} | {upload_key}, # §3.5
 note_interne?, importata_da: "esterno"
 ```
 
 `riferimento` non c'è, di proposito: sulla tabella `invoices` è il riferimento di una **proforma**
-(vincolo `ck_invoices_riferimento_only_on_proforma`), e la descrizione che the previous system stampava
+(vincolo `ck_invoices_riferimento_only_on_proforma`), e la descrizione che il gestionale precedente stampava
 («900142/0426/…») è una causale, quindi va in `causale` e nella riga.
 
 **I totali sono dichiarati e verificati, non ricalcolati.** Il documento fiscale è quello
-emesso da the previous system: il CRM deve registrare *quel* totale. Ma verifica che `imponibile + imposta =
+emesso dal gestionale precedente: il CRM deve registrare *quel* totale. Ma verifica che `imponibile + imposta =
 totale` e che `imponibile = Σ prezzo_totale di riga` al centesimo; una discordanza è un
 `ValidationFailed` che nomina i due valori. Il **bollo non entra nel totale**: si dichiara a
 parte (verificato non negativo, mai sommato), perché `DatiBollo/BolloVirtuale` afferma che è
 l'emittente ad averlo assolto in modo virtuale — è la stessa identità che `sum_totals` dello
-slice 3 (§6.1 regola 4 e §7.2) scrive per una fattura emessa qui, e il registro the previous system concorda:
+slice 3 (§6.1 regola 4 e §7.2) scrive per una fattura emessa qui, e il registro del gestionale precedente concorda:
 la colonna «Totale» coincide sempre con «Imp. Reddito». È lo stesso principio dei totali dello slice 3 §6.1,
 letto al contrario: lì il CRM calcola e il documento segue, qui il documento comanda e il CRM
 controlla che i conti tornino.
@@ -154,16 +154,16 @@ importata senza PDF originale», non genera.
 | `InvoiceService.declare_gaps(anno, [{numero, motivo}], actor)` | Scrive `invoice_register_gaps`; `activities` `invoice.buco_dichiarato` |
 | REST `POST /api/invoices/import` e `POST /api/invoices/{anno}/gaps` | Ruolo `admin`; PAT accettato come ovunque |
 | MCP `import_issued_invoice`, `declare_invoice_register_gaps` | In `tools/privileged.py`, quindi solo con `mcp_full_access`: **scrivono nel registro fiscale**, e la lista dei divieti agli agenti (`AGENT_FORBIDDEN_ACTIONS`) cresce di due voci, con i test di `test_mcp_invoice_ban.py` aggiornati a diciannove |
-| Frontend | Fuori ambito: il titolare importa via MCP o REST. La lista fatture mostra il badge «importata da the previous system» e nasconde i pulsanti XML/rigenera su quelle righe |
+| Frontend | Fuori ambito: il titolare importa via MCP o REST. La lista fatture mostra il badge «importata dal gestionale precedente» e nasconde i pulsanti XML/rigenera su quelle righe |
 
 ### 3.7 L'import concreto di settembre 2026
 
-Quattordici fatture (numeri 2, 3, 5, 7–17), tutte con dati già ricostruiti dalle email e dal
-registro the previous system (screenshot del 4/09). Tutti e sei i clienti esistono già nel CRM; i PDF stanno nella cartella
-`Fatture` del Drive humancraft. Una delle quattordici è «emessa e non consegnata» in the previous system:
+Quattordici fatture (numeri 2–6, 8–12, 14–17), tutte con dati già ricostruiti dalle email e dal
+registro del gestionale precedente (screenshot del 4/09). Tutti e sei i clienti esistono già nel CRM; i PDF stanno nella cartella
+`Fatture` del Drive di Studio Rossi. Una delle quattordici è «emessa e non consegnata» nel gestionale precedente:
 si importa con `trasmessa_esternamente_il = NULL` e nota, e resta un residuo da chiudere con il
-codice fiscale del cliente. Sequenza: profili (§2.3) → collegamento Drive (§5) → import 2, 3, 5,
-7…17 in ordine di numero → buchi 1, 4, 6 dichiarati → verifica che `list_invoices` dia 14 righe
+codice fiscale del cliente. Sequenza: profili (§2.3) → collegamento Drive (§5) → import 2…6,
+8…12, 14…17 in ordine di numero → buchi 1, 7, 13 dichiarati → verifica che `list_invoices` dia 14 righe
 e `get_unbilled_backlog`/scadenziario tornino con 14 e 15 scadute.
 
 ---
@@ -172,7 +172,7 @@ e `get_unbilled_backlog`/scadenziario tornino con 14 e 15 scadute.
 
 ### 4.1 Le cartelle del titolare
 
-Il Drive humancraft ha, alla radice: `Progetti`, `Offerte`, `Meet Recordings`, `Fatture`,
+Il Drive di Studio Rossi ha, alla radice: `Progetti`, `Offerte`, `Meet Recordings`, `Fatture`,
 `ALTRO`, più file sciolti (lettere di incarico Acme, prompt). Il CRM **non** assume questa
 struttura: è il titolare che, dall'app, indica la **cartella radice** che il CRM può vedere (una
 o più: `Offerte`, `Fatture`, `Progetti`). Tutto fuori da quelle cartelle non esiste per il CRM,
@@ -281,7 +281,7 @@ e vanno chiuse entrambe:
 | Cosa scade oggi | Perché | Cosa cambia |
 |---|---|---|
 | **Sessione dell'app**: `refresh_token_days = 30` | Default dello slice 1 | Default a **180 giorni**, e la rotazione del refresh token **rinnova la scadenza a ogni uso** (sliding): chi usa il CRM non rivede il login; chi lo lascia fermo sei mesi sì. `PIGROCRM_REFRESH_TOKEN_DAYS=180` sull'installazione. L'access token resta a 15 minuti: è la finestra di revoca, non la durata della sessione |
-| **Consenso Google**: `consent_expires_at` a 7 giorni | `PIGROCRM_GOOGLE_APP_UNVERIFIED=true`: il progetto OAuth su Google Cloud è in modalità *Testing*, e Google fa scadere i refresh token consumer dopo sette giorni. Non è una scelta del CRM e nessun codice può allungarla | Il progetto OAuth passa a **pubblicato**. Poiché `ivansala@humancraft.tech` è un account Google Workspace, il tipo utente **Internal** (solo utenti del dominio humancraft.tech) non richiede la verifica di Google per gli scope sensibili di Gmail e Drive. Con l'app pubblicata il refresh token non ha scadenza fissa: Google lo revoca solo dopo **sei mesi di inutilizzo**, e il sync Gmail lo usa ogni giorno. Poi `PIGROCRM_GOOGLE_APP_UNVERIFIED=false`, così `consent_expires_at` resta `NULL` e il banner di scadenza non compare più |
+| **Consenso Google**: `consent_expires_at` a 7 giorni | `PIGROCRM_GOOGLE_APP_UNVERIFIED=true`: il progetto OAuth su Google Cloud è in modalità *Testing*, e Google fa scadere i refresh token consumer dopo sette giorni. Non è una scelta del CRM e nessun codice può allungarla | Il progetto OAuth passa a **pubblicato**. Poiché `mario@example.com` è un account Google Workspace, il tipo utente **Internal** (solo utenti del dominio example.com) non richiede la verifica di Google per gli scope sensibili di Gmail e Drive. Con l'app pubblicata il refresh token non ha scadenza fissa: Google lo revoca solo dopo **sei mesi di inutilizzo**, e il sync Gmail lo usa ogni giorno. Poi `PIGROCRM_GOOGLE_APP_UNVERIFIED=false`, così `consent_expires_at` resta `NULL` e …
 
 Il grant Drive del §5.1 nasce già sotto queste regole: stesso progetto OAuth pubblicato, nessuna
 scadenza imposta dal CRM, `consent_expires_at` valorizzato solo se l'installazione dichiara
@@ -310,7 +310,7 @@ produrrebbe un secondo consenso da rifare ogni settimana.
 
 ## 7. Come si verifica
 
-1. **Registro.** Importare 2, 3, 5, 7–17 del 2026 in ordine casuale produce lo stesso registro
+1. **Registro.** Importare 2–6, 8–12, 14–17 del 2026 in ordine casuale produce lo stesso registro
    che in ordine crescente; un import con `(2026, 9)` duplicato è `Conflict`; una `data_emissione`
    che rompe la monotonia rispetto ai vicini è `ValidationFailed`; il contatore vale 17; una
    `issue` successiva dà la 18; un numero mancante non dichiarato blocca l'ultimo import con un

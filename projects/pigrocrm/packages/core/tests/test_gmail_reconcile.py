@@ -1,9 +1,9 @@
 """An unknown outcome resolves exactly, so a double send cannot happen.
 
-This is the file for the previous system's live defect: it sends, then fails to write the record, then
-answers `404 'Fattura non trovata per registrare l'invio.'` **while the email is already
-delivered**. The operator reads an error and presses the button again, and the client
-gets two.
+This is the file for the previous system's live defect: it sends, then fails to write
+the record, then answers `404 'Fattura non trovata per registrare l'invio.'` **while
+the email is already delivered**. The operator reads an error and presses the button
+again, and the client gets two.
 
 Two halves have to hold at once, and each is the other's failure mode:
 
@@ -73,8 +73,8 @@ def _draft(session: Session, account: GoogleAccount, **overrides: Any) -> EmailD
 
 def _lost_answer(deliver: bool, **overrides: Any) -> FakeGmail:
     """Gmail's answer never arrives. `deliver=True` is the case that matters: the message
-    really did leave, and only the response was lost. That is the previous system's live defect, and it
-    is the case a guess gets wrong."""
+    really did leave, and only the response was lost. That is the previous system's
+    live defect, and it is the case a guess gets wrong."""
     return FakeGmail(timeout_on_send=True, deliver_on_timeout=deliver, **overrides)
 
 

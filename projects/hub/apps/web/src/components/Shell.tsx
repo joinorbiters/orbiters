@@ -29,7 +29,7 @@ export function Shell({ children }: { children: ReactNode }) {
         <a href="https://joinorbiters.com/termini" className="underline-offset-2 hover:underline">
           Termini
         </a>
-        <span>Orbiters è un progetto di Humancraft di Ivan Sala</span>
+        <span>Orbiters è un progetto di Studio Rossi</span>
       </footer>
     </div>
   )

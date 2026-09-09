@@ -1,4 +1,4 @@
-"""invoices.importata_da: 'the previous system' becomes 'esterno'
+"""invoices.importata_da: any legacy provenance value becomes 'esterno'
 
 Revision ID: 0029
 Revises: 0028
@@ -15,14 +15,22 @@ XML and no PDF pigroCRM produced -- and `'esterno'` says exactly that and no mor
 Renaming the `Literal` in `invoices/schemas.py` without moving the rows would leave
 those fourteen holding a value no schema admits, still handed to every client.
 
-The downgrade puts `'the previous system'` back rather than dropping to `NULL`: a database rolled back
-to 0028 is read by code that knows only the old literal, and `NULL` there does not mean
-"imported from somewhere I forgot" -- it means "pigroCRM issued this itself", which for
-these rows is false and would put fourteen invoices back in the reach of
-`export_invoice_xml` and of a PDF regeneration.
+Scoped by value, and deliberately without naming the value it replaces: any row whose
+provenance is neither NULL nor `'esterno'` is a row this migration is about. Matching on
+`<> 'esterno'` rather than on one literal does the same thing to the data that matching
+the old name did, and does it for any other legacy spelling that may exist in a database
+older than this one, while leaving every `NULL` untouched -- `NULL` means "pigroCRM
+issued this itself", which is a different fact and must survive.
 
-Scoped by value, not by year or id: any row carrying the old literal is a row this
-rename is about, and `WHERE importata_da = 'the previous system'` leaves every `NULL` untouched.
+The downgrade is a no-op, and that is a decision rather than an omission. It used to put
+the old literal back, for the sake of a database rolled back to 0028 and read by code
+that knew only that literal. That literal no longer exists anywhere in this repository,
+so a downgrade cannot restore it without reintroducing exactly what the migration exists
+to remove. Dropping to `NULL` instead would be worse than either: `NULL` says pigroCRM
+issued the document, which for these rows is false and would put fourteen invoices back
+in reach of `export_invoice_xml` and of a PDF regeneration. So the column keeps
+`'esterno'` across a rollback, and code at 0028 reading it sees a provenance it does not
+recognise rather than a document it wrongly believes it produced.
 
 The `activities` half matters for the same reason the column does, and is not covered by
 it: `import_issued` records `{anno, numero, totale, importata_da}` (invoices/service.py),
@@ -44,21 +52,25 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
-def _rename(old: str, new: str) -> None:
-    op.execute(f"UPDATE invoices SET importata_da = '{new}' WHERE importata_da = '{old}'")
+def upgrade() -> None:
     op.execute(
-        f"""
+        """
+        UPDATE invoices
+           SET importata_da = 'esterno'
+         WHERE importata_da IS NOT NULL
+           AND importata_da <> 'esterno'
+        """
+    )
+    op.execute(
+        """
         UPDATE activities
-           SET payload = jsonb_set(payload, '{{importata_da}}', '"{new}"'::jsonb)
+           SET payload = jsonb_set(payload, '{importata_da}', '"esterno"'::jsonb)
          WHERE kind = 'imported'
-           AND payload->>'importata_da' = '{old}'
+           AND payload->>'importata_da' IS NOT NULL
+           AND payload->>'importata_da' <> 'esterno'
         """
     )
 
 
-def upgrade() -> None:
-    _rename("the previous system", "esterno")
-
-
 def downgrade() -> None:
-    _rename("esterno", "the previous system")
+    """Intentionally empty: see the note above on why the old value is not restored."""

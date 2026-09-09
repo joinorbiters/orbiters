@@ -1389,7 +1389,7 @@ class TimeEntry(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
 
     `data` is a `Date`, not a timestamp -- §6.3. It is the calendar day the work
     belongs to, and that day decides which month, which report and which period it
-    lands in. the previous system's `formatIsoDate` used `toISOString()`, so an hour logged at 23:30
+    lands in. The previous system's `formatIsoDate` used `toISOString()`, so an hour logged at 23:30
     CEST on 31 March was stored as 1 April and went into the wrong monthly export --
     the file attached to an invoice.
 
@@ -1500,7 +1500,7 @@ class Cost(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     `fiscal_profile.codice_regime` -- named here as a boundary, not designed (§13).
 
     `document_id` is the receipt, held in slice 2's document store with its pluggable
-    storage, versioning and hash. the previous system kept the attachment as base64 inside the costs
+    storage, versioning and hash. The previous system kept the attachment as base64 inside the costs
     JSON (`parseBase64Payload`); the document store already exists and is not
     reinvented.
     """
@@ -3887,7 +3887,7 @@ def to_read(entry: TimeEntry) -> TimeEntryRead:
     Returned already summed because §6 forbids the browser from doing any economic
     arithmetic: every figure the UI shows arrives finished. Task 4A-14 (the report) and
     Task 4B-4 (the P&L) both call this rather than repeating the multiplication --
-    the previous system's P&L recomputed its own totals in the browser and that is exactly how the
+    The previous system's P&L recomputed its own totals in the browser and that is exactly how the
     printed column and the total came to disagree.
     """
     read = TimeEntryRead.model_validate(entry)
@@ -4025,7 +4025,7 @@ class TimeEntryService:
                 data=data.data,
                 ore=data.ore,
                 # Stored raw: multi-line, unescaped, exactly as typed. `escape_for`
-                # prepares it at render, once, for the context it lands in. the previous system
+                # prepares it at render, once, for the context it lands in. The previous system
                 # escaped at write time and the value then reached the XLSX escaped and
                 # the PDF double-escaped.
                 descrizione=data.descrizione,
@@ -4106,7 +4106,7 @@ class TimeEntryService:
         return to_read(entry)
 
     def soft_delete(self, entry_id: UUID, actor: Actor) -> None:
-        """Reversible, like everything else in this product. the previous system's only way to void a
+        """Reversible, like everything else in this product. The previous system's only way to void a
         wrong entry was a physical `DELETE` that rewrote the whole archive file;
         `ore > 0` stays the rule and the correction has a path that is not destructive
         (§2.2, last row)."""
@@ -4396,7 +4396,7 @@ def test_a_write_into_a_closed_period_is_refused_both_ways(
 def test_the_receipt_is_a_document_reference_not_bytes(
     db_session: Session, seeded_category_id: UUID
 ) -> None:
-    """the previous system kept the attachment as base64 inside the costs JSON
+    """The previous system kept the attachment as base64 inside the costs JSON
     (`parseBase64Payload`). The document store already exists, with pluggable storage,
     versioning and a hash, and is not reinvented (§10.3). An id that resolves to
     nothing is `NotFound`, not a raw `ForeignKeyViolation`."""
@@ -6328,8 +6328,8 @@ def test_the_seeded_template_exists_and_names_no_freelancer(db_session: Session)
     body = (ASSETS / "template-time-report.md").read_text(encoding="utf-8")
     header = (ASSETS / "header.typ.template").read_text(encoding="utf-8")
     for source in (body, header):
-        assert "humancraft" not in source.lower()
-        assert "ivansala" not in source.lower()
+        assert "studiorossi" not in source.lower()
+        assert "mariorossi" not in source.lower()
         assert not re.search(r"P\.IVA\s+\d{11}", source)
     # The carried-over layout, asserted where it is expressible as text.
     assert "0.7fr" in body
@@ -6456,7 +6456,7 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'pigrocrm.core.timetra
 ```markdown
 <!-- packages/core/src/pigrocrm/core/render/assets/template-time-report.md
 
-The layout carried over from `the reference copy/offer/template-time-tracking.typ`. What
+The layout carried over from `.reference-*/offer/template-time-tracking.typ`. What
 is carried is the knowledge: the "Periodo / Data emissione" line, the Cliente + Offerta
 block, a three-column DATA · ORE · DESCRIZIONE table with the description at 0.7fr
 because it is the only column the client actually reads, the thin divider, and a footer
@@ -6654,7 +6654,7 @@ def _italian_date(giorno: date) -> str:
     """`dd/mm/yyyy`, formatted from the `Date`'s own parts.
 
     Never through an instant and never through `toISOString()`-shaped arithmetic:
-    the previous system's `formatIsoDate` projected a timestamp to UTC, so an hour logged at 23:30
+    The previous system's `formatIsoDate` projected a timestamp to UTC, so an hour logged at 23:30
     CEST on 31 March was stored -- and printed -- as 1 April, landing in the wrong
     monthly export, which is the file attached to an invoice.
     """
@@ -6674,7 +6674,7 @@ class TimeReportService:
         """Everything both formats need, computed once.
 
         Every figure arrives finished: `totale_ore` is already summed with `sum_hours`,
-        so neither the template nor the workbook adds anything. the previous system accumulated hours
+        so neither the template nor the workbook adds anything. The previous system accumulated hours
         as binary floats (`sum + entry.hours`) and printed a total that was a binary sum
         rounded at the end.
 
@@ -6906,7 +6906,7 @@ def test_dates_are_dates_and_hours_are_numbers_with_their_format() -> None:
 
 
 def test_the_description_arrives_verbatim_with_its_newline_and_no_escaping() -> None:
-    """the previous system stored the description already escaped for Typst and wrote that same string
+    """The previous system stored the description already escaped for Typst and wrote that same string
     into the cell (`vite.config.js:1245`), so a client opened the spreadsheet and read
     `Call con \\@mario su \\[fase 1\\]`. Nothing here escapes anything: a cell value is
     not markup."""
@@ -6970,7 +6970,7 @@ If `uv` resolves a different version, update the pin in this same commit rather 
 """The timesheet as a spreadsheet.
 
 The **shape** of this sheet is carried over from the previous system's `buildTimeTrackingXlsx`
-(`the reference copy/website/vite.config.js`): a four-row header block with merged cells,
+(`.reference-*/website/vite.config.js`): a four-row header block with merged cells,
 a bold header row on a grey fill, a frozen pane below it, and widths 14 / 10 / 80. None
 of that is deducible from a specification -- it is what makes the file usable rather
 than merely correct, tuned by years of somebody actually scrolling and filtering it.
@@ -7388,7 +7388,7 @@ Then replace the private copy in `features/deals/columns.tsx`. Delete the local 
 /**
  * Criterion 4's second half: "no economic total is born in the browser".
  *
- * the previous system's whole P&L was computed in `App.jsx` — three fiscal constants, float hour
+ * The previous system's whole P&L was computed in `App.jsx` — three fiscal constants, float hour
  * sums, and a margin that changed depending on which of three fallback buckets happened
  * to be non-empty. This slice moves that arithmetic into `packages/core` and this test
  * is what keeps it there. Parsed with the TypeScript compiler rather than grepped,
@@ -10470,7 +10470,7 @@ def test_there_is_exactly_one_fiscal_profile_table(db_engine: Engine) -> None:
     assert not {t for t in tables if t != "fiscal_profile" and "fiscal" in t}
 
 
-def test_the_previous_systems_own_values_are_the_defaults(db_session: Session) -> None:
+def test_the_previous_systems_values_are_the_defaults(db_session: Session) -> None:
     from pigrocrm.core.invoices.fiscal_service import FiscalProfileService
 
     profile = FiscalProfileService(db_session).get(ADMIN)
@@ -11002,7 +11002,7 @@ git commit -m "feat(timetracking): the real invoice_line FK, and freezing narrow
 SQL query run on a path independent of the service.
 
 This is the test that makes "revenue is the invoice" a property rather than a slogan.
-the previous system's P&L used `offer.totalAmount` — the *offer's* amount — filtered to projects with
+The previous system's P&L used `offer.totalAmount` — the *offer's* amount — filtered to projects with
 at least one non-draft invoice, so a job invoiced for a third of its offer appeared at
 full revenue. There is no second notion of revenue here and none may be introduced.
 """
@@ -11163,7 +11163,7 @@ def test_an_incomplete_deal_does_not_lie(
 def test_costs_of_an_uninvoiced_deal_still_appear(
     db_session: Session, seeded_deal_id: UUID, seeded_category_id: UUID
 ) -> None:
-    """the previous system's `projectCostRows` started from `offers.filter(offerKeysWithInvoices.has(...))`,
+    """The previous system's `projectCostRows` started from `offers.filter(offerKeysWithInvoices.has(...))`,
     so the expenses of a job in progress were invisible to every summary. Every deal has
     its own P&L here, invoiced or not, with the **state** beside it instead of the
     exclusion (§7.3)."""
@@ -11465,7 +11465,7 @@ class BindTimeRequest(BaseModel):
 """Every aggregate query of this slice, in one file.
 
 Deliberately one module rather than a query beside each caller: "where does `ricavi`
-come from" must have exactly one answer to read. the previous system's defect was a *dispersed*
+come from" must have exactly one answer to read. The previous system's defect was a *dispersed*
 aggregation — `hoursByOfferKey.get(offer.id) || hoursByOfferKey.get(offer.fileName) ||
 hoursByOfferKey.get(offer.offerName) || 0` took the **first non-empty bucket instead of
 their sum**, so hours logged against an offer's name vanished if a single hour had been
@@ -12878,7 +12878,7 @@ git commit -m "feat(analytics): hours to an invoice draft, grouped by rate and m
 
 ```python
 # packages/core/tests/test_fiscal_estimate.py
-"""§8. the previous system computed this **per offer**, inside `App.jsx`:
+"""§8. The previous system computed this **per offer**, inside `App.jsx`:
 
     const taxableBase   = gross * FORFETTARIO_PROFITABILITY_RATE       // 0.67
     const substituteTax = taxableBase * FORFETTARIO_SUBSTITUTE_TAX_RATE // 0.05

@@ -68,7 +68,7 @@ def _italian_date(giorno: date) -> str:
     """`dd/mm/yyyy`, formatted from the `Date`'s own parts.
 
     Never through an instant and never through `toISOString()`-shaped arithmetic:
-    the previous system's `formatIsoDate` projected a timestamp to UTC, so an hour logged at 23:30
+    The previous system's `formatIsoDate` projected a timestamp to UTC, so an hour logged at 23:30
     CEST on 31 March was stored -- and printed -- as 1 April, landing in the wrong
     monthly export, which is the file attached to an invoice.
     """
@@ -81,7 +81,7 @@ def report_variables(
     """Everything both formats need, computed once from already-fetched rows.
 
     Every figure arrives finished: `totale_ore` is already summed with `sum_hours`, so
-    neither the template nor the workbook adds anything. the previous system accumulated hours as
+    neither the template nor the workbook adds anything. The previous system accumulated hours as
     binary floats (`sum + entry.hours`) and printed a total that was a binary sum
     rounded at the end.
 

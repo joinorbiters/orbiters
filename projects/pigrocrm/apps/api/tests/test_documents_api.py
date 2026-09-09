@@ -223,10 +223,10 @@ def test_emitter_profile_is_404_before_it_is_saved_then_readable(logged_in: Test
     assert logged_in.get("/api/emitter").status_code == 404
     saved = logged_in.put(
         "/api/emitter",
-        json={"ragione_sociale": "Humancraft di Ivan Sala", "partita_iva": "14518240966"},
+        json={"ragione_sociale": "Studio Rossi", "partita_iva": "01234567890"},
     )
     assert saved.status_code == 200, saved.text
-    assert logged_in.get("/api/emitter").json()["partita_iva"] == "14518240966"
+    assert logged_in.get("/api/emitter").json()["partita_iva"] == "01234567890"
 
 
 def test_a_non_admin_cannot_write_the_emitter_profile(collaborator_client: TestClient) -> None:

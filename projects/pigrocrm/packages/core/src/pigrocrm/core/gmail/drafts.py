@@ -10,7 +10,7 @@ Two consequences, and both are the point:
   **exact** lookup on an id we chose, instead of by comparing recipients and timestamps
   and hoping two similar messages are not minutes apart.
 
-the previous system kept this in a JSON file with a non-atomic read-modify-write, so two concurrent
+The previous system kept this in a JSON file with a non-atomic read-modify-write, so two concurrent
 sends lost the count. Here the uniqueness of `message_id_header` is the database's:
 `test_email_drafts.py` races two creates onto the same id and requires exactly one to
 survive.
@@ -211,8 +211,8 @@ class EmailDraftService:
         not history, and keeping it would leave somebody's abandoned text in the database
         forever. A draft in flight or already sent is refused for the opposite reason --
         deleting the row mid-send leaves the outcome with nothing to be recorded against,
-        which is the previous system's «404 Offerta non trovata per registrare l'invio email» with the
-        mail already delivered."""
+        which is the previous system's «404 Offerta non trovata per registrare
+        l'invio email» with the mail already delivered."""
         actor.require_write("delete_email_draft")
         draft = self._get(draft_id)
         self._require_editable(draft)

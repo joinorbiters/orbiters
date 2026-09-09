@@ -45,15 +45,15 @@ def service(db_session: Session, storage: LocalFileStorage) -> InvoiceService:
     FiscalProfileService(db_session).upsert(FiscalProfileUpsert(codice_regime="RF19"), ADMIN)
     EmitterProfileService(db_session).upsert(
         EmitterProfileUpsert(
-            ragione_sociale="Humancraft di Ivan Sala",
-            partita_iva="14518240966",
+            ragione_sociale="Studio Rossi",
+            partita_iva="01234567890",
             codice_fiscale="HMCRFT00A01H501K",
             indirizzo="Via Vittorio Veneto 12",
             cap="20124",
             comune="Milano",
             provincia="MI",
             nazione="IT",
-            email="someone@example.com",
+            email="mario@example.com",
         ),
         ADMIN,
     )

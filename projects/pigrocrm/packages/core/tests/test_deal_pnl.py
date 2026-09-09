@@ -57,10 +57,10 @@ def test_an_incomplete_deal_does_not_lie(
 def test_costs_of_an_uninvoiced_deal_still_appear(
     db_session: Session, seeded_deal_id: UUID, seeded_category_id: UUID
 ) -> None:
-    """the previous system's `projectCostRows` started from `offers.filter(offerKeysWithInvoices.has(...))`,
-    so the expenses of a job in progress were invisible to every summary. Every deal has
-    its own P&L here, invoiced or not, with the **state** beside it instead of the
-    exclusion (§7.3)."""
+    """The previous system's `projectCostRows` started from
+    `offers.filter(offerKeysWithInvoices.has(...))`, so the expenses of a job in progress were
+    invisible to every summary. Every deal has its own P&L here, invoiced or not, with the **state**
+    beside it instead of the exclusion (§7.3)."""
     CostService(db_session).create(
         CostCreate(
             deal_id=seeded_deal_id,

@@ -237,8 +237,8 @@ def test_an_imported_number_stops_at_the_register_ceiling() -> None:
     `InvoiceForExport`.
 
     Everywhere else the number is produced by the counter, so it cannot exceed the
-    ceiling by accident; an import is the one place a caller names it. the previous system prints its
-    own document ids as `900142`, one column away from the register number on the same
+    ceiling by accident; an import is the one place a caller names it. The previous system prints
+    its own document ids as `900142`, one column away from the register number on the same
     screenshot: a slipped value would raise `ultimo_numero` to it -- irreversibly, since
     the counter never moves backwards -- make every later SdI file name ambiguous (it
     embeds `anno * 10000 + numero`), and turn `undeclared_gaps` into a

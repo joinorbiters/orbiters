@@ -46,15 +46,15 @@ def emitter(logged_in: TestClient) -> dict[str, Any]:
     response = logged_in.put(
         "/api/emitter",
         json={
-            "ragione_sociale": "Humancraft di Ivan Sala",
-            "partita_iva": "14518240966",
+            "ragione_sociale": "Studio Rossi",
+            "partita_iva": "01234567890",
             "codice_fiscale": "HMCRFT00A01H501K",
             "indirizzo": "Via Vittorio Veneto 12",
             "cap": "20124",
             "comune": "Milano",
             "provincia": "MI",
             "nazione": "IT",
-            "email": "someone@example.com",
+            "email": "mario@example.com",
         },
     )
     assert response.status_code == 200, response.text
@@ -101,7 +101,7 @@ def _body(customer_id: str, numero: int, giorno: str) -> dict[str, Any]:
         "imposta": "0.00",
         # The stamp is declared beside the total, never inside it: the identity the
         # service checks is `imponibile + imposta == totale` (slice 3 `sum_totals`, and
-        # the previous system's own register, whose «Totale» column always equals «Imp. Reddito»).
+        # The previous system's own register, whose «Totale» column always equals «Imp. Reddito»).
         "bollo": "2.00",
         "totale": "2700.00",
         "stato_pagamento": "incassato",

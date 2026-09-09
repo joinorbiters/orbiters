@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     # the same env.py production runs. Empty resolves to packages/core/alembic.ini next
     # to this package, which is where both the checkout and the API image keep it.
     tenants_alembic_ini: str = ""
-    # The root installation's own name as a space, e.g. `humancraft`: `/<root_slug>/app`
+    # The root installation's own name as a space, e.g. `studiorossi`: `/<root_slug>/app`
     # and `/<root_slug>/api` are the root itself -- same database, same Gmail and Drive,
     # same cookies -- so the titolare's CRM has an address shaped like everyone else's.
     # Empty means the root answers only without a prefix. Reserved for signups when set.

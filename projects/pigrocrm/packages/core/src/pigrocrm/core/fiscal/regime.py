@@ -1,7 +1,7 @@
 """A regime decides three things and nothing else: the rate a line defaults to, the
 `Natura`/`RiferimentoNormativo` pair, and whether the stamp duty applies (spec 7.2).
 
-the previous system hardcoded all three in the generator, which is why "what regime was this
+The previous system hardcoded all three in the generator, which is why "what regime was this
 invoice in" had no answer other than reading the source at the time. Here they come
 from `fiscal_profile` through one of these objects, so a different regime is a second
 object -- no new column, no migration -- and the rounding rules of `totals.py`, already

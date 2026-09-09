@@ -99,7 +99,7 @@ def test_a_write_into_a_closed_period_is_refused_both_ways(
 def test_the_receipt_is_a_document_reference_not_bytes(
     db_session: Session, seeded_category_id: UUID
 ) -> None:
-    """the previous system kept the attachment as base64 inside the costs JSON
+    """The previous system kept the attachment as base64 inside the costs JSON
     (`parseBase64Payload`). The document store already exists, with pluggable storage,
     versioning and a hash, and is not reinvented (§10.3). An id that resolves to
     nothing is `NotFound`, not a raw `ForeignKeyViolation`."""

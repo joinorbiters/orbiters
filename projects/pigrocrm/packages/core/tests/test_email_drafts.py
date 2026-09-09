@@ -187,8 +187,8 @@ def test_a_failed_draft_is_editable_again_and_loses_its_stale_error(
 
 def test_deleting_a_draft_in_flight_is_refused(db_session: Session) -> None:
     """Deleting the row while the send is running would leave the outcome with nothing
-    to be recorded against -- which is the previous system's `404 'Offerta non trovata per registrare
-    l'invio email.'` with the mail already delivered."""
+    to be recorded against -- which is the previous system's `404 'Offerta non trovata per
+    registrare l'invio email.'` with the mail already delivered."""
     account = connected_account(db_session)
     customer = _customer(db_session)
     service = _service(db_session)

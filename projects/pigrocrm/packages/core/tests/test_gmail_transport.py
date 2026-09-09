@@ -174,7 +174,7 @@ def test_it_gives_up_after_four_attempts_rather_than_forever() -> None:
 
 
 def test_the_token_endpoint_surfaces_invalid_grant_as_a_machine_readable_code() -> None:
-    """the previous system's parseGoogleError truncated the message to 400 characters and returned
+    """The previous system's parseGoogleError truncated the message to 400 characters and returned
     500, so a revoked token and a flaky network produced the same screen and therefore
     the same wrong reaction: retry. The code is what makes them distinguishable."""
     body = json.dumps(

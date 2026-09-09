@@ -35,13 +35,13 @@ def _emitter(session: Session) -> None:
     # without one, the same way `issue` does.
     EmitterProfileService(session).upsert(
         EmitterProfileUpsert(
-            ragione_sociale="Humancraft di Ivan Sala",
-            partita_iva="14518240966",
+            ragione_sociale="Studio Rossi",
+            partita_iva="01234567890",
             indirizzo="Via Vittorio Veneto 12",
             cap="20124",
             comune="Milano",
             provincia="MI",
-            email="someone@example.com",
+            email="mario@example.com",
         ),
         Actor(id=None, type="mcp", role="admin"),
     )

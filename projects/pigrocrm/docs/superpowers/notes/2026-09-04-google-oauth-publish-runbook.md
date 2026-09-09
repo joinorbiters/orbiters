@@ -4,7 +4,7 @@ Slice 9B, prerequisito del collegamento Drive (§5.6 della spec dello slice 9). 
 progetto OAuth su Google Cloud è in modalità *Testing* (`PIGROCRM_GOOGLE_APP_UNVERIFIED=true`
 in questo `.env`): Google fa scadere il refresh token Gmail sette giorni dopo il consenso,
 e il titolare rifà il login in continuazione. L'account del titolare
-(`ivansala@humancraft.tech`) è un account Google Workspace, quindi il progetto può passare
+(`mario@example.com`) è un account Google Workspace, quindi il progetto può passare
 al tipo utente **Internal** ed essere pubblicato **senza la revisione di verifica di
 Google**, anche con gli scope sensibili di Gmail e Drive.
 
@@ -20,7 +20,7 @@ vanno fatti dal titolare (o da chi ha i permessi di proprietario/editor su quel 
 
 `APIs & Services` → `OAuth consent screen`:
 
-1. **User Type**: **Internal** (solo utenti del dominio `humancraft.tech`). È questa la
+1. **User Type**: **Internal** (solo utenti del dominio `example.com`). È questa la
    scelta che evita la revisione di Google: uno user type Internal non passa mai per la
    verifica, indipendentemente dagli scope dichiarati.
 2. **Publishing status**: **In produzione** (*In production*, non più *Testing*).

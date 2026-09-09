@@ -18,8 +18,8 @@ in the middle.
 3. The outcome is committed after.
 
 The cost is that the process can die between 2 and 3. That is precisely the `incerto`
-state, and `reconcile` is how it gets resolved -- by asking Gmail, not by guessing. the previous system
-had the same window and no name for it, which is why it answers
+state, and `reconcile` is how it gets resolved -- by asking Gmail, not by guessing. The previous
+system had the same window and no name for it, which is why it answers
 `404 'Fattura non trovata per registrare l'invio'` while the email is already delivered,
 and why the operator then presses the button again.
 

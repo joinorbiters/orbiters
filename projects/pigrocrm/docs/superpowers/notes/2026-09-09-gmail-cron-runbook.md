@@ -13,15 +13,16 @@ Due cose decise insieme, perché insieme rispondono alla stessa domanda dell'ope
 ## 1. Installare il cron (operatore, sul server)
 
 Una riga in `crontab -e` dell'utente che possiede il deploy (quello che può parlare con
-il socket di Docker):
+il socket di Docker). `$DEPLOY_PATH` è la directory di deploy configurata
+sull'ambiente (la radice del checkout del repository su quel server):
 
 ```
-*/15 * * * * cd /opt/pigrocrm/projects/pigrocrm && docker compose --env-file ../../.env exec -T api uv run --no-sync pigrocrm gmail-sync >> /var/log/pigrocrm-gmail-sync.log 2>&1
+*/15 * * * * cd $DEPLOY_PATH/projects/pigrocrm && docker compose --env-file ../../.env exec -T api uv run --no-sync pigrocrm gmail-sync >> /var/log/pigrocrm-gmail-sync.log 2>&1
 ```
 
 Quattro dettagli della riga non sono decorativi:
 
-- **`cd /opt/pigrocrm/projects/pigrocrm`**: `docker compose` legge `docker-compose.yml`
+- **`cd $DEPLOY_PATH/projects/pigrocrm`**: `docker compose` legge `docker-compose.yml`
   dalla directory corrente, e cron parte dalla home dell'utente, non da lì.
 - **`--env-file ../../.env`**: il `.env` del server sta nella radice del repository, non
   accanto al compose file, e compose cerca `.env` nella *propria* directory. Senza
@@ -39,7 +40,7 @@ Verifica subito, senza aspettare il quarto d'ora, eseguendo la stessa riga a man
 stampare una riga sola e uscire con stato 0.
 
 ```
-cd /opt/pigrocrm/projects/pigrocrm && docker compose --env-file ../../.env exec -T api uv run --no-sync pigrocrm gmail-sync; echo "uscita: $?"
+cd $DEPLOY_PATH/projects/pigrocrm && docker compose --env-file ../../.env exec -T api uv run --no-sync pigrocrm gmail-sync; echo "uscita: $?"
 ```
 
 Se l'installazione ha più di una casella Google collegata, il comando **si rifiuta di

@@ -223,7 +223,7 @@ issue to `In Review` becomes something the PR does on its own rather than a manu
   else's a second earlier, and the field keeps no history the MCP surface can read, so
   reading the owner before you write is the only guard there is.
 - `gitBranchName` is rendered for **whoever reads the issue**, not for its assignee: the
-  same card comes back as `fiorelorenzo/orb-41-...` to one of us and `ivansala/orb-41-...`
+  same card comes back as `fiorelorenzo/orb-41-...` to one of us and `mariorossi/orb-41-...`
   to the other. A branch prefix therefore proves nothing about who owns the work.
 - `list_issues` filters on `assignee: "me"` correctly, and does **not** filter on an
   empty one: `assignee: null` and `assignee: "null"` are both accepted and both silently

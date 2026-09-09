@@ -13,7 +13,7 @@ from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 
 ENTITY = "emitter_profile"
 # `.fullmatch()`, not `.match()`: `$` matches before a trailing newline, so
-# "12345678901" -- 12 characters, one more than the String(11) column -- would pass
+# "01234567890\n" -- 12 characters, one more than the String(11) column -- would pass
 # a `.match()` check and reach flush() as a raw, session-poisoning DataError. The same
 # defect this project has already paid for once on `customers.partita_iva`.
 PARTITA_IVA_RE = re.compile(r"\d{11}")
@@ -99,7 +99,7 @@ class EmitterProfileService:
         """The profile as a template scope, under the name `emittente`.
 
         This is what makes `{{emittente.ragione_sociale}}` work in a template and what
-        replaces the hardcoded issuer data in the previous system's `header.typ`. `singleton` is
+        replaces the hardcoded issuer data nel gestionale precedente's `header.typ`. `singleton` is
         excluded: it is a storage mechanism, not a fact about the business (and is
         already absent from `EmitterProfileRead` for the same reason).
         """

@@ -62,15 +62,15 @@ def service(db_session: Session, tmp_path) -> InvoiceService:  # type: ignore[no
     FiscalProfileService(db_session).upsert(FiscalProfileUpsert(codice_regime="RF19"), ADMIN)
     EmitterProfileService(db_session).upsert(
         EmitterProfileUpsert(
-            ragione_sociale="Humancraft di Ivan Sala",
-            partita_iva="14518240966",
+            ragione_sociale="Studio Rossi",
+            partita_iva="01234567890",
             codice_fiscale="HMCRFT00A01H501K",
             indirizzo="Via Vittorio Veneto 12",
             cap="20124",
             comune="Milano",
             provincia="MI",
             nazione="IT",
-            email="someone@example.com",
+            email="mario@example.com",
         ),
         ADMIN,
     )
@@ -402,7 +402,7 @@ def test_the_snapshot_freezes_both_parties_and_the_fiscal_parameters(
     ).scalar_one()
     assert stored["versione"] == SNAPSHOT_VERSIONE
     assert stored["cliente"]["ragione_sociale"] == "Acme S.r.l."
-    assert stored["emittente"]["ragione_sociale"] == "Humancraft di Ivan Sala"
+    assert stored["emittente"]["ragione_sociale"] == "Studio Rossi"
     assert stored["fiscale"]["codice_regime"] == "RF19"
 
 

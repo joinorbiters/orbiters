@@ -416,8 +416,8 @@ class GmailRepository:
         A conditional UPDATE and not a SELECT-then-set: two concurrent requests both pass
         a read, and only the database can arbitrate which of them owns the send.
         `send_state` is the guard in the WHERE clause, so the second caller updates zero
-        rows and learns it lost -- and the email is sent once. the previous system kept this count in a
-        JSON file with a non-atomic read-modify-write and lost it under exactly this race.
+        rows and learns it lost -- and the email is sent once. The previous system kept this count
+        in a JSON file with a non-atomic read-modify-write and lost it under exactly this race.
 
         The predicate is `EDITABLE_SEND_STATES` rather than `== "bozza"`, and that is the
         same fact stated twice on purpose: a draft whose previous attempt was refused is

@@ -4,7 +4,7 @@ The render is two-staged: a Markdown template becomes compiled Markdown, Pandoc 
 that into Typst, Typst composes the PDF. A value in an ordinary paragraph is escaped
 for Markdown and Pandoc handles the Typst layer for it; a value inside a raw
 `{=typst}` block is passed through by Pandoc untouched, so nothing but this module
-stands between it and the compiler. the previous system applied one uniform `escapeTypstText` to
+stands between it and the compiler. The previous system applied one uniform `escapeTypstText` to
 everything (`website/vite.config.js:71-77`) and patched the character list each time a
 new symbol broke a document -- the commit `fix(pdf): escape @ and other
 typst-sensitive chars in placeholders` is that pattern in its final form.
@@ -285,7 +285,7 @@ def escape_xml(value: str) -> str:
     slice builds the FatturaPA document as an `lxml` element tree and serialises it
     once, so the serialiser is the single escaping pass and anything this function
     substituted would be escaped a second time on the way out -- `&` would reach the
-    Agenzia delle Entrate as `&amp;amp;`. the previous system's own literal-backslash defect
+    Agenzia delle Entrate as `&amp;amp;`. The previous system's own literal-backslash defect
     (`normalizeSingleLine` ran `escapeTypstText` and then `escapeXml` over the same
     string) is that mistake in its other direction. The `xml` context therefore exists
     to say, explicitly and in the same module as the other four contexts, that the

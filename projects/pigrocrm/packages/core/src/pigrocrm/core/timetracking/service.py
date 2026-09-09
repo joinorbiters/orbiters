@@ -69,7 +69,7 @@ def to_read(entry: TimeEntry) -> TimeEntryRead:
     Returned already summed because §6 forbids the browser from doing any economic
     arithmetic: every figure the UI shows arrives finished. Task 4A-14 (the report) and
     Task 4B-4 (the P&L) both call this rather than repeating the multiplication --
-    the previous system's P&L recomputed its own totals in the browser and that is exactly how the
+    The previous system's P&L recomputed its own totals in the browser and that is exactly how the
     printed column and the total came to disagree.
     """
     read = TimeEntryRead.model_validate(entry)
@@ -239,7 +239,7 @@ class TimeEntryService:
                 data=data.data,
                 ore=data.ore,
                 # Stored raw: multi-line, unescaped, exactly as typed. `escape_for`
-                # prepares it at render, once, for the context it lands in. the previous system
+                # prepares it at render, once, for the context it lands in. The previous system
                 # escaped at write time and the value then reached the XLSX escaped and
                 # the PDF double-escaped.
                 descrizione=data.descrizione,
@@ -337,8 +337,8 @@ class TimeEntryService:
         return to_read(entry)
 
     def soft_delete(self, entry_id: UUID, actor: Actor) -> None:
-        """Reversible, like everything else in this product. the previous system's only way to void a
-        wrong entry was a physical `DELETE` that rewrote the whole archive file;
+        """Reversible, like everything else in this product. The previous system's only way to void
+        a wrong entry was a physical `DELETE` that rewrote the whole archive file;
         `ore > 0` stays the rule and the correction has a path that is not destructive
         (§2.2, last row)."""
         actor.require_write("delete_time_entry")

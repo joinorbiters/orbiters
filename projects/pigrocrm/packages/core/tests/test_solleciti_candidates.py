@@ -1,10 +1,9 @@
 """Which invoices are worth chasing -- and, first of all, which are not.
 
-Four conditions, one test each, plus the signal the previous system could not have had. Each condition
-is here because its absence is a message somebody's client receives: chasing a paid
-invoice, chasing three days after the due date while the transfer is in flight, chasing
-twice in one afternoon because the first one was forgotten, and chasing a disputed
-invoice forever.
+Four conditions, one test each, plus the signal the previous system could not have had. Each
+condition is here because its absence is a message somebody's client receives: chasing a paid
+invoice, chasing three days after the due date while the transfer is in flight, chasing twice in
+one afternoon because the first one was forgotten, and chasing a disputed invoice forever.
 
 The two conditions the brief's table could not name are in here too, and they are the
 ones slice 3's real shape adds: a `bozza` has no number and no legal existence, and an
@@ -245,7 +244,8 @@ def test_the_ceiling_counts_prepared_reminders_too(db_session: Session) -> None:
     assert _service(db_session).candidates(actor_for(account)) == []
 
 
-# --- the signal the previous system could not have had ----------------------------------------------
+# --- the signal the previous system could not have had
+# ----------------------------------------------
 
 
 def test_a_client_who_replied_is_flagged_and_sorted_last_but_not_removed(

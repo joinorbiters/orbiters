@@ -105,8 +105,8 @@ describe('EntityCell', () => {
   })
 
   it('falls back to a single initial for a one-word name', () => {
-    render(<EntityCell name="the previous system" />)
-    expect(screen.getByText('M')).toBeInTheDocument()
+    render(<EntityCell name="Rossi" />)
+    expect(screen.getByText('R')).toBeInTheDocument()
   })
 
   /** The name is right there in words, so the chip is decoration and must not be read

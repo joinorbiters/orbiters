@@ -67,7 +67,7 @@ function LoginPage() {
   useEffect(() => {
     if (!user) return
     // A login on the bare page of a root that has a name continues under that name:
-    // `/humancraft/app` is where the CRM lives, and a different basepath is a
+    // `/studiorossi/app` is where the CRM lives, and a different basepath is a
     // different application instance, so this is a navigation, not a router push. The
     // cookies are the root's, at `/`, and travel with it. Waits for the root endpoint
     // rather than guessing: a push to `/app` first and a hop afterwards would flash the

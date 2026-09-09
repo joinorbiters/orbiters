@@ -51,7 +51,7 @@ These apply to **every** task. They are not repeated per task. Everything from `
 
 - **No `fetch` inside components.** Every request goes through the generated client wrapped in TanStack Query hooks. The two documented exceptions already in the codebase are multipart upload and blob download, which `openapi-fetch` cannot express (`features/documents/queries.ts`); this slice reuses that same raw-`fetch` shape for the PDF/XML download and adds no third exception.
 - **The API client is generated, never handwritten.** `openapi-typescript` reads `openapi.json` from the running API (`pnpm generate:api`). A contract change must break `tsc`, not production.
-- **No business logic in the frontend.** Validation messages come from the API's problem documents. Recomputing a rule client-side is how the three interfaces start disagreeing — and on an invoice it is the exact the previous system defect this slice exists to remove.
+- **No business logic in the frontend.** Validation messages come from the API's problem documents. Recomputing a rule client-side is how the three interfaces start disagreeing — and on an invoice it is the exact defect of the previous system this slice exists to remove.
 - **No component file over ~250 lines.** If a file approaches the limit, extract.
 - **UI language is Italian.** Every visible label, button and message.
 - **TypeScript strict mode**, no `any`, no `@ts-ignore`. `tsconfig.json` has `noUncheckedIndexedAccess` on.
@@ -90,7 +90,7 @@ Font: **Outfit** only. `Reenie Beanie` belongs to the landing page in slice 5 �
 ### New to slice 3
 
 - **XML is built as an element tree and serialised once, never concatenated.** No function anywhere in `invoices/fatturapa.py` may produce a fragment of XML as a string. Markup injection then becomes impossible *by structure*, not by remembering to call an escaper — which is precisely how the previous system's generator stayed correct only as long as every interpolation site remembered `escapeXml`.
-- **One escaper per value, applied to the domain value.** A value that reached the XML has never been through `escape_typst`, `escape_markdown` or `escape_url`. The `xml` context added to `RenderContext` in Task 1 is a *refusal*, not a substitution: it rejects code points XML 1.0 cannot represent and returns the value byte-for-byte otherwise, because the tree serialiser is the one and only escaping pass. the previous system's literal backslash inside an Agenzia delle Entrate record came from stacking two escapers; there is no code path here that can stack them.
+- **One escaper per value, applied to the domain value.** A value that reached the XML has never been through `escape_typst`, `escape_markdown` or `escape_url`. The `xml` context added to `RenderContext` in Task 1 is a *refusal*, not a substitution: it rejects code points XML 1.0 cannot represent and returns the value byte-for-byte otherwise, because the tree serialiser is the one and only escaping pass. The previous system's literal backslash inside an Agenzia delle Entrate record came from stacking two escapers; there is no code path here that can stack them.
 - **`lxml`, not `xml.etree.ElementTree`.** `lxml` accepts an explicit `nsmap` on the root element, so the `ds:` and `xsi:` declarations that a prologue already accepted by the SdI carries survive even though this file references neither. ElementTree prunes unreferenced prefixes.
 - **No fiscal decision is an `if` inside the generator.** Default VAT rate, `Natura`, `RiferimentoNormativo` and the stamp-duty threshold come from `fiscal_profile` through a `RegimeStrategy`. A second regime is a second strategy object, with no new column and no migration.
 - **`ROUND_HALF_UP`, never the `Decimal` default `ROUND_HALF_EVEN`.** Italian fiscal practice and the SdI's own arithmetic round a half up. Every `quantize` in this slice passes `rounding=ROUND_HALF_UP` explicitly.
@@ -126,7 +126,7 @@ Resolved in favour of the shipped code, as instructed. Each was verified by read
 3. **`emitter_profile` already has a `regime_fiscale` column.** Spec §7.1 introduces `fiscal_profile.codice_regime` as if nothing described the regime yet. **Verified:** `emitter/models.py:42` is `regime_fiscale: Mapped[str | None] = mapped_column(String(200), default=None)` — free text, 200 characters, used today only as a line of prose in the offer header. **Resolution (Task 6):** `fiscal_profile.codice_regime` is `String(4)` with a `RF\d\d` check and is the **only** input to the XML's `RegimeFiscale`; `emitter_profile.regime_fiscale` keeps its current meaning — a human-readable sentence for the PDF header — and is left untouched, because renaming or dropping a shipped column that slice 2's `header.typ.template` already reads is a migration this slice has no reason to pay for. The two are not duplicates: one is a code the SdI validates, the other is a caption.
 4. **The success criterion names FPR12 v1.2.1; the schema in force is v1.2.3.** Spec §14.1 says "XSD FPR12 v1.2.1". **Verified against `fatturapa.gov.it`:** the current *fattura ordinaria* schema is `Schema_VFPR12_v1.2.3.xsd`, in force since 2025-04-01, and v1.2.1 is no longer published on that page. The `versione="FPR12"` attribute is unchanged across 1.2.x, so nothing about the generator changes. **Resolution (Task 4):** vendor and validate against **1.2.3**. Validating against a superseded schema would prove the file valid for a rule set the SdI no longer applies.
 5. **`xmllint --schema` is replaced by `lxml.etree.XMLSchema`, and the `ds:` import is resolved locally.** Spec §14.1 names `xmllint`. Two facts force a change: nothing in the repo installs `libxml2-utils` (`Dockerfile.api` installs only Pandoc, Typst and `libpq5`), and the official XSD's single `xs:import` points at a **remote** `http://www.w3.org/TR/2002/REC-xmldsig-core-20020212/xmldsig-core-schema.xsd`, which a CI run with no network cannot fetch. **Resolution (Task 4):** validate with `lxml.etree.XMLSchema` — the same libxml2 engine `xmllint` is a CLI over, already a dependency because the generator needs it, so no new binary in the image — and resolve that one import through an `lxml.etree.Resolver` mapping the exact remote URL to the vendored sibling file. The official XSD is committed **byte-for-byte unmodified**: hand-editing a `schemaLocation` inside a fiscal schema to make a test pass is exactly the kind of edit nobody reviews twice.
-6. **The shipped render toolchain is Pandoc 3.8.2.1 / Typst 0.14.2, not slice 2's plan text.** Slice 2's Global Constraints pin `PANDOC_VERSION=3.1.12.2` and `TYPST_VERSION=0.11.0` "as `the reference copy/Dockerfile` pins them". **Verified:** the shipped `Dockerfile.api` pins `ARG TYPST_VERSION=0.14.2` and `ARG PANDOC_VERSION=3.8.2.1`, with a comment recording that `render/diagnostics.py`'s `_LOCATION_RE` and `render/pdf.py`'s `_defeat_typst_autotypography` were confirmed against 0.14.2 specifically. **Resolution:** this plan's pinned versions are the shipped pair. Task 13's templates are written for Typst 0.14.2.
+6. **The shipped render toolchain is Pandoc 3.8.2.1 / Typst 0.14.2, not slice 2's plan text.** Slice 2's Global Constraints pin `PANDOC_VERSION=3.1.12.2` and `TYPST_VERSION=0.11.0` "as `.reference-*/Dockerfile` pins them". **Verified:** the shipped `Dockerfile.api` pins `ARG TYPST_VERSION=0.14.2` and `ARG PANDOC_VERSION=3.8.2.1`, with a comment recording that `render/diagnostics.py`'s `_LOCATION_RE` and `render/pdf.py`'s `_defeat_typst_autotypography` were confirmed against 0.14.2 specifically. **Resolution:** this plan's pinned versions are the shipped pair. Task 13's templates are written for Typst 0.14.2.
 7. **The SdI file-name convention cannot be a storage key.** Spec §8.4 asks for `IT{cf_o_piva}_{progressivo}.xml`. **Verified:** `storage/base.py:40`'s `_KEY_RE` is `[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*` — lowercase only, deliberately, because two keys differing only in case name the same file on APFS and NTFS. `IT…` uppercase is refused. **Resolution (Tasks 5, 12):** the SdI name is the **download** file name, in `Content-Disposition` on `GET /api/invoices/{id}/xml`, which is where it matters — the file goes to an intermediary that often validates the name before the content. The storage key stays lowercase and structural: `fatture/{anno}/{numero}/v{n}.xml`, `proforma/{invoice_id}/v{n}.pdf`.
 8. **`issue_invoice` takes the source row's id in the path, and `origine_proforma_id` is set by the method rather than passed to it.** Spec §11 says `issue_invoice` "accetta un `origine_proforma_id` facoltativo" while pinning the endpoint to `POST /api/invoices/{id}/issue`; spec §5 says the conversion **creates a new row** pointing at the proforma. Passing both an `{id}` and an `origine_proforma_id` makes two ways to say the same thing, and the second would need a "duplicate this proforma as a draft" endpoint nobody asked for. **Resolution (Task 10):** one method, `InvoiceService.issue(invoice_id, data, actor)`, where `invoice_id` names either a `bozza` **fattura** (issued in place) or a `confermata` **proforma** (a new `emessa` row is created, its lines copied, `origine_proforma_id` set to the proforma, and the proforma marked `consumata`). One endpoint, one lock, one set of validations, one freezing step — which is the property §11 asked for.
 9. **The MCP ban test needs two declared lists, not one.** Spec §11 says the architecture test grows a clause: "for every public method of `InvoiceService`, either an MCP tool calls it, or the method is in a declared exclusion list — and the list must be **exactly** `issue_invoice`, `annul_invoice`, `mark_transmitted_externally`, `update_fiscal_profile`." Taken literally that is unsatisfiable: `update`, `soft_delete`, `export_xml`, `produce_artifacts`, `download` and `lines` have no MCP tool either, and none of them is one of the four. **Resolution (Task 15):** two declared sets, `MCP_FORBIDDEN_OPERATIONS` — asserted to be exactly those four names — and `MCP_UNEXPOSED_OPERATIONS`, each entry carrying its one-line reason. The test asserts every public method falls in exactly one of three buckets (reached by a tool, forbidden, or declared-unexposed), so adding a method without deciding which it is breaks the build. The spec's substantive requirement is met exactly; conflating "must never be exposed" with "happens not to be exposed" would have made the four-name assertion meaningless within a slice.
@@ -166,7 +166,7 @@ packages/core/src/pigrocrm/core/
 packages/core/migrations/versions/
 └── 0004_invoices_fiscal_profile.py
 packages/core/src/pigrocrm/core/render/assets/
-├── template-invoice.md                         # carried from the reference copy/offer/template-invoice.md
+├── template-invoice.md                         # carried from .reference-*/offer/template-invoice.md
 └── template-proforma.md
 packages/core/tests/fpr12/
 ├── __init__.py                                 # fpr12_schema() -> etree.XMLSchema, local ds: resolver
@@ -231,7 +231,7 @@ Append to `packages/core/tests/test_template_escaping.py`:
 
 
 def test_xml_context_returns_the_domain_value_untouched() -> None:
-    """The tree serialiser is the one and only escaping pass. the previous system put a literal
+    """The tree serialiser is the one and only escaping pass. The previous system put a literal
     backslash into an Agenzia delle Entrate record by running a value through
     escapeTypstText and then escapeXml; there is no code path here that can stack
     two escapers, because this one substitutes nothing."""
@@ -319,7 +319,7 @@ def escape_xml(value: str) -> str:
     slice builds the FatturaPA document as an `lxml` element tree and serialises it
     once, so the serialiser is the single escaping pass and anything this function
     substituted would be escaped a second time on the way out -- `&` would reach the
-    Agenzia delle Entrate as `&amp;amp;`. the previous system's own literal-backslash defect
+    Agenzia delle Entrate as `&amp;amp;`. The previous system's own literal-backslash defect
     (`normalizeSingleLine` ran `escapeTypstText` and then `escapeXml` over the same
     string) is that mistake in its other direction. The `xml` context therefore exists
     to say, explicitly and in the same module as the other four contexts, that the
@@ -575,7 +575,7 @@ Create `packages/core/src/pigrocrm/core/invoices/__init__.py` empty, and `packag
 ```python
 """The money arithmetic of spec 6.1, as pure functions over `Decimal`.
 
-No `float` reaches this module and none leaves it. the previous system applied a percentage to a
+No `float` reaches this module and none leaves it. The previous system applied a percentage to a
 total it had re-read out of a formatted string (`parseAmount(values.TOTALE)`); here an
 amount is only ever a `Decimal` computed from other `Decimal`s, and text is produced
 at the very end by `format_amount_*` for the XML and the PDF, never parsed back.
@@ -938,7 +938,7 @@ RATE_DECIMAL_PLACES = 2
 GIORNI_SCADENZA_MIN = 0
 GIORNI_SCADENZA_MAX = 365
 
-# the previous system shipped `RiferimentoNormativo` as "N2.2 (non soggette - altri casi)", which is
+# The previous system shipped `RiferimentoNormativo` as "N2.2 (non soggette - altri casi)", which is
 # the *description of the code*, not a normative reference. This is the real one for
 # the forfettario, and it is a default rather than a constant because the article
 # numbers have changed before.
@@ -1001,7 +1001,7 @@ Delete the `SafeStr` re-export from `__all__` and its import if `ruff` flags it 
 """A regime decides three things and nothing else: the rate a line defaults to, the
 `Natura`/`RiferimentoNormativo` pair, and whether the stamp duty applies (spec 7.2).
 
-the previous system hardcoded all three in the generator, which is why "what regime was this
+The previous system hardcoded all three in the generator, which is why "what regime was this
 invoice in" had no answer other than reading the source at the time. Here they come
 from `fiscal_profile` through one of these objects, so a different regime is a second
 object -- no new column, no migration -- and the rounding rules of `totals.py`, already
@@ -2266,19 +2266,19 @@ from pigrocrm.core.invoices.totals import build_riepilogo, sum_totals
 Q = f"{{{FPR12_NAMESPACE}}}"
 
 EMITTENTE = PartySnapshot(
-    ragione_sociale="Humancraft di Ivan Sala",
-    partita_iva="14518240966",
+    ragione_sociale="Studio Rossi",
+    partita_iva="01234567890",
     codice_fiscale="HMCRFT00A01H501K",
     codice_sdi=None,
-    pec="someone@example.com",
+    pec="studiorossi@pec.it",
     indirizzo="Via Vittorio Veneto 12",
     cap="20124",
     comune="Milano",
     provincia="MI",
     nazione="IT",
-    email="someone@example.com",
+    email="mario@example.com",
     telefono="+39 02 1234567",
-    sito_web="https://humancraft.tech",
+    sito_web="https://example.com",
 )
 
 FISCALE = {
@@ -2467,7 +2467,7 @@ def test_a_hostile_name_still_produces_a_schema_valid_file() -> None:
 
 def test_a_hostile_name_round_trips_byte_for_byte() -> None:
     """The tree serialiser is the one escaping pass, so re-parsing must give back the
-    domain value exactly. the previous system ran a value through escapeTypstText and then
+    domain value exactly. The previous system ran a value through escapeTypstText and then
     escapeXml, which put a literal backslash into an Agenzia delle Entrate record --
     that is what this asserts cannot happen."""
     xml = FatturaPAExporter().to_bytes(
@@ -2618,7 +2618,7 @@ def test_a_customer_with_a_pec_but_no_sdi_gets_the_seven_zeroes_and_the_pec() ->
 
 
 def test_a_customer_with_neither_sdi_nor_pec_is_refused_by_field_name() -> None:
-    """the previous system produced an empty `CodiceDestinatario` here: an invalid file, generated
+    """The previous system produced an empty `CodiceDestinatario` here: an invalid file, generated
     without an error."""
     with pytest.raises(ValidationFailed) as caught:
         FatturaPAExporter().to_bytes(
@@ -2633,7 +2633,7 @@ def test_a_customer_with_neither_sdi_nor_pec_is_refused_by_field_name() -> None:
 
 @pytest.mark.parametrize("field", ["indirizzo", "cap", "comune", "provincia"])
 def test_a_missing_address_part_is_refused_by_field_name(field: str) -> None:
-    """These are four real columns on `customers`. the previous system guessed them out of one
+    """These are four real columns on `customers`. The previous system guessed them out of one
     free-text address with a regex over Italian street prefixes."""
     with pytest.raises(ValidationFailed) as caught:
         FatturaPAExporter().to_bytes(
@@ -2720,7 +2720,7 @@ def test_an_invoice_with_no_lines_is_refused() -> None:
 def test_a_fiscal_id_that_does_not_match_is_omitted_rather_than_malformed(
     raw: str | None, expected: str | None
 ) -> None:
-    """The highest-value line in the previous system's generator: a malformed `IdCodice` is an
+    """The highest-value line nel gestionale precedente's generator: a malformed `IdCodice` is an
     outright rejection, while an absent element often passes."""
     assert normalise_fiscal_id(raw) == expected
 
@@ -2907,7 +2907,7 @@ def check_party_exportable(party: PartySnapshot, entity: str) -> None:
     missing a CAP would already own a register number that can never produce a valid
     file, and the only remaining remedy would be an annulment.
 
-    the previous system guessed `indirizzo`, `cap`, `comune` and `provincia` out of one free-text
+    The previous system guessed `indirizzo`, `cap`, `comune` and `provincia` out of one free-text
     field with a regex over Italian street prefixes. They are four real columns on
     `customers`; nothing is guessed, and a missing one refuses.
     """
@@ -3118,7 +3118,7 @@ class FatturaPAExporter:
             destinatario = etree.SubElement(block, "CodiceDestinatario")
             destinatario.text = CODICE_DESTINATARIO_FALLBACK
         else:
-            # the previous system emitted an empty element here: an invalid file, produced with no
+            # The previous system emitted an empty element here: an invalid file, produced with no
             # error at all.
             raise ValidationFailed(
                 "customer",
@@ -3280,7 +3280,7 @@ class FatturaPAExporter:
         """
         linea = etree.SubElement(parent, "DettaglioLinee")
         numero = etree.SubElement(linea, "NumeroLinea")
-        # A real line number per real line. the previous system hardcoded 1, quantity 1 and the
+        # A real line number per real line. The previous system hardcoded 1, quantity 1 and the
         # whole total as the unit price, so the detail of the work never reached the
         # customer.
         numero.text = str(riga.numero_linea)
@@ -3324,7 +3324,7 @@ class FatturaPAExporter:
         esigibilita = etree.SubElement(riepilogo, "EsigibilitaIVA")
         esigibilita.text = ESIGIBILITA_IVA
         if group.natura and group.riferimento_normativo:
-            # A real normative reference, from the profile. the previous system sent the *description
+            # A real normative reference, from the profile. The previous system sent the *description
             # of the code* ("N2.2 (non soggette - altri casi)") in this field.
             self._text(
                 riepilogo,
@@ -3377,7 +3377,7 @@ class FatturaPAExporter:
     def _iso(value: date) -> str:
         """A `date`'s own ISO form.
 
-        Deliberately not a timestamp conversion. the previous system's `formatIsoDate` called
+        Deliberately not a timestamp conversion. The previous system's `formatIsoDate` called
         `toISOString()`, i.e. projected an instant through UTC: an invoice created on
         31 December at 23:30 CET came out dated 1 January, so its fiscal year was
         wrong on an immutable document. There is no instant here to get wrong.
@@ -4456,7 +4456,7 @@ class Invoice(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     numero: Mapped[int | None] = mapped_column(Integer, default=None)
     riferimento: Mapped[str | None] = mapped_column(String(30), default=None)
     # `Date`, never a timestamp: this is the date printed on the document and the one
-    # that decides the fiscal year, not an instant. the previous system's `toISOString()` moved an
+    # that decides the fiscal year, not an instant. The previous system's `toISOString()` moved an
     # invoice issued on 31 December at 23:30 CET into the next year.
     data_emissione: Mapped[date | None] = mapped_column(Date, default=None)
     data_scadenza: Mapped[date | None] = mapped_column(Date, default=None)
@@ -4570,7 +4570,7 @@ class Invoice(Base, PrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
 class InvoiceLine(Base, PrimaryKeyMixin, TimestampMixin):
     """One `DettaglioLinee`.
 
-    the previous system sent one line per invoice -- `NumeroLinea` hardcoded to 1, quantity 1, the
+    The previous system sent one line per invoice -- `NumeroLinea` hardcoded to 1, quantity 1, the
     whole total as the unit price -- so the detail of the work never reached the
     customer.
 
@@ -6100,15 +6100,15 @@ def service(db_session: Session, tmp_path) -> InvoiceService:  # type: ignore[no
     FiscalProfileService(db_session).upsert(FiscalProfileUpsert(codice_regime="RF19"), ADMIN)
     EmitterProfileService(db_session).upsert(
         EmitterProfileUpsert(
-            ragione_sociale="Humancraft di Ivan Sala",
-            partita_iva="14518240966",
+            ragione_sociale="Studio Rossi",
+            partita_iva="01234567890",
             codice_fiscale="HMCRFT00A01H501K",
             indirizzo="Via Vittorio Veneto 12",
             cap="20124",
             comune="Milano",
             provincia="MI",
             nazione="IT",
-            email="someone@example.com",
+            email="mario@example.com",
         ),
         ADMIN,
     )
@@ -6392,7 +6392,7 @@ def test_the_snapshot_freezes_both_parties_and_the_fiscal_parameters(
     ).scalar_one()
     assert stored["versione"] == SNAPSHOT_VERSIONE
     assert stored["cliente"]["ragione_sociale"] == "Acme S.r.l."
-    assert stored["emittente"]["ragione_sociale"] == "Humancraft di Ivan Sala"
+    assert stored["emittente"]["ragione_sociale"] == "Studio Rossi"
     assert stored["fiscale"]["codice_regime"] == "RF19"
 
 
@@ -6946,15 +6946,15 @@ def world(db_engine: Engine, tmp_path):  # type: ignore[no-untyped-def]
         FiscalProfileService(setup).upsert(FiscalProfileUpsert(codice_regime="RF19"), ADMIN)
         EmitterProfileService(setup).upsert(
             EmitterProfileUpsert(
-                ragione_sociale="Humancraft di Ivan Sala",
-                partita_iva="14518240966",
+                ragione_sociale="Studio Rossi",
+                partita_iva="01234567890",
                 codice_fiscale="HMCRFT00A01H501K",
                 indirizzo="Via Vittorio Veneto 12",
                 cap="20124",
                 comune="Milano",
                 provincia="MI",
                 nazione="IT",
-                email="someone@example.com",
+                email="mario@example.com",
             ),
             ADMIN,
         )
@@ -7213,15 +7213,15 @@ def service(db_session: Session, tmp_path) -> InvoiceService:  # type: ignore[no
     FiscalProfileService(db_session).upsert(FiscalProfileUpsert(codice_regime="RF19"), ADMIN)
     EmitterProfileService(db_session).upsert(
         EmitterProfileUpsert(
-            ragione_sociale="Humancraft di Ivan Sala",
-            partita_iva="14518240966",
+            ragione_sociale="Studio Rossi",
+            partita_iva="01234567890",
             codice_fiscale="HMCRFT00A01H501K",
             indirizzo="Via Vittorio Veneto 12",
             cap="20124",
             comune="Milano",
             provincia="MI",
             nazione="IT",
-            email="someone@example.com",
+            email="mario@example.com",
         ),
         ADMIN,
     )
@@ -7761,15 +7761,15 @@ def service(db_session: Session, storage: LocalFileStorage) -> InvoiceService:
     FiscalProfileService(db_session).upsert(FiscalProfileUpsert(codice_regime="RF19"), ADMIN)
     EmitterProfileService(db_session).upsert(
         EmitterProfileUpsert(
-            ragione_sociale="Humancraft di Ivan Sala",
-            partita_iva="14518240966",
+            ragione_sociale="Studio Rossi",
+            partita_iva="01234567890",
             codice_fiscale="HMCRFT00A01H501K",
             indirizzo="Via Vittorio Veneto 12",
             cap="20124",
             comune="Milano",
             provincia="MI",
             nazione="IT",
-            email="someone@example.com",
+            email="mario@example.com",
         ),
         ADMIN,
     )
@@ -7843,7 +7843,7 @@ def test_the_download_name_follows_the_sdi_convention_using_the_frozen_emitter_i
     EmitterProfileService(service.session).upsert(
         EmitterProfileUpsert(
             ragione_sociale="Altro Nome",
-            partita_iva="14518240966",
+            partita_iva="01234567890",
             codice_fiscale="RSSMRA80A01H501U",
             indirizzo="Via Nuova 1",
             cap="20125",
@@ -7926,7 +7926,7 @@ def test_a_regenerated_export_is_byte_identical_to_the_original(
     EmitterProfileService(service.session).upsert(
         EmitterProfileUpsert(
             ragione_sociale="Altro Nome",
-            partita_iva="14518240966",
+            partita_iva="01234567890",
             codice_fiscale="HMCRFT00A01H501K",
             indirizzo="Via Nuova 1",
             cap="20125",
@@ -8557,15 +8557,15 @@ def service(db_session: Session, storage: LocalFileStorage) -> InvoiceService:
     )
     EmitterProfileService(db_session).upsert(
         EmitterProfileUpsert(
-            ragione_sociale="Humancraft di Ivan Sala",
-            partita_iva="14518240966",
+            ragione_sociale="Studio Rossi",
+            partita_iva="01234567890",
             codice_fiscale="HMCRFT00A01H501K",
             indirizzo="Via Vittorio Veneto 12",
             cap="20124",
             comune="Milano",
             provincia="MI",
             nazione="IT",
-            email="someone@example.com",
+            email="mario@example.com",
             regime_fiscale="Regime forfettario ex L. 190/2014",
         ),
         ADMIN,
@@ -8745,7 +8745,7 @@ def test_re_rendering_is_byte_identical_and_writes_no_second_version(
     EmitterProfileService(db_session).upsert(
         EmitterProfileUpsert(
             ragione_sociale="Altro Nome",
-            partita_iva="14518240966",
+            partita_iva="01234567890",
             codice_fiscale="HMCRFT00A01H501K",
             indirizzo="Via Nuova 1",
             cap="20125",
@@ -9168,15 +9168,15 @@ def emitter(admin_client: TestClient) -> dict[str, Any]:
     response = admin_client.put(
         "/api/emitter",
         json={
-            "ragione_sociale": "Humancraft di Ivan Sala",
-            "partita_iva": "14518240966",
+            "ragione_sociale": "Studio Rossi",
+            "partita_iva": "01234567890",
             "codice_fiscale": "HMCRFT00A01H501K",
             "indirizzo": "Via Vittorio Veneto 12",
             "cap": "20124",
             "comune": "Milano",
             "provincia": "MI",
             "nazione": "IT",
-            "email": "someone@example.com",
+            "email": "mario@example.com",
         },
     )
     assert response.status_code == 200, response.text
@@ -13008,15 +13008,15 @@ def world(db_session: Session, tmp_path) -> tuple[InvoiceService, UUID]:  # type
     )
     EmitterProfileService(db_session).upsert(
         EmitterProfileUpsert(
-            ragione_sociale="Humancraft di Ivan Sala",
-            partita_iva="14518240966",
+            ragione_sociale="Studio Rossi",
+            partita_iva="01234567890",
             codice_fiscale="HMCRFT00A01H501K",
             indirizzo="Via Vittorio Veneto 12",
             cap="20124",
             comune="Milano",
             provincia="MI",
             nazione="IT",
-            email="someone@example.com",
+            email="mario@example.com",
         ),
         HUMAN,
     )
@@ -13119,8 +13119,8 @@ export async function createFiscalProfile(page: Page): Promise<void> {
 
 export async function createEmitterProfile(page: Page): Promise<void> {
   await page.goto('/app/impostazioni/emittente')
-  await page.getByLabel('Ragione sociale').fill('Humancraft di Ivan Sala')
-  await page.getByLabel('P.IVA').fill('14518240966')
+  await page.getByLabel('Ragione sociale').fill('Studio Rossi')
+  await page.getByLabel('P.IVA').fill('01234567890')
   await page.getByLabel('Codice fiscale').fill('HMCRFT00A01H501K')
   await page.getByLabel('Indirizzo').fill('Via Vittorio Veneto 12')
   await page.getByLabel('CAP').fill('20124')

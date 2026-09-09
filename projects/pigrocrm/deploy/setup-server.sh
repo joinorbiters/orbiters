@@ -19,7 +19,7 @@
 # `listen 443 ssl` shows up in it (certbot's own signature), leave it alone.
 set -euo pipefail
 
-DOMAIN="${PIGROCRM_DOMAIN:-pigrocrm.humancraft.tech}"
+DOMAIN="${PIGROCRM_DOMAIN:-pigrocrm.example.com}"
 CONF="/etc/nginx/sites-available/${DOMAIN}"
 
 if [ -f "$CONF" ] && grep -q 'listen 443 ssl' "$CONF"; then

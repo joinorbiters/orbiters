@@ -6,10 +6,10 @@ not the ones income calculation needs, which nobody used yet. They are the same 
 so they go on the same single row: a second fiscal profile would create two answers to
 "which regime am I in".
 
-The three constants migrated out of the previous system's `App.jsx` -- `FORFETTARIO_PROFITABILITY_RATE
-= 0.67`, `FORFETTARIO_SUBSTITUTE_TAX_RATE = 0.05`, `FORFETTARIO_INPS_RATE = 0.2607` --
-become the defaults, as percentages. That migration is the final payment on the debt
-slice 1 §2.2 cited as the empirical justification for this whole architecture.
+The three constants migrated out of the previous system's `App.jsx` --
+`FORFETTARIO_PROFITABILITY_RATE = 0.67`, `FORFETTARIO_SUBSTITUTE_TAX_RATE = 0.05`,
+`FORFETTARIO_INPS_RATE = 0.2607` -- become the defaults, as percentages. That migration is the final
+payment on the debt slice 1 §2.2 cited as the empirical justification for this whole architecture.
 """
 
 from decimal import Decimal
@@ -67,7 +67,7 @@ def test_there_is_exactly_one_fiscal_profile_table(db_engine: Engine) -> None:
     assert not {t for t in tables if t != "fiscal_profile" and "fiscal" in t}
 
 
-def test_the_previous_systems_own_values_are_the_defaults(db_session: Session) -> None:
+def test_the_previous_systems_values_are_the_defaults(db_session: Session) -> None:
     profile = _seed(db_session).get(ADMIN)
     assert profile.coefficiente_redditivita == Decimal("67.00")
     assert profile.aliquota_imposta_sostitutiva == Decimal("5.00")

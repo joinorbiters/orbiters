@@ -101,7 +101,7 @@ def _error_code(payload: bytes) -> str:
     """Google speaks two dialects and this slice touches both. The OAuth token
     endpoint answers `{"error": "invalid_grant"}` -- a bare string. The Gmail API
     answers `{"error": {"status": "UNAUTHENTICATED", ...}}` -- an object. Reading only
-    one of them is how `invalid_grant` gets lost, which is the the previous system defect.
+    one of them is how `invalid_grant` gets lost, which is the previous system's defect.
 
     The `errors[0].reason` fallback is the older v1 shape, which the Gmail API still
     returns for some quota failures and which carries no `status` at all.

@@ -279,7 +279,7 @@ def test_logout_consumes_every_refresh_token_the_browser_sends(
     client: TestClient, admin_user
 ) -> None:
     """A browser keeps one cookie per path and sends every one that matches: a session
-    opened at `/` before the root got its own name and the one opened at `/humancraft/`
+    opened at `/` before the root got its own name and the one opened at `/studiorossi/`
     after it arrive as two `refresh_token=` pairs in a single header. `request.cookies`
     keeps only the last, and a logout that consumed only that one left the other alive
     -- the session the person had just ended came back on the next refresh."""

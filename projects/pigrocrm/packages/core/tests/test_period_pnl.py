@@ -75,8 +75,8 @@ def test_a_general_expense_has_its_own_row_and_touches_no_deal(
 ) -> None:
     """Any apportionment key -- on revenue, on hours -- has one precise and unacceptable
     consequence: a deal's margin would move when a *different* deal was invoiced. That is
-    exactly the property that makes a number unreportable, and it is the defect the previous system's
-    P&L has for personal taxation.
+    exactly the property that makes a number unreportable, and it is the defect the previous
+    system's P&L has for personal taxation.
 
     Both columns are non-zero before the expense lands, so "nothing moved" is a statement
     about real figures and not about two pairs of zeros.

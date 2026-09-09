@@ -7,7 +7,7 @@ from pigrocrm.core.db import Base, PrimaryKeyMixin, TimestampMixin
 class EmitterProfile(Base, PrimaryKeyMixin, TimestampMixin):
     """Who is issuing the document. One row, ever.
 
-    This is what replaces "Humancraft di Ivan Sala", the P.IVA, the PEC and the
+    This is what replaces "Studio Rossi", the P.IVA, the PEC and the
     address hardcoded into the previous system's `offer/header.typ` (lines 16-28). A CRM for
     Italian freelancers cannot have one freelancer's name in its source. Slice 3
     builds FatturaPA on these same columns, which is why the fiscal ones mirror
@@ -44,6 +44,6 @@ class EmitterProfile(Base, PrimaryKeyMixin, TimestampMixin):
     # PDF: an email does not attach an image of a signature, it wants text. The phone
     # number, the website and the company name are deliberately NOT repeated here; the
     # reminder template reads them from their own columns, so the number cannot diverge
-    # between two places. the previous system hardcoded all of it, twice, verbatim, in two builders.
+    # between two places. The previous system hardcoded all of it, twice, verbatim, in two builders.
     firma_email: Mapped[str | None] = mapped_column(Text, default=None)
     regime_fiscale: Mapped[str | None] = mapped_column(String(200), default=None)

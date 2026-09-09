@@ -559,8 +559,8 @@ class SollecitiService:
     ) -> date | None:
         """When this client last wrote back about this invoice, or `None`.
 
-        The signal the previous system could not have had: from the moment the CRM reads the mail, the
-        list can say "the client replied on 12 August". It does not suppress the candidate
+        The signal the previous system could not have had: from the moment the CRM reads the mail,
+        the list can say "the client replied on 12 August". It does not suppress the candidate
         -- a reply is not a payment, and sometimes the reply is exactly what needs chasing
         -- but it sorts last and it says so.
 

@@ -3254,7 +3254,7 @@ def test_create_requires_only_the_company_name(db_session: Session) -> None:
 
 
 def test_fiscal_fields_are_first_class_columns(db_session: Session) -> None:
-    """the previous system guessed among vat_number / vat / piva because these were external
+    """The previous system guessed among vat_number / vat / piva because these were external
     attributes. Here they are columns, so slice 3 can build FatturaPA on them."""
     customer = CustomerService(db_session).create(
         CustomerCreate(

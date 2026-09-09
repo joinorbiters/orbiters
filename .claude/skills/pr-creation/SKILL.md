@@ -22,7 +22,7 @@ it and a document disagree, the document is right and the skill has a bug.
    assigned to the other person is not made yours by opening a PR for it, nor by their
    having asked you for it, and a PR on their card is worse than no PR: it is their work
    done twice.
-2. **The branch is Linear's.** Use the issue's `gitBranchName` (`ivansala/orb-42-...`),
+2. **The branch is Linear's.** Use the issue's `gitBranchName` (`mariorossi/orb-42-...`),
    which Linear renders for whoever reads the issue rather than for its assignee, so it
    tells you nothing about ownership and is only the name to use once step 1 holds. In a
    git worktree of its own, never on `main` and never in the shared checkout:

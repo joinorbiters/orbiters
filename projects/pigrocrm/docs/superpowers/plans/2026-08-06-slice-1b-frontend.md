@@ -697,7 +697,7 @@ vi.mock('@tanstack/react-router', () => ({
 
 const mockAuth = vi.hoisted(() => ({ ruolo: 'admin' as string }))
 vi.mock('@/lib/auth', () => ({
-  useAuth: () => ({ user: { nome: 'Ivan', email: 'm@example.com', ruolo: mockAuth.ruolo }, logout: vi.fn() }),
+  useAuth: () => ({ user: { nome: 'Mario', email: 'm@example.com', ruolo: mockAuth.ruolo }, logout: vi.fn() }),
   useIsAdmin: () => mockAuth.ruolo === 'admin',
 }))
 
@@ -5059,7 +5059,7 @@ jobs:
           ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p \"${DEPLOY_PATH}\""
           rsync -az --delete \
             --exclude '.git' --exclude '.github' \
-            --exclude '.env' --exclude 'the reference copy' \
+            --exclude '.env' --exclude '.reference-*' \
             --exclude 'node_modules' --exclude 'dist' --exclude '.venv' \
             ./ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}"
 
@@ -5104,7 +5104,7 @@ one, which is what the `--exclude '.env'` above guarantees.
 # Idempotent: safe to run on every deploy.
 set -euo pipefail
 
-DOMAIN="${PIGROCRM_DOMAIN:-pigrocrm.humancraft.tech}"
+DOMAIN="${PIGROCRM_DOMAIN:-pigrocrm.example.com}"
 CONF="/etc/nginx/sites-available/${DOMAIN}"
 
 cat > "$CONF" <<CONFEOF

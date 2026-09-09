@@ -4711,7 +4711,7 @@ export interface components {
          *
          *     No `riferimento`: `invoices.riferimento` is constrained by
          *     `ck_invoices_riferimento_only_on_proforma` to `NULL` on every `tipo = 'fattura'`
-         *     row, and an import always produces a `fattura`. the previous system's free-text description
+         *     row, and an import always produces a `fattura`. The previous system's free-text description
          *     belongs in `causale` and in the line's own `descrizione`.
          */
         InvoiceImport: {

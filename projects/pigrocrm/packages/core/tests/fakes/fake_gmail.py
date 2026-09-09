@@ -201,7 +201,7 @@ class FakeGmail:
     def _invalid_grant(description: str) -> tuple[int, bytes, dict[str, str]]:
         """The exact shape Google returns for a grant it will not honour -- a bare
         string under "error", not an object. That is the dialect a parser reading only
-        the Gmail API's shape loses, and losing it is the the previous system defect."""
+        the Gmail API's shape loses, and losing it is the previous system's defect."""
         return (
             400,
             json.dumps({"error": "invalid_grant", "error_description": description}).encode(),

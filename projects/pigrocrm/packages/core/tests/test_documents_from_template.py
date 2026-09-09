@@ -49,7 +49,7 @@ Oggetto: {{offerta.oggetto}}
 @pytest.fixture
 def setup(db_session: Session, tmp_path: Path) -> tuple[DocumentService, Customer, object]:
     EmitterProfileService(db_session).upsert(
-        EmitterProfileUpsert(ragione_sociale="Humancraft di Ivan Sala", partita_iva="14518240966"),
+        EmitterProfileUpsert(ragione_sociale="Studio Rossi", partita_iva="01234567890"),
         ADMIN,
     )
     template = TemplateService(db_session).create(
@@ -330,7 +330,7 @@ def test_oggi_defaults_to_italys_own_day_not_the_processs(
     called.
     """
     EmitterProfileService(db_session).upsert(
-        EmitterProfileUpsert(ragione_sociale="Humancraft di Ivan Sala", partita_iva="14518240966"),
+        EmitterProfileUpsert(ragione_sociale="Studio Rossi", partita_iva="01234567890"),
         ADMIN,
     )
     template = TemplateService(db_session).create(

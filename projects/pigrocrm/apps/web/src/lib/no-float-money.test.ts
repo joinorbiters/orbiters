@@ -1,7 +1,7 @@
 /**
  * Criterion 4's second half: "no economic total is born in the browser".
  *
- * the previous system's whole P&L was computed in `App.jsx` -- three fiscal constants, float hour
+ * The previous system's whole P&L was computed in `App.jsx` -- three fiscal constants, float hour
  * sums, and a margin that changed depending on which of three fallback buckets happened
  * to be non-empty. This slice moves that arithmetic into `packages/core` and this test
  * is what keeps it there. Parsed with the TypeScript compiler rather than grepped,

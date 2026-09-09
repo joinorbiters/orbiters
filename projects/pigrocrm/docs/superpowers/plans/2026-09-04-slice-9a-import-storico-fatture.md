@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Registrare nel CRM le fatture già emesse con the previous system come fatture `emessa` con numero e data originali, senza consumare numeri né produrre XML, portando il contatore dell'anno al numero più alto importato e dichiarando esplicitamente i buchi del registro.
+**Goal:** Registrare nel CRM le fatture già emesse con il gestionale precedente come fatture `emessa` con numero e data originali, senza consumare numeri né produrre XML, portando il contatore dell'anno al numero più alto importato e dichiarando esplicitamente i buchi del registro.
 
 **Architecture:** Un nuovo metodo `InvoiceService.import_issued` che riusa il lock del contatore, lo snapshot del regime e le righe dello slice 3 ma prende `(anno, numero)` dal chiamante; una colonna `invoices.importata_da` che spegne export XML e rigenerazione PDF su quelle righe; una tabella `invoice_register_gaps` per i numeri mancanti dichiarati. Esposto via REST (`admin`) e via due tool MCP in `privileged.py` (solo con `mcp_full_access`), coerentemente con la lista dei divieti agli agenti.
 
@@ -39,8 +39,8 @@
 | `packages/core/src/pigrocrm/core/actor.py` | Due voci in `AGENT_FORBIDDEN_ACTIONS` |
 | `apps/mcp/tests/test_mcp_invoice_ban.py`, `apps/mcp/tests/test_mcp_surface_coverage.py` | Liste a diciannove |
 | `apps/mcp/tests/test_invoice_import_tools.py` | Test dei due tool |
-| `apps/web/src/features/invoices/InvoiceStateBadge.tsx`, `InvoiceActions.tsx`, `src/lib/api-types.ts` | Badge «importata da the previous system», niente XML/rigenera |
-| `docs/superpowers/data/2026-09-04-the previous system-fatture-2026.json` | Le 14 fatture da importare, nel formato di `InvoiceImport` |
+| `apps/web/src/features/invoices/InvoiceStateBadge.tsx`, `InvoiceActions.tsx`, `src/lib/api-types.ts` | Badge «importata dal gestionale precedente», niente XML/rigenera |
+| `docs/superpowers/data/2026-09-04-fatture-2026.json` | Le 14 fatture da importare, nel formato di `InvoiceImport` |
 
 ---
 
@@ -84,7 +84,7 @@ def test_an_invoice_records_where_it_was_imported_from(db_session: Session) -> N
         anno=2026,
         numero=7,
         data_emissione=date(2026, 5, 5),
-        importata_da="the previous system",
+        importata_da="esterno",
         imponibile=Decimal("2700.00"),
         imposta=Decimal("0.00"),
         bollo=Decimal("2.00"),
@@ -92,11 +92,11 @@ def test_an_invoice_records_where_it_was_imported_from(db_session: Session) -> N
     )
     db_session.add(row)
     db_session.flush()
-    assert db_session.get(Invoice, row.id).importata_da == "the previous system"
+    assert db_session.get(Invoice, row.id).importata_da == "esterno"
 
 
 def test_a_register_gap_is_unique_per_year_and_number(db_session: Session) -> None:
-    db_session.add(InvoiceRegisterGap(anno=2026, numero=4, motivo="annullata in the previous system"))
+    db_session.add(InvoiceRegisterGap(anno=2026, numero=4, motivo="annullata altrove"))
     db_session.flush()
     db_session.add(InvoiceRegisterGap(anno=2026, numero=4, motivo="di nuovo"))
     with pytest.raises(IntegrityError):
@@ -116,7 +116,7 @@ Expected: FAIL — `ImportError: cannot import name 'InvoiceRegisterGap'`
 In `models.py`, dentro `class Invoice`, dopo `custom_fields`:
 
 ```python
-    # `'the previous system'` for a row registered by slice 9's import: issued elsewhere, numbered
+    # `'esterno'` for a row registered by slice 9's import: issued elsewhere, numbered
     # elsewhere, and therefore without an XML or a PDF this CRM produced. `NULL` is the
     # ordinary case. A string rather than a boolean because the *source* is the fact
     # worth keeping: a second migration one day would not be "imported = true" twice.
@@ -228,7 +228,7 @@ git commit -m "feat(invoices): importata_da column and declared register gaps (s
 - Produces:
   - `InvoiceLineImport(descrizione: SafeStr, quantita: Decimal = 1, unita_misura: SafeStr | None, prezzo_unitario: Decimal, prezzo_totale: Decimal, aliquota_iva: Decimal, natura: SafeStr | None = None, riferimento_normativo: SafeStr | None = None)` — `extra="forbid"`.
   - `PdfSorgente(document_id: UUID)`.
-  - `InvoiceImport(anno: int, numero: int, data_emissione: date, data_scadenza: date | None, customer_id: UUID, deal_id: UUID | None, causale: SafeStr | None, righe: list[InvoiceLineImport] (min 1, max MAX_LINES), imponibile: Decimal, imposta: Decimal, bollo: Decimal, totale: Decimal, stato_pagamento: StatoPagamento = "da_incassare", data_incasso: date | None, trasmessa_esternamente_il: date | None, pdf_sorgente: PdfSorgente | None, note_interne: SafeStr | None, importata_da: Literal["the previous system"] = "the previous system")` — `extra="forbid"`, `anno` fra 2000 e 2100, `numero >= 1`.
+  - `InvoiceImport(anno: int, numero: int, data_emissione: date, data_scadenza: date | None, customer_id: UUID, deal_id: UUID | None, causale: SafeStr | None, righe: list[InvoiceLineImport] (min 1, max MAX_LINES), imponibile: Decimal, imposta: Decimal, bollo: Decimal, totale: Decimal, stato_pagamento: StatoPagamento = "da_incassare", data_incasso: date | None, trasmessa_esternamente_il: date | None, pdf_sorgente: PdfSorgente | None, note_interne: SafeStr | None, importata_da: Literal["esterno"] = "esterno")` — `extra="forbid"`, `anno` fra 2000 e 2100, `numero >= 1`.
   - `RegisterGapIn(numero: int >= 1, motivo: SafeStr max 500)`, `RegisterGapsDeclare(buchi: list[RegisterGapIn], min 1)`, `RegisterGapRead(anno, numero, motivo, dichiarato_da, dichiarato_il)`.
   - `InvoiceRead.importata_da: str | None`.
 
@@ -278,7 +278,7 @@ def _import(**overrides: object) -> dict[str, object]:
 
 def test_an_import_defaults_to_esterno_and_da_incassare() -> None:
     data = InvoiceImport(**_import())
-    assert data.importata_da == "the previous system"
+    assert data.importata_da == "esterno"
     assert data.stato_pagamento == "da_incassare"
     assert data.pdf_sorgente is None
 
@@ -376,7 +376,7 @@ class InvoiceImport(BaseModel):
     trasmessa_esternamente_il: date | None = None
     pdf_sorgente: PdfSorgente | None = None
     note_interne: SafeStr | None = None
-    importata_da: Literal["the previous system"] = "the previous system"
+    importata_da: Literal["esterno"] = "esterno"
 
 
 class RegisterGapIn(BaseModel):
@@ -446,7 +446,7 @@ def _issued(session: Session, *, anno: int, numero: int, giorno: date, importata
         anno=anno,
         numero=numero,
         data_emissione=giorno,
-        importata_da="the previous system" if importata else None,
+        importata_da="esterno" if importata else None,
         imponibile=Decimal("100.00"),
         imposta=Decimal("0.00"),
         bollo=Decimal("0.00"),
@@ -563,7 +563,7 @@ git commit -m "feat(invoices): repository queries for import — neighbours, pre
 
 ### Task 4: `InvoiceService.import_issued` — percorso felice e regole di registro
 
-> Ruling (review Task 4): `riferimento` non fa parte di `InvoiceImport` — su `invoices` è il riferimento di una proforma per vincolo `ck_invoices_riferimento_only_on_proforma`; la descrizione the previous system va in `causale`. Il servizio verifica inoltre `anno == data_emissione.year` e rifiuta `data_incasso` senza `stato_pagamento = incassato`.
+> Ruling (review Task 4): `riferimento` non fa parte di `InvoiceImport` — su `invoices` è il riferimento di una proforma per vincolo `ck_invoices_riferimento_only_on_proforma`; la descrizione del gestionale precedente va in `causale`. Il servizio verifica inoltre `anno == data_emissione.year` e rifiuta `data_incasso` senza `stato_pagamento = incassato`.
 
 **Files:**
 - Modify: `packages/core/src/pigrocrm/core/invoices/service.py` (nuovo metodo dopo `issue`; costante `IMPORT_ACTION`)
@@ -624,7 +624,7 @@ def test_an_imported_invoice_is_issued_numbered_and_moves_the_counter(db_session
     read = service.import_issued(_payload(customer_id, numero=7, giorno=date(2026, 5, 5)), ADMIN)
 
     assert (read.anno, read.numero, read.stato, read.tipo) == (2026, 7, "emessa", "fattura")
-    assert read.importata_da == "the previous system"
+    assert read.importata_da == "esterno"
     assert read.totale == Decimal("3422.00") and read.bollo == Decimal("2.00")
     assert read.stato_pagamento == "incassato" and read.data_incasso == date(2026, 5, 20)
     assert read.xml_hash_sha256 is None and read.pdf_document_id is None
@@ -940,10 +940,10 @@ def test_gaps_are_declared_with_a_reason_and_listed(db_session: Session, tmp_pat
     service = _svc(db_session, tmp_path)
     out = service.declare_gaps(
         2026,
-        RegisterGapsDeclare(buchi=[{"numero": 1, "motivo": "annullata in the previous system"}, {"numero": 4, "motivo": "test di emissione"}]),  # type: ignore[list-item]
+        RegisterGapsDeclare(buchi=[{"numero": 1, "motivo": "annullata nel gestionale precedente"}, {"numero": 4, "motivo": "test di emissione"}]),  # type: ignore[list-item]
         ADMIN,
     )
-    assert [(g.numero, g.motivo) for g in out] == [(1, "annullata in the previous system"), (4, "test di emissione")]
+    assert [(g.numero, g.motivo) for g in out] == [(1, "annullata nel gestionale precedente"), (4, "test di emissione")]
     assert [g.numero for g in service.register_gaps(2026, ADMIN)] == [1, 4]
 
 
@@ -1095,7 +1095,7 @@ def _pdf_document(session: Session, tmp_path, customer_id: UUID) -> UUID:  # noq
     from pigrocrm.core.storage.local import LocalFileStorage
 
     docs = DocumentService(session, LocalFileStorage(tmp_path), get_settings())
-    doc = docs.create(DocumentCreate(customer_id=customer_id, tipo="fattura", titolo="Fattura 7/2026 (the previous system)"), ADMIN)
+    doc = docs.create(DocumentCreate(customer_id=customer_id, tipo="fattura", titolo="Fattura 7/2026 (importata)"), ADMIN)
     docs.add_version(doc.id, b"%PDF-1.4 fake", "application/pdf", ADMIN)
     return doc.id
 
@@ -1281,7 +1281,7 @@ def test_an_admin_imports_and_sees_the_undeclared_gaps(
 ) -> None:
     first = logged_in.post("/api/invoices/import", json=_body(customer["id"], 7, "2026-05-05"))
     assert first.status_code == 201, first.text
-    assert first.json()["fattura"]["importata_da"] == "the previous system"
+    assert first.json()["fattura"]["importata_da"] == "esterno"
     assert first.json()["buchi_non_dichiarati"] == []
 
     second = logged_in.post("/api/invoices/import", json=_body(customer["id"], 9, "2026-06-05"))
@@ -1442,8 +1442,8 @@ async def test_import_registers_the_invoice_and_names_the_gaps(mcp_session: Sess
     async with Client(_server(mcp_session, tmp_path, full_access=True)) as client:
         result = await client.call_tool("import_issued_invoice", {"dati": dati})
         payload = result.structured_content
-        assert payload["fattura"]["numero"] == 9 and payload["fattura"]["importata_da"] == "the previous system"
-        gaps = await client.call_tool("declare_invoice_register_gaps", {"anno": 2026, "buchi": [{"numero": 8, "motivo": "annullata in the previous system"}]})
+        assert payload["fattura"]["numero"] == 9 and payload["fattura"]["importata_da"] == "esterno"
+        gaps = await client.call_tool("declare_invoice_register_gaps", {"anno": 2026, "buchi": [{"numero": 8, "motivo": "annullata nel gestionale precedente"}]})
         assert gaps.structured_content["result"][0]["numero"] == 8
 ```
 
@@ -1512,7 +1512,7 @@ git commit -m "feat(mcp): import_issued_invoice and declare_invoice_register_gap
 
 ---
 
-### Task 9: Badge «importata da the previous system» e niente XML nel frontend
+### Task 9: Badge «importata dal gestionale precedente» e niente XML nel frontend
 
 **Files:**
 - Modify: `apps/web/src/lib/api-types.ts` (rigenerato), `apps/web/src/features/invoices/InvoiceStateBadge.tsx`, `apps/web/src/features/invoices/InvoiceActions.tsx`
@@ -1531,11 +1531,11 @@ Append a `InvoiceActions.test.tsx`, seguendo il render helper già presente nel 
 
 ```tsx
 it('hides the XML and regenerate actions for an invoice imported from the previous system', () => {
-  const imported = { ...issuedInvoice, importata_da: 'the previous system' }
+  const imported = { ...issuedInvoice, importata_da: 'esterno' }
   renderActions(imported)
   expect(screen.queryByRole('button', { name: /XML FatturaPA/i })).toBeNull()
   expect(screen.queryByRole('button', { name: /Rigenera/i })).toBeNull()
-  expect(screen.getByText(/importata da the previous system/i)).toBeInTheDocument()
+  expect(screen.getByText(/importata dal gestionale precedente/i)).toBeInTheDocument()
 })
 ```
 
@@ -1548,7 +1548,7 @@ Expected: FAIL — il pulsante XML è presente.
 
 - [ ] **Step 4: Implementare**
 
-`InvoiceStateBadge.tsx`: dopo il badge dello stato, se `invoice.importata_da` è valorizzato, un secondo `<Badge variant="outline">importata da {invoice.importata_da === 'the previous system' ? 'the previous system' : invoice.importata_da}</Badge>`, entrambi dentro un `<span className="inline-flex gap-1">`.
+`InvoiceStateBadge.tsx`: dopo il badge dello stato, se `invoice.importata_da` è valorizzato, un secondo `<Badge variant="outline">importata da {invoice.importata_da}</Badge>`, entrambi dentro un `<span className="inline-flex gap-1">`.
 
 `InvoiceActions.tsx`: introdurre `const isImported = invoice.importata_da != null` e condizionare a `isIssued && !isImported` i pulsanti «XML FatturaPA» e «Rigenera PDF/XML» (righe 111-127). Il download PDF resta: è l'originale.
 
@@ -1561,7 +1561,7 @@ Expected: PASS
 
 ```bash
 git add apps/web/src/lib/api-types.ts apps/web/src/features/invoices/InvoiceStateBadge.tsx apps/web/src/features/invoices/InvoiceActions.tsx apps/web/src/features/invoices/InvoiceActions.test.tsx
-git commit -m "feat(web): imported-from-the previous system badge; no XML or re-render on imported invoices"
+git commit -m "feat(web): imported-from-elsewhere badge; no XML or re-render on imported invoices"
 ```
 
 ---
@@ -1569,8 +1569,8 @@ git commit -m "feat(web): imported-from-the previous system badge; no XML or re-
 ### Task 10: Il dataset delle 14 fatture e il runbook
 
 **Files:**
-- Create: `docs/superpowers/data/2026-09-04-the previous system-fatture-2026.json`
-- Create: `docs/superpowers/notes/2026-09-04-import-the previous system-runbook.md`
+- Create: `docs/superpowers/data/2026-09-04-fatture-2026.json`
+- Create: `docs/superpowers/notes/2026-09-04-import-storico-runbook.md`
 
 **Interfaces:**
 - Consumes: `InvoiceImport` (Task 2), tool `import_issued_invoice` (Task 8).
@@ -1579,34 +1579,34 @@ git commit -m "feat(web): imported-from-the previous system badge; no XML or re-
 
 Un array JSON di 14 oggetti nel formato di `InvoiceImport` con `customer_id` da risolvere per `ragione_sociale` (campo ausiliario `_cliente`, rimosso dallo script di invio). `data_scadenza`, `data_incasso` e `trasmessa_esternamente_il` da compilare dal titolare dove indicato `null`.
 
-> **I valori qui sotto sono sintetici.** Il dataset reale (clienti, importi, tariffe, id Drive dei PDF) è stato rimosso da questo repository il 2026-09-09, prima della pubblicazione, insieme al file JSON che questo task creava: erano dati di clienti veri e il fatturato di un anno. Quello che resta è la forma, che è ciò di cui il piano ha bisogno per essere leggibile: 14 righe, i buchi di registro 1, 4 e 6 assenti, una fattura su due righe, una verso l'estero con `natura` diversa, e tre righe sotto la soglia del bollo. Chi rieseguisse questo task su dati propri parte da qui.
+> **I valori qui sotto sono sintetici.** Il dataset reale (clienti, importi, tariffe, id Drive dei PDF) è stato rimosso da questo repository il 2026-09-09, prima della pubblicazione, insieme al file JSON che questo task creava: erano dati di clienti veri e il fatturato di un anno. Quello che resta è la forma, che è ciò di cui il piano ha bisogno per essere leggibile: 14 righe, i buchi di registro 1, 7 e 13 assenti, una fattura su due righe, una verso l'estero con `natura` diversa, e tre righe sotto la soglia del bollo. Chi rieseguisse questo task su dati propri parte da qui.
 
 | numero | data | `_cliente` | descrizione riga | quantità × prezzo | imponibile | stato_pagamento |
 |---|---|---|---|---|---|---|
-| 2 | 2026-02-04 | Alfa S.r.l. | Consulenza sito vetrina | 1 × 200 | 200.00 | incassato |
-| 3 | 2026-02-04 | Beta Service S.r.l. | Servizi di consulenza progetto Delta (ODA 2026-012-ACM-BET) | 1 × 900 | 900.00 | incassato |
-| 5 | 2026-04-07 | Mario Rossi | Consulenza AI prototipo Delta — anticipo | 1 × 2000 | 2200.00 (seconda riga: spese accessorie 200.00) | incassato; `trasmessa_esternamente_il: null` (non consegnata) |
-| 7 | 2026-05-05 | Acme S.r.l. | 900142/0426/Consulenza AI CTO progetto Aurora | 9 × 300 | 2700.00 | incassato |
-| 8 | 2026-05-05 | Gamma Società Cooperativa | Servizi di consulenza progetto Vega — pre-analisi console remota | 3 × 300 | 900.00 | incassato |
-| 9 | 2026-06-05 | Acme S.r.l. | 900142/0526/Consulenza AI CTO progetto Aurora | 20 × 300 | 6000.00 | incassato |
-| 10 | 2026-06-05 | Acme S.r.l. | 900142/0526/Rimborso spese | 1 × 60.50 | 60.50 | incassato |
-| 11 | 2026-07-13 | Acme S.r.l. | 900142/0626/Consulenza AI CTO progetto Aurora | 21 × 300 | 6300.00 | incassato |
-| 12 | 2026-07-13 | Acme S.r.l. | 900142/0626/Rimborso hosting | 1 × 15.00 | 15.00 | incassato |
-| 13 | 2026-08-03 | Example Ltd | Consulting services for project Vega — July 2026 (pro-rata) | 1 × 5000 | 5000.00 | incassato |
-| 14 | 2026-08-03 | Acme S.r.l. | 900143/0726/Consulenza AI CTO progetto Aurora | 21 × 310 | 6510.00 | da_incassare (scaduta) |
-| 15 | 2026-08-03 | Gamma Società Cooperativa | Consulenza console remota Vega — acconto 30% | 1 × 2500 | 2500.00 | da_incassare (scaduta) |
-| 16 | 2026-08-11 | Gamma Società Cooperativa | Consulenza console remota Vega — 20% post UAT | 1 × 1600 | 1600.00 | da_incassare |
-| 17 | 2026-08-11 | Acme S.r.l. | 900143/0726/Rimborso hosting | 1 × 20.00 | 20.00 | da_incassare |
+| 2 | 2026-01-19 | Alfa S.r.l. | Consulenza sito vetrina | 1 × 200 | 200.00 | incassato |
+| 3 | 2026-01-19 | Beta Service S.r.l. | Servizi di consulenza progetto Delta (ODA 2026-012-ACM-BET) | 1 × 900 | 900.00 | incassato |
+| 4 | 2026-03-11 | Mario Rossi | Consulenza AI prototipo Delta — anticipo | 1 × 2000 | 2200.00 (seconda riga: spese accessorie 200.00) | incassato; `trasmessa_esternamente_il: null` (non consegnata) |
+| 5 | 2026-04-16 | Acme S.r.l. | 900142/0426/Consulenza AI CTO progetto Aurora | 9 × 300 | 2700.00 | incassato |
+| 6 | 2026-04-16 | Gamma Società Cooperativa | Servizi di consulenza progetto Vega — pre-analisi console remota | 3 × 300 | 900.00 | incassato |
+| 8 | 2026-05-14 | Acme S.r.l. | 900142/0526/Consulenza AI CTO progetto Aurora | 20 × 300 | 6000.00 | incassato |
+| 9 | 2026-05-14 | Acme S.r.l. | 900142/0526/Rimborso spese | 1 × 60.50 | 60.50 | incassato |
+| 10 | 2026-06-22 | Acme S.r.l. | 900142/0626/Consulenza AI CTO progetto Aurora | 21 × 300 | 6300.00 | incassato |
+| 11 | 2026-06-22 | Acme S.r.l. | 900142/0626/Rimborso hosting | 1 × 15.00 | 15.00 | incassato |
+| 12 | 2026-07-30 | Example Ltd | Consulting services for project Vega — July 2026 (pro-rata) | 1 × 5000 | 5000.00 | incassato |
+| 14 | 2026-07-30 | Acme S.r.l. | 900143/0726/Consulenza AI CTO progetto Aurora | 21 × 310 | 6510.00 | da_incassare (scaduta) |
+| 15 | 2026-07-30 | Gamma Società Cooperativa | Consulenza console remota Vega — acconto 30% | 1 × 2500 | 2500.00 | da_incassare (scaduta) |
+| 16 | 2026-08-06 | Gamma Società Cooperativa | Consulenza console remota Vega — 20% post UAT | 1 × 1600 | 1600.00 | da_incassare |
+| 17 | 2026-08-06 | Acme S.r.l. | 900143/0726/Rimborso hosting | 1 × 20.00 | 20.00 | da_incassare |
 
-Per ogni riga: `aliquota_iva: "0"`, `natura: "N2.2"`, `imposta: "0.00"`; `bollo: "2.00"` sulle fatture con imponibile > 77,47 (tutte tranne 10, 12, 17) e `totale = imponibile + bollo`. **Il bollo va confermato dal titolare** contro i PDF: se il registro di partenza non lo applicava, `bollo: "0.00"` e `totale = imponibile`. Il dataset nasce con `bollo: "0.00"` e una nota che lo dice. La fattura 13 (cliente UK) porta `natura: "N2.1"`.
+Per ogni riga: `aliquota_iva: "0"`, `natura: "N2.2"`, `imposta: "0.00"`; `bollo: "2.00"` sulle fatture con imponibile > 77,47 (tutte tranne 9, 11, 17) e `totale = imponibile + bollo`. **Il bollo va confermato dal titolare** contro i PDF: se il registro di partenza non lo applicava, `bollo: "0.00"` e `totale = imponibile`. Il dataset nasce con `bollo: "0.00"` e una nota che lo dice. La fattura 12 (cliente UK) porta `natura: "N2.1"`.
 
 - [ ] **Step 2: Scrivere il runbook**
 
-`docs/superpowers/notes/2026-09-04-import-the previous system-runbook.md`, in ordine:
+`docs/superpowers/notes/2026-09-04-import-storico-runbook.md`, in ordine:
 1. Compilare profilo fiscale ed emittente in Impostazioni (o `PUT /api/fiscal-profile`, `PUT /api/emitter-profile`).
 2. Riavviare l'API dal worktree (non ha `--reload`).
-3. Per ogni riga del dataset, in ordine di numero, chiamare `import_issued_invoice` dal server MCP `pigrocrm` (o `POST /api/invoices/import`); alla fine dichiarare i buchi 1, 4, 6 con `declare_invoice_register_gaps` (motivo da chiedere al titolare; default «numero non emesso in the previous system»).
-4. Verifiche: `list_invoices` → 14 righe con `importata_da = "the previous system"`; contatore 2026 = 17 (`SELECT * FROM invoice_counters`); `get_unbilled_backlog`/scadenziario mostrano 14 e 15 scadute; `export_invoice_xml` su una importata risponde 409.
+3. Per ogni riga del dataset, in ordine di numero, chiamare `import_issued_invoice` dal server MCP `pigrocrm` (o `POST /api/invoices/import`); alla fine dichiarare i buchi 1, 7, 13 con `declare_invoice_register_gaps` (motivo da chiedere al titolare; default «numero non emesso nel gestionale precedente»).
+4. Verifiche: `list_invoices` → 14 righe con `importata_da = "esterno"`; contatore 2026 = 17 (`SELECT * FROM invoice_counters`); `get_unbilled_backlog`/scadenziario mostrano 14 e 15 scadute; `export_invoice_xml` su una importata risponde 409.
 5. Caricare i PDF originali dalla cartella Drive `Fatture` come documenti `tipo = fattura` (a mano via `POST /api/documents` + upload versione finché 9C non esiste) e ricollegarli con `pdf_sorgente` — oppure attendere 9C e farlo con `import_drive_file`.
 
 - [ ] **Step 3: Validare il dataset contro lo schema**
@@ -1615,7 +1615,7 @@ Per ogni riga: `aliquota_iva: "0"`, `natura: "N2.2"`, `imposta: "0.00"`; `bollo:
 uv run --directory . python - <<'EOF'
 import json
 from pigrocrm.core.invoices.schemas import InvoiceImport
-rows = json.load(open("docs/superpowers/data/2026-09-04-the previous system-fatture-2026.json"))
+rows = json.load(open("docs/superpowers/data/2026-09-04-fatture-2026.json"))
 for row in rows:
     row = {k: v for k, v in row.items() if not k.startswith("_")}
     row["customer_id"] = "00000000-0000-0000-0000-000000000000"
@@ -1629,8 +1629,8 @@ Expected: `14 righe valide`.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add docs/superpowers/data/2026-09-04-the previous system-fatture-2026.json docs/superpowers/notes/2026-09-04-import-the previous system-runbook.md
-git commit -m "docs: the previous system 2026 invoice dataset and import runbook (slice 9A)"
+git add docs/superpowers/data/2026-09-04-fatture-2026.json docs/superpowers/notes/2026-09-04-import-storico-runbook.md
+git commit -m "docs: gestionale precedente 2026 invoice dataset and import runbook (slice 9A)"
 ```
 
 ---
