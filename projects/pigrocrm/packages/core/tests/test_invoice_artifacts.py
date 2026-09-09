@@ -16,10 +16,15 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.activities.service import ActivityService
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.customers.models import Customer
+from pigrocrm.core.documents.models import Document
+from pigrocrm.core.documents.schemas import DocumentListQuery
+from pigrocrm.core.documents.service import DocumentService
 from pigrocrm.core.emitter.schemas import EmitterProfileUpsert
 from pigrocrm.core.emitter.service import EmitterProfileService
+from pigrocrm.core.errors import NotFound
 from pigrocrm.core.fiscal.schemas import FiscalProfileUpsert
 from pigrocrm.core.fiscal.service import FiscalProfileService
 from pigrocrm.core.invoices.schemas import InvoiceCreate, InvoiceIssue, InvoiceLineIn
@@ -192,3 +197,43 @@ def test_the_pdf_for_an_italian_customer_keeps_the_domestic_declaration(
     testo = extract_pdf_text(storage, db_session, pdf.document_id)
     assert "L. 190/2014" in testo
     assert "7-ter" not in testo
+
+
+# --- discarding a proforma takes its PDF with it (ORB-41) ---------------------------
+
+
+def test_discarding_a_proforma_archives_its_pdf_and_keeps_the_bytes(
+    service: InvoiceService,
+    db_session: Session,
+    storage: LocalFileStorage,
+    customer_id: UUID,
+) -> None:
+    """The soft delete of a proforma used to stop at `invoices.deleted_at` and leave
+    `pdf_document_id` pointing at a live row, so `list_documents` kept showing
+    "Proforma PROV-... (PDF)" and its download kept working while `get_invoice` on the
+    owner answered not found (ORB-41). The document goes with its owner, in the same
+    transaction, and as a soft delete: the row and the stored bytes stay, so a restore
+    of the document is still a real restore."""
+    proforma_id = _confirmed_proforma(service, customer_id)
+    (pdf,) = service.produce_artifacts(proforma_id, ADMIN)
+    documents = DocumentService(db_session, storage)
+    listed = documents.list(DocumentListQuery(customer_id=customer_id), ADMIN).items
+    assert pdf.document_id in [item.id for item in listed]
+
+    service.soft_delete(proforma_id, ADMIN)
+
+    listed = documents.list(DocumentListQuery(customer_id=customer_id), ADMIN).items
+    assert pdf.document_id not in [item.id for item in listed]
+    with pytest.raises(NotFound):
+        documents.get(pdf.document_id, ADMIN)
+    # Reversible: the row is archived, not gone, and the bytes are still where the
+    # version says they are.
+    row = db_session.get(Document, pdf.document_id)
+    assert row is not None and row.deleted_at is not None
+    version = documents.repo.version(row.id, row.versione_corrente)
+    assert version is not None
+    assert storage.get(version.storage_key)[:5] == b"%PDF-"
+    # And the document's own timeline says why it went, the way a delete from the
+    # documents surface would.
+    kinds = [a.kind for a in ActivityService(db_session).timeline("document", pdf.document_id)]
+    assert "deleted" in kinds

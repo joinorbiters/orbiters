@@ -25,6 +25,7 @@ from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.documents.models import Document
 from pigrocrm.core.documents.schemas import DocumentCreate
+from pigrocrm.core.documents.service import ENTITY as DOCUMENT_ENTITY
 from pigrocrm.core.documents.service import DocumentService
 from pigrocrm.core.drive.reader import ALREADY_AUTHORIZED, DriveReader, drive_reader_for
 from pigrocrm.core.emitter.service import EmitterProfileService
@@ -485,6 +486,18 @@ class InvoiceService:
         makes the rule true for a psql session too. Without the gap-free register the
         numbering guarantee of spec 3 would be worth nothing: a number that can be
         deleted is a gap with extra steps.
+
+        The artefact rows go with the invoice (ORB-41). A proforma's PDF is filed among
+        the customer's documents by `produce_artifacts`, and `DocumentRepository.list`
+        filters on `documents.deleted_at` alone, so until this archived it too the
+        PDF stayed listed and downloadable while `get` on its owner answered not found.
+        Done here at repository level rather than through `DocumentService.soft_delete`
+        for two reasons: that method commits on its own, and the two rows must fall
+        in one transaction or a crash in between leaves exactly the orphan this fixes;
+        and the permission that governs is the invoice's, already checked above. A soft
+        delete like the invoice's own: the row and the bytes stay, so a restore of the
+        document is still a real restore. The table CHECK above guarantees this never
+        reaches a fiscal artefact, since a numbered invoice cannot get this far.
         """
         actor.require_write("delete_invoice")
         invoice = self._require(invoice_id)
@@ -496,7 +509,17 @@ class InvoiceService:
                 stato=invoice.stato,
                 numero=invoice.numero,
             )
-        invoice.deleted_at = datetime.now(UTC)
+        now = datetime.now(UTC)
+        invoice.deleted_at = now
+        for document_id in (invoice.pdf_document_id, invoice.xml_document_id):
+            if document_id is None:
+                continue
+            document = self.documents.repo.get(document_id)
+            if document is None:
+                # Already archived, by hand or by an earlier attempt: nothing to redo.
+                continue
+            document.deleted_at = now
+            self.activities.record(DOCUMENT_ENTITY, document.id, "deleted", actor)
         self.activities.record(ENTITY, invoice.id, "deleted", actor)
         try:
             self.session.commit()
