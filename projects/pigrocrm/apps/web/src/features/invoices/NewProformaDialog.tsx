@@ -25,6 +25,13 @@ import { Textarea } from '@/components/ui/textarea'
 import { useCustomer, useCustomers } from '@/features/customers/queries'
 import { useDeal, useDeals } from '@/features/deals/queries'
 import { toProblem, type ProblemDetail } from '@/lib/api'
+import { toIsoDate } from '@/lib/dates'
+import { AccrualPeriodFields } from './AccrualPeriodFields'
+import {
+  emptyAccrualPeriod,
+  validateAccrualPeriod,
+  type AccrualPeriodDraft,
+} from './accrualPeriod'
 import { formatMoney, previewImponibile } from './format'
 import { useCreateInvoice } from './queries'
 
@@ -97,6 +104,8 @@ function isStarted(row: DraftRow): boolean {
 interface Errors {
   customer?: string
   causale?: string
+  data?: string
+  competenza?: string
   righe?: string
 }
 
@@ -256,6 +265,16 @@ function DealPicker({
  * control for it here would have been silently dropped -- `InvoiceCreate` does not
  * forbid extra keys -- which is worse than not offering it, so the dialog says where
  * the date comes from instead.
+ *
+ * `data_emissione` *is* a field, since ORB-63: a proforma is a document the customer
+ * receives and answers to, so it carries a date of its own, the sender's and stable,
+ * rather than printing the day it was rendered. Today by default, read from local date
+ * parts (`toIsoDate`), and editable on the detail page until the proforma is consumed.
+ * It is not a register date: the fattura issued from it takes its own at emission.
+ *
+ * The accrual period (ORB-61) is optional, both ends or neither. It is what the P&L
+ * «per competenza» reads and what the XML's `DataInizioPeriodo`/`DataFinePeriodo` say,
+ * which is how August work invoiced in September stops landing in September's month.
  */
 function NewProformaDialog({
   onClose,
@@ -271,6 +290,8 @@ function NewProformaDialog({
   const [customerId, setCustomerId] = useState(fixedCustomerId ?? '')
   const [dealId, setDealId] = useState(fixedDealId ?? '')
   const [causale, setCausale] = useState('')
+  const [dataEmissione, setDataEmissione] = useState(() => toIsoDate(new Date()))
+  const [competenza, setCompetenza] = useState<AccrualPeriodDraft>(emptyAccrualPeriod)
   const [note, setNote] = useState('')
   const [rows, setRows] = useState<DraftRow[]>(() => [firstRow(prefill)])
   const [errors, setErrors] = useState<Errors>({})
@@ -299,6 +320,9 @@ function NewProformaDialog({
     const found: Errors = {}
     if (customerId === '') found.customer = 'Scegli il cliente da fatturare.'
     if (causale.trim() === '') found.causale = 'La causale è obbligatoria.'
+    if (dataEmissione === '') found.data = 'La proforma ha bisogno di una data.'
+    const periodError = validateAccrualPeriod(competenza)
+    if (periodError !== undefined) found.competenza = periodError
     if (!rows.some(isComplete)) {
       found.righe = 'Serve almeno una riga con descrizione e prezzo unitario.'
     } else if (rows.some((row) => isStarted(row) && !isComplete(row))) {
@@ -317,6 +341,7 @@ function NewProformaDialog({
       customer_id: customerId,
       tipo: 'proforma',
       causale: causale.trim(),
+      data_emissione: dataEmissione,
       // Only the complete rows, and each one with only the keys the user filled in.
       // An omitted optional key on a *create* is the server's own default, which is
       // what "the user did not say" means here -- unlike `InvoiceLinesEditor`, where a
@@ -329,6 +354,12 @@ function NewProformaDialog({
       })),
     }
     if (dealId !== '') body.deal_id = dealId
+    // After `validate`, a non-empty start means a non-empty end too; an empty pair is
+    // the server's own default, per the rule above.
+    if (competenza.competenza_da !== '') {
+      body.competenza_da = competenza.competenza_da
+      body.competenza_a = competenza.competenza_a
+    }
     if (note.trim() !== '') body.note_interne = note.trim()
 
     create.mutate(body, {
@@ -402,6 +433,29 @@ function NewProformaDialog({
             />
             {errors.causale ? (
               <p className="text-sm text-destructive">{errors.causale}</p>
+            ) : null}
+          </div>
+
+          <div className="space-y-2">
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div className="space-y-2">
+                <Label htmlFor="proforma-data">
+                  Data
+                  <span className="ml-1 text-destructive">*</span>
+                </Label>
+                <Input
+                  id="proforma-data"
+                  type="date"
+                  required
+                  value={dataEmissione}
+                  onChange={(event) => setDataEmissione(event.target.value)}
+                />
+              </div>
+              <AccrualPeriodFields idPrefix="proforma" value={competenza} onChange={setCompetenza} />
+            </div>
+            {errors.data ? <p className="text-sm text-destructive">{errors.data}</p> : null}
+            {errors.competenza ? (
+              <p className="text-sm text-destructive">{errors.competenza}</p>
             ) : null}
           </div>
 

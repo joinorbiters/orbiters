@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { FilterChip } from '@/components/FilterRow'
 import { QueryErrorBanner } from '@/components/QueryErrorBanner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -8,7 +9,7 @@ import { useIsAdmin } from '@/lib/auth'
 import { toIsoDate } from '@/lib/dates'
 import { PeriodTotals, PnlRows } from './PnlRows'
 import { ToInvoiceDialog } from './ToInvoiceDialog'
-import { useDealPnl, usePeriodPnl } from './queries'
+import { PNL_BASE_LABELS, PNL_BASES, useDealPnl, usePeriodPnl, type PnlBase } from './queries'
 
 /**
  * A discriminated argument, never two optional props: there is then no "empty string"
@@ -69,6 +70,14 @@ function DealEconomics({ dealId }: { dealId: string }) {
   )
 }
 
+/** One sentence per reading, under the chips: the row's hint names the base, this says
+ *  what the base does to the figure, and only one of the two is on screen at a time. */
+const BASE_NOTE: Record<PnlBase, string> = {
+  emissione: 'Ricavi attribuiti alla data di emissione della fattura.',
+  competenza:
+    'Ricavi attribuiti al periodo di competenza della fattura, o alla data di emissione quando manca.',
+}
+
 function CustomerEconomics({ customerId }: { customerId: string }) {
   // A customer's economics is the sum of their deals, served by the same period endpoint
   // with a `customer_id` filter -- never a second aggregation written here, which is how
@@ -76,23 +85,50 @@ function CustomerEconomics({ customerId }: { customerId: string }) {
   // because the endpoint requires one; `toIsoDate` builds it from local date parts, so
   // the report cannot open on next year late on 31 December.
   const year = new Date().getFullYear()
+  // The reading is state and not a search param: it is a way of looking at one card,
+  // and `emissione` is what the spec recorded, so the tab opens on it every time.
+  const [base, setBase] = useState<PnlBase>('emissione')
   const pnl = usePeriodPnl({
     from: toIsoDate(new Date(year, 0, 1)),
     to: toIsoDate(new Date(year, 11, 31)),
     customer_id: customerId,
+    // Always explicit, the default included, so the request says what the card shows.
+    base,
   })
-
-  if (pnl.isError) return <QueryErrorBanner error={pnl.error} />
-  if (pnl.isLoading || !pnl.data) return <Skeleton className="h-48 w-full" />
 
   return (
     <Card>
       <CardContent className="pt-6">
-        <h2 className="mb-1 font-semibold">Conto economico {year}</h2>
-        <p className="mb-3 text-xs text-muted-foreground">
-          Somma dei deal di questo cliente nell&apos;anno in corso.
-        </p>
-        <PeriodTotals pnl={pnl.data} />
+        {/* The chips stay up whatever the request did: a failed «per competenza» read
+            with no way back to «per emissione» would strand the reader on a banner. */}
+        <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="mb-1 font-semibold">Conto economico {year}</h2>
+            <p className="text-xs text-muted-foreground">
+              Somma dei deal di questo cliente nell&apos;anno in corso. {BASE_NOTE[base]}
+            </p>
+          </div>
+          {/* `FilterChip`, the riga-filtri toggle of the design spec (§4), and not a
+              `Select`: two readings are a pair of chips, one always pressed -- unlike
+              `FilterChips` there is no «all», because a P&L is always read by *some*
+              date. `aria-pressed` is the state, as everywhere else. */}
+          <div role="group" aria-label="Ricavi per" className="flex items-center gap-2">
+            {PNL_BASES.map((option) => (
+              <FilterChip key={option} pressed={base === option} onPress={() => setBase(option)}>
+                {PNL_BASE_LABELS[option]}
+              </FilterChip>
+            ))}
+          </div>
+        </div>
+        {pnl.isError ? (
+          // The banner and nothing else: a conto economico rendered under a failed read
+          // would show a screenful of dashes that look like real zeroes.
+          <QueryErrorBanner error={pnl.error} />
+        ) : pnl.isLoading || !pnl.data ? (
+          <Skeleton className="h-48 w-full" />
+        ) : (
+          <PeriodTotals pnl={pnl.data} base={base} />
+        )}
       </CardContent>
     </Card>
   )

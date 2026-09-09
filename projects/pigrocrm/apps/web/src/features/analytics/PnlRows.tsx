@@ -1,7 +1,7 @@
 import { useId } from 'react'
 import { formatHoursValue, formatMoneyValue } from '@/features/time/columns'
 import { formatPercent } from './format'
-import type { DealPnl, PeriodPnl, PnlTotals } from './queries'
+import type { DealPnl, PeriodPnl, PnlBase, PnlTotals } from './queries'
 
 function Row({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
@@ -68,6 +68,14 @@ export function PnlRows({ pnl }: { pnl: DealPnl }) {
   )
 }
 
+/** What the revenue row says beside its label, so a screenshot of one column still
+ *  says which reading it is: the same figure can differ by a month's invoicing between
+ *  the two, and a number that does not name its base is a number with no unit. */
+const BASE_HINT: Record<PnlBase, string> = {
+  emissione: 'per emissione',
+  competenza: 'per competenza',
+}
+
 /**
  * One column of a period P&L. `reportable` marks the closed one and nothing else: the
  * in-progress column is real but provisional, and a reader who takes it for a result
@@ -76,10 +84,12 @@ export function PnlRows({ pnl }: { pnl: DealPnl }) {
 function TotalsColumn({
   label,
   totals,
+  base,
   reportable = false,
 }: {
   label: string
   totals: PnlTotals
+  base: PnlBase
   reportable?: boolean
 }) {
   const headingId = useId()
@@ -93,7 +103,7 @@ function TotalsColumn({
           <span className="text-xs text-muted-foreground">dato riportabile</span>
         )}
       </div>
-      <Row label="Ricavi" value={formatMoneyValue(totals.ricavi)} />
+      <Row label="Ricavi" value={formatMoneyValue(totals.ricavi)} hint={BASE_HINT[base]} />
       <Row label="Costi diretti" value={formatMoneyValue(totals.costi_diretti)} />
       <Row label="Costo del lavoro" value={formatMoneyValue(totals.costo_lavoro)} />
       <Row label="Margine lordo" value={formatMoneyValue(totals.margine_lordo)} />
@@ -110,12 +120,12 @@ function TotalsColumn({
  * business performance. The backend refuses to return such a field; this component
  * refuses to compute one, which is the only way the refusal survives the trip.
  */
-export function PeriodTotals({ pnl }: { pnl: PeriodPnl }) {
+export function PeriodTotals({ pnl, base = 'emissione' }: { pnl: PeriodPnl; base?: PnlBase }) {
   return (
     <div className="space-y-4">
       <div className="grid gap-4 md:grid-cols-2">
-        <TotalsColumn label="Deal chiusi" totals={pnl.chiusi} reportable />
-        <TotalsColumn label="Deal in corso" totals={pnl.in_corso} />
+        <TotalsColumn label="Deal chiusi" totals={pnl.chiusi} base={base} reportable />
+        <TotalsColumn label="Deal in corso" totals={pnl.in_corso} base={base} />
       </div>
       <div>
         <Row label="Spese generali" value={formatMoneyValue(pnl.spese_generali)} />

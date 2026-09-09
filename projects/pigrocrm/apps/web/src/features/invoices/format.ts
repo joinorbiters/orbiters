@@ -60,6 +60,21 @@ export function formatDate(value: string | null): string {
 }
 
 /**
+ * The accrual period as the detail page states it, «dal - al» (ORB-61), through the same
+ * `formatDate` as the emission date two rows above it, so the two read alike.
+ *
+ * Both ends or the dash: the server stores the pair together or not at all, so a lone
+ * end is a state this product never renders. `== null` and not `=== null`, on purpose:
+ * an API that predates the two columns sends no key at all, and a detail page that
+ * crashed on `undefined` during the window between the two deploys would be worse than
+ * a dash.
+ */
+export function formatPeriod(da: string | null, a: string | null): string {
+  if (da == null || a == null || da === '' || a === '') return EMPTY
+  return `${formatDate(da)} - ${formatDate(a)}`
+}
+
+/**
  * The label a human reads. Two integers joined by a slash is presentation, not
  * business logic -- and a proforma's reference deliberately cannot be produced by this
  * function from a number, because it never has one.

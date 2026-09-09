@@ -16,6 +16,25 @@ export type DealPnl = components['schemas']['DealPnl']
 export type PeriodPnl = components['schemas']['PeriodPnl']
 export type PnlTotals = components['schemas']['PnlTotals']
 
+/**
+ * Which date a period P&L attributes revenue by (ORB-61). `emissione` is the invoice's
+ * own date, the reading slice 4 §7.1 chose («ricavo = fatturato») and the default;
+ * `competenza` is `coalesce(competenza_da, data_emissione)` on the server, so August
+ * work invoiced in September lands in August, and an invoice with no period falls back
+ * to its date rather than out of the year. Two readings side by side rather than one
+ * silently changed, which is the spec's own pattern for cash against accrual (§13).
+ */
+export type PnlBase = 'emissione' | 'competenza'
+
+export const PNL_BASES: readonly PnlBase[] = ['emissione', 'competenza']
+
+/** The chip that selects each reading. A total `Record`, like `INVOICE_STATE_LABELS`, so
+ *  a third base fails to compile here rather than rendering an unlabelled chip. */
+export const PNL_BASE_LABELS: Record<PnlBase, string> = {
+  emissione: 'Per emissione',
+  competenza: 'Per competenza',
+}
+
 /** The window every period-wide report is asked for. Not exported: the one hook that
  *  takes it is called with an object literal, and a type nobody outside this module
  *  names is one more thing to keep true for no reader. */
@@ -23,6 +42,7 @@ interface PeriodParams {
   from: string
   to: string
   customer_id?: string
+  base?: PnlBase
 }
 
 export function useDealPnl(dealId: string) {

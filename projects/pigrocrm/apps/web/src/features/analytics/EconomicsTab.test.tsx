@@ -259,7 +259,73 @@ describe('EconomicsTab on a customer', () => {
       from: '2026-01-01',
       to: '2026-12-31',
       customer_id: CUSTOMER,
+      // Explicit even though it is the server's default: the request states the reading
+      // the card shows, and a reader of the network tab should not have to know which
+      // one "absent" means.
+      base: 'emissione',
     })
+  })
+
+  /** The reading the spec recorded (slice 4 §7.1, revenue by the invoice's own date) is
+   *  the one the tab opens on, and the revenue row says so beside its label. */
+  it('reads revenue by emission date by default, and says so on the row', async () => {
+    routeGet({ '/api/analytics/pnl': ok(periodPnl()) })
+    renderTab({ customerId: CUSTOMER })
+
+    const closed = await screen.findByRole('group', { name: /deal chiusi/i })
+    expect(within(closed).getByText('per emissione')).toBeInTheDocument()
+    expect(within(closed).queryByText('per competenza')).toBeNull()
+    const chips = screen.getByRole('group', { name: 'Ricavi per' })
+    expect(within(chips).getByRole('button', { name: 'Per emissione' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    expect(within(chips).getByRole('button', { name: 'Per competenza' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    )
+    expect(screen.getByText(/attribuiti alla data di emissione/i)).toBeInTheDocument()
+  })
+
+  /** ORB-61: the second reading is the server's `coalesce(competenza_da, data_emissione)`,
+   *  asked for with `base=competenza`; nothing is re-attributed in the browser. */
+  it('switches to the accrual reading by asking the server again with base=competenza', async () => {
+    routeGet({ '/api/analytics/pnl': ok(periodPnl()) })
+    renderTab({ customerId: CUSTOMER })
+    await screen.findByRole('group', { name: /deal chiusi/i })
+
+    await userEvent.click(screen.getByRole('button', { name: 'Per competenza' }))
+
+    await waitFor(() => {
+      const bases = vi
+        .mocked(api.GET)
+        .mock.calls.map(
+          (call) =>
+            (call as unknown as [string, { params: { query: Record<string, unknown> } }])[1]
+              .params.query.base,
+        )
+      expect(bases).toContain('competenza')
+    })
+    expect(screen.getByRole('button', { name: 'Per competenza' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    expect(screen.getByRole('button', { name: 'Per emissione' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    )
+    const closed = await screen.findByRole('group', { name: /deal chiusi/i })
+    expect(await within(closed).findByText('per competenza')).toBeInTheDocument()
+    expect(screen.getByText(/attribuiti al periodo di competenza/i)).toBeInTheDocument()
+  })
+
+  it('keeps the two chips on screen when the request fails, so the reading can be changed back', async () => {
+    routeGet({ '/api/analytics/pnl': failed({ detail: 'Periodo non leggibile' }, 503) })
+    renderTab({ customerId: CUSTOMER })
+
+    await screen.findByRole('alert')
+    expect(screen.getByRole('button', { name: 'Per emissione' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Per competenza' })).toBeInTheDocument()
   })
 
   /** The two columns are the point of §7.4: adding a finished job's margin to a half-done
