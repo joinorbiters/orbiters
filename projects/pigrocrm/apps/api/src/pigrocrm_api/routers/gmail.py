@@ -30,7 +30,7 @@ import threading
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -52,6 +52,7 @@ from pigrocrm.core.gmail.tokens import GoogleTokenClient
 from pigrocrm.core.gmail.transport import GmailTransport
 from pigrocrm_api.deps import ActorDep, SessionDep, SettingsDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
+from pigrocrm_api.tenancy import cookie_path
 
 router = APIRouter(prefix="/api/gmail", tags=["gmail"], responses=PROBLEM_RESPONSES)
 
@@ -137,6 +138,7 @@ def start_oauth(session: SessionDep, actor: ActorDep, settings: SettingsDep) -> 
 
 @router.get("/oauth/callback")
 def finish_oauth(
+    request: Request,
     session: SessionDep,
     actor: ActorDep,
     settings: SettingsDep,
@@ -147,7 +149,7 @@ def finish_oauth(
     if error is not None or code is None or state is None:
         # One outcome code for every refusal on Google's side. Google's own `error` is
         # not forwarded: it is English, and it sometimes embeds the client id.
-        return _back_to_settings(_ESITO_NEGATO)
+        return _back_to_settings(request, _ESITO_NEGATO)
     try:
         _oauth(session, settings).complete(code=code, state=state, actor=actor)
     except Conflict:
@@ -158,12 +160,16 @@ def finish_oauth(
         # `GET /account` and shows the true state. A `PermissionDenied` deliberately is
         # *not* caught: that is not an outcome of the consent flow but a caller who may
         # not perform it, and it belongs in the problem document like every other 403.
-        return _back_to_settings(_ESITO_ERRORE)
-    return _back_to_settings(_ESITO_COLLEGATO)
+        return _back_to_settings(request, _ESITO_ERRORE)
+    return _back_to_settings(request, _ESITO_COLLEGATO)
 
 
-def _back_to_settings(esito: str) -> RedirectResponse:
-    return RedirectResponse(f"{_SETTINGS_PAGE}?esito={esito}", status_code=307)
+def _back_to_settings(request: Request, esito: str) -> RedirectResponse:
+    # Under the prefix the request wore: a space's consent must end on that space's
+    # settings page, not on the root's. `cookie_path` is the one place that already
+    # knows the prefix, and its `/` is the bare root.
+    prefix = cookie_path(request).rstrip("/")
+    return RedirectResponse(f"{prefix}{_SETTINGS_PAGE}?esito={esito}", status_code=307)
 
 
 @router.delete(_ACCOUNT_PATH, status_code=204)
