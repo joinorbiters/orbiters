@@ -21,7 +21,9 @@ from pigrocrm.core.fiscal.schemas import (
     CODICE_REGIME_RE,
     DEFAULT_RIFERIMENTO_NORMATIVO,
     NATURA_NON_RESIDENTE,
-    RIFERIMENTO_NORMATIVO_NON_RESIDENTE,
+    PAESI_UE,
+    RIFERIMENTO_NORMATIVO_EXTRA_UE,
+    RIFERIMENTO_NORMATIVO_UE,
     FiscalSnapshot,
 )
 from pigrocrm.core.invoices.totals import RiepilogoGroup, round_money
@@ -65,8 +67,10 @@ class RegimeStrategy(Protocol):
 class _Forfettario:
     """`RF19`. No VAT, and on every line and every summary group a `Natura` with its
     normative declaration: `N2.2` and the profile's L. 190/2014 text for an Italian
-    customer, `N2.1` and the art. 7-ter DPR 633/1972 text for a customer established
-    abroad, whose service is outside the territorial scope of Italian VAT (ORB-32).
+    customer; `N2.1` for a customer established abroad, whose service is outside the
+    territorial scope of Italian VAT under art. 7-ter DPR 633/1972 (ORB-32), with the
+    annotation art. 21 c. 6-bis prescribes for where they are: "inversione contabile"
+    inside the EU, "operazione non soggetta" outside it.
 
     The country is the only thing read off the customer. A private consumer abroad
     would be a different case again (7-ter is a business-to-business rule), and the
@@ -86,10 +90,15 @@ class _Forfettario:
                 f"il regime {self.codice} non applica IVA, quindi l'aliquota deve essere zero",
                 expected="0.00",
             )
-        # Normalised the same way `check_party_exportable` reads it: `customers.nazione`
-        # is stored as typed, and a lowercase `it` is still Italy.
-        if nazione_cliente.strip().upper() != "IT":
-            return ZERO, NATURA_NON_RESIDENTE, RIFERIMENTO_NORMATIVO_NON_RESIDENTE
+        # Normalised the way `_cessionario` reads it in `fatturapa.py`: `customers.nazione`
+        # is stored as typed, a lowercase `it` is still Italy, and an empty value is
+        # Italy too -- the column's own default -- rather than a foreign customer.
+        paese = (nazione_cliente or "").strip().upper() or "IT"
+        if paese != "IT":
+            riferimento = (
+                RIFERIMENTO_NORMATIVO_UE if paese in PAESI_UE else RIFERIMENTO_NORMATIVO_EXTRA_UE
+            )
+            return ZERO, NATURA_NON_RESIDENTE, riferimento
         natura = profile.natura_default or "N2.2"
         riferimento = profile.riferimento_normativo or DEFAULT_RIFERIMENTO_NORMATIVO
         return ZERO, natura, riferimento

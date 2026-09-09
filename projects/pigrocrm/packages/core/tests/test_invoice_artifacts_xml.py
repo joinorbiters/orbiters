@@ -23,7 +23,8 @@ from pigrocrm.core.emitter.service import EmitterProfileService
 from pigrocrm.core.errors import Conflict, NotFound
 from pigrocrm.core.fiscal.schemas import (
     DEFAULT_RIFERIMENTO_NORMATIVO,
-    RIFERIMENTO_NORMATIVO_NON_RESIDENTE,
+    RIFERIMENTO_NORMATIVO_EXTRA_UE,
+    RIFERIMENTO_NORMATIVO_UE,
     FiscalProfileUpsert,
 )
 from pigrocrm.core.fiscal.service import FiscalProfileService
@@ -348,7 +349,7 @@ def test_the_hostile_customer_name_survives_the_whole_round_trip(
     assert len(list(root.iter("IdCodice"))) == 3
 
 
-def _non_resident_customer(db_session: Session) -> UUID:
+def _non_resident_customer(db_session: Session, nazione: str = "GB") -> UUID:
     customer = Customer(
         ragione_sociale="Example Ltd",
         partita_iva="GB123456789",
@@ -356,20 +357,25 @@ def _non_resident_customer(db_session: Session) -> UUID:
         cap="00000",  # the SdI convention for a foreign address; a real postcode is ORB-38
         comune="London",
         provincia="",
-        nazione="GB",
+        nazione=nazione,
     )
     db_session.add(customer)
     db_session.flush()
     return customer.id
 
 
+@pytest.mark.parametrize(
+    ("nazione", "riferimento"),
+    [("GB", RIFERIMENTO_NORMATIVO_EXTRA_UE), ("FR", RIFERIMENTO_NORMATIVO_UE)],
+)
 def test_the_xml_for_a_non_resident_customer_carries_n2_1_and_the_7_ter_reference(
-    service: InvoiceService, db_session: Session
+    service: InvoiceService, db_session: Session, nazione: str, riferimento: str
 ) -> None:
     """ORB-32, on the surface the SdI reads. Every line and the summary group say
-    `N2.1`, the summary's `RiferimentoNormativo` names art. 7-ter, and the file still
-    validates against FPR12 1.2.3."""
-    invoice_id = _issue(service, _non_resident_customer(db_session))
+    `N2.1`, the summary's `RiferimentoNormativo` carries the art. 21 c. 6-bis
+    annotation for where the customer is, and the file validates against FPR12 1.2.3
+    in both cases."""
+    invoice_id = _issue(service, _non_resident_customer(db_session, nazione))
     service.export_xml(invoice_id, ADMIN)
     data, _, _ = service.download(invoice_id, "xml", ADMIN)
     assert_valid(data)
@@ -378,9 +384,7 @@ def test_the_xml_for_a_non_resident_customer_carries_n2_1_and_the_7_ter_referenc
     body = root.find("FatturaElettronicaBody")
     assert body is not None
     assert [n.text for n in body.iter("Natura")] == ["N2.1", "N2.1"]
-    assert body.findtext("DatiBeniServizi/DatiRiepilogo/RiferimentoNormativo") == (
-        RIFERIMENTO_NORMATIVO_NON_RESIDENTE
-    )
+    assert body.findtext("DatiBeniServizi/DatiRiepilogo/RiferimentoNormativo") == riferimento
 
 
 def test_the_xml_for_an_italian_customer_keeps_n2_2_and_the_domestic_declaration(
