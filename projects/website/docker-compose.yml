@@ -1,0 +1,19 @@
+# The website's stack: one container, no state, no database, nothing to migrate.
+# It is a compose file rather than a bare `docker run` so that the deploy mechanism
+# every project in this monorepo shares (`.github/workflows/_deploy-compose.yml`)
+# applies here unchanged.
+#
+# Never `docker compose up` without `-p`: compose otherwise names the project after
+# this directory, and a directory rename would orphan the running stack and build a
+# second one beside it. The deploy always passes `-p website` or `-p website-preview`.
+services:
+  web:
+    build:
+      context: ../..
+      dockerfile: projects/website/Dockerfile
+    restart: unless-stopped
+    ports:
+      # Overridable so preview and production can run on the same host without
+      # fighting for the port. Bound to the loopback in both cases: nginx on the host
+      # is what faces the internet, and publishing to 0.0.0.0 walks past the firewall.
+      - '${WEBSITE_WEB_PORT:-127.0.0.1:8082}:80'

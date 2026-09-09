@@ -2,7 +2,7 @@ import { defineConfig, devices } from '@playwright/test'
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: /landing-served\.spec\.ts$/,
+  testMatch: /served\.spec\.ts$/,
   fullyParallel: false,
   workers: 1,
   reporter: process.env.CI ? 'github' : 'list',
