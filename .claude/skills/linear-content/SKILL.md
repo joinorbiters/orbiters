@@ -14,7 +14,7 @@ observed, what was decided, where the evidence is, and what was left undone on p
 English, first person, plain words, the way you would say it to a colleague. No em
 dashes, no "not just X but Y", no emoji, no selling ("robust", "seamless", "powerful").
 Italian only inside «guillemets» when quoting what the product says to its users or what
-Ivan said. Real newlines, never `\n` escapes. Markdown headings are bold lead words, not
+the person you work for said. Real newlines, never `\n` escapes. Markdown headings are bold lead words, not
 `#` titles: a card is not a document.
 
 ## The title
@@ -49,8 +49,9 @@ reason, so the next person does not reopen a closed question.
 ```
 
 Optional, when they apply: **Evidence** (the reproduction, the measurement, the log
-line), **Blocks** / **Blocked by** (issue ids you have read), **Decision for Ivan**
-(one question, the options, your recommendation first).
+line), **Blocks** / **Blocked by** (issue ids you have read), **Decision for the
+lead** (the project's lead per `docs/tracker.md`: one question, the options, your
+recommendation first).
 
 ## Comments
 
@@ -62,7 +63,7 @@ which kind it is, so a reader can skim the thread.
 - **Found.** `**Cause is different from the title:** ...` The reproduction or measurement,
   and what it changes about the plan.
 - **Decision.** `**MCP, decided.** ...` What was chosen, the reason, where it is recorded
-  (`DECISIONS.md` row, spec paragraph). If it is Ivan's to take: the question, the
+  (`DECISIONS.md` row, spec paragraph). If it is the lead's to take: the question, the
   options, your recommendation, and stop.
 - **PR.** `PR: <url> (branch ...)` plus one sentence on what it contains and what is
   still running (review, CI).
