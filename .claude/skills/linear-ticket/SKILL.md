@@ -1,6 +1,6 @@
 ---
 name: linear-ticket
-description: Use when filing, finding, moving or closing a Linear issue for this repository (team Orbiters, ORB-N), or posting a project update. The MCP workflow with every field in one call, the state changes at each step, and the API quirks that otherwise cost a wasted call. Triggers on "crea ticket", "apri un'issue", "file this", "move to Done", "update the project".
+description: Use when filing, finding, moving or closing a Linear issue for this repository (team Orbiters, ORB-N), or posting a project update. The MCP workflow with every field in one call, the state changes at each step, and the API quirks that otherwise cost a wasted call. Triggers on "file this", "move to Done", "update the project", or the Italian «crea ticket», «apri un'issue».
 ---
 
 # Working the Linear board
@@ -11,15 +11,17 @@ Read it once per session. This skill is the sequence of calls and the traps. Con
 
 ## First call of the session
 
-One read (`list_projects` or `list_issues` with `team: "Orbiters"`) and check the team
-that comes back is **Orbiters** (`ORB-`). Two workspaces are enrolled on this machine;
-filing a client's work in the wrong company's board is the failure mode.
+The MCP server is `linear-orbiters`, the only Linear surface for this board. One read
+(`list_projects` or `list_issues` with `team: "Orbiters"`) and check the team that comes
+back is **Orbiters** (`ORB-`): two workspaces are enrolled on this machine, and filing a
+client's work in the wrong company's board is the failure mode.
 
 ## Finding before filing
 
 `list_issues` with `team: "Orbiters"` and `query: "<two or three words of the problem>"`,
-then with the `area:*` label. An issue that exists is used, moved and commented; a new
-one is filed only when none does, and **before** the work starts, never after.
+then with the `area:*` label. An issue that exists is used, moved and commented. A new
+one is filed only when none does and the work will outlive this run, and then **before**
+the work starts, never after (`docs/tracker.md`, The loop).
 
 ## Filing: one `save_issue` call
 
@@ -45,24 +47,24 @@ above; `list_issue_labels` with `includeGroups: true` is the source when in doub
 
 ## Moving it
 
-- **`In Progress`** when you start, with `assignee: "me"`.
-- **`In Review`** when the PR is open. Comment the PR URL. Nothing does this for you
-  until the GitHub app is approved on the org.
-- **`Done`** only against evidence on the surface the issue is about, in the closing
-  comment: the run id and job names that went green, the commit sha, what you opened
-  and what came back. A green CI closes a CI issue; a deploy issue closes when a request
-  that exercises the new code came back right, never on a 200 from an unchanged path.
-  If you cannot verify, say so in a comment and leave it open.
-- **`Canceled`** for won't-do, with the reason.
+When each state applies, and what closes an issue, is `docs/tracker.md` § The loop; do
+not learn it from here. What that section leaves to the caller:
 
-`save_issue` accepts `state`; `get_issue` echoes it as `status`. Both are the same field.
+- `In Progress` goes with `assignee: "me"` in the same call.
+- `In Review` is set by you when the PR opens, with a comment carrying the PR URL: the
+  GitHub app is not approved on the org, so nothing does it for you.
+- `Done` takes a closing comment shaped as the `linear-content` skill says (`Evidence:`
+  with run ids, sha, what you exercised and what came back). No evidence, no `Done`.
+- Won't-do is `Canceled` (one `l`), with the reason.
+
+`save_issue` accepts `state`; `get_issue` echoes it as `status`. Same field.
 
 ## Commenting
 
 `save_comment` with `issueId` (not `issue`) and `body`. When: something changed the
 issue (a reproduction, a measurement, a cause different from the title, a decision that
-is now Ivan's), a PR opened, a step of a plan landed, the closing evidence. Not: "working
-on it". Replies in a thread take `parentId`.
+is now the project lead's), a PR opened, a step of a plan landed, the closing evidence.
+Not: "working on it". Replies in a thread take `parentId`.
 
 ## Project updates
 
@@ -74,11 +76,10 @@ Not one that restates the issue list.
 ## References in code and commits
 
 `ORB-N` in a commit body or a comment is a pointer to an issue you have read. Never
-invent one. The branch is the issue's `gitBranchName`, taken from the `save_issue` or
-`get_issue` response, not typed by hand.
+invent one. The branch is the issue's `gitBranchName`, read from `get_issue` (or
+`list_issues` with `fields: ["gitBranchName"]`), not typed by hand.
 
 ## What the tracker is not
 
-Documentation. A rule goes to `docs/design/DECISIONS.md`, a procedure to `AGENTS.md`,
-and the issue points at them. Work that needs no decision is recorded by its commit,
-not by a `Done` card filed for the sake of having one.
+Documentation: `docs/tracker.md` § Rules says where a rule, a procedure and finished
+work go instead. An issue points at those places.

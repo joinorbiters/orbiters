@@ -1,15 +1,16 @@
 ---
 name: pr-creation
-description: Use when opening, describing or merging a pull request in this monorepo. Enforces the branch, the Conventional Commit title, the body in the repository's own template sections, the review and merge loop, and the hand-off to Linear. Triggers on "apri una PR", "open a PR", "fai review e mergia", "submit for review".
+description: Use when opening, describing or merging a pull request in this monorepo. Enforces the branch, the Conventional Commit title, the body in the repository's own template sections, the review and merge loop, and the hand-off to Linear. Triggers on "open a PR", "submit for review", "review and merge", or the Italian «apri una PR», «fai review e mergia».
 ---
 
 # Opening a pull request here
 
-The contract lives in three files this skill points at and never restates: the root
-`AGENTS.md` (Conventional Commits, English, no trailers, release only through CI),
-`.github/PULL_REQUEST_TEMPLATE.md` (the body's sections) and `docs/tracker.md` (what
-Linear needs at each step). This skill is the order of operations and the shape of each
-piece, so two agents open the same kind of PR.
+The contract lives in three files this skill points at and restates as little as it
+can: the root `AGENTS.md` (Conventional Commits, English, no trailers, release only
+through CI), `.github/PULL_REQUEST_TEMPLATE.md` (the body's sections) and
+`docs/tracker.md` (what Linear needs at each step). This skill is the order of
+operations and the shape of each piece, so two agents open the same kind of PR. Where
+it and a document disagree, the document is right and the skill has a bug.
 
 ## Before the branch exists
 
@@ -22,7 +23,8 @@ piece, so two agents open the same kind of PR.
    ```bash
    git fetch origin
    git worktree add -b <gitBranchName> ../<repo>-orb<N> origin/main
-   cd ../<repo>-orb<N> && pnpm install --frozen-lockfile --prefer-offline
+   cd ../<repo>-orb<N>
+   uv sync --frozen && pnpm install --frozen-lockfile --prefer-offline
    ```
 
    Other sessions write to the same index; a worktree is what keeps your commit yours.
@@ -30,12 +32,12 @@ piece, so two agents open the same kind of PR.
 
 ## Commits
 
-Conventional Commits, English, first person, written the way a person writes: no em
-dashes, no "not just X but Y", no emoji, **no AI co-author trailer of any form**. The
-subject says what is true after the commit (`feat(web): a draft invoice can be deleted
-from its page`), the body says why and what was deliberately left alone, and the last
-line is the issue: `ORB-42.` Commit with a pathspec (`git add <files>`), never `git add
--A`. Keep a migration or a move in its own commit.
+As the root `AGENTS.md` Conventions say (Conventional Commits, English, first person,
+no AI trailer). What that section does not say: the subject states what is true after
+the commit (`feat(web): a draft invoice can be deleted from its page`), the body says
+why and what was deliberately left alone, the last line is the issue (`ORB-42.`), you
+commit with a pathspec (`git add <files>`, never `-A`, other sessions share the index),
+and a migration or a file move gets a commit of its own.
 
 ## Title
 
@@ -47,13 +49,15 @@ type(scope): what is true now
 
 `type` is one of `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `ci`, `chore`,
 `style`, `revert`. `scope` is the project or the app: `web`, `api`, `core`, `mcp`
-(the CRM), `hub`, `website`, `brand`, `ci`, `repo`. Lowercase after the colon, sentence
-case, a verb in the present: what the reader gets, not what you did to the files.
+(the CRM), `hub`, `website`, `brand`, `ci`, `repo`. After the colon the first word is
+lowercase and nothing is in Title Case; a verb in the present: what the reader gets, not
+what you did to the files.
 
 ## Body
 
-The template's three sections, in the first person, in this order, then the conditional
-ones, then the Linear line. `gh pr create --body-file -` with a heredoc.
+The template's three sections, in the first person and in its order. Conditional
+sections go after «How I verified it» and before «Anything a reviewer should look at
+twice»; the Linear line closes the body. `gh pr create --body-file -` with a heredoc.
 
 ```markdown
 ## What this changes
@@ -74,7 +78,8 @@ verified, which part and why.>
 path no test covers. Delete this section if there is genuinely nothing.>
 ```
 
-Conditional sections, placed after "How I verified it", each only when true:
+Conditional sections, each only when true (paths from the repository root; the CRM is
+`projects/pigrocrm`, the hub `projects/hub`):
 
 - **`## What did not change, on purpose`** when a reviewer could reasonably assume a
   neighbouring thing moved (an MCP tool that deliberately does not follow a new button,
@@ -85,17 +90,21 @@ Conditional sections, placed after "How I verified it", each only when true:
   already exists in production (`IF NOT EXISTS` where the table was adopted), and what
   `compare_metadata` in the migration test says.
 - **`## API changes`** when a FastAPI route, request or response shape changed: the
-  `METHOD /path`, the fields that changed, the status codes, and that
-  `pnpm --filter web generate:api` was run so `src/lib/api-types.ts` matches (the web
-  reads the generated types, never hand-written ones).
-- **`## MCP surface`** when a tool was added, removed or renamed in `apps/mcp`: which
-  service method backs it, and what changed in `test_mcp_surface_coverage.py` and
-  `test_mcp_invoice_ban.py`, which are the record of what an agent may and may not do.
+  `METHOD /path`, the fields that changed, the status codes. For the CRM, that
+  `pnpm --filter web generate:api` was run with the API up on `localhost:8000`, so
+  `projects/pigrocrm/apps/web/src/lib/api-types.ts` matches (the web reads the generated
+  types, never hand-written ones). The hub's web has a hand-written client in
+  `projects/hub/apps/web/src/lib/api.ts`: say what changed there.
+- **`## MCP surface`** when a tool was added, removed or renamed. For the CRM
+  (`projects/pigrocrm/apps/mcp`): which service method backs it, and what changed in
+  `tests/test_mcp_surface_coverage.py` and `tests/test_mcp_invoice_ban.py`, the record
+  of what an agent may and may not do. For the hub (`projects/hub/apps/mcp`): the
+  change to `tests/test_tools.py`.
 - **`## Screenshots`** for anything a person could see: a label, a pill, a disabled
   button, a new pane, a reordered menu. A **before and after pair**, composed into one
   side-by-side image per pair, taken on the same data at the same viewport. Never
-  committed: attach with `gh pr edit <n> --attach ./pair-1.png` (needs `gh` 2.99.0 or
-  newer, `gh --version`). If a pair cannot be captured (no fixture, no running stack),
+  committed: attach with `gh pr edit <n> --attach ./pair-1.png` (the flag exists from
+  `gh` 2.99.0; check `gh --version`). If a pair cannot be captured (no fixture, no running stack),
   keep the section and say why. Deleting it reads as forgetting.
 
 The last line of the body: `Linear: ORB-N.`
