@@ -86,7 +86,7 @@ export function AdminFreelancers() {
   const list = useQuery({ queryKey: ['freelancers', stato], queryFn: () => admin.freelancers(stato) })
   return (
     <>
-      <Header title="Freelance" count={list.data?.totale}>
+      <Header title="Developer e CTO" count={list.data?.totale}>
         <StateFilter states={FREELANCER_STATES} value={stato} onChange={setStato} />
       </Header>
       {list.isError ? (
@@ -94,7 +94,7 @@ export function AdminFreelancers() {
       ) : list.isPending ? (
         <Empty>Caricamento…</Empty>
       ) : list.data.items.length === 0 ? (
-        <Empty>Nessun freelance qui.</Empty>
+        <Empty>Nessun profilo qui.</Empty>
       ) : (
         <table className="w-full text-sm">
           <thead className="text-left text-xs text-muted-foreground">
@@ -221,7 +221,7 @@ export function AdminFreelancerDetail() {
       </div>
       <p className="px-6 pb-6">
         <Link to="/admin/freelance" className="inline-flex items-center gap-1 text-sm underline-offset-2 hover:underline">
-          <ArrowLeft className="size-4" /> Tutti i freelance
+          <ArrowLeft className="size-4" /> Tutti i developer e CTO
         </Link>
       </p>
     </>

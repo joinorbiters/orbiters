@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { useAdmin, useLogout } from '@/lib/auth'
 
 const NAV = [
-  { to: '/admin/freelance', label: 'Freelance', icon: UserRound },
+  { to: '/admin/freelance', label: 'Developer e CTO', icon: UserRound },
   { to: '/admin/aziende', label: 'Aziende', icon: Briefcase },
   { to: '/admin/iscrizioni', label: 'Iscrizioni', icon: Mail },
 ] as const
