@@ -91,8 +91,14 @@ describe('orbiters.html', () => {
     expect(privacy).toMatch(/href="\/orbiters"/)
   })
 
-  it('still offers the way into an installation, quietly', () => {
-    expect(html).toMatch(/href="\/app\/"/)
+  it('no longer signs itself as a PigroCRM project, and offers no login', () => {
+    // Until 2026-09-09 a footer said "Un progetto PigroCRM" and linked "Accedi" to
+    // /app/. Since the split the site is Orbiters first and the login belongs to the
+    // CRM at pigro.joinorbiters.com, so the community page has no reason to point at
+    // either. ORB-19 removed the footer, and this keeps it from coming back.
+    expect(html).not.toContain('Un progetto PigroCRM')
+    expect(html).not.toMatch(/href="\/app\/"/)
+    expect(html).not.toMatch(/<footer/)
   })
 })
 
