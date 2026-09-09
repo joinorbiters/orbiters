@@ -36,9 +36,12 @@ const CUSTOMERS = [
   { id: 'cust-2', ragione_sociale: 'Beta Snc' },
 ]
 
+// `customer_ragione_sociale` is on the wire shape (`DealRead`, denormalised there on
+// purpose), which is what lets the deal-fixed dialog name the customer without asking
+// for it.
 const DEALS = [
-  { id: 'deal-1', nome: 'Sito vetrina', customer_id: 'cust-1' },
-  { id: 'deal-2', nome: 'App interna', customer_id: 'cust-1' },
+  { id: 'deal-1', nome: 'Sito vetrina', customer_id: 'cust-1', customer_ragione_sociale: 'ACME Srl' },
+  { id: 'deal-2', nome: 'App interna', customer_id: 'cust-1', customer_ragione_sociale: 'ACME Srl' },
 ]
 
 /** Every GET this dialog can make, answered by path. `useDeals` walks a cursor, so its
@@ -257,6 +260,46 @@ describe('NewProformaButton, opened from a record that already answers the quest
 
     expect(body()).toMatchObject({ customer_id: 'cust-1' })
     expect(body()).not.toHaveProperty('deal_id')
+  })
+
+  it('still offers that customer’s deals when only the customer is fixed', async () => {
+    vi.mocked(api.POST).mockReturnValue(ok({ id: 'inv-9' }))
+    await open({ customerId: 'cust-1' })
+
+    // The combination the customer's Fatture tab ships: the customer is settled, the
+    // deal is not, and the list is still the server-filtered one.
+    await userEvent.click(await screen.findByLabelText(/^Deal/))
+    await userEvent.click(await screen.findByRole('option', { name: 'App interna' }))
+    expect(api.GET).toHaveBeenCalledWith(
+      '/api/deals',
+      expect.objectContaining({
+        params: expect.objectContaining({
+          query: expect.objectContaining({ customer_id: 'cust-1' }),
+        }),
+      }),
+    )
+
+    await userEvent.type(screen.getByLabelText(/^Causale/), 'Sprint 3')
+    await userEvent.type(screen.getByLabelText('Descrizione riga 1'), 'Sviluppo')
+    await userEvent.type(screen.getByLabelText('Prezzo unitario riga 1'), '80')
+    await userEvent.click(screen.getByRole('button', { name: 'Crea proforma' }))
+
+    expect(body()).toMatchObject({ customer_id: 'cust-1', deal_id: 'deal-2' })
+  })
+
+  it('names the customer from the deal it was opened from, without asking for it', async () => {
+    await open({
+      customerId: 'cust-1',
+      dealId: 'deal-1',
+      prefill: { descrizione: 'Sito vetrina', importo: '4500.00' },
+    })
+
+    // `DealRead.customer_ragione_sociale` carries the name, and the deal page has
+    // already read the deal -- so the dialog opens with both parties named and never
+    // touches `/api/customers/{customer_id}`, which from that page would be a cold read
+    // behind a «…» placeholder.
+    expect(await screen.findByText('ACME Srl')).toBeInTheDocument()
+    expect(api.GET).not.toHaveBeenCalledWith('/api/customers/{customer_id}', expect.anything())
   })
 
   it('fixes the deal too, and starts from the deal’s own name and expected value', async () => {

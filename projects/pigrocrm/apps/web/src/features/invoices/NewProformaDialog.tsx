@@ -63,6 +63,21 @@ export interface ProformaPrefill {
   importo: string
 }
 
+/**
+ * How much the page behind the dialog has already answered: nothing, the customer, or
+ * the customer and the deal.
+ *
+ * A union and not two independent optionals, because a deal fixed without its customer
+ * is not a state this dialog could honour. It would render the customer picker beside a
+ * fixed deal's name, and choosing a customer there has to drop that deal (it may belong
+ * to someone else -- `_check_owner` answers 409) while the name it was chosen from stays
+ * on screen. Nothing ships that pairing today, which is exactly why it would have
+ * survived until something did.
+ */
+export type FixedParties =
+  | { customerId?: undefined; dealId?: undefined }
+  | { customerId: string; dealId?: string }
+
 /** The first line, from a prefill if there is one. Every field stays editable: a deal's
  *  expected value is the whole of the work and an invoice is usually a part of it, so
  *  this is a starting point and never an answer. */
@@ -130,28 +145,54 @@ function CustomerPicker({
  * already taken -- so the field states the answer instead of offering it. The id travels
  * in the body either way.
  *
- * The name is read through the same hook the page behind the dialog already mounted
- * (`useCustomer`/`useDeal`), so this is a cache hit rather than a second request: the
- * customer page has read its customer, and the deal page reads both its deal and, in
- * `DealCustomerCard`, its customer.
+ * A `<dl>` and not two `<p>`s: with no control to point an `htmlFor` at, the pairing of
+ * the name and what it answers exists only for a sighted reader unless the markup says
+ * it. Muted label, `font-medium` value -- the weighting `Row` already uses on both
+ * detail pages, where the answer is the thing worth reading.
  */
 function FixedField({ label, value }: { label: string; value: string | undefined }) {
   return (
-    <div className="space-y-2">
-      <p className="text-sm font-medium">{label}</p>
-      <p className="text-muted-foreground text-sm">{value ?? '…'}</p>
-    </div>
+    <dl className="space-y-2">
+      <dt className="text-muted-foreground text-sm">{label}</dt>
+      {/* `…` while the read resolves, the same placeholder `DealCustomerCard` shows for
+          the same fact. In practice neither caller ever renders it: both reads below are
+          cache hits (see their own notes). */}
+      <dd className="text-sm font-medium">{value ?? '…'}</dd>
+    </dl>
   )
 }
 
+/**
+ * The customer, when only the customer is fixed -- which is the Fatture tab of that
+ * customer's own page. `useCustomer` is mounted there at route level, so this is a cache
+ * hit and the name is on screen the instant the dialog opens.
+ */
 function FixedCustomer({ customerId }: { customerId: string }) {
   const customer = useCustomer(customerId)
   return <FixedField label="Cliente" value={customer.data?.ragione_sociale} />
 }
 
-function FixedDeal({ dealId }: { dealId: string }) {
+/**
+ * Both parties at once, when the deal is fixed too -- which is a deal's own header.
+ *
+ * One read names both, and it is the read the page has already made: `DealRead` carries
+ * `customer_ragione_sociale` (denormalised there precisely so a deal can be shown
+ * without a second request -- see that field's comment in `deals/schemas.py`), and
+ * `useDeal(dealId)` is mounted at the deal route's own top level.
+ *
+ * This is why the customer is *not* read through `useCustomer` here: on the deal page
+ * that would be a cold `GET /api/customers/{id}` on every open. `DealCustomerCard` does
+ * hold one, but it lives in the Collegamenti tab, which Radix leaves unmounted until it
+ * is selected -- so its cache entry is not there to be hit.
+ */
+function FixedCustomerAndDeal({ dealId }: { dealId: string }) {
   const deal = useDeal(dealId)
-  return <FixedField label="Deal" value={deal.data?.nome} />
+  return (
+    <>
+      <FixedField label="Cliente" value={deal.data?.customer_ragione_sociale ?? undefined} />
+      <FixedField label="Deal" value={deal.data?.nome} />
+    </>
+  )
 }
 
 /** `NO_DEAL` is a UI-only value: "no deal" is the *absence* of `deal_id` in the body,
@@ -221,12 +262,7 @@ function NewProformaDialog({
   customerId: fixedCustomerId,
   dealId: fixedDealId,
   prefill,
-}: {
-  onClose: () => void
-  customerId?: string
-  dealId?: string
-  prefill?: ProformaPrefill
-}) {
+}: { onClose: () => void; prefill?: ProformaPrefill } & FixedParties) {
   const navigate = useNavigate()
   const create = useCreateInvoice()
   // A fixed id is the initial state and not a separate one: everything downstream --
@@ -249,8 +285,11 @@ function NewProformaDialog({
   function chooseCustomer(value: string) {
     setCustomerId(value)
     // A deal chosen for the previous customer would be a 409 from `_check_owner`, and
-    // the picker below is about to list a different set entirely.
-    setDealId('')
+    // the picker below is about to list a different set entirely. Back to the *fixed*
+    // deal rather than to none: `FixedParties` makes a fixed deal without its customer
+    // unrepresentable, so today this is always `''` -- and it stays correct rather than
+    // silently dropping a deal the caller pinned if that ever changes.
+    setDealId(fixedDealId ?? '')
   }
 
   /** What this form checks before asking, and nothing more. Everything else -- the
@@ -325,6 +364,9 @@ function NewProformaDialog({
         {problem ? <QueryErrorBanner error={problem} /> : null}
 
         <div className="space-y-4">
+          {/* Three shapes, one per level of «already answered»: both pickers, the
+              customer stated and its deals still offered, or both parties stated from
+              the one read the deal page has already made. */}
           {fixedCustomerId === undefined ? (
             <>
               <CustomerPicker value={customerId} onChange={chooseCustomer} />
@@ -332,21 +374,20 @@ function NewProformaDialog({
                 <p className="text-sm text-destructive">{errors.customer}</p>
               ) : null}
             </>
-          ) : (
+          ) : fixedDealId === undefined ? (
             <FixedCustomer customerId={fixedCustomerId} />
+          ) : (
+            // The state and not `fixedDealId`: what is shown is what the body will carry.
+            <FixedCustomerAndDeal dealId={dealId} />
           )}
 
-          {fixedDealId === undefined ? (
-            customerId === '' ? null : (
-              <DealPicker
-                customerId={customerId}
-                value={dealId}
-                onChange={(value) => setDealId(value === NO_DEAL ? '' : value)}
-              />
-            )
-          ) : (
-            <FixedDeal dealId={fixedDealId} />
-          )}
+          {fixedDealId === undefined && customerId !== '' ? (
+            <DealPicker
+              customerId={customerId}
+              value={dealId}
+              onChange={(value) => setDealId(value === NO_DEAL ? '' : value)}
+            />
+          ) : null}
 
           <div className="space-y-2">
             <Label htmlFor="proforma-causale">
@@ -464,15 +505,7 @@ function NewProformaDialog({
  * the customer list is fetched when someone actually wants to pick from it -- the same
  * fix, for the same reason, that `DealForm`'s `CustomerPicker` documents.
  */
-export function NewProformaButton({
-  customerId,
-  dealId,
-  prefill,
-}: {
-  customerId?: string
-  dealId?: string
-  prefill?: ProformaPrefill
-} = {}) {
+export function NewProformaButton(props: { prefill?: ProformaPrefill } & FixedParties) {
   const [open, setOpen] = useState(false)
 
   return (
@@ -481,14 +514,10 @@ export function NewProformaButton({
         <Plus className="mr-2 size-4" />
         Nuova fattura
       </Button>
-      {open ? (
-        <NewProformaDialog
-          onClose={() => setOpen(false)}
-          customerId={customerId}
-          dealId={dealId}
-          prefill={prefill}
-        />
-      ) : null}
+      {/* Spread whole rather than destructured and re-passed: `FixedParties` is a union,
+          and naming its two members one by one is exactly what loses the correlation
+          between them -- `customerId` alone would widen back to `string | undefined`. */}
+      {open ? <NewProformaDialog onClose={() => setOpen(false)} {...props} /> : null}
     </>
   )
 }
