@@ -52,3 +52,15 @@ Migration 0001 adopts it as it stands (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN
 EXISTS`, the unique index `IF NOT EXISTS`) so the first `alembic upgrade head` on the
 copied database changes nothing and records 0001. Keep every migration that may run on
 that database conditional in the same way until the copy is confirmed.
+
+## Deploying
+
+Through CI only, as every project here (`docs/adding-a-project.md` §7): preview on a
+push to `main` that touched the hub, production on a tag `hub-v<semver>`, both by
+`.github/workflows/deploy-hub.yml` calling `_deploy-compose.yml`. The production compose
+project is `orbiters`, the name the stack first went up under: pass `-p orbiters` to
+every `docker compose` you ever run against it by hand, or compose names a second stack
+after the directory. The host's `/opt/hub/.env` holds the `ORBITERS_*` and `POSTGRES_*`
+values and is never in the repository. The public paths are `/hub/` (web, 8085) and
+`/api/hub/` + `/api/orbiters/signups` (api, 8084), proxied by the host vhost that lives
+in `projects/website/deploy/joinorbiters.conf`.
