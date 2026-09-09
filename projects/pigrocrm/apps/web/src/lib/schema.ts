@@ -77,7 +77,15 @@ export function clearedNativeValue(fields: readonly FieldDefinition[], key: stri
   return type !== undefined && TEXT_SHAPED.has(type) ? '' : null
 }
 
-export type EntityType = 'customer' | 'person' | 'deal' | 'document' | 'invoice' | 'time_entry' | 'cost'
+export type EntityType =
+  | 'customer'
+  | 'person'
+  | 'deal'
+  | 'document'
+  | 'invoice'
+  | 'time_entry'
+  | 'cost'
+  | 'attivita'
 
 /**
  * The subset of `EntityType` that has a real `GET /api/{plural}/{id}/timeline`
@@ -96,8 +104,13 @@ export type EntityType = 'customer' | 'person' | 'deal' | 'document' | 'invoice'
  * `Record<TimelineEntityType, ...>`, so a bare `= EntityType` alias would force an
  * entry for both the moment `EntityType` grew them, even though neither has a
  * timeline router yet. Widen this `Exclude` alongside the endpoint, not before it.
+ *
+ * `attivita` joined them on 2026-09-09: slice 10 writes `activities` rows for every
+ * closure of a commitment, so the timeline *data* exists, and
+ * `GET /api/attivita/{id}/timeline` does not. Excluded until it does -- inventing the
+ * route in this type would give `Timeline` a fetcher that 404s.
  */
-export type TimelineEntityType = Exclude<EntityType, 'time_entry' | 'cost'>
+export type TimelineEntityType = Exclude<EntityType, 'time_entry' | 'cost' | 'attivita'>
 
 export interface EntitySchema {
   entity_type: string

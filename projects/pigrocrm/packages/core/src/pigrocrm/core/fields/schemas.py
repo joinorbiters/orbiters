@@ -14,7 +14,19 @@ from pigrocrm.core.validation import SafeStr
 # CREATE_MODELS in schema_registry.py, and EntityType in apps/web/src/lib/schema.ts
 # -- and no migration. That is R13 stated correctly; the earlier phrasing ("no
 # changes required") has now been checked and disproved three times, once per slice.
-EntityType = Literal["customer", "person", "deal", "document", "invoice", "time_entry", "cost"]
+EntityType = Literal[
+    "customer",
+    "person",
+    "deal",
+    "document",
+    "invoice",
+    "time_entry",
+    "cost",
+    # Slice 10. A commitment carries custom fields for the same reason everything
+    # else does: whoever runs the installation knows what they need to record about
+    # one, and the alternative is a `note` field holding a form.
+    "attivita",
+]
 
 _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
 

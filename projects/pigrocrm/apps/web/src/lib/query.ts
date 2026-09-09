@@ -51,6 +51,11 @@ export const queryKeys = {
   invoiceLines: (id: string) => ['invoice-lines', id] as const,
   fiscalProfile: ['fiscal-profile'] as const,
   timeEntries: (params?: unknown) => ['time-entries', params ?? {}] as const,
+  // One key per month, and the prefix `['calendario']` on purpose: a commitment whose
+  // date moved is stale in two months at once, so every write invalidates the prefix
+  // rather than the month the page happens to be showing.
+  calendarMonth: (mese: string) => ['calendario', mese] as const,
+  attivita: (params?: unknown) => ['attivita', params ?? {}] as const,
   /** The caller's own running timer -- one row or null, so one key with no argument. */
   timer: ['timer'] as const,
   timeEntry: (id: string) => ['time-entry', id] as const,
