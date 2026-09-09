@@ -24,9 +24,10 @@ from pigrocrm.core.documents.schemas import DocumentListQuery
 from pigrocrm.core.documents.service import DocumentService
 from pigrocrm.core.emitter.schemas import EmitterProfileUpsert
 from pigrocrm.core.emitter.service import EmitterProfileService
-from pigrocrm.core.errors import NotFound
+from pigrocrm.core.errors import Conflict, NotFound
 from pigrocrm.core.fiscal.schemas import FiscalProfileUpsert
 from pigrocrm.core.fiscal.service import FiscalProfileService
+from pigrocrm.core.invoices.models import Invoice
 from pigrocrm.core.invoices.schemas import InvoiceCreate, InvoiceIssue, InvoiceLineIn
 from pigrocrm.core.invoices.service import InvoiceService
 from pigrocrm.core.storage.local import LocalFileStorage
@@ -237,3 +238,55 @@ def test_discarding_a_proforma_archives_its_pdf_and_keeps_the_bytes(
     # documents surface would.
     kinds = [a.kind for a in ActivityService(db_session).timeline("document", pdf.document_id)]
     assert "deleted" in kinds
+
+
+def test_a_proforma_consumed_between_the_read_and_the_write_is_a_conflict(
+    service: InvoiceService,
+    db_session: Session,
+    storage: LocalFileStorage,
+    customer_id: UUID,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The race `soft_delete`'s `IntegrityError` handler was written for (ORB-57): the
+    pre-check reads `confermata`, an emission consumes the proforma while the delete is
+    in flight, and `ck_invoices_no_delete_once_consumed` refuses the `UPDATE`. The
+    handler could never run: `ActivityService.record` flushes, so the constraint fired
+    inside `record`, before the `try`, and the caller got a raw `IntegrityError` on a
+    session that still needed a rollback. The refusal has to be the domain `Conflict`
+    the handler promises, the session has to come back usable, and nothing of the
+    delete may survive, the PDF's archiving included, since that travels in the same
+    transaction.
+
+    Emulated on the test's own connection rather than from a second session: the
+    `db_session` fixture holds every row inside one outer transaction that no other
+    connection can see. The raw `UPDATE` slipped in after the repository's read leaves
+    the row in exactly the state a committed emission would, with the service still
+    holding the stale `confermata` it read. It is undone by the rollback the handler
+    performs, so afterwards the proforma reads as it did before the attempt.
+    """
+    proforma_id = _confirmed_proforma(service, customer_id)
+    (pdf,) = service.produce_artifacts(proforma_id, ADMIN)
+    documents = DocumentService(db_session, storage)
+    read = service.repo.get
+
+    def read_then_lose_the_race(invoice_id: UUID) -> Invoice | None:
+        invoice = read(invoice_id)
+        # What `issue` does to a proforma, reduced to the one column the CHECK reads.
+        db_session.execute(
+            text("UPDATE invoices SET stato = 'consumata' WHERE id = :id"), {"id": invoice_id}
+        )
+        return invoice
+
+    monkeypatch.setattr(service.repo, "get", read_then_lose_the_race)
+    with pytest.raises(Conflict) as caught:
+        service.soft_delete(proforma_id, ADMIN)
+    assert "emesso nel frattempo" in caught.value.message
+    monkeypatch.undo()
+
+    # Usable session, whole rollback: neither the invoice nor its PDF is archived.
+    proforma = db_session.get(Invoice, proforma_id)
+    assert proforma is not None and proforma.deleted_at is None
+    assert service.get(proforma_id, ADMIN).id == proforma_id
+    assert documents.get(pdf.document_id, ADMIN).id == pdf.document_id
+    listed = documents.list(DocumentListQuery(customer_id=customer_id), ADMIN).items
+    assert pdf.document_id in [item.id for item in listed]

@@ -511,6 +511,23 @@ class InvoiceService:
             )
         now = datetime.now(UTC)
         invoice.deleted_at = now
+        try:
+            # The UPDATE reaches PostgreSQL here, on purpose, and not at whichever later
+            # statement happens to autoflush: `DocumentRepository.get` and
+            # `ActivityService.record` both flush, and a CHECK violation raised there
+            # was outside this handler, so the race below surfaced as a raw
+            # `IntegrityError` on a session that still needed a rollback (ORB-57).
+            self.session.flush()
+        except IntegrityError as exc:
+            # The pre-check above cannot cover a row that was issued concurrently: the
+            # CHECK is the real authority, and the rollback is mandatory or the
+            # caller's session is unusable on its next statement.
+            self.session.rollback()
+            raise Conflict(
+                ENTITY, "il documento e' stato emesso nel frattempo e non si elimina piu'"
+            ) from exc
+        # From here on the row is ours until the commit: the flush took its lock, so an
+        # emission that arrives now waits, and then fails its own CHECK on a deleted row.
         for document_id in (invoice.pdf_document_id, invoice.xml_document_id):
             if document_id is None:
                 continue
@@ -521,16 +538,7 @@ class InvoiceService:
             document.deleted_at = now
             self.activities.record(DOCUMENT_ENTITY, document.id, "deleted", actor)
         self.activities.record(ENTITY, invoice.id, "deleted", actor)
-        try:
-            self.session.commit()
-        except IntegrityError as exc:
-            # The pre-check above cannot cover a row that was issued concurrently: the
-            # CHECK is the real authority, and the rollback is mandatory or the
-            # caller's session is unusable on its next statement.
-            self.session.rollback()
-            raise Conflict(
-                ENTITY, "il documento e' stato emesso nel frattempo e non si elimina piu'"
-            ) from exc
+        self.session.commit()
 
     def set_payment_state(self, invoice_id: UUID, data: PaymentState, actor: Actor) -> InvoiceRead:
         """Collection is a subsequent fact, not part of the document (spec 4), so this
