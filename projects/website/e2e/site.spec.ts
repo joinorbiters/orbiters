@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test'
 const PAGES = ['/', '/privacy', '/termini', '/orbiters'] as const
 const BUDGET_BYTES = 40 * 1024
 
-test.describe('the landing page', () => {
+test.describe('every page of the site', () => {
   for (const path of PAGES) {
     test(`${path} asks nothing of any other host`, async ({ page }) => {
       // Every request is collected unconditionally, and only classified as

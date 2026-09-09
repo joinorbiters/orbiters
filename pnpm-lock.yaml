@@ -71,7 +71,7 @@ importers:
 
   .: {}
 
-  projects/landing:
+  projects/website:
     dependencies:
       '@orbiters/brand':
         specifier: workspace:*

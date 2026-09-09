@@ -39,7 +39,7 @@ apps/web/        Vite + React SPA, served under /app.
 deploy/          the nginx vhost and the server setup script.
 ```
 
-The landing pages are **not here**: they are their own project, `projects/landing`
+The public pages are **not here**: they are their own project, `projects/website`
 (joinorbiters.com and the pages the product signs itself with). Its built output is
 still copied into this project's web image and served at the document root, which is
 a serving arrangement and not a dependency of the application on it. The palette,
