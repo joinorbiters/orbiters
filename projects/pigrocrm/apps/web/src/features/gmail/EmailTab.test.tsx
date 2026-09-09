@@ -1,6 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { EmailTab } from './EmailTab'
 import type { GmailMessageRead } from './queries'
@@ -57,16 +56,13 @@ function renderTab() {
 }
 
 /**
- * Routes both reads the tab makes. Two, since B2-11: the stored correspondence and the
- * drafts that have not left. A single `mockResolvedValue` would answer the drafts query
- * with a list of messages -- which happens to survive `?? []` and so would pass while
- * testing nothing about the drafts at all.
+ * Routes the one read the tab makes. Anything else is a defect: since 2026-09-09 the
+ * tab is read-only, so a second request -- the drafts it used to list -- means the
+ * composer has crept back in.
  */
-function respond(args: { messages?: unknown; drafts?: unknown } = {}) {
+function respond(args: { messages?: unknown } = {}) {
   vi.mocked(api.GET).mockImplementation(((path: string) => {
     if (path === '/api/gmail/messages') return Promise.resolve(args.messages ?? ok([]))
-    if (path === '/api/email-drafts')
-      return Promise.resolve(args.drafts ?? ok({ items: [], total: 0 }))
     throw new Error(`unexpected GET ${path}`)
   }) as never)
 }
@@ -88,11 +84,8 @@ describe('EmailTab', () => {
     expect(messagesCall()?.[1]).toMatchObject({
       params: { query: { entity_type: 'customer', entity_id: ENTITY_ID } },
     })
-    // And nothing on either read is a Gmail search string: both reach the CRM's own rows.
-    expect(vi.mocked(api.GET).mock.calls.map((call) => call[0]).sort()).toEqual([
-      '/api/email-drafts',
-      '/api/gmail/messages',
-    ])
+    // And nothing on the read is a Gmail search string: it reaches the CRM's own rows.
+    expect(vi.mocked(api.GET).mock.calls.map((call) => call[0])).toEqual(['/api/gmail/messages'])
   })
 
   it('groups messages by thread and shows the direction', async () => {
@@ -221,73 +214,21 @@ describe('EmailTab', () => {
     expect(save).toHaveAttribute('title', 'In arrivo')
   })
 
-  // --- the composer, from the tab that opens it ----------------------------------------
+  // --- read-only, by decision ------------------------------------------------------------
 
-  it('opens the composer from «Scrivi», with the recipient a reply would go to', async () => {
+  /**
+   * Writing an email left this tab on 2026-09-09: the agent drafts and sends over MCP,
+   * and the payment reminder keeps its own screen. What a person looks for here is what
+   * was actually said, so there is no «Scrivi», no list of drafts, and no second read
+   * for them -- `respond` above throws on any request but the correspondence.
+   */
+  it('offers no way to write an email, and reads nothing but the correspondence', async () => {
     respond({ messages: ok([message()]) })
     renderTab()
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Scrivi' }))
-
-    expect(screen.getByRole('dialog', { name: "Scrivi un'email" })).toBeInTheDocument()
-    // Read off the correspondence already on screen: the counterpart of the newest
-    // message, which for one we received is whoever sent it.
-    expect(screen.getByLabelText('A')).toHaveValue('ada@acme.it')
-  })
-
-  /**
-   * A draft that has not left is not part of the conversation the client has seen.
-   * Putting it inside the thread would show a message that never went -- «il CRM crede
-   * una cosa diversa da quella che è successa», in the one place a person looks to find
-   * out what was said.
-   */
-  it('lists unsent drafts above the correspondence, with their state in words', async () => {
-    respond({
-      messages: ok([message()]),
-      drafts: ok({
-        items: [
-          {
-            id: 'd1',
-            entity_type: 'customer',
-            entity_id: ENTITY_ID,
-            google_account_id: null,
-            to_addresses: ['ada@acme.it'],
-            cc_addresses: [],
-            subject: 'Preventivo rivisto',
-            body_markdown: 'Testo',
-            attachment_version_ids: [],
-            message_id_header: '<a.1@crm.example.it>',
-            in_reply_to_message_id: null,
-            send_state: 'incerto',
-            send_attempted_at: null,
-            last_error: null,
-            sent_gmail_message_id: null,
-            payment_reminder_id: null,
-            created_at: '2026-08-20T09:00:00Z',
-            updated_at: '2026-08-20T09:00:00Z',
-          },
-        ],
-        total: 1,
-      }),
-    })
-    renderTab()
-
-    expect(await screen.findByText('Preventivo rivisto')).toBeInTheDocument()
-    // The state is words, not a colour: «esito da verificare» is the whole point of the
-    // row, and it must never read as «inviata».
-    expect(screen.getByText('Esito da verificare')).toBeInTheDocument()
-  })
-
-  it('keeps showing the correspondence when the drafts read fails', async () => {
-    // Two reads, two claims. A drafts query that failed must not take down the thread
-    // the person actually came for.
-    respond({
-      messages: ok([message()]),
-      drafts: failed({ detail: 'bozze non raggiungibili' }, 503),
-    })
-    renderTab()
-
     expect(await screen.findByText('Rinnovo')).toBeInTheDocument()
-    expect(screen.getByRole('alert')).toHaveTextContent('bozze non raggiungibili')
+    expect(screen.queryByRole('button', { name: 'Scrivi' })).not.toBeInTheDocument()
+    const paths = vi.mocked(api.GET).mock.calls.map((call) => call[0])
+    expect(new Set(paths)).toEqual(new Set(['/api/gmail/messages']))
   })
 })
