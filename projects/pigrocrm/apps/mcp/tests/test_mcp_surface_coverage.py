@@ -435,14 +435,18 @@ _BYTE: dict[Method, str] = {
 #    future slice could expose any of them -- which is exactly why they are not in the
 #    ban list and why each has to say so out loud.
 #
-#    Seven entries have left this block, and they are the reason it must stay small.
+#    Eight entries have left this block, and they are the reason it must stay small.
 #    `PeriodLockService.list_locks`, `TemplateService.preview`,
 #    `DocumentService.regenerate`, `soft_delete` and `restore` were all recorded here as
 #    "non ha ancora un tool" / "e' una decisione della persona" -- and each turned out to
 #    be a plain read, or a reversible audited write whose inverse this surface already
 #    exposes for customers, deals, people, costs and time entries. `EmailDraftService.
 #    create` and `SollecitiService.candidates` left the same way at B2-10, as
-#    `draft_email` and `list_payment_reminder_candidates`. A reason that only says
+#    `draft_email` and `list_payment_reminder_candidates`. `InvoiceService.soft_delete`
+#    left at ORB-37 as `discard_proforma`: "a person's decision" had described a draft
+#    the same surface already creates and rewrites line by line, and the service plus
+#    the table CHECK refuse the delete for anything that consumed a number. A reason
+#    that only says
 #    "nobody wrote the tool" is a placeholder wearing the clothes of a decision; this
 #    category is for the ones that survive being asked why, and the only way to keep that
 #    true is to delete the ones that do not the moment the tool is written.
@@ -479,8 +483,6 @@ _COPERTE_O_UMANE: dict[Method, str] = {
     ("FiscalProfileService", "get"): "describe_fiscal_profile espone gia' il regime",
     ("InvoiceService", "update"): "note interne e campi custom, congelati dopo "
     "l'emissione: nessuna audience agentica",
-    ("InvoiceService", "soft_delete"): "cancellare una bozza di fattura resta una "
-    "decisione della persona",
     ("InvoiceService", "confirm_proforma"): "e' la conferma umana che precede "
     "l'emissione: l'agente prepara, la persona conferma",
     ("TemplateService", "get"): "describe_template espone gia' il template",
