@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test'
+import { COMPOSE_ONLY } from './e2e/compose-only'
 
 export default defineConfig({
   testDir: './e2e',
@@ -17,9 +18,11 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      // landing-served.spec.ts runs against the composed stack, through
-      // playwright.compose.config.ts, never against `pnpm dev`.
-      testIgnore: /landing.*\.spec\.ts$/,
+      // The composed stack's own specs run through playwright.compose.config.ts, never
+      // against `pnpm dev`. The pattern is imported rather than written here: the two
+      // configs spelling it separately is exactly how seven of these came to run in the
+      // wrong one for a day (see e2e/compose-only.ts).
+      testIgnore: COMPOSE_ONLY,
       use: { ...devices['Desktop Chrome'], baseURL: 'http://localhost:5173' },
     },
   ],

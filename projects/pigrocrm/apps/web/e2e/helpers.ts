@@ -40,6 +40,67 @@ export async function loginAsAdmin(page: Page): Promise<void> {
 }
 
 /**
+ * Signs out through the profile menu at the foot of the sidebar, and waits for the login
+ * page.
+ *
+ * A helper because «Esci» stopped being a button. The UI revision of 2026-09-08 moved it
+ * into the profile `DropdownMenu` (`AppShell.tsx`: «who is signed in, the space's
+ * settings for an admin, the way out»), so it is a `menuitem` inside a menu that has to
+ * be opened first -- and `getByRole('button', { name: 'Esci' })`, which two specs still
+ * did, waited thirty seconds for a control that no longer exists in that shape. One
+ * place, so the next move of that control is one edit.
+ *
+ * The menu is opened by its accessible name rather than by the user's initials: the
+ * trigger shows an avatar, a name and a role, and all three change with whoever is
+ * logged in, while `aria-label="Menu del profilo"` does not.
+ */
+export async function logout(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Menu del profilo' }).click()
+  await page.getByRole('menuitem', { name: 'Esci' }).click()
+  await expect(page).toHaveURL(/\/app\/login$/)
+}
+
+/** The two collapsible groups of the sidebar, spelled as their headers spell them. */
+export type SidebarGroup = 'Vendite' | 'Amministrazione'
+
+/**
+ * Navigates through the sidebar, opening the entry's group first when it is closed.
+ *
+ * The third thing the UI revision of 2026-09-08 changed under these specs: nine flat
+ * entries became two groups, and a group is *closed* unless it holds the current route
+ * or you opened it yourself (`AppShell.tsx`: `isOpen`). So from the dashboard the
+ * «Deal» link is in the DOM's future rather than on the screen, and clicking it waits
+ * until the test times out.
+ *
+ * The header is clicked only when the entry is not already visible: from a page inside
+ * the group the entry is there, and clicking the header would *close* the group.
+ */
+export async function navigate(page: Page, group: SidebarGroup, entry: string): Promise<void> {
+  const link = page.getByRole('link', { name: entry, exact: true })
+  if (!(await link.isVisible())) {
+    await page.getByRole('button', { name: group }).click()
+  }
+  await link.click()
+}
+
+/**
+ * Runs one action from a row's «⋯» menu, given what that row is *about*.
+ *
+ * Another consequence of the UI revision of 2026-09-08 (§4: «behind the ⋯ like every
+ * other row action»). Per-row controls used to be buttons with their own accessible
+ * names -- `archivia codice interno` -- and are now `menuitem`s inside a
+ * `DropdownMenu` whose trigger is labelled «Azioni per <thing>». A spec still clicking
+ * the old button waits thirty seconds for a control that no longer exists in that shape.
+ *
+ * `subject` is the row's own label as the trigger spells it, so the call reads as the
+ * sentence a person would say: `rowAction(page, 'Codice interno', 'Archivia')`.
+ */
+export async function rowAction(page: Page, subject: string, action: string): Promise<void> {
+  await page.getByRole('button', { name: `Azioni per ${subject}` }).click()
+  await page.getByRole('menuitem', { name: action }).click()
+}
+
+/**
  * Types into the Kanban's "Nuovo campo"/customer-form "Etichetta" control one
  * keystroke at a time, the same way `FieldsPanel.test.tsx`'s own
  * `userEvent.type` does and `.fill()` cannot: seeing this as a defect at all

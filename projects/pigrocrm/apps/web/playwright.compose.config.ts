@@ -1,8 +1,11 @@
 import { defineConfig, devices } from '@playwright/test'
+import { COMPOSE_ONLY } from './e2e/compose-only'
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: /served\.spec\.ts$/,
+  // The complement of `playwright.config.ts`'s own `testIgnore`, from the same
+  // constant: this config runs exactly what that one refuses to.
+  testMatch: COMPOSE_ONLY,
   fullyParallel: false,
   workers: 1,
   reporter: process.env.CI ? 'github' : 'list',

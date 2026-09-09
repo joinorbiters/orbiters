@@ -5,7 +5,10 @@
 #
 #   apps/web/scripts/e2e.sh
 #
-# or, from apps/web/: `pnpm test:e2e`.
+# or, from apps/web/: `pnpm test:e2e`. Anything passed here is passed on to
+# `playwright test`, so one file at a time works the same way:
+#
+#   apps/web/scripts/e2e.sh e2e/time-tracking.spec.ts
 #
 # Nothing else needs to be running first: no manually-started API, no manually
 # started frontend. Playwright's own `webServer` block (apps/web/playwright.config.ts)
@@ -40,7 +43,7 @@ trap cleanup EXIT
 "$REPO_ROOT/apps/web/scripts/e2e-setup.sh"
 
 set +e
-(cd "$REPO_ROOT/apps/web" && pnpm exec playwright test)
+(cd "$REPO_ROOT/apps/web" && pnpm exec playwright test "$@")
 status=$?
 set -e
 

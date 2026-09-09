@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { loginAsAdmin, typeLikeAHuman } from './helpers'
+import { loginAsAdmin, rowAction, typeLikeAHuman } from './helpers'
 
 test.beforeEach(async ({ page }) => {
   await loginAsAdmin(page)
@@ -114,7 +114,9 @@ test('archiving a field a record still holds a value for does not lock that reco
 
   // Archive the definition while this record still holds a value for it.
   await page.goto('/app/impostazioni/campi')
-  await page.getByRole('button', { name: /archivia codice interno/i }).click()
+  // Through the row's «⋯» menu, which is where per-row actions have lived since the UI
+  // revision of 2026-09-08 -- see `helpers.ts::rowAction`.
+  await rowAction(page, 'Codice interno', 'Archivia')
   // `exact: true` is load-bearing: the success toast this click fires reads
   // "Campo archiviato" (FieldsPanel's `archive.mutate` `onSuccess`), which
   // contains "archiviato" as a case-insensitive substring of the plain
