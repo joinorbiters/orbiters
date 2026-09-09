@@ -144,7 +144,13 @@ def _run(argv: list[str], workdir: Path) -> subprocess.CompletedProcess[bytes]:
         ) from exc
 
 
-def render_pdf(markdown: str, *, header_typst: str, settings: Settings) -> bytes:
+def render_pdf(
+    markdown: str,
+    *,
+    header_typst: str,
+    settings: Settings,
+    temp_root: Path | None = None,
+) -> bytes:
     """Compiled Markdown in, PDF bytes out.
 
     The whole render happens inside one throwaway directory that is removed on every
@@ -155,8 +161,14 @@ def render_pdf(markdown: str, *, header_typst: str, settings: Settings) -> bytes
     a failing `#import` whose error message quotes the target file's own first line
     back) reach anything else living under that wider root. The compile root is
     exactly this one document's own throwaway directory and nothing else.
+
+    `temp_root` is where that throwaway directory is created; `None` means the system
+    temp directory, which is what every production caller uses. It exists so a test
+    can watch a directory nobody else writes to: the system temp directory is shared
+    by every process on the host, and under xdist another worker's in-flight render
+    is indistinguishable there from a directory this render failed to remove (ORB-40).
     """
-    workdir = Path(tempfile.mkdtemp(prefix="pigrocrm-render-"))
+    workdir = Path(tempfile.mkdtemp(prefix="pigrocrm-render-", dir=temp_root))
     try:
         shutil.copytree(ASSETS_DIR / "media", workdir / "media")
         source = workdir / "source.md"
