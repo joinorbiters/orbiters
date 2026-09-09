@@ -258,6 +258,31 @@ def test_logout_invalidates_the_refresh_token_server_side(logged_in: TestClient)
     assert response.status_code == 401
 
 
+def test_logout_consumes_every_refresh_token_the_browser_sends(
+    client: TestClient, admin_user
+) -> None:
+    """A browser keeps one cookie per path and sends every one that matches: a session
+    opened at `/` before the root got its own name and the one opened at `/humancraft/`
+    after it arrive as two `refresh_token=` pairs in a single header. `request.cookies`
+    keeps only the last, and a logout that consumed only that one left the other alive
+    -- the session the person had just ended came back on the next refresh."""
+    first = client.post("/api/auth/login", json=CREDENTIALS).cookies.get(REFRESH_COOKIE)
+    second = client.post("/api/auth/login", json=CREDENTIALS).cookies.get(REFRESH_COOKIE)
+    assert first and second and first != second
+
+    bare = TestClient(client.app, base_url="https://testserver")
+    response = bare.post(
+        "/api/auth/logout",
+        headers={"Cookie": f"{REFRESH_COOKIE}={second}; {REFRESH_COOKIE}={first}"},
+    )
+    assert response.status_code == 204
+
+    for token in (first, second):
+        again = TestClient(client.app, base_url="https://testserver")
+        again.cookies.set(REFRESH_COOKIE, token)
+        assert again.post("/api/auth/refresh").status_code == 401
+
+
 def test_a_personal_access_token_authenticates_too(logged_in: TestClient) -> None:
     """The same API serves the browser and the agent; only the credential differs."""
     raw = logged_in.post("/api/tokens", json={"nome": "Claude"}).json()["token"]

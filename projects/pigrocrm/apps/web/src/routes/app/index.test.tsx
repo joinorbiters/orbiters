@@ -26,7 +26,7 @@ describe('the /app/ route', () => {
     // (function, object, adapter, standard schema) and only one of them is callable.
     const validate = Route.options.validateSearch as typeof validateDashboardSearch
     const search = validate({})
-    expect(search.tab).toBe('commerciale')
+    expect(search.tab).toBe('economica')
     expect(search.da).toMatch(/^\d{4}-\d{2}-01$/)
   })
 })
