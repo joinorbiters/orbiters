@@ -109,7 +109,6 @@
      on the width; system.css spends it at the end of the body. Measured again when the
      notice changes size or the viewport does, and taken away with the notice. */
   var ROOM = '--consent-room'
-  var release = null
 
   function room(box) {
     var root = document.documentElement
@@ -138,10 +137,6 @@
     remember(decision)
     if (decision === GRANTED) loadPixel()
     if (box && box.parentNode) box.parentNode.removeChild(box)
-    if (release) {
-      release()
-      release = null
-    }
   }
 
   function start() {
@@ -150,9 +145,16 @@
     /* A refusal is final until the visitor clears their own storage: no pixel, and no
        second ask. */
     if (decision === DENIED) return
-    var box = notice(decide)
+    /* The room is released by the same click that removes the notice, here, so that a
+       second start() cannot orphan the first notice's observer and `decide` keeps no
+       state of its own. */
+    var stop = null
+    var box = notice(function (decision, clicked) {
+      if (stop) stop()
+      decide(decision, clicked)
+    })
     document.body.appendChild(box)
-    release = room(box)
+    stop = room(box)
   }
 
   window.__consent = { start: start, decide: decide, STORAGE_KEY: STORAGE_KEY }

@@ -48,8 +48,7 @@
     return 1 - Math.abs((u + v - 1) * 1.6)
   }
 
-  /* Whole columns from `origin` to the right edge, never rounded up: a half column is
-     a clipped tile. Rows still round up; below is only the browser's chrome. */
+  /* Whole columns from `origin`, never rounded up: a half column is a clipped tile. */
   function columns(width, cell, origin) {
     return Math.max(0, Math.floor((width - origin) / cell))
   }
@@ -74,7 +73,8 @@
     var cell = options.cell || 16
     var band = options.band || diagonal
     var seed = options.seed || 0
-    var originOf = options.origin || function () { return 0 }
+    /* No origin (the landing hero): paint to the edge. */
+    var originOf = options.origin
     var cols, rows, dpr, origin
     var last = 0
 
@@ -89,8 +89,8 @@
       canvas.width = width
       canvas.height = height
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      origin = originOf() || 0
-      cols = columns(canvas.clientWidth, cell, origin)
+      origin = originOf ? originOf() || 0 : 0
+      cols = originOf ? columns(canvas.clientWidth, cell, origin) : Math.ceil(canvas.clientWidth / cell)
       rows = Math.ceil(canvas.clientHeight / cell)
       return true
     }

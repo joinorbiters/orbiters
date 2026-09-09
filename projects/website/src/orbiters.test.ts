@@ -141,6 +141,8 @@ describe('orbiters.css', () => {
         /calc\(var\(--orb-step\) \+ var\(--orb-cell\) \+ var\(--orb-slack\) - var\(--orb-origin\)\)/,
       )
       expect(css).toMatch(/--orb-step:\s*var\(--orb-cell\)/)
+      // From a tablet up the shadow is the design's own 10px, and it stays so.
+      expect(css).toMatch(/@media \(min-width: 48rem\) \{[^}]*--orb-step:\s*10px/)
       expect(rule('.box')).toMatch(/box-shadow:\s*var\(--orb-step\) var\(--orb-step\) 0 var\(--orb-ink\)/)
     })
 
