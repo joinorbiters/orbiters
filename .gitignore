@@ -16,6 +16,12 @@ __pycache__/
 node_modules/
 dist/
 *.tsbuildinfo
+# Playwright's run state and its per-failure artefact directories. It rewrites
+# `test-results/.last-run.json` on every run and drops a `test-results/<test>/`
+# with an `error-context.md` for every failure, so without this line a finished
+# e2e run leaves a modified tracked file and untracked directories that are
+# nobody's work, and `git add -A` ships a test run's timestamp to the trunk.
+test-results/
 
 # Env
 .env
