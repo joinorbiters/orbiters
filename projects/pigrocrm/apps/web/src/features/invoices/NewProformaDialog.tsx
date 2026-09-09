@@ -22,8 +22,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { useCustomers } from '@/features/customers/queries'
-import { useDeals } from '@/features/deals/queries'
+import { useCustomer, useCustomers } from '@/features/customers/queries'
+import { useDeal, useDeals } from '@/features/deals/queries'
 import { toProblem, type ProblemDetail } from '@/lib/api'
 import { formatMoney, previewImponibile } from './format'
 import { useCreateInvoice } from './queries'
@@ -48,6 +48,27 @@ interface DraftRow {
  *  so the commonest line (one of something) needs no typing at all. */
 function newRow(): DraftRow {
   return { descrizione: '', quantita: '1', prezzo_unitario: '' }
+}
+
+/**
+ * What the dialog starts from when the page that opened it already knows what is being
+ * invoiced: a deal's name and its expected value, in the words the deal itself uses.
+ *
+ * Two strings and not a `DraftRow`, because the caller is not filling in a form -- the
+ * quantity is this dialog's business (one of something, as `newRow` explains) and the
+ * caller has no opinion about it.
+ */
+export interface ProformaPrefill {
+  descrizione: string
+  importo: string
+}
+
+/** The first line, from a prefill if there is one. Every field stays editable: a deal's
+ *  expected value is the whole of the work and an invoice is usually a part of it, so
+ *  this is a starting point and never an answer. */
+function firstRow(prefill?: ProformaPrefill): DraftRow {
+  if (prefill === undefined) return newRow()
+  return { descrizione: prefill.descrizione, quantita: '1', prezzo_unitario: prefill.importo }
 }
 
 function isComplete(row: DraftRow): boolean {
@@ -101,6 +122,38 @@ function CustomerPicker({
   )
 }
 
+/**
+ * What a fixed customer or deal looks like: its name, as text.
+ *
+ * Not a disabled `Select`. A control nobody can operate still reads as a decision left
+ * to make, and the point of opening this dialog from a record is that the decision is
+ * already taken -- so the field states the answer instead of offering it. The id travels
+ * in the body either way.
+ *
+ * The name is read through the same hook the page behind the dialog already mounted
+ * (`useCustomer`/`useDeal`), so this is a cache hit rather than a second request: the
+ * customer page has read its customer, and the deal page reads both its deal and, in
+ * `DealCustomerCard`, its customer.
+ */
+function FixedField({ label, value }: { label: string; value: string | undefined }) {
+  return (
+    <div className="space-y-2">
+      <p className="text-sm font-medium">{label}</p>
+      <p className="text-muted-foreground text-sm">{value ?? '…'}</p>
+    </div>
+  )
+}
+
+function FixedCustomer({ customerId }: { customerId: string }) {
+  const customer = useCustomer(customerId)
+  return <FixedField label="Cliente" value={customer.data?.ragione_sociale} />
+}
+
+function FixedDeal({ dealId }: { dealId: string }) {
+  const deal = useDeal(dealId)
+  return <FixedField label="Deal" value={deal.data?.nome} />
+}
+
 /** `NO_DEAL` is a UI-only value: "no deal" is the *absence* of `deal_id` in the body,
  *  and a `Select` needs a non-empty string to represent an option. */
 const NO_DEAL = 'nessuno'
@@ -143,7 +196,13 @@ function DealPicker({
 }
 
 /**
- * Creating a proforma from the Fatture page.
+ * Creating a proforma.
+ *
+ * From the Fatture page, where nothing is known and both pickers are asked; from a
+ * customer's Fatture tab, where the customer is; and from a deal's header, where the
+ * customer, the deal and the first line all are. One dialog for the three, because the
+ * document they create is the same one -- what changes is only how many of its questions
+ * the page behind it has already answered.
  *
  * A proforma and not a `fattura` bozza, even though `POST /api/invoices` accepts both:
  * what the owner does next is confirm it and issue it (`POST /{id}/confirm`, then
@@ -157,14 +216,27 @@ function DealPicker({
  * forbid extra keys -- which is worse than not offering it, so the dialog says where
  * the date comes from instead.
  */
-function NewProformaDialog({ onClose }: { onClose: () => void }) {
+function NewProformaDialog({
+  onClose,
+  customerId: fixedCustomerId,
+  dealId: fixedDealId,
+  prefill,
+}: {
+  onClose: () => void
+  customerId?: string
+  dealId?: string
+  prefill?: ProformaPrefill
+}) {
   const navigate = useNavigate()
   const create = useCreateInvoice()
-  const [customerId, setCustomerId] = useState('')
-  const [dealId, setDealId] = useState('')
+  // A fixed id is the initial state and not a separate one: everything downstream --
+  // validation, the body, the deal list's `customer_id` -- reads these two and does not
+  // need to know whether a human chose them or the page did.
+  const [customerId, setCustomerId] = useState(fixedCustomerId ?? '')
+  const [dealId, setDealId] = useState(fixedDealId ?? '')
   const [causale, setCausale] = useState('')
   const [note, setNote] = useState('')
-  const [rows, setRows] = useState<DraftRow[]>(() => [newRow()])
+  const [rows, setRows] = useState<DraftRow[]>(() => [firstRow(prefill)])
   const [errors, setErrors] = useState<Errors>({})
   const [problem, setProblem] = useState<ProblemDetail | null>(null)
 
@@ -253,17 +325,27 @@ function NewProformaDialog({ onClose }: { onClose: () => void }) {
         {problem ? <QueryErrorBanner error={problem} /> : null}
 
         <div className="space-y-4">
-          <CustomerPicker value={customerId} onChange={chooseCustomer} />
-          {errors.customer ? (
-            <p className="text-sm text-destructive">{errors.customer}</p>
-          ) : null}
+          {fixedCustomerId === undefined ? (
+            <>
+              <CustomerPicker value={customerId} onChange={chooseCustomer} />
+              {errors.customer ? (
+                <p className="text-sm text-destructive">{errors.customer}</p>
+              ) : null}
+            </>
+          ) : (
+            <FixedCustomer customerId={fixedCustomerId} />
+          )}
 
-          {customerId === '' ? null : (
-            <DealPicker
-              customerId={customerId}
-              value={dealId}
-              onChange={(value) => setDealId(value === NO_DEAL ? '' : value)}
-            />
+          {fixedDealId === undefined ? (
+            customerId === '' ? null : (
+              <DealPicker
+                customerId={customerId}
+                value={dealId}
+                onChange={(value) => setDealId(value === NO_DEAL ? '' : value)}
+              />
+            )
+          ) : (
+            <FixedDeal dealId={fixedDealId} />
           )}
 
           <div className="space-y-2">
@@ -374,13 +456,23 @@ function NewProformaDialog({ onClose }: { onClose: () => void }) {
 }
 
 /**
- * The Fatture page's own entry point into creating a document.
+ * The entry point into creating a document, wherever one is offered: the Fatture page
+ * with nothing fixed, a customer's Fatture tab with `customerId`, a deal's header with
+ * all three.
  *
  * The dialog is *mounted* only while open rather than kept behind `open={false}`, so
  * the customer list is fetched when someone actually wants to pick from it -- the same
  * fix, for the same reason, that `DealForm`'s `CustomerPicker` documents.
  */
-export function NewProformaButton() {
+export function NewProformaButton({
+  customerId,
+  dealId,
+  prefill,
+}: {
+  customerId?: string
+  dealId?: string
+  prefill?: ProformaPrefill
+} = {}) {
   const [open, setOpen] = useState(false)
 
   return (
@@ -389,7 +481,14 @@ export function NewProformaButton() {
         <Plus className="mr-2 size-4" />
         Nuova fattura
       </Button>
-      {open ? <NewProformaDialog onClose={() => setOpen(false)} /> : null}
+      {open ? (
+        <NewProformaDialog
+          onClose={() => setOpen(false)}
+          customerId={customerId}
+          dealId={dealId}
+          prefill={prefill}
+        />
+      ) : null}
     </>
   )
 }

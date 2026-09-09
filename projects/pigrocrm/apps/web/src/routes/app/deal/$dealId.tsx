@@ -27,6 +27,7 @@ import { DocumentsTab } from '@/features/documents/DocumentsTab'
 import { EmailTab } from '@/features/gmail/EmailTab'
 import { useGmailConfigured } from '@/features/gmail/queries'
 import { InvoicesTab } from '@/features/invoices/InvoicesTab'
+import { NewProformaButton } from '@/features/invoices/NewProformaDialog'
 import { TimeEntriesTab } from '@/features/time/TimeEntriesTab'
 import { toProblem, type ProblemDetail } from '@/lib/api'
 import { useCanWrite } from '@/lib/auth'
@@ -207,6 +208,17 @@ export function DealDetail() {
         actions={
           canWrite && (
             <>
+              {/* First, and the only filled button here: a deal's header is opened to
+                  invoice it far more often than to rename it. The dialog it opens has
+                  nothing left to ask but the causale -- the customer, the deal and the
+                  first line are all on this page already. `valore_previsto` is nullable
+                  (`DealRead`), and an absent one starts the line at an empty price
+                  rather than at a zero nobody typed. */}
+              <NewProformaButton
+                customerId={deal.customer_id}
+                dealId={deal.id}
+                prefill={{ descrizione: deal.nome, importo: deal.valore_previsto ?? '' }}
+              />
               {/* Two outcomes, top right, only while the deal is still open: closing it
                   is the one decision this page exists for. Reopening goes through the
                   bar, which is also where the person sees which stage it goes back to. */}

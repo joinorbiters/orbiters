@@ -1,16 +1,28 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen } from '@testing-library/react'
-import type { ReactElement } from 'react'
+import userEvent from '@testing-library/user-event'
+import type { ReactElement, ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DealDetail } from './$dealId'
 import { api } from '@/lib/api'
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>()
-  return { ...actual, useParams: () => ({ dealId: 'd1' }), useNavigate: () => vi.fn() }
+  return {
+    ...actual,
+    useParams: () => ({ dealId: 'd1' }),
+    useNavigate: () => vi.fn(),
+    // The Preventivo card links to Analisi, and a real `Link` needs a router context
+    // this test has no reason to build. The house stub (deal/lista.test.tsx,
+    // fatture/index.test.tsx) renders it as a plain anchor.
+    Link: ({ children }: { children: ReactNode }) => <a href="#">{children}</a>,
+  }
 })
 
-vi.mock('@/lib/auth', () => ({ useCanWrite: () => false }))
+// Hoisted so one test can flip it: the header's actions exist only for a writer, and
+// everything else here is about what any reader sees.
+const auth = vi.hoisted(() => ({ canWrite: false }))
+vi.mock('@/lib/auth', () => ({ useCanWrite: () => auth.canWrite }))
 
 // `api.GET` is spied on directly, mirroring `clienti/$customerId.test.tsx`: what
 // is under test is this route's own handling of what the real `unwrap` produces,
@@ -35,7 +47,28 @@ function mockDealFetch(result: ReturnType<typeof ok> | ReturnType<typeof failed>
 
 beforeEach(() => {
   mockGet.mockReset()
+  auth.canWrite = false
 })
+
+/** Enough of a `DealRead` for the page to render past its guards. Every nullable field
+ *  the Panoramica formats is present as `null`: absent is not the same as null to
+ *  `formatDate`/`formatMoney`, which read the string they are handed. */
+const DEAL = {
+  id: 'd1',
+  nome: 'Sito vetrina',
+  customer_id: 'c1',
+  pipeline_stage_id: 's1',
+  valore_previsto: '4500.00',
+  probabilita: 50,
+  data_chiusura_prevista: null,
+  ore_preventivate: null,
+  valore_preventivato: null,
+  tariffa_oraria: null,
+  owner_id: null,
+  note: null,
+  chiuso_il: null,
+  custom_fields: {},
+} as never
 
 function renderWithClient(ui: ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -67,5 +100,49 @@ describe('DealDetail', () => {
     renderWithClient(<DealDetail />)
     expect(await screen.findByRole('alert')).toHaveTextContent('Il server non risponde.')
     expect(screen.queryByText('Deal non trovato.')).not.toBeInTheDocument()
+  })
+
+  /**
+   * The commonest invoice of all is the one a deal has just earned, and every field it
+   * needs is on this page already. The action is in the header rather than on the
+   * Fatture tab because a deal's header is where its verbs live -- and it opens the
+   * dialog with the customer, the deal and the first line already answered.
+   */
+  describe('the «Nuova fattura» action', () => {
+    async function openDeal() {
+      mockGet.mockImplementation(
+        ((path: string) => {
+          if (path === '/api/deals/{deal_id}') return ok(DEAL)
+          // `useStages` unwraps to a bare array, not to a page.
+          if (path === '/api/pipeline-stages') return ok([])
+          return ok({ items: [], next_cursor: null })
+        }) as never,
+      )
+      renderWithClient(<DealDetail />)
+      await screen.findByRole('tab', { name: 'Panoramica' })
+    }
+
+    it('opens a proforma already filled in from the deal', async () => {
+      auth.canWrite = true
+      await openDeal()
+
+      const button = await screen.findByRole('button', { name: 'Nuova fattura' })
+      // Before «Modifica»: creating is the thing this header is most often opened for.
+      const actions = screen.getAllByRole('button').map((element) => element.textContent)
+      expect(actions.indexOf('Nuova fattura')).toBeLessThan(actions.indexOf('Modifica'))
+
+      await userEvent.click(button)
+      expect(await screen.findByRole('dialog')).toBeInTheDocument()
+      // Neither picker: this dialog was opened from the record that answers both.
+      expect(screen.queryByLabelText(/^Cliente/)).not.toBeInTheDocument()
+      expect(screen.queryByLabelText(/^Deal/)).not.toBeInTheDocument()
+      expect(screen.getByLabelText('Descrizione riga 1')).toHaveValue('Sito vetrina')
+      expect(screen.getByLabelText('Prezzo unitario riga 1')).toHaveValue('4500.00')
+    })
+
+    it('is not offered to a reader', async () => {
+      await openDeal()
+      expect(screen.queryByRole('button', { name: 'Nuova fattura' })).not.toBeInTheDocument()
+    })
   })
 })
