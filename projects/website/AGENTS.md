@@ -44,11 +44,16 @@ alone; `WEBSITE_API_URL` repoints it.
 
 Serving is owned here since 2026-09-09: this project builds its own image and runs its
 own container. What that means in practice is that the path map exists twice, in
-`deploy/nginx.conf` for production and in `vite.config.ts` for the dev and preview
-servers, and a page added in one and not the other passes the suite and 404s in
-production. The e2e suite runs against `vite preview`, so it checks the second copy;
-the first is checked by `website-image` in preflight and by the deploy's own health
-check.
+`deploy/nginx.conf` for production and in `src/path-map-plugin.ts` for the dev and
+preview servers. `path-map-plugin.test.ts` reads the first and compares it with the
+second, so a page added in one and not the other is a failing unit test rather than a
+site that passes the suite and 404s in production. The e2e suite runs against `vite
+preview`, so it checks the second copy on a real server; the first is checked by
+`website-image` in preflight and by the deploy's own health check. The one place the
+two deliberately differ is the paths the host vhost gives to other tenants of the
+origin (`/api`, `/hub`, `/app`, `/health`): the container 404s them, the Vite servers
+proxy `/api` and answer a plain-text stand-in for the rest, because they cannot run
+the CRM or the hub and a redirect into production would make the suite depend on it.
 
 ## Verification
 
