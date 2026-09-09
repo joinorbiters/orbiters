@@ -408,10 +408,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build both images from the repository root context
         working-directory: projects/hub
-        # Through compose, with `-p orbiters` as the deploy passes it (docs/adding-a-project.md
-        # §7), so this proves the same context and the same files the deploy uses.
+        # Through compose, so this proves the same context and the same files the
+        # deploy uses. `-p orbiters` changes only what the throwaway images are called
+        # (the names the deploy's project gives them, which is what preflight's twin
+        # builds too). The two variables exist because compose interpolates the whole
+        # file before a build and both are `:?` there; a build reads neither, and the
+        # data directory has to stay path-shaped or compose reads the word as a named
+        # volume and refuses the project.
         env:
           POSTGRES_PASSWORD: build-only-never-used
+          ORBITERS_DATA_DIR: ./build-only-never-mounted
         run: docker compose -p orbiters build
 
   ci:

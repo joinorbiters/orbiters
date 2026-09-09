@@ -10,8 +10,15 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-orbiters}
     # On the host, never in a Docker-managed volume: the same decision PigroCRM took
     # after a daemon reset scared everyone. Set ORBITERS_DATA_DIR outside the repository.
+    #
+    # No default, on purpose. Two stacks of this file run on one host, and each has its
+    # own data directory; a `.env` that forgets the variable must fail here, loudly,
+    # rather than bring Postgres up on an empty relative directory with `/health`
+    # answering 200 and the real rows unmounted (ORB-28). A build never mounts it, but
+    # compose interpolates the whole file before building, so `docker compose build`
+    # needs a value too: CI and preflight pass a throwaway one.
     volumes:
-      - ${ORBITERS_DATA_DIR:-../../data/orbiters-postgres}:/var/lib/postgresql/data
+      - ${ORBITERS_DATA_DIR:?set it in .env, to this stack's own directory outside the repository}:/var/lib/postgresql/data
     ports:
       - '${ORBITERS_DB_PORT:-127.0.0.1:55435}:5432'
     healthcheck:

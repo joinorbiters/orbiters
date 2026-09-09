@@ -241,7 +241,7 @@
     },
     {
       "id": "hub-image",
-      "run": "cd projects/hub && POSTGRES_PASSWORD=build-only-never-used docker compose -p orbiters build",
+      "run": "cd projects/hub && POSTGRES_PASSWORD=build-only-never-used ORBITERS_DATA_DIR=./build-only-never-mounted docker compose -p orbiters build",
       "when": [
         "projects/hub/Dockerfile.api",
         "projects/hub/Dockerfile.web",
