@@ -251,7 +251,7 @@ def _line(**overrides: object) -> dict[str, object]:
     base: dict[str, object] = {
         "descrizione": "900142/0426/Consulenza AI CTO progetto Aurora",
         "quantita": Decimal("9"),
-        "prezzo_unitario": Decimal("380"),
+        "prezzo_unitario": Decimal("300"),
         "prezzo_totale": Decimal("2700.00"),
         "aliquota_iva": Decimal("0"),
         "natura": "N2.2",
@@ -597,7 +597,7 @@ def _payload(customer_id: UUID, *, numero: int, giorno: date, **overrides: objec
             {
                 "descrizione": "900142/0426/Consulenza AI CTO progetto Aurora",
                 "quantita": Decimal("9"),
-                "prezzo_unitario": Decimal("380"),
+                "prezzo_unitario": Decimal("300"),
                 "prezzo_totale": Decimal("2700.00"),
                 "aliquota_iva": Decimal("0"),
                 "natura": "N2.2",
@@ -1577,26 +1577,28 @@ git commit -m "feat(web): imported-from-the previous system badge; no XML or re-
 
 - [ ] **Step 1: Scrivere il dataset**
 
-Un array JSON di 14 oggetti nel formato di `InvoiceImport` con `customer_id` da risolvere per `ragione_sociale` (campo ausiliario `_cliente`, rimosso dallo script di invio). Valori noti dal registro the previous system e dalle email; `data_scadenza`, `data_incasso` e `trasmessa_esternamente_il` da compilare dal titolare dove indicato `null`:
+Un array JSON di 14 oggetti nel formato di `InvoiceImport` con `customer_id` da risolvere per `ragione_sociale` (campo ausiliario `_cliente`, rimosso dallo script di invio). `data_scadenza`, `data_incasso` e `trasmessa_esternamente_il` da compilare dal titolare dove indicato `null`.
+
+> **I valori qui sotto sono sintetici.** Il dataset reale (clienti, importi, tariffe, id Drive dei PDF) è stato rimosso da questo repository il 2026-09-09, prima della pubblicazione, insieme al file JSON che questo task creava: erano dati di clienti veri e il fatturato di un anno. Quello che resta è la forma, che è ciò di cui il piano ha bisogno per essere leggibile: 14 righe, i buchi di registro 1, 4 e 6 assenti, una fattura su due righe, una verso l'estero con `natura` diversa, e tre righe sotto la soglia del bollo. Chi rieseguisse questo task su dati propri parte da qui.
 
 | numero | data | `_cliente` | descrizione riga | quantità × prezzo | imponibile | stato_pagamento |
 |---|---|---|---|---|---|---|
-| 2 | 2026-02-04 | Gamma S.r.l. | Consulenza Delta | 1 × 250 | 250.00 | incassato |
-| 3 | 2026-02-04 | Eta Service S.r.l. | Servizi di consulenza Theta (ODA 2026-012-HUM-OPS) | 1 × 1000 | 1000.00 | incassato |
-| 5 | 2026-04-07 | Francesco Paolo Bianchi | Consulenza AI prototipo POINT — anticipo | 1 × 2500 | 2000.00 (seconda riga: spese accessorie 200.00) | incassato; `trasmessa_esternamente_il: null` (non consegnata) |
+| 2 | 2026-02-04 | Alfa S.r.l. | Consulenza sito vetrina | 1 × 200 | 200.00 | incassato |
+| 3 | 2026-02-04 | Beta Service S.r.l. | Servizi di consulenza progetto Delta (ODA 2026-012-ACM-BET) | 1 × 900 | 900.00 | incassato |
+| 5 | 2026-04-07 | Mario Rossi | Consulenza AI prototipo Delta — anticipo | 1 × 2000 | 2200.00 (seconda riga: spese accessorie 200.00) | incassato; `trasmessa_esternamente_il: null` (non consegnata) |
 | 7 | 2026-05-05 | Acme S.r.l. | 900142/0426/Consulenza AI CTO progetto Aurora | 9 × 300 | 2700.00 | incassato |
-| 8 | 2026-05-05 | Beta Società Cooperativa | Servizi di consulenza Epsilon — pre-analisi Remote Console | 3 × 350 | 1050.00 | incassato |
+| 8 | 2026-05-05 | Gamma Società Cooperativa | Servizi di consulenza progetto Vega — pre-analisi console remota | 3 × 300 | 900.00 | incassato |
 | 9 | 2026-06-05 | Acme S.r.l. | 900142/0526/Consulenza AI CTO progetto Aurora | 20 × 300 | 6000.00 | incassato |
-| 10 | 2026-06-05 | Acme S.r.l. | 900142/0526/Rimborso spese | 1 × 110.00 | 110.00 | incassato |
+| 10 | 2026-06-05 | Acme S.r.l. | 900142/0526/Rimborso spese | 1 × 60.50 | 60.50 | incassato |
 | 11 | 2026-07-13 | Acme S.r.l. | 900142/0626/Consulenza AI CTO progetto Aurora | 21 × 300 | 6300.00 | incassato |
-| 12 | 2026-07-13 | Acme S.r.l. | 900142/0626/Rimborso hosting | 1 × 18.32 | 18.32 | incassato |
-| 13 | 2026-08-03 | Example Ltd | Consulting services for Example.com — July 2026 (pro-rata) | 1 × 4000.00 | 4000.00 | incassato |
-| 14 | 2026-08-03 | Acme S.r.l. | 900143/0726/Consulenza AI CTO progetto Aurora | 21 × 390 | 6300.00 | da_incassare (scaduta) |
-| 15 | 2026-08-03 | Beta Società Cooperativa | Consulenza Remote Console Zeta — acconto 30% | 1 × 2640 | 2100.00 | da_incassare (scaduta) |
-| 16 | 2026-08-11 | Beta Società Cooperativa | Consulenza Remote Console Zeta — 20% post UAT | 1 × 1760 | 1400.00 | da_incassare |
-| 17 | 2026-08-11 | Acme S.r.l. | 900143/0726/Rimborso hosting | 1 × 20.12 | 20.12 | da_incassare |
+| 12 | 2026-07-13 | Acme S.r.l. | 900142/0626/Rimborso hosting | 1 × 15.00 | 15.00 | incassato |
+| 13 | 2026-08-03 | Example Ltd | Consulting services for project Vega — July 2026 (pro-rata) | 1 × 5000 | 5000.00 | incassato |
+| 14 | 2026-08-03 | Acme S.r.l. | 900143/0726/Consulenza AI CTO progetto Aurora | 21 × 310 | 6510.00 | da_incassare (scaduta) |
+| 15 | 2026-08-03 | Gamma Società Cooperativa | Consulenza console remota Vega — acconto 30% | 1 × 2500 | 2500.00 | da_incassare (scaduta) |
+| 16 | 2026-08-11 | Gamma Società Cooperativa | Consulenza console remota Vega — 20% post UAT | 1 × 1600 | 1600.00 | da_incassare |
+| 17 | 2026-08-11 | Acme S.r.l. | 900143/0726/Rimborso hosting | 1 × 20.00 | 20.00 | da_incassare |
 
-Per ogni riga: `aliquota_iva: "0"`, `natura: "N2.2"`, `imposta: "0.00"`; `bollo: "2.00"` sulle fatture con imponibile > 77,47 (tutte tranne 10, 12, 17) e `totale = imponibile + bollo`. **Il bollo va confermato dal titolare** contro i PDF: i totali nello screenshot the previous system coincidono con l'imponibile (colonna «Totale» = «Imp. Reddito»), quindi è possibile che the previous system non applicasse il bollo; in quel caso `bollo: "0.00"` e `totale = imponibile`. Il dataset nasce con `bollo: "0.00"` e una nota che lo dice. La fattura 13 (Example, cliente UK) porta `natura: "N2.1"`.
+Per ogni riga: `aliquota_iva: "0"`, `natura: "N2.2"`, `imposta: "0.00"`; `bollo: "2.00"` sulle fatture con imponibile > 77,47 (tutte tranne 10, 12, 17) e `totale = imponibile + bollo`. **Il bollo va confermato dal titolare** contro i PDF: se il registro di partenza non lo applicava, `bollo: "0.00"` e `totale = imponibile`. Il dataset nasce con `bollo: "0.00"` e una nota che lo dice. La fattura 13 (cliente UK) porta `natura: "N2.1"`.
 
 - [ ] **Step 2: Scrivere il runbook**
 

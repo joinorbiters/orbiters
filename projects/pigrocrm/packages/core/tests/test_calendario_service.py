@@ -140,7 +140,7 @@ def test_a_day_carries_its_total_and_its_breakdown_by_deal(
         ("Progetto di prova", Decimal("8.00")),
         ("Secondo progetto", Decimal("1.00")),
     }
-    # The client's name travels with the deal, so a cell can read «Eta · Theta» and
+    # The client's name travels with the deal, so a cell can read «Acme · Progetto di prova» and
     # not just the project. The seeded deal's own customer is named with a uuid by the
     # fixture, so what is asserted is that it is there at all.
     per_deal = {riga.deal_nome: riga.cliente for riga in day.per_deal}

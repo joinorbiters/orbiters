@@ -160,7 +160,7 @@ importata senza PDF originale», non genera.
 
 Quattordici fatture (numeri 2, 3, 5, 7–17), tutte con dati già ricostruiti dalle email e dal
 registro the previous system (screenshot del 4/09). Tutti e sei i clienti esistono già nel CRM; i PDF stanno nella cartella
-`Fatture` del Drive humancraft. La fattura 5/00 (Bianchi) è «emessa e non consegnata» in the previous system:
+`Fatture` del Drive humancraft. Una delle quattordici è «emessa e non consegnata» in the previous system:
 si importa con `trasmessa_esternamente_il = NULL` e nota, e resta un residuo da chiudere con il
 codice fiscale del cliente. Sequenza: profili (§2.3) → collegamento Drive (§5) → import 2, 3, 5,
 7…17 in ordine di numero → buchi 1, 4, 6 dichiarati → verifica che `list_invoices` dia 14 righe

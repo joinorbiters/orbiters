@@ -97,7 +97,7 @@ export function NumberCell({ children }: { children: ReactNode }) {
 /**
  * Up to two initials for the chip: the first letter of each of the first two words.
  *
- * Two, not more: «Acme Srl» reads as `CS`, and a chip of four
+ * Two, not more: «Prima Società Benefit Srl» reads as `PS`, and a chip of four
  * letters is no longer a chip. Words are split on any run of whitespace so a double
  * space cannot produce an empty initial, and the result is uppercased because a
  * lowercase ragione sociale would otherwise give a chip that looks like a typo.

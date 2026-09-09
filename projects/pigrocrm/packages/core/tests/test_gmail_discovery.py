@@ -227,12 +227,10 @@ def test_every_listing_discovery_issues_carries_the_domain_clause_and_nothing_el
 def test_the_connected_mailbox_is_never_reported_as_a_correspondent(db_session: Session) -> None:
     """If the owner's own mailbox is at the customer's domain -- a contractor with an
     address there -- it is still the owner, not somebody to add to the CRM."""
-    account = connected_account(db_session, email_address="mario@example.com")
+    account = connected_account(db_session, email_address="ivan@example.com")
     customer = _example(db_session)
     fake = FakeGmail()
-    fake.messages["m1"] = _mail(
-        1, frm="marco@example.com", to="mario@example.com", thread="t1"
-    )
+    fake.messages["m1"] = _mail(1, frm="marco@example.com", to="ivan@example.com", thread="t1")
 
     report = sync_service(db_session, fake).discover(customer.id, actor=actor_for(account))
 
