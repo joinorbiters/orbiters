@@ -8,13 +8,22 @@
 ;(function () {
   var doc = document
 
+  /* The x of the first grid line, read off the body's computed background-position:
+     orbiters.css centres the grid in the viewport, and the canvas has to land its
+     tiles on the same lines. Read from the page rather than recomputed here, so there
+     is one copy of that arithmetic. Two gradient layers, hence "6px, 6px": parseFloat
+     takes the first. */
+  function origin() {
+    return parseFloat(getComputedStyle(document.body).backgroundPositionX) || 0
+  }
+
   function field(canvas) {
     var shared = window.__pigroField
     if (!shared) return
     var cell = parseFloat(
       getComputedStyle(document.documentElement).getPropertyValue('--orb-cell'),
     )
-    shared.mount(canvas, { cell: cell || 16, animate: true })
+    shared.mount(canvas, { cell: cell || 16, animate: true, origin: origin })
   }
 
   /* The attribution the URL carries -- `?utm_source=linkedin&utm_medium=paid-social&

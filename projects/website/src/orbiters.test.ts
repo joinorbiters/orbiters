@@ -107,11 +107,67 @@ describe('orbiters.css', () => {
     expect(css).not.toMatch(/border-radius:(?!\s*0;)/)
     expect(css).not.toMatch(/backdrop-filter|blur\(/)
     for (const [, shadow] of css.matchAll(/box-shadow:\s*([^;]+);/g)) {
-      // Offsets only: `x y 0 colour`, never a blur radius.
+      // Offsets only: `x y 0 colour`, never a blur radius. The box's step is a token
+      // since ORB-18, so that it can be one whole cell on a phone.
       for (const layer of (shadow ?? '').split(',')) {
-        expect(layer.trim()).toMatch(/^-?\d+(?:px)? -?\d+(?:px)? 0 /)
+        expect(layer.trim()).toMatch(/^-?\d+(?:px)? -?\d+(?:px)? 0 |^var\(--orb-step\) var\(--orb-step\) 0 /)
       }
     }
+  })
+
+  describe('on a phone, the box sits on the grid (ORB-18)', () => {
+    /** The declarations of one rule, by exact selector, first occurrence. */
+    function rule(selector: string): string {
+      const escaped = selector.replace(/[.[\]*+?^${}()|\\]/g, '\\$&')
+      const body = css.match(new RegExp(`(?:^|\\n\\s*)${escaped}\\s*\\{([^}]*)\\}`))?.[1]
+      if (!body) throw new Error(`rule "${selector}" not found`)
+      return body
+    }
+
+    it('splits the slack of the viewport between the two edges, in whole pixels', () => {
+      // A viewport is almost never a whole number of cells. Half of what is left over
+      // goes to each side, rounded down to the pixel, and it is the cell token that is
+      // divided, so a change of cell moves the origin with it.
+      expect(css).toMatch(/--orb-slack:\s*mod\(100vw, var\(--orb-cell\)\)/)
+      expect(css).toMatch(/--orb-origin:\s*round\(down, var\(--orb-slack\) \/ 2, 1px\)/)
+      expect(css).toMatch(/background-position:\s*var\(--orb-origin\) 0/)
+    })
+
+    it('lays the box edges on grid lines, one column in, with the shadow one whole cell', () => {
+      // Left: the origin plus one whole column. Right: the step, one column, and what
+      // is left of the slack, which is what makes the two gaps equal to the eye.
+      expect(css).toMatch(/calc\(var\(--orb-origin\) \+ var\(--orb-cell\)\)/)
+      expect(css).toMatch(
+        /calc\(var\(--orb-step\) \+ var\(--orb-cell\) \+ var\(--orb-slack\) - var\(--orb-origin\)\)/,
+      )
+      expect(css).toMatch(/--orb-step:\s*var\(--orb-cell\)/)
+      expect(rule('.box')).toMatch(/box-shadow:\s*var\(--orb-step\) var\(--orb-step\) 0 var\(--orb-ink\)/)
+    })
+
+    it('keeps a plain one-cell padding for a browser without mod()', () => {
+      // The grid arithmetic is guarded: a `var()` that resolves to an unsupported
+      // function is invalid at computed-value time and would leave the body with no
+      // padding at all, not with the earlier declaration.
+      expect(rule('body')).toMatch(/padding:\s*var\(--orb-cell\)/)
+      expect(css).toMatch(/@supports \(padding: round\(down, mod\(100vw, 14px\) \/ 2, 1px\)\)/)
+    })
+
+    it('has the canvas read the origin off the page rather than recompute it', () => {
+      // One copy of the arithmetic: the tiles land where the CSS grid landed.
+      expect(js).toMatch(/getComputedStyle\(document\.body\)\.backgroundPositionX/)
+      expect(js).toMatch(/origin:\s*origin/)
+    })
+
+    it('lets the form inputs shrink to their column, so two of them fit in 430px', () => {
+      // Before this, at 430 wide the two-column row pushed the box to 485px and the
+      // page scrolled sideways: an input's intrinsic width is about twenty characters
+      // and a grid column will not shrink below its item's minimum.
+      expect(rule('.signup input,\n.signup button')).toMatch(/min-width:\s*0/)
+    })
+
+    it('balances the title, so "soli." never stands alone on the second line', () => {
+      expect(rule('h1')).toMatch(/text-wrap:\s*balance/)
+    })
   })
 
   it('actually hides the form once it is hidden', () => {
