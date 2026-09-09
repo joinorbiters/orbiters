@@ -1,9 +1,9 @@
 {
-  "name": "landing",
+  "name": "website",
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "joinorbiters.com: the Orbiters community page, and the pages the product signs itself with.",
+  "description": "joinorbiters.com: the Orbiters community page, the pages the product signs itself with, and the signup form.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

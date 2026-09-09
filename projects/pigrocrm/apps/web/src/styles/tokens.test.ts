@@ -170,7 +170,7 @@ describe('design tokens', () => {
     // request and another licence check, it is illegible at small sizes, and a
     // handwritten accent on a page Google reads during OAuth verification looks
     // unserious. The landing asserts the same on its own side
-    // (projects/landing/src/landing-tokens.test.ts), so neither surface can regain
+    // (projects/website/src/landing-tokens.test.ts), so neither surface can regain
     // it quietly.
     expect(css).not.toMatch(/Reenie/i)
     // The face itself is declared once, in `shared/brand/font.css`, and this file

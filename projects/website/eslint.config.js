@@ -3,7 +3,7 @@ import globals from 'globals'
 import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
-// No React, no Tailwind, no router plugin: the landing is four HTML pages and three
+// No React, no Tailwind, no router plugin: the site is four HTML pages and three
 // scripts, and keeping it that way is the point of it being its own project rather
 // than a corner of the application's bundle.
 export default defineConfig([

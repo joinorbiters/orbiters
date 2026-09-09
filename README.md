@@ -7,7 +7,7 @@ The monorepo for Orbiters' products.
 | Project | What it is | Stack |
 |---|---|---|
 | [`projects/pigrocrm`](projects/pigrocrm) | PigroCRM — an AI-first CRM for Italian freelancers, consultants and small startups. Everything the web UI can do is also reachable over REST and over MCP. | Python · FastAPI · SQLAlchemy · PostgreSQL · React · Vite |
-| [`projects/landing`](projects/landing) | joinorbiters.com — the Orbiters community page, the pages the product signs itself with, and the signup form. Four static pages, deliberately no framework. | HTML · CSS · Vite |
+| [`projects/website`](projects/website) | joinorbiters.com — the public site: the Orbiters community page, the pages the product signs itself with, and the signup form. Static pages, deliberately no framework. | HTML · CSS · Vite |
 | [`shared/brand`](shared/brand) | The palette, the typeface and the four-tile mark, read by both surfaces so there is one source and no copy. | CSS |
 
 ## Getting started

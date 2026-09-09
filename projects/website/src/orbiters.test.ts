@@ -121,7 +121,7 @@ describe('orbiters.css', () => {
 describe('orbiters.js', () => {
   it('stays small', () => {
     // Commented source; Vite ships it at about 2.6 KB. The whole page, font aside,
-    // sits under 10 KB against the landing's 40 KB budget (e2e/landing.spec.ts).
+    // sits under 10 KB against the site's 40 KB budget (e2e/site.spec.ts).
     expect(Buffer.byteLength(js, 'utf-8')).toBeLessThan(7 * 1024)
   })
 

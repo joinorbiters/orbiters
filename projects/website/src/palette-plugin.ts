@@ -62,7 +62,7 @@ export function extractSharedTokens(css: string): Record<string, string> {
   if (count !== EXPECTED_TOKEN_COUNT) {
     throw new Error(
       `extractSharedTokens extracted only ${count} shared token${count === 1 ? '' : 's'} ` +
-        `from palette.css (expected ${EXPECTED_TOKEN_COUNT}). The landing must not restate ` +
+        `from palette.css (expected ${EXPECTED_TOKEN_COUNT}). The site must not restate ` +
         'the palette: fix the extraction, do not paste values into landing.css.',
     )
   }
@@ -77,7 +77,7 @@ const TOKEN_CONSUMERS = ['src/landing.css', 'src/orbiters.css']
  *  at build and at dev time. */
 export function palettePlugin(): Plugin {
   return {
-    name: 'landing-palette',
+    name: 'website-palette',
     enforce: 'pre',
     transform(code, id) {
       const file = id.split('?')[0] ?? ''

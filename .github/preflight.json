@@ -68,40 +68,40 @@
       "why": "Build before typecheck, always: a bare tsc --noEmit on a clean checkout fails every route file with TS2307 because src/routeTree.gen.ts is gitignored and only a Vite run writes it."
     },
     {
-      "id": "landing-lint",
-      "run": "pnpm --filter landing lint",
+      "id": "website-lint",
+      "run": "pnpm --filter website lint",
       "when": [
-        "projects/landing/**",
+        "projects/website/**",
         "shared/brand/**"
       ]
     },
     {
-      "id": "landing-unit",
-      "run": "pnpm --filter landing test",
+      "id": "website-unit",
+      "run": "pnpm --filter website test",
       "when": [
-        "projects/landing/**",
+        "projects/website/**",
         "shared/brand/**",
         "pnpm-lock.yaml"
       ],
       "why": "99 assertions on the built and unbuilt text: which tokens each sheet may declare, what each page promises, how the field behaves. No services, about two seconds."
     },
     {
-      "id": "landing-build",
-      "run": "pnpm --filter landing build && pnpm --filter landing exec tsc --noEmit",
+      "id": "website-build",
+      "run": "pnpm --filter website build && pnpm --filter website exec tsc --noEmit",
       "when": [
-        "projects/landing/**",
+        "projects/website/**",
         "shared/brand/**",
         "package.json",
         "pnpm-lock.yaml",
         "pnpm-workspace.yaml"
       ],
-      "why": "The build is where the palette plugin runs, so a palette that stopped being extractable fails here rather than shipping a landing with no colour."
+      "why": "The build is where the palette plugin runs, so a palette that stopped being extractable fails here rather than shipping pages with no colour."
     },
     {
-      "id": "landing-e2e",
-      "run": "pnpm --filter landing test:e2e",
+      "id": "website-e2e",
+      "run": "pnpm --filter website test:e2e",
       "when": [
-        "projects/landing/**",
+        "projects/website/**",
         "shared/brand/**"
       ],
       "serial": true,

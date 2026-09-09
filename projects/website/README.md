@@ -1,24 +1,26 @@
-# landing
+# website
 
-joinorbiters.com: the Orbiters community page, the pages the product signs itself with
-(`/pigrocrm`, `/privacy`, `/termini`), and the signup form.
+joinorbiters.com: the public site. Today that is the Orbiters community page, the pages
+the product signs itself with (`/pigrocrm`, `/privacy`, `/termini`), and the signup
+form; it is called `website` rather than `landing` because it is expected to grow past
+those.
 
 Four HTML pages, three scripts, three stylesheets. No React, no Tailwind, no router.
 That absence is the requirement rather than an omission: this is the first page a
 visitor loads, and it does not drag an application bundle behind it. The build takes
-about 300 milliseconds.
+about 300 milliseconds. Anything added here should keep that true.
 
 ## Commands
 
 ```
-pnpm --filter landing dev        # :5173, with /api proxied to a running CRM API
-pnpm --filter landing build      # dist/
-pnpm --filter landing test       # 99 assertions, vitest, no services
-pnpm --filter landing test:e2e   # Playwright against `vite preview` on :4173
-pnpm --filter landing lint
+pnpm --filter website dev        # :5173, with /api proxied to a running CRM API
+pnpm --filter website build      # dist/
+pnpm --filter website test       # 99 assertions, vitest, no services
+pnpm --filter website test:e2e   # Playwright against `vite preview` on :4173
+pnpm --filter website lint
 ```
 
-`LANDING_API_URL` repoints the dev and preview proxy (default `http://localhost:8000`).
+`WEBSITE_API_URL` repoints the dev and preview proxy (default `http://localhost:8000`).
 
 ## The pages
 
@@ -55,6 +57,6 @@ restated here:
 
 Today the built output is copied into PigroCRM's web image and served at that origin's
 document root, which is why one certificate and one deploy cover both. That is a
-serving arrangement rather than a source dependency, and it is transitional: the
-community site is not the CRM's. ORB-12 covers giving this project its own image and
+serving arrangement rather than a source dependency, and it is transitional: this
+site is not the CRM's. ORB-12 covers giving this project its own image and
 its own vhost, which moves two live domains and is therefore a deliberate step.
