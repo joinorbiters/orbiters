@@ -18,9 +18,9 @@ export function Chooser() {
           className="group flex flex-col gap-3 rounded-2xl border bg-card p-6 transition-colors hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
         >
           <UserRound className="size-6" aria-hidden="true" />
-          <span className="text-lg font-semibold">Sono un freelance</span>
+          <span className="text-lg font-semibold">Sono un developer o un CTO</span>
           <span className="text-sm text-muted-foreground">
-            Voglio progetti da aziende vere, e gente con cui parlarne.
+            Lavoro in proprio: voglio progetti da aziende vere, e gente con cui parlarne.
           </span>
           <span className="mt-auto inline-flex items-center gap-1 text-sm font-medium">
             Entra <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5" />
