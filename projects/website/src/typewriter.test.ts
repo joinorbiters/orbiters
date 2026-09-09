@@ -23,7 +23,7 @@ type TypewriterWindow = Window & { __typewriter?: Typewriter }
 // The roles Ivan can edit, in the order the title types them. The first is the one
 // the page ships with, so the title reads "Developer, ma non da soli." before the
 // script runs and when it never does.
-const ROLES = ['Developer', 'AI engineer', 'CTO', 'Fractional CTO', 'Tech lead']
+const ROLES = ['Developer', 'AI engineer', 'CTO', 'Fractional CTO', 'Tech lead', 'Freelance']
 
 // The whole first line, as both pages write it. The screen-reader span names three
 // roles once, comma included, and is the accessible first line in every state; the

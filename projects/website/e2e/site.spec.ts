@@ -302,7 +302,7 @@ test.describe('every page of the site', () => {
   // script deletes it and types the next one, and the rest of the page does not move
   // while it does. The layout half is checked for every word at every width without
   // waiting for the cycle to reach it; the motion half once per page.
-  const ROLES = ['Developer', 'AI engineer', 'CTO', 'Fractional CTO', 'Tech lead']
+  const ROLES = ['Developer', 'AI engineer', 'CTO', 'Fractional CTO', 'Tech lead', 'Freelance']
   const TITLED = ['/', '/pigrocrm'] as const
 
   /** The tops that must not move, and the title's height, with `word` in the role. */

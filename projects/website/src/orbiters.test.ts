@@ -76,19 +76,19 @@ describe('orbiters.html', () => {
     expect(text).toContain('solo di Orbiters')
     expect(html).not.toMatch(/appena apriamo|Lascia l'email|lista d'attesa/)
     // ORB-24: the reader is named in the words of docs/design/positioning.md, and
-    // "freelance" is no longer the headline. It may still appear as the fiscal category
-    // in a sentence; it may not be the title, the share card or the claim.
+    // "freelance" is no longer the claim. It may still appear as the fiscal category in
+    // a sentence, and Ivan kept it in the <title> and the share card on 2026-09-09
+    // (continuity for search and for people who already know the page); the h1 speaks
+    // to the roles instead, and "Freelance" is one of the words it types.
     for (const word of ['developer', 'ai engineer', 'fatturare']) {
       expect(text.toLowerCase()).toContain(word)
     }
     expect(text).toMatch(/\bCTO\b/)
-    for (const headline of [
-      html.match(/<title>([^<]+)<\/title>/)?.[1],
-      meta('og:title'),
-      html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/)?.[1]?.replace(/<[^>]+>/g, ' '),
-    ]) {
-      expect(headline?.toLowerCase()).not.toContain('freelance')
-    }
+    expect(html.match(/<title>([^<]+)<\/title>/)?.[1]).toContain('freelance')
+    expect(meta('og:title')).toBe('Orbiters — freelance, ma non da soli')
+    const h1 = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/)?.[1] ?? ''
+    expect(h1.replace(/<[^>]+>/g, ' ').toLowerCase()).not.toContain('freelance')
+    expect(h1).toMatch(/data-roles="[^"]*\|Freelance"/)
   })
 
   it('writes no third-party tag into its markup, and stores nothing in the browser', () => {

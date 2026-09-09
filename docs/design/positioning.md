@@ -81,6 +81,8 @@ so: «stiamo mettendo insieme», «ti scriviamo noi».
 | CTO, fractional CTO, fractional | CTO a tempo, CTO part-time, consulente strategico | «Fractional» is the term of art and the search term |
 | chi fa software in proprio, lavora in proprio | freelance as the subject of a headline | Says what they do and that they do it on their own account |
 | freelance, partita IVA, forfettario | libero professionista, professionista autonomo | As the legal and fiscal category only: «developer freelance», «in forfettario». Never as who the reader is |
+
+Two exceptions Ivan decided on 2026-09-09: the `<title>` of both pages and their `og:title` keep «freelance» («Orbiters — la community dei freelance», «Orbiters — freelance, ma non da soli»), for continuity with what search engines and people already know; and «Freelance» is one of the words the h1 types, after the roles, so a visitor who only knows that word still finds themselves in it.
 | aziende vere, un progetto vero | clienti, opportunità, lead | The company is the other party of a project, not a sales object |
 | tariffa a giornata, quanto costa una tua giornata | rate, tariffa oraria | Seniors quote days |
 | persone che ci sono passate | community, network, mentor | The value is the experience, not the group |
