@@ -337,6 +337,47 @@ def test_a_foreign_customer_is_issued_rather_than_refused_by_name(
     assert issued.numero is not None, "una fattura estera consuma un numero come le altre"
 
 
+def test_a_draft_whose_customer_changed_country_is_refused_before_the_number_is_spent(
+    service: InvoiceService, db_session: Session
+) -> None:
+    """ORB-32, second half. The lines were computed for an Italian customer and carry
+    `N2.2`; the customer is then corrected to GB. Issuing must not copy the stale pair
+    into the register: the regime is asked again for every stored line and a
+    disagreement refuses by field name, before the counter moves. Replacing the lines
+    is the remedy, and after it the same draft issues with `N2.1`."""
+    customer_id = _customer(db_session)
+    invoice_id = _draft(service, customer_id)
+    customer = db_session.get(Customer, customer_id)
+    assert customer is not None
+    customer.nazione = "GB"
+    customer.provincia = ""
+    customer.cap = "00000"
+    customer.codice_sdi = None
+    db_session.flush()
+
+    with pytest.raises(ValidationFailed) as caught:
+        service.issue(invoice_id, InvoiceIssue(), ADMIN)
+    assert caught.value.details["field"] == "righe"
+    assert "sostituisci le righe" in str(caught.value)
+    assert (
+        db_session.execute(
+            text("SELECT count(*) FROM invoices WHERE numero IS NOT NULL AND anno = :anno"),
+            {"anno": TODAY.year},
+        ).scalar_one()
+        == 0
+    ), "a refused emission must not have consumed a number"
+
+    service.replace_lines(
+        invoice_id,
+        [InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("1000.00"))],
+        ADMIN,
+    )
+    issued = service.issue(invoice_id, InvoiceIssue(), ADMIN)
+    assert issued.stato == "emessa"
+    (riga,) = service.lines(issued.id, ADMIN)
+    assert riga.natura == "N2.1"
+
+
 def test_issuing_requires_admin_not_merely_write(
     service: InvoiceService, db_session: Session
 ) -> None:

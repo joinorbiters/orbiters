@@ -76,6 +76,7 @@ def build_scope(export: InvoiceForExport, *, riferimento: str | None) -> dict[st
             "bollo": format_amount_2(export.bollo),
             "totale": format_amount_2(export.totale),
             "dichiarazione_bollo": bollo,
+            "dichiarazione_regime": _dichiarazione_regime(export),
         },
         "righe": [
             {
@@ -90,6 +91,26 @@ def build_scope(export: InvoiceForExport, *, riferimento: str | None) -> dict[st
             for riga in export.righe
         ],
     }
+
+
+def _dichiarazione_regime(export: InvoiceForExport) -> str:
+    """The normative declaration the footer prints: the one the lines carry.
+
+    Until ORB-32 the footer read `fiscale.riferimento_normativo` straight from the
+    snapshot, which is the profile's *domestic* text; a non-resident customer's lines
+    carry `N2.1` and the art. 7-ter reference instead, and a PDF that contradicted its
+    own XML is what that produced. The distinct references are kept in line order and
+    joined with a space, so an invoice whose lines ever carried two different ones
+    shows both rather than the first. The profile text remains the fallback for lines
+    with no reference at all, which is what an `RF01` invoice has.
+    """
+    distinct: list[str] = []
+    for riga in export.righe:
+        if riga.riferimento_normativo and riga.riferimento_normativo not in distinct:
+            distinct.append(riga.riferimento_normativo)
+    if distinct:
+        return " ".join(distinct)
+    return export.snapshot.fiscale.riferimento_normativo or _EMPTY
 
 
 def render_invoice_pdf(
