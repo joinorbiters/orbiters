@@ -68,6 +68,8 @@ describe('TimerBar', () => {
     renderBar()
     const user = typist()
     await user.type(await screen.findByLabelText('Descrizione'), 'Call con il cliente')
+    // Manual is the default; the stopwatch is one click away.
+    await user.click(screen.getByRole('button', { name: /usa il timer/i }))
     await user.click(screen.getByRole('button', { name: /avvia/i }))
     await waitFor(() => expect(vi.mocked(api.POST)).toHaveBeenCalledTimes(1))
     const [path, init] = vi.mocked(api.POST).mock.calls[0] as unknown as [string, { body: unknown }]
@@ -96,14 +98,12 @@ describe('TimerBar', () => {
     expect((init.body as { data: string }).data).toMatch(/^2026-03-12$/)
   })
 
-  it('logs a manual line through log_time with the hours normalised', async () => {
-    vi.mocked(api.GET).mockImplementation((() => ok(running)) as never)
+  it('opens on the manual line and refuses to log without a deal', async () => {
     vi.mocked(api.GET).mockImplementation((() => ok(null)) as never)
     vi.mocked(api.POST).mockImplementation((() => ok({ id: 'e9', deal_id: DEAL, ore: '2.50' })) as never)
     renderBar()
     const user = typist()
-    await user.click(await screen.findByRole('button', { name: /inserisci a mano/i }))
-    await user.type(screen.getByLabelText('Ore'), '2,5')
+    await user.type(await screen.findByLabelText('Ore'), '2,5')
     // No deal chosen: refused before any request, with a sentence rather than a 422.
     await user.click(screen.getByRole('button', { name: /aggiungi/i }))
     expect(vi.mocked(api.POST)).not.toHaveBeenCalled()

@@ -128,8 +128,10 @@ describe('TimePage', () => {
       'Registro',
       'Settimana',
     ])
-    // The register is the first view: the bar that starts a timer is on it.
-    expect(await screen.findByRole('button', { name: /avvia/i })).toBeInTheDocument()
+    // The register is the first view: the bar that logs hours by hand is on it, and the
+    // stopwatch one click behind it.
+    expect(await screen.findByRole('button', { name: /aggiungi/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /usa il timer/i })).toBeInTheDocument()
   })
 
   it('moves a whole week at a time', async () => {

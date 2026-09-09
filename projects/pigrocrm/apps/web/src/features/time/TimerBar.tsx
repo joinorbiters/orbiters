@@ -59,9 +59,10 @@ function Elapsed({ timer }: { timer: RunningTimer }) {
 
 /**
  * Toggl's top bar, in this product's terms: what you are doing, on which deal, whether
- * it is billable, and one big button. Two modes -- the stopwatch, and a manual line with
- * hours and a date -- because the thing Toggl gets right is that both are the *same*
- * row of controls, so nobody has to find a second screen to enter yesterday.
+ * it is billable, and one big button. Two modes -- a manual line with hours and a date,
+ * which is the default, and the stopwatch -- because the thing Toggl gets right is that
+ * both are the *same* row of controls, so nobody has to find a second screen to enter
+ * yesterday or to start a clock.
  *
  * While the clock runs the row keeps editing the running timer (PATCH on change): the
  * deal and the description are decided when the person knows them, not when they press
@@ -83,7 +84,10 @@ export function TimerBar({
   const discard = useDiscardTimer()
   const log = useLogTime()
 
-  const [mode, setMode] = useState<'timer' | 'manuale'>('timer')
+  // Manual first (Ivan, 2026-09-09): the common case is «ho fatto due ore», typed after
+  // the fact; the stopwatch is the second mode, one click away, and a running clock
+  // always shows regardless of the mode the bar was left in.
+  const [mode, setMode] = useState<'timer' | 'manuale'>('manuale')
   const [descrizione, setDescrizione] = useState('')
   const [dealId, setDealId] = useState<string>(NO_DEAL)
   const [fatturabile, setFatturabile] = useState(true)

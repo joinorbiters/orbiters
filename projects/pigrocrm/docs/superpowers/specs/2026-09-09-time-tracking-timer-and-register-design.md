@@ -40,8 +40,10 @@ story slice 4 §13 costed at three mechanisms.
   `discard_timer`. The clock is the token owner's; an actor without an id (system) has
   none and `start_timer` refuses it.
 - Web, `/app/ore` (`features/time/TimePage.tsx`): one header with the week controls and
-  two tabs. «Registro»: `TimerBar` (description, deal, fatturabile, Avvia/Stop with the
-  elapsed time, or hours + date + Aggiungi in manual mode) and `TimeRegister` (the week
+  two tabs. «Registro»: `TimerBar` (description, deal, fatturabile; by default hours +
+  date + Aggiungi, and one click away the stopwatch with Avvia/Stop and the elapsed time --
+  Ivan asked for manual first, since «ho fatto due ore» typed after the fact is the common
+  case) and `TimeRegister` (the week
   grouped by day, latest first, day totals, week total with the billable share, per
   entry: Continua as a new timer, Modifica in the existing dialog, Elimina). «Settimana»:
   `WeekGrid`, now the table alone -- the page owns the week and the two reads, so the
