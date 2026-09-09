@@ -1,13 +1,41 @@
-"""`orbiters`: the operator's commands. One today, the admin bootstrap arrives with the
-admin area (hub spec, step 3)."""
+"""`orbiters`: the operator's commands."""
 
 import argparse
+import getpass
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
+from orbiters_core.admin import AdminService
 from orbiters_core.config import get_settings
 from orbiters_core.conversions import pixel_from_settings
+from orbiters_core.db import create_engine_from_settings, session_factory
+from orbiters_core.errors import DomainError
+
+
+def createadmin(email: str | None, nome: str | None) -> int:
+    """`orbiters createadmin`: the first (or another) reader of the admin area.
+
+    The password is read from a prompt, or from stdin when there is no terminal -- so a
+    deploy script can pipe it -- and never from an argument, which would leave it in the
+    shell history and in `ps`.
+    """
+    settings = get_settings()
+    email = email or input("Email: ")
+    nome = nome or input("Nome: ")
+    password = (
+        getpass.getpass("Password: ") if sys.stdin.isatty() else sys.stdin.readline().rstrip("\n")
+    )
+    session = session_factory(create_engine_from_settings(settings))()
+    try:
+        created = AdminService(session, settings).create(email, nome, password)
+    except DomainError as exc:
+        print(exc.message, file=sys.stderr)
+        return 1
+    finally:
+        session.close()
+    print(f"Amministratore creato: {created.email}")
+    return 0
 
 
 def conversions_check() -> int:
@@ -52,9 +80,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "conversions-check",
         help="Verifica la chiave della Conversions API senza registrare una conversione",
     )
+    admin = sub.add_parser("createadmin", help="Crea un amministratore dell'area admin")
+    admin.add_argument("--email")
+    admin.add_argument("--nome")
     args = parser.parse_args(argv)
     if args.command == "conversions-check":
         return conversions_check()
+    if args.command == "createadmin":
+        return createadmin(args.email, args.nome)
     parser.error(f"comando sconosciuto: {args.command}")
     return 2
 

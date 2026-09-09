@@ -33,6 +33,15 @@ class Settings(BaseSettings):
     # decides, and the default is no.
     openai_conversions_send_hashed_email: bool = False
 
+    # --- the admin session -----------------------------------------------------------
+    # `Secure` by default, like PigroCRM: on plain HTTP the browser drops the cookie and
+    # the login looks like it worked. Local development sets it to false in its `.env`;
+    # compose never forwards it, so a deploy cannot inherit that.
+    cookie_secure: bool = True
+    # Sliding: every authenticated request pushes the expiry this far ahead, so someone
+    # who uses the admin area never sees the login again and someone who does not does.
+    admin_session_days: int = 30
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

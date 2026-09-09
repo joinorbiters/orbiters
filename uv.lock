@@ -731,6 +731,7 @@ version = "0.1.0"
 source = { editable = "projects/hub/packages/core" }
 dependencies = [
     { name = "alembic" },
+    { name = "argon2-cffi" },
     { name = "email-validator" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
@@ -742,6 +743,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = "==1.19.0" },
+    { name = "argon2-cffi", specifier = "==25.1.0" },
     { name = "email-validator", specifier = "==2.3.0" },
     { name = "psycopg", extras = ["binary"], specifier = "==3.3.4" },
     { name = "pydantic", specifier = "==2.13.4" },
