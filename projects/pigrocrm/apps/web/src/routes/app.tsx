@@ -23,7 +23,9 @@ function AppLayout() {
   // redirect and no AppShell chrome around it.
   // The two pages a visitor reaches without a session: the login, and the signup that
   // makes a space (spec 2026-09-08). Everything else under /app bounces to the login.
-  const isLoginRoute = PUBLIC_ROUTES.has(pathname)
+  // Without a trailing slash: `/app/registrati/` is the same page, and a visitor who
+  // arrived through a redirect that kept one must not be bounced to the login for it.
+  const isLoginRoute = PUBLIC_ROUTES.has(pathname.replace(/\/+$/, ''))
 
   useEffect(() => {
     if (!isLoginRoute && !isLoading && !user) void navigate({ to: '/app/login' })

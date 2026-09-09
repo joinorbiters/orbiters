@@ -145,6 +145,25 @@ def login(
     return user
 
 
+def _every_cookie_value(request: Request, name: str) -> list[str]:
+    """Every value the browser sent under `name`, not only the one `request.cookies`
+    keeps.
+
+    A browser holds one cookie per (name, domain, path), and it sends all of them that
+    match: a session opened at `/` before the root got its own name, and the one opened
+    at `/humancraft/` after, arrive as two `refresh_token=` pairs in one header. The
+    `SimpleCookie` parser behind `request.cookies` keeps the last of them, so a logout
+    that read only that one left the other alive. Parsed by hand because the values are
+    JWTs -- no `;`, no `=` beyond the first, nothing to quote."""
+    header = request.headers.get("cookie", "")
+    values: list[str] = []
+    for pair in header.split(";"):
+        key, sep, value = pair.strip().partition("=")
+        if sep and key.strip() == name and value:
+            values.append(value.strip())
+    return values
+
+
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(
     request: Request, response: Response, session: SessionDep, settings: SettingsDep
@@ -155,16 +174,28 @@ def logout(
     # default (T1 raised it from thirty days). An already-invalid or already-expired
     # token has nothing left to invalidate, so that case is not an error here: the
     # goal state ("no usable session") is already true.
-    token = request.cookies.get(REFRESH_COOKIE)
-    if token:
+    #
+    # Every refresh token the browser presented, not the first: see
+    # `_every_cookie_value`. Consuming one that was already consumed revokes the rest
+    # of this user's tokens as a replay (`RefreshTokenService.consume`), which on a
+    # logout is the right outcome too -- the person asked for no usable session.
+    refresh_tokens = RefreshTokenService(session)
+    for token in _every_cookie_value(request, REFRESH_COOKIE):
         try:
             payload = decode_token(token, settings, expected_type="refresh")
             if payload.jti is not None:
-                RefreshTokenService(session).consume(payload.jti, payload.sub)
+                refresh_tokens.consume(payload.jti, payload.sub)
         except DomainError:
             pass
-    response.delete_cookie(ACCESS_COOKIE, path=cookie_path(request))
-    response.delete_cookie(REFRESH_COOKIE, path=cookie_path(request))
+    # Deleted at the path the request wore and, when that is a space's or the root's
+    # own name, at `/` as well: a cookie is only ever removed by a Set-Cookie with the
+    # same path, and a browser that still holds the pair a plain `/app/login` set
+    # before the prefix existed would otherwise keep sending it -- which is a session
+    # the person just said they do not want.
+    paths = {cookie_path(request), "/"}
+    for path in sorted(paths, key=len, reverse=True):
+        response.delete_cookie(ACCESS_COOKIE, path=path)
+        response.delete_cookie(REFRESH_COOKIE, path=path)
 
 
 @router.post("/refresh", response_model=UserRead, responses={401: _UNAUTHENTICATED_RESPONSE})
