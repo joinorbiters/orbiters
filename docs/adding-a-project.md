@@ -103,7 +103,7 @@ Two edits to `.github/workflows/ci.yml`, and no new workflow file:
 
   <name>-py:
     needs: changes
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.<name>_py == 'true') }}
+    if: ${{ !cancelled() && (needs.changes.outputs.all == 'true' || needs.changes.outputs.<name>_py == 'true') }}
     uses: ./.github/workflows/_python-gate.yml
     with:
       lint-path: projects/<name>
@@ -114,9 +114,18 @@ Two edits to `.github/workflows/ci.yml`, and no new workflow file:
 Then add the new job to `ci`'s `needs:` list. Forgetting that is the failure that
 does not look like one: the job runs, it can go red, and `ci` stays green.
 
-The `!cancelled()` guard is not optional. A job that `needs` a skipped job is skipped
-whatever its own `if` says, `changes` is skipped on every push, and a skipped job
-counts as passing.
+Copy that `if:` exactly; both halves earn their place. `!cancelled()` keeps the job
+alive when a job it needs was skipped, because a skipped dependency skips the
+dependent whatever its own `if` says, and skipped counts as passing. `outputs.all`
+is the push whose base commit could not be reached, where the honest answer to
+"what changed" is everything.
+
+**A project that ships an image needs its own image filter**, listing what the build
+context actually copies in: the project's own tree, `shared/**` if it uses it, and
+the root manifests (`package.json`, `pnpm-lock.yaml`, `pyproject.toml`, `uv.lock`,
+`.dockerignore`). The trunk tier is scoped like the PR tier since 2026-09-09, so a
+filter that is missing means an image that stops being built rather than one that is
+built too often, and the deploy will happily ship the last one that was.
 
 ## 6. Preflight
 
