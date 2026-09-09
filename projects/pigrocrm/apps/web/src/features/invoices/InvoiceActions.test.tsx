@@ -128,6 +128,25 @@ describe('InvoiceActions', () => {
     expect(screen.getByText(/Il numero resta nel registro/)).toBeInTheDocument()
   })
 
+  it('offers to produce a proforma PDF that does not exist yet, and to download one that does', async () => {
+    vi.mocked(api.POST).mockResolvedValue(ok([]))
+    const { unmount } = wrap(
+      <InvoiceActions invoice={{ ...PROFORMA, pdf_document_id: null } as Invoice} />,
+    )
+    expect(screen.queryByRole('button', { name: /^pdf proforma$/i })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /genera pdf proforma/i }))
+    await waitFor(() =>
+      expect(api.POST).toHaveBeenCalledWith('/api/invoices/{invoice_id}/artifacts', {
+        params: { path: { invoice_id: 'pf-1' } },
+      }),
+    )
+    expect(toast.success).toHaveBeenCalledWith('PDF proforma generato')
+    unmount()
+    wrap(<InvoiceActions invoice={{ ...PROFORMA, pdf_document_id: 'doc-1' } as Invoice} />)
+    expect(screen.getByRole('button', { name: /^pdf proforma$/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /genera pdf proforma/i })).not.toBeInTheDocument()
+  })
+
   // --- deleting what never had a number (slice 3 §4) ---------------------------------------
 
   it('deletes a draft after a confirmation, then hands the page back to its caller', async () => {

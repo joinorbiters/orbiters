@@ -5,6 +5,7 @@ import { QueryErrorBanner } from '@/components/QueryErrorBanner'
 import { StatusPill } from '@/components/StatusPill'
 import { InvoiceActions } from '@/features/invoices/InvoiceActions'
 import { InvoiceLinesEditor } from '@/features/invoices/InvoiceLinesEditor'
+import { InvoicePdfPreview } from '@/features/invoices/InvoicePdfPreview'
 import { InvoiceStateBadge } from '@/features/invoices/InvoiceStateBadge'
 import { formatDate, formatInvoiceNumber, formatMoney } from '@/features/invoices/format'
 import {
@@ -58,59 +59,65 @@ export function InvoiceDetail() {
         </>
       }
       overview={
-        <div className="space-y-8">
-          {/* A deleted draft has no page: back to the list, which the mutation has already
-              invalidated. */}
-          <InvoiceActions invoice={row} onDeleted={() => void navigate({ to: '/app/fatture' })} />
+        // Half and half from a wide screen (ORB-30): the numbers on the left as they
+        // were, the document itself on the right. Below that width the preview follows
+        // the data, since the numbers are what a phone came for.
+        <div className="grid gap-8 xl:grid-cols-2">
+          <div className="space-y-8">
+            {/* A deleted draft has no page: back to the list, which the mutation has already
+                invalidated. */}
+            <InvoiceActions invoice={row} onDeleted={() => void navigate({ to: '/app/fatture' })} />
 
-          <dl className="grid max-w-lg grid-cols-2 gap-2 text-sm">
-            <dt className="text-muted-foreground">Data emissione</dt>
-            <dd>{formatDate(row.data_emissione)}</dd>
-            <dt className="text-muted-foreground">Scadenza</dt>
-            <dd>{formatDate(row.data_scadenza)}</dd>
-            <dt className="text-muted-foreground">Imponibile</dt>
-            <dd>{formatMoney(row.imponibile)}</dd>
-            <dt className="text-muted-foreground">Imposta</dt>
-            <dd>{formatMoney(row.imposta)}</dd>
-            {/* Stored but outside the total: DatiBollo declares that the issuer settled
-                it virtually, so adding it here would overstate what the customer owes. */}
-            <dt className="text-muted-foreground">Bollo</dt>
-            <dd>{formatMoney(row.bollo)}</dd>
-            <dt className="text-muted-foreground font-medium">Totale</dt>
-            <dd className="font-medium">{formatMoney(row.totale)}</dd>
-            {pagamento !== null ? (
-              <>
-                <dt className="text-muted-foreground">Pagamento</dt>
-                <dd>
-                  {PAYMENT_STATE_LABELS[pagamento]}
-                  {row.data_incasso !== null ? ` il ${formatDate(row.data_incasso)}` : ''}
-                </dd>
-              </>
-            ) : null}
-            {row.trasmessa_esternamente_il !== null ? (
-              <>
-                <dt className="text-muted-foreground">Trasmessa il</dt>
-                <dd>{formatDate(row.trasmessa_esternamente_il)}</dd>
-              </>
-            ) : null}
-            {row.annullata_il !== null ? (
-              <>
-                <dt className="text-muted-foreground">Annullata il</dt>
-                <dd>{formatDate(row.annullata_il)}</dd>
-                <dt className="text-muted-foreground">Motivo</dt>
-                <dd>{row.motivo_annullamento ?? '—'}</dd>
-              </>
-            ) : null}
-          </dl>
+            <dl className="grid max-w-lg grid-cols-2 gap-2 text-sm">
+              <dt className="text-muted-foreground">Data emissione</dt>
+              <dd>{formatDate(row.data_emissione)}</dd>
+              <dt className="text-muted-foreground">Scadenza</dt>
+              <dd>{formatDate(row.data_scadenza)}</dd>
+              <dt className="text-muted-foreground">Imponibile</dt>
+              <dd>{formatMoney(row.imponibile)}</dd>
+              <dt className="text-muted-foreground">Imposta</dt>
+              <dd>{formatMoney(row.imposta)}</dd>
+              {/* Stored but outside the total: DatiBollo declares that the issuer settled
+                  it virtually, so adding it here would overstate what the customer owes. */}
+              <dt className="text-muted-foreground">Bollo</dt>
+              <dd>{formatMoney(row.bollo)}</dd>
+              <dt className="text-muted-foreground font-medium">Totale</dt>
+              <dd className="font-medium">{formatMoney(row.totale)}</dd>
+              {pagamento !== null ? (
+                <>
+                  <dt className="text-muted-foreground">Pagamento</dt>
+                  <dd>
+                    {PAYMENT_STATE_LABELS[pagamento]}
+                    {row.data_incasso !== null ? ` il ${formatDate(row.data_incasso)}` : ''}
+                  </dd>
+                </>
+              ) : null}
+              {row.trasmessa_esternamente_il !== null ? (
+                <>
+                  <dt className="text-muted-foreground">Trasmessa il</dt>
+                  <dd>{formatDate(row.trasmessa_esternamente_il)}</dd>
+                </>
+              ) : null}
+              {row.annullata_il !== null ? (
+                <>
+                  <dt className="text-muted-foreground">Annullata il</dt>
+                  <dd>{formatDate(row.annullata_il)}</dd>
+                  <dt className="text-muted-foreground">Motivo</dt>
+                  <dd>{row.motivo_annullamento ?? '—'}</dd>
+                </>
+              ) : null}
+            </dl>
 
-          <section className="space-y-3">
-            <h2 className="text-sm font-medium">Righe</h2>
-            {lines.isError ? (
-              <QueryErrorBanner error={lines.error} />
-            ) : (
-              <InvoiceLinesEditor invoice={row} lines={lines.data ?? []} readOnly={readOnly} />
-            )}
-          </section>
+            <section className="space-y-3">
+              <h2 className="text-sm font-medium">Righe</h2>
+              {lines.isError ? (
+                <QueryErrorBanner error={lines.error} />
+              ) : (
+                <InvoiceLinesEditor invoice={row} lines={lines.data ?? []} readOnly={readOnly} />
+              )}
+            </section>
+          </div>
+          <InvoicePdfPreview invoice={row} />
         </div>
       }
     />
