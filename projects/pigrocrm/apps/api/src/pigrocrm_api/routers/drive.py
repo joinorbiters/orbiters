@@ -17,7 +17,7 @@ through it is 9C/9D's surface, built on the `usable()` gate `drive/account.py` a
 exposes.
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -29,6 +29,7 @@ from pigrocrm.core.errors import Conflict
 from pigrocrm_api.deps import ActorDep, SessionDep, SettingsDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
 from pigrocrm_api.routers.gmail import token_client
+from pigrocrm_api.tenancy import cookie_path
 
 router = APIRouter(prefix="/api/drive", tags=["drive"], responses=PROBLEM_RESPONSES)
 
@@ -73,6 +74,7 @@ def start_oauth(session: SessionDep, actor: ActorDep, settings: SettingsDep) -> 
 
 @router.get("/oauth/callback")
 def finish_oauth(
+    request: Request,
     session: SessionDep,
     actor: ActorDep,
     settings: SettingsDep,
@@ -81,7 +83,7 @@ def finish_oauth(
     error: str | None = None,
 ) -> RedirectResponse:
     if error is not None or code is None or state is None:
-        return _back_to_settings(_ESITO_NEGATO)
+        return _back_to_settings(request, _ESITO_NEGATO)
     try:
         _oauth(session, settings).complete(code=code, state=state, actor=actor)
     except Conflict:
@@ -91,12 +93,16 @@ def finish_oauth(
         # with no identity. All of them arrive here through a browser redirect, so all
         # of them end on the settings page, which re-reads `GET /account` and shows the
         # true state.
-        return _back_to_settings(_ESITO_ERRORE)
-    return _back_to_settings(_ESITO_COLLEGATO)
+        return _back_to_settings(request, _ESITO_ERRORE)
+    return _back_to_settings(request, _ESITO_COLLEGATO)
 
 
-def _back_to_settings(esito: str) -> RedirectResponse:
-    return RedirectResponse(f"{_SETTINGS_PAGE}?esito={esito}", status_code=307)
+def _back_to_settings(request: Request, esito: str) -> RedirectResponse:
+    # Under the prefix the request wore: a space's consent must end on that space's
+    # settings page, not on the root's. `cookie_path` is the one place that already
+    # knows the prefix, and its `/` is the bare root.
+    prefix = cookie_path(request).rstrip("/")
+    return RedirectResponse(f"{prefix}{_SETTINGS_PAGE}?esito={esito}", status_code=307)
 
 
 @router.delete(_ACCOUNT_PATH, status_code=204)

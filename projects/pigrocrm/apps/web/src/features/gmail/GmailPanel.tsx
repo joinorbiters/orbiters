@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { toProblem } from '@/lib/api'
+import { tenantPrefix } from '@/lib/tenant'
 import { formatInstant } from './instants'
 import {
   GMAIL_READONLY_SCOPE,
@@ -17,7 +18,10 @@ import {
   type SyncReport,
 } from './queries'
 
-const OAUTH_START = '/api/gmail/oauth/start'
+// Under a space, and under the root's own name, the API answers at `/<slug>/api/...` and
+// the session cookie is scoped to that prefix: a plain anchor to `/api/...` reaches the
+// root API with no cookie and answers «Autenticazione richiesta» (live, 2026-09-09).
+const OAUTH_START = `${tenantPrefix}/api/gmail/oauth/start`
 
 /** The four statuses, in the words their owner would use. */
 const STATUS_LABEL: Record<string, string> = {
