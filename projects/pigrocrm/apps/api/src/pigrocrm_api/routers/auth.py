@@ -8,6 +8,7 @@ from pigrocrm.core.auth.repository import UserRepository
 from pigrocrm.core.auth.schemas import UserRead
 from pigrocrm.core.auth.service import UserService
 from pigrocrm.core.auth.tokens import decode_token, issue_access_token
+from pigrocrm.core.config import Settings
 from pigrocrm.core.errors import DomainError, ValidationFailed
 from pigrocrm.core.validation import SafeStr
 from pigrocrm_api.deps import ACCESS_COOKIE, REFRESH_COOKIE, ActorDep, SessionDep, SettingsDep
@@ -110,6 +111,19 @@ def _set_cookie(
     )
 
 
+def _clear_other_jars(response: Response, request: Request, settings: Settings) -> None:
+    """Deletes the session pair at every path this installation ever set it at, except
+    the one this response is about to set. A stale, more specific pair -- the root's old
+    `/humancraft/` jar -- would otherwise be sent ahead of the fresh one and shadow it on
+    every request (`cookie_paths_to_clear`). Deleting what is not there is a no-op."""
+    keep = cookie_path(request)
+    for path in cookie_paths_to_clear(request, settings.root_slug):
+        if path == keep:
+            continue
+        response.delete_cookie(ACCESS_COOKIE, path=path)
+        response.delete_cookie(REFRESH_COOKIE, path=path)
+
+
 @router.post("/login", response_model=UserRead, responses={401: _LOGIN_UNAUTHORIZED_RESPONSE})
 def login(
     payload: LoginRequest,
@@ -126,6 +140,7 @@ def login(
         user = UserService(session).authenticate(payload.email, payload.password)
     except ValidationFailed as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Credenziali non valide") from exc
+    _clear_other_jars(response, request, settings)
     _set_cookie(
         response,
         ACCESS_COOKIE,
@@ -191,7 +206,7 @@ def logout(
     # `cookie_paths_to_clear`: a cookie is only ever removed by a Set-Cookie with the
     # same path, and a pair left in another jar would keep the session the person just
     # said they do not want.
-    for path in cookie_paths_to_clear(request):
+    for path in cookie_paths_to_clear(request, settings.root_slug):
         response.delete_cookie(ACCESS_COOKIE, path=path)
         response.delete_cookie(REFRESH_COOKIE, path=path)
 
@@ -235,6 +250,7 @@ def refresh(
     except DomainError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Utente non attivo") from exc
 
+    _clear_other_jars(response, request, settings)
     # One cookie-setting path for both branches, deliberately: a grace-window answer
     # that differed from an ordinary rotation in any observable way -- a header, a
     # max-age, an order -- would tell a caller how long ago some other tab refreshed,
