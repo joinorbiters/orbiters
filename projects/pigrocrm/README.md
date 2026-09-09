@@ -94,9 +94,15 @@ sudo bash deploy/setup-server.sh
 
 Scrive un vhost che fa da reverse proxy verso `127.0.0.1:8080`, per ora solo in HTTP. Usa il
 dominio di default (`pigrocrm.humancraft.tech`) a meno di impostare `PIGROCRM_DOMAIN`:
-`sudo PIGROCRM_DOMAIN=tuodominio.it bash deploy/setup-server.sh`. Idempotente: rilanciarlo ad
-ogni deploy successivo, come fa `ci-deploy.yml`, non tocca la configurazione TLS che il passo
-seguente aggiunge.
+`sudo PIGROCRM_DOMAIN=tuodominio.it bash deploy/setup-server.sh`, e va passato, perché il
+default non è il dominio di questo server.
+
+**Passo una tantum: il deploy automatico non lo esegue.** Rilanciarlo a ogni push
+riscriverebbe il reverse proxy a ogni commit, e la protezione che dovrebbe salvare la
+configurazione TLS cerca un file chiamato come il dominio (`sites-available/tuodominio.it`).
+Se certbot ha lasciato il vhost con un altro nome, la guardia non lo trova e lo script
+aggiunge un secondo vhost con lo stesso `server_name`. Su questo host è esattamente il caso:
+il file si chiama `pigro.joinorbiters.conf`.
 
 ### 4. Attiva TLS — prima di provare ad accedere
 
