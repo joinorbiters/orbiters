@@ -1,13 +1,24 @@
 import argparse
 import getpass
 import sys
+from collections.abc import Sequence
+from datetime import UTC, datetime
+
+from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.auth.schemas import UserCreate
 from pigrocrm.core.auth.service import UserService
 from pigrocrm.core.config import get_settings
 from pigrocrm.core.db import create_engine_from_settings, session_factory
-from pigrocrm.core.errors import DomainError
+from pigrocrm.core.errors import Conflict, DomainError
+from pigrocrm.core.gmail.errors import GoogleCallFailed
+from pigrocrm.core.gmail.models import GoogleAccount
+from pigrocrm.core.gmail.repository import GmailRepository
+from pigrocrm.core.gmail.schemas import SyncReport
+from pigrocrm.core.gmail.sync import GmailSyncService
+from pigrocrm.core.gmail.tokens import GoogleTokenClient
+from pigrocrm.core.gmail.transport import GmailTransport
 
 
 def createadmin(email: str | None, nome: str | None) -> int:
@@ -89,7 +100,119 @@ def seed_templates() -> int:
     return 0
 
 
-def main() -> int:
+def gmail_sync(email: str | None) -> int:
+    """`pigrocrm gmail-sync [--email casella@dove.it]`: one cycle, for cron.
+
+    There is no daemon and no queue in this product (see `gmail/sync.py`), so the
+    fifteen minutes are cron's to keep. This is the whole contract with it: one line on
+    stdout, exit 0 when the cycle ran, exit 1 when it could not. The runbook is
+    `docs/superpowers/notes/2026-09-09-gmail-cron-runbook.md`.
+
+    **Which actor, and why it is not `Actor.system()`.** `createadmin` passes
+    `Actor.system()`, which has no id -- and `GmailSyncService.sync` refuses an actor
+    with no id, correctly: there is one mailbox per user, and a sync that read "the
+    first row in the table" would spend one person's Google quota under another's
+    consent. So this builds `Actor(id=<the mailbox owner>, type="system", role="admin")`:
+    the id says *whose* credential is being spent, and `type="system"` says nobody
+    pressed anything, which is what the timeline entry then records. The alternative --
+    the owner's own `user` actor -- would write a timeline that says a person
+    synchronised at 03:15, and the timeline exists not to say that.
+
+    It widens nothing. `AGENT_FORBIDDEN_ACTIONS` is checked against `type == "mcp"`
+    only, so a system actor was never subject to it and a personal access token gains
+    nothing from this command existing; the credential an agent presents still resolves
+    to `type="mcp"` in `PatService.resolve`, whatever this process does. `role="admin"`
+    is what `Actor.system()` already carries and is read only by `require_write`, which
+    a cron with shell access to the container is past by definition.
+
+    **Why the failures are caught here.** A traceback in a log nobody is watching is a
+    failure that gets read as noise. Every foreseeable one -- no mailbox, an ambiguous
+    one, a revoked or expired consent, Gmail refusing the call -- is a sentence and a 1.
+    Anything else still raises, because an unforeseen failure deserves its stack.
+    """
+    settings = get_settings()
+    engine = create_engine_from_settings(settings)
+    with session_factory(engine)() as session:
+        try:
+            account = _gmail_account(session, email)
+            actor = Actor(id=account.user_id, type="system", role="admin")
+            transport = GmailTransport()
+            service = GmailSyncService(
+                session,
+                settings=settings,
+                transport=transport,
+                tokens=GoogleTokenClient(
+                    client_id=settings.google_client_id,
+                    client_secret=settings.google_client_secret,
+                    transport=transport,
+                ),
+            )
+            report = service.sync(actor)
+        except (DomainError, GoogleCallFailed) as exc:
+            message = exc.message if isinstance(exc, DomainError) else str(exc)
+            print(f"{_now()} gmail-sync: {message}", file=sys.stderr)
+            return 1
+        print(f"{_now()} gmail-sync {account.email_address}: {_outcome(report)}")
+    return 0
+
+
+def _now() -> str:
+    """Every line starts with the time. Cron adds none, and a log of bare sentences
+    cannot answer the first question anybody asks it: when did this stop working."""
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _outcome(report: SyncReport) -> str:
+    """Counters only -- never a subject, an address or a body. `SyncReport` has no room
+    for one, which is what makes this line safe to append to a file on the host."""
+    if report.already_running:
+        # Not a failure: a cron every fifteen minutes and a human pressing Sincronizza
+        # is exactly the collision the advisory lock exists for, and the second caller
+        # spent nothing. Exiting 1 here would put an error in the log for the system
+        # working as designed.
+        since = report.running_since
+        return f"già in corso da {since.isoformat(timespec='seconds') if since else 'poco fa'}"
+    return (
+        f"{report.messages_stored} messaggi nuovi, "
+        f"{report.messages_skipped} già presenti, "
+        f"{report.threads_fetched} conversazioni lette, "
+        f"{report.links_created} collegamenti, "
+        f"{report.reconciled} invii riconciliati "
+        f"({report.queries_issued} query)"
+    )
+
+
+def _gmail_account(session: Session, email: str | None) -> GoogleAccount:
+    """The mailbox to synchronise, or a `Conflict` naming the ones there are.
+
+    Never a guess. On the single-user install this is the only row and `--email` is
+    noise; on an install with two, picking one would leave the other quietly
+    unsynchronised and the log would look identical either way.
+    """
+    accounts = GmailRepository(session).all_accounts()
+    if not accounts:
+        raise Conflict("google_account", "nessuna casella Google collegata")
+    if email is not None:
+        for account in accounts:
+            if account.email_address.casefold() == email.casefold():
+                return account
+        raise Conflict(
+            "google_account",
+            f"{email} non è una casella collegata: {_mailbox_list(accounts)}",
+        )
+    if len(accounts) > 1:
+        raise Conflict(
+            "google_account",
+            f"più di una casella collegata, indica --email: {_mailbox_list(accounts)}",
+        )
+    return accounts[0]
+
+
+def _mailbox_list(accounts: Sequence[GoogleAccount]) -> str:
+    return ", ".join(account.email_address for account in accounts)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="pigrocrm")
     sub = parser.add_subparsers(dest="command", required=True)
     admin = sub.add_parser("createadmin", help="Crea il primo utente amministratore")
@@ -98,14 +221,18 @@ def main() -> int:
     reset = sub.add_parser("resetpassword", help="Imposta una nuova password a un utente esistente")
     reset.add_argument("--email")
     sub.add_parser("seed-templates", help="Crea i template predefiniti, se mancano")
+    sync = sub.add_parser("gmail-sync", help="Sincronizza la casella Google collegata (per cron)")
+    sync.add_argument("--email", help="La casella da sincronizzare, se ne è collegata più di una")
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.command == "createadmin":
         return createadmin(args.email, args.nome)
     if args.command == "resetpassword":
         return resetpassword(args.email)
     if args.command == "seed-templates":
         return seed_templates()
+    if args.command == "gmail-sync":
+        return gmail_sync(args.email)
     return 1
 
 

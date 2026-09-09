@@ -111,6 +111,23 @@ class GoogleAccountService:
                 configured=configured,
             )
 
+        # The seven days are Testing mode's, never this CRM's. `oauth.py._store` writes
+        # `consent_expires_at` only while `google_app_unverified` is on, and once the
+        # operator publishes the client -- Internal, or verified -- Google stops
+        # expiring the refresh token while the rows written before that keep their date.
+        # Read literally, an old row would go on asking somebody to renew a consent that
+        # is not going to lapse, and then declare it dead on a day nothing happened:
+        # exactly the class of defect this module exists to prevent, a true-sounding
+        # sentence about something that did not occur.
+        #
+        # So the prediction is dropped with the mode that made it, and only the
+        # prediction: `status` below is a fact somebody learned and is reported either
+        # way. The stale column is deliberately left in place rather than cleared -- it
+        # is the record of what was true under the consent that wrote it, and a
+        # migration that erased it would also erase the evidence for an install that
+        # went back to Testing.
+        expires_at = account.consent_expires_at if self.settings.google_app_unverified else None
+
         # Order matters, and it is an order of actionability. Revoked is the most final,
         # so it wins over everything below it.
         if account.status == "revoked":
@@ -122,20 +139,16 @@ class GoogleAccountService:
             return answer(None, None)
         # A date already past is inside "within 48 hours" by arithmetic, so it is caught
         # here rather than being reported as a gentle heads-up about the future.
-        if account.status == "expired" or (
-            account.consent_expires_at is not None and account.consent_expires_at <= now
-        ):
+        if account.status == "expired" or (expires_at is not None and expires_at <= now):
             return answer("expired", _EXPIRED_TEXT.format(email=account.email_address))
-        if account.consent_expires_at is not None and account.consent_expires_at - now <= timedelta(
-            hours=CONSENT_WARNING_HOURS
-        ):
+        if expires_at is not None and expires_at - now <= timedelta(hours=CONSENT_WARNING_HOURS):
             return answer(
                 "expiring",
                 _EXPIRING_TEXT.format(
                     email=account.email_address,
                     # The day, not "presto": the date is what lets somebody decide
                     # whether this is a thing for now or a thing for Monday.
-                    when=account.consent_expires_at.strftime("%d/%m/%Y alle %H:%M"),
+                    when=expires_at.strftime("%d/%m/%Y alle %H:%M"),
                 ),
             )
         if SCOPE_READONLY in missing:

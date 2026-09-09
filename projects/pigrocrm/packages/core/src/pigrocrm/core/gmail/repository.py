@@ -91,6 +91,22 @@ class GmailRepository:
             select(GoogleAccount).order_by(GoogleAccount.connected_at).limit(1)
         ).scalar_one_or_none()
 
+    def all_accounts(self) -> list[GoogleAccount]:
+        """Every connected mailbox, oldest consent first.
+
+        For `pigrocrm gmail-sync`, which has to tell "there is one, use it" from "there
+        are two, say which" -- a question `any_account` answers by picking, which is
+        right for the reply signal and wrong for a cron that would otherwise leave one
+        mailbox silently unsynchronised. Same ordering, for the same reason: an
+        arbitrary row order would make the CLI's own error message list the mailboxes
+        differently between two identical calls.
+        """
+        return list(
+            self.session.execute(
+                select(GoogleAccount).order_by(GoogleAccount.connected_at)
+            ).scalars()
+        )
+
     def add_state(self, state: GoogleOAuthState) -> GoogleOAuthState:
         self.session.add(state)
         self.session.flush()

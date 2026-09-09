@@ -142,6 +142,26 @@ from the network inside a production container already running, on every single 
 
 `https://tuodominio.it/`, with the credentials just created.
 
+### 7. Il cron del sync Gmail (solo se colleghi Gmail)
+
+Non c'è nessun demone e nessuna coda: il sync Gmail è un ciclo che parte, fa il suo lavoro
+e finisce. I quindici minuti li tiene cron, con una riga nel `crontab` dell'utente che
+possiede il deploy:
+
+```
+*/15 * * * * cd /opt/pigrocrm/projects/pigrocrm && docker compose --env-file ../../.env exec -T api uv run --no-sync pigrocrm gmail-sync >> /var/log/pigrocrm-gmail-sync.log 2>&1
+```
+
+Ogni esecuzione scrive una riga sola, con l'ora davanti e i soli contatori del ciclo (mai
+un oggetto, un indirizzo o un corpo di messaggio): esce `0` quando il ciclo è andato — o
+quando ne era già in corso un altro, che non è un errore — e `1` con una frase su `stderr`
+quando la casella manca, è ambigua o il consenso è revocato. `--env-file ../../.env` e
+`--no-sync` valgono qui esattamente per i motivi del §1 e del §5.
+
+Il runbook con la tabella delle frasi di errore, cosa fare per ciascuna e il rapporto con
+la scadenza del consenso Google è
+[`docs/superpowers/notes/2026-09-09-gmail-cron-runbook.md`](docs/superpowers/notes/2026-09-09-gmail-cron-runbook.md).
+
 ## Status
 
 In development. Will replace [Acme](https://acme.humancraft.tech).
