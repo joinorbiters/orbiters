@@ -27,12 +27,12 @@ from fakes.fake_drive import GOOGLE_DOC_MIME, FakeDrive, RecordedRequest
 from fakes.gmail_fixtures import TOKEN_KEY, gmail_settings
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from test_drive_text import minimal_docx, minimal_pdf
+from test_text import minimal_docx, minimal_pdf
 
 from pigrocrm.core.activities.models import Activity
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.auth.models import User
-from pigrocrm.core.config import DRIVE_TEXT_MAX_BYTES_DEFAULT, Settings
+from pigrocrm.core.config import TEXT_MAX_BYTES_DEFAULT, Settings
 from pigrocrm.core.drive import reader as reader_module
 from pigrocrm.core.drive.errors import DriveCredentialRevoked
 from pigrocrm.core.drive.models import GoogleDriveAccount
@@ -44,10 +44,10 @@ from pigrocrm.core.drive.reader import (
     drive_reader_for,
 )
 from pigrocrm.core.drive.schemas import DRIVE_SCOPE_FILE, DRIVE_SCOPE_READONLY
-from pigrocrm.core.drive.text import DOCX_MIME, PDF_MIME, PROVENIENZA, TEXT_TRUNCATION_MARKER
 from pigrocrm.core.drive.transport import DriveTransport, UserTokens
 from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 from pigrocrm.core.gmail.crypto import seal
+from pigrocrm.core.text import DOCX_MIME, PDF_MIME, PROVENIENZA, TEXT_TRUNCATION_MARKER
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
 
@@ -576,8 +576,8 @@ def test_the_default_ceiling_is_the_settings_default() -> None:
     drive = _tree()
 
     assert _reader(drive).read_text(TXT_FILE).testo == TXT_TEXT
-    assert DRIVE_TEXT_MAX_BYTES_DEFAULT == 262_144
-    assert Settings(_env_file=None).drive_text_max_bytes == DRIVE_TEXT_MAX_BYTES_DEFAULT  # type: ignore[call-arg]
+    assert TEXT_MAX_BYTES_DEFAULT == 262_144
+    assert Settings(_env_file=None).drive_text_max_bytes == TEXT_MAX_BYTES_DEFAULT  # type: ignore[call-arg]
 
 
 # --- the id itself -------------------------------------------------------------------

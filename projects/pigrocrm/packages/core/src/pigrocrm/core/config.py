@@ -17,13 +17,16 @@ MIN_JWT_SECRET_LENGTH = 32
 # AES-256-GCM, which is what encrypts `google_accounts.refresh_token_ciphertext`.
 GOOGLE_TOKEN_KEY_BYTES = 32
 
-# The default ceiling on the text of one Drive file (`drive/reader.py::read_text`).
+# The default ceiling on the text of one file, wherever it was read from: a file on
+# Drive (`drive/reader.py::read_text`) or a document archived in the CRM
+# (`documents/service.py::read_text`). One number for both, because it answers one
+# question -- how much of somebody else's document a single answer may carry.
 # A module constant as well as a field default because `DriveReader` takes the number,
 # not a `Settings`: it is a reader of Drive, not of this installation's configuration,
 # and `drive_reader_for` is the one place the two meet. Same 256 KB as
 # `gmail_body_max_bytes`, and for the same reason -- a generous limit that only bites
 # on the anomalous, so that what a person reads is the document and not a policy.
-DRIVE_TEXT_MAX_BYTES_DEFAULT = 262_144
+TEXT_MAX_BYTES_DEFAULT = 262_144
 
 
 class Settings(BaseSettings):
@@ -175,7 +178,13 @@ class Settings(BaseSettings):
     # `ge=1` because a ceiling of zero would return an empty document for every file
     # and read as "this file has no text"; the upper bound is what an agent's context
     # and an HTTP response can carry without the cap being a fiction.
-    drive_text_max_bytes: int = Field(default=DRIVE_TEXT_MAX_BYTES_DEFAULT, ge=1, le=10_485_760)
+    drive_text_max_bytes: int = Field(default=TEXT_MAX_BYTES_DEFAULT, ge=1, le=10_485_760)
+    # --- Documenti archiviati. The same ceiling for the text of a document already in
+    # the CRM's own store. A separate field and not a reuse of the Drive one: an
+    # installation that reads long contracts out of its archive has no reason to also
+    # widen what a Drive folder may pour into an answer, and the two ceilings guard
+    # bytes that arrive by different doors.
+    document_text_max_bytes: int = Field(default=TEXT_MAX_BYTES_DEFAULT, ge=1, le=10_485_760)
     # Whether reconciliation may rely on Gmail preserving the Message-ID we supply.
     # Spec 6.3 requires this to be verified rather than assumed, because the fallback
     # (matching on recipient + subject + internalDate) is an approximate comparison and

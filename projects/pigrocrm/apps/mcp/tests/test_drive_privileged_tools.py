@@ -61,11 +61,11 @@ from pigrocrm.core.drive import reader as reader_module
 from pigrocrm.core.drive.models import GoogleDriveAccount
 from pigrocrm.core.drive.query import OUTSIDE_ID_PATTERN, checked_outside_id
 from pigrocrm.core.drive.schemas import DRIVE_SCOPE_FILE, DRIVE_SCOPE_READONLY
-from pigrocrm.core.drive.text import PROVENIENZA
 from pigrocrm.core.drive.transport import DriveTransport
 from pigrocrm.core.errors import ValidationFailed
 from pigrocrm.core.gmail.crypto import seal
 from pigrocrm.core.storage import LocalFileStorage
+from pigrocrm.core.text import PROVENIENZA
 from pigrocrm_mcp.server import build_server
 
 TOOLS = ("list_drive_files", "read_drive_file", "import_drive_file")
