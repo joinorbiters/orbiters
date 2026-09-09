@@ -7,7 +7,7 @@ from testcontainers.community.postgres import PostgresContainer
 
 import orbiters_core.models  # noqa: F401
 from orbiters_core.db import Base
-from orbiters_core.migrate import upgrade_to_head
+from orbiters_core.migrate import head_revision, upgrade_to_head
 
 
 def test_the_migrations_produce_exactly_the_models_schema(hub_engine: Engine) -> None:
@@ -20,7 +20,7 @@ def test_the_migrations_produce_exactly_the_models_schema(hub_engine: Engine) ->
 def test_the_production_table_is_adopted_with_its_rows() -> None:
     """The shape `create_all` gave the table on 2026-09-07 plus the columns two
     `ADD COLUMN IF NOT EXISTS` rounds added later, with a row in it: after `upgrade`
-    the row is still there, the late columns exist, and the version table says 0001."""
+    the row is still there, the late columns exist, and the version table is at head."""
     with PostgresContainer("postgres:17-alpine", driver="psycopg") as container:
         url = container.get_connection_url()
         engine = create_engine(url, future=True)
@@ -50,10 +50,8 @@ def test_the_production_table_is_adopted_with_its_rows() -> None:
                 ).scalars()
             )
             assert {"nome", "cognome", "linkedin_url", "utm_id"} <= columns
-            assert (
-                connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-                == "0001"
-            )
+            version = connection.execute(text("SELECT version_num FROM alembic_version"))
+            assert version.scalar() == head_revision()
             # And the result is the models' schema, on the adopted table as on a fresh one.
             diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
             assert diff == [], diff

@@ -8,7 +8,7 @@ from testcontainers.community.postgres import PostgresContainer
 
 from orbiters_api.deps import get_session
 from orbiters_api.main import create_app
-from orbiters_api.routers.signups import reset_signup_rate_limit
+from orbiters_api.ratelimit import reset_rate_limit
 from orbiters_core.config import Settings, get_settings
 from orbiters_core.db import create_engine_from_settings, session_factory
 from orbiters_core.migrate import upgrade_to_head
@@ -44,6 +44,6 @@ def client(api_session: Session) -> Iterator[TestClient]:
     app.dependency_overrides[get_settings] = lambda: Settings(_env_file=None)  # type: ignore[call-arg]
     # The limiter counts requests per process, so one test's posts would otherwise be
     # spent out of the next test's budget.
-    reset_signup_rate_limit()
+    reset_rate_limit()
     with TestClient(app, base_url="https://testserver") as test_client:
         yield test_client

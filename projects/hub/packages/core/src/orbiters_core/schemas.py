@@ -1,12 +1,17 @@
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from orbiters_core.models import (
+    AZIENDA_MAX_LENGTH,
+    DURATA_MAX_LENGTH,
     LINKEDIN_URL_MAX_LENGTH,
     NAME_MAX_LENGTH,
+    POSIZIONE_MAX_LENGTH,
     UTM_MAX_LENGTH,
 )
 from orbiters_core.validation import SafeStr
@@ -193,3 +198,190 @@ class SignupAck(BaseModel):
     """
 
     ok: bool = True
+
+
+# ---- the hub proper -------------------------------------------------------------------
+
+Remoto = Literal["remoto", "ibrido", "in_sede"]
+FreelancerStato = Literal["nuovo", "contattato", "attivo", "scartato"]
+CompanyStato = Literal["nuovo", "contattato", "in_corso", "chiuso"]
+
+# A day's worth of work, in euro. Wide enough for anyone, narrow enough that a typo of
+# one extra zero is still a number the admin can read and correct.
+TARIFFA_MIN = Decimal("1")
+TARIFFA_MAX = Decimal("99999.99")
+LINKS_MAX = 10
+LINK_MAX_LENGTH = 300
+PROGETTO_MAX_LENGTH = 4000
+
+
+def _clean_text(value: str, *, what: str) -> str:
+    trimmed = _reject_control_characters(value).strip()
+    if not trimmed:
+        raise ValueError(f"serve {what}, non solo spazi")
+    return trimmed
+
+
+def _https_url(value: str) -> str:
+    """Any https address: the additional links are the person's own (a site, a GitHub,
+    a portfolio), so the host is not checked, only that it is a link worth following."""
+    trimmed = _reject_control_characters(value).strip()
+    parts = urlsplit(trimmed)
+    if parts.scheme != "https" or not parts.hostname:
+        raise ValueError("serve un indirizzo https completo")
+    return trimmed
+
+
+class FreelancerCreate(BaseModel):
+    """What the wizard collects. The CV travels beside this body, not inside it: the API
+    takes it as a multipart file and hands the bytes to the service with this schema."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    nome: SafeStr = Field(min_length=1, max_length=NAME_MAX_LENGTH)
+    cognome: SafeStr = Field(min_length=1, max_length=NAME_MAX_LENGTH)
+    email: EmailStr
+    linkedin_url: SafeStr | None = Field(default=None, max_length=LINKEDIN_URL_MAX_LENGTH)
+    tariffa_giornaliera: Decimal = Field(
+        max_digits=7, decimal_places=2, ge=TARIFFA_MIN, le=TARIFFA_MAX
+    )
+    posizione: SafeStr = Field(min_length=1, max_length=POSIZIONE_MAX_LENGTH)
+    remoto: Remoto
+    links: list[SafeStr] = Field(default_factory=list, max_length=LINKS_MAX)
+    utm: SignupUtm | None = None
+
+    @field_validator("nome", "cognome", "posizione", mode="after")
+    @classmethod
+    def _trimmed(cls, value: str) -> str:
+        return _clean_text(value, what="un valore")
+
+    @field_validator("linkedin_url", mode="after")
+    @classmethod
+    def _linkedin(cls, value: str | None) -> str | None:
+        return SignupCreate._linkedin(value)
+
+    @field_validator("links", mode="after")
+    @classmethod
+    def _links(cls, value: list[str]) -> list[str]:
+        cleaned = [_https_url(link) for link in value if link.strip()]
+        if any(len(link) > LINK_MAX_LENGTH for link in cleaned):
+            raise ValueError(f"un link può avere al massimo {LINK_MAX_LENGTH} caratteri")
+        return cleaned
+
+
+class CompanyCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    nome_azienda: SafeStr = Field(min_length=1, max_length=AZIENDA_MAX_LENGTH)
+    referente: SafeStr = Field(min_length=1, max_length=NAME_MAX_LENGTH)
+    email: EmailStr
+    progetto: SafeStr = Field(min_length=1, max_length=PROGETTO_MAX_LENGTH)
+    periodo_da: date
+    durata: SafeStr = Field(min_length=1, max_length=DURATA_MAX_LENGTH)
+    budget_giornaliero: Decimal = Field(
+        max_digits=7, decimal_places=2, ge=TARIFFA_MIN, le=TARIFFA_MAX
+    )
+    utm: SignupUtm | None = None
+
+    @field_validator("nome_azienda", "referente", "durata", mode="after")
+    @classmethod
+    def _trimmed(cls, value: str) -> str:
+        return _clean_text(value, what="un valore")
+
+    @field_validator("progetto", mode="after")
+    @classmethod
+    def _progetto(cls, value: str) -> str:
+        """Multi-line is the point of a project description, so newlines stay; every
+        other control character and the bidi overrides are refused as everywhere else."""
+        for character in value:
+            if character in "\n\r\t":
+                continue
+            _reject_control_characters(character)
+        trimmed = value.strip()
+        if not trimmed:
+            raise ValueError("serve una descrizione del progetto, non solo spazi")
+        return trimmed
+
+
+class Ack(BaseModel):
+    """What every public POST of the hub answers, and all it answers: accepted."""
+
+    ok: bool = True
+
+
+class FreelancerRead(BaseModel):
+    """The row as an admin reads it. Never the CV bytes: those have their own download,
+    so a list of two hundred people is not two hundred PDFs in one response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    nome: str
+    cognome: str
+    email: str
+    linkedin_url: str | None
+    cv_filename: str
+    cv_mime: str
+    cv_size: int
+    tariffa_giornaliera: Decimal
+    posizione: str
+    remoto: str
+    links: list[str]
+    stato: str
+    note: str | None
+    utm_source: str | None = None
+    utm_medium: str | None = None
+    utm_campaign: str | None = None
+    utm_content: str | None = None
+    utm_term: str | None = None
+    utm_id: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class FreelancerList(BaseModel):
+    totale: int
+    items: list[FreelancerRead]
+
+
+class CompanyRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    nome_azienda: str
+    referente: str
+    email: str
+    progetto: str
+    periodo_da: date
+    durata: str
+    budget_giornaliero: Decimal
+    stato: str
+    note: str | None
+    utm_source: str | None = None
+    utm_medium: str | None = None
+    utm_campaign: str | None = None
+    utm_content: str | None = None
+    utm_term: str | None = None
+    utm_id: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CompanyList(BaseModel):
+    totale: int
+    items: list[CompanyRead]
+
+
+class StatusChange(BaseModel):
+    """What an admin changes on a row: where it stands, and a note to themselves."""
+
+    stato: str = Field(min_length=1, max_length=20)
+    note: SafeStr | None = Field(default=None, max_length=PROGETTO_MAX_LENGTH)
+
+
+class CvFile(BaseModel):
+    """The bytes and the two headers a download needs."""
+
+    filename: str
+    mime: str
+    content: bytes

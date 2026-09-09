@@ -2,12 +2,14 @@ from fastapi import FastAPI
 from sqlalchemy import text
 
 from orbiters_api.deps import SessionDep
-from orbiters_api.routers import signups
+from orbiters_api.routers import companies, freelancers, signups
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Orbiters API", version="0.1.0")
     app.include_router(signups.router)
+    app.include_router(freelancers.router)
+    app.include_router(companies.router)
 
     @app.get("/health")
     def health(session: SessionDep) -> dict[str, str]:
