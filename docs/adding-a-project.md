@@ -127,6 +127,15 @@ the root manifests (`package.json`, `pnpm-lock.yaml`, `pyproject.toml`, `uv.lock
 filter that is missing means an image that stops being built rather than one that is
 built too often, and the deploy will happily ship the last one that was.
 
+**A project that deploys needs a `<name>_deploy` filter too**, which is that image
+filter plus the two workflow files that decide the deploy. Write it with the YAML
+anchor the existing three use (`&<name>_image` on the image filter, `*<name>_image`
+in the deploy one) rather than a second copy of the paths: `changes` publishes these
+three as the `changed-paths` artifact and each deploy reads its own key from it, so a
+drifted copy is a project that stops deploying. It happened the other way round
+before 2026-09-09, when each deploy carried its own grep and PigroCRM's had lost
+`shared/brand`.
+
 ## 6. Preflight
 
 Add the project's expensive checks to `.github/preflight.json`, with `when` globs
@@ -142,7 +151,7 @@ tier is a hole, not a saving.
 
 Two environments, two triggers, and no deploy logic of your own:
 
-- **preview** on every push to `main` that touched the project;
+- **preview** when CI concludes green on `main` for a commit that touched the project;
 - **production** on a version tag, `<name>-v<semver>`, never on a branch.
 
 A bare `v1.2.0` cannot work here: it does not say which project it releases. The tag
@@ -152,6 +161,15 @@ The mechanism lives in `.github/workflows/_deploy-compose.yml` and is shared. Wh
 project writes is a caller, `deploy-<name>.yml`, with one job per environment, each
 naming four things: the GitHub environment, the compose directory, the compose project
 name, and a health URL. Copy `deploy-pigrocrm.yml`; it is deliberately short.
+
+The preview trigger is `workflow_run` on CI, not `push`, because the deploy refuses an
+unverified commit and waiting for CI on a billed runner cost more than the deploy
+itself (measured 2026-09-09: 458 of 514 seconds). Two things follow, and the copied
+file already does both. The preview job passes `ref: ${{ github.event.workflow_run.head_sha }}`,
+since `github.sha` on that event is the branch tip at event time and can already be a
+commit CI never saw. And a `workflow_run` workflow always runs in its default-branch
+version, so a change to one of these files cannot be exercised from a branch: land it
+and watch the next trunk push.
 
 Three rules that are easy to get wrong and expensive to debug:
 
