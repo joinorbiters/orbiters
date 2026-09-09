@@ -242,22 +242,19 @@ the repository takes TLS away on the spot.
 `projects/<name>/README.md` and `projects/<name>/AGENTS.md`, plus a row in the
 project table in the root `README.md`.
 
-## 9. Its own Linear project
+## 9. Its place in Linear
 
-One Linear project per monorepo project, in the `Orbiters` team, never a shared one:
-a single project holding every product turns the board into a list nobody can read
-at a glance, which is the failure that makes people stop opening it.
-
-Name it exactly as the directory reads to people (`PigroCRM`, not `pigrocrm`), point
-its description at `projects/<name>/` and at the specs that stay in the repo, and add
-a link to the repository. The `Area` labels are shared across projects: add the
-children the new project needs (`api`, `web`, `mcp`, `core`, `infra`, `ci` exist
-today) rather than inventing a parallel scheme. Only one label per group can be
-applied to an issue, so an issue that spans two areas wants splitting or the area
-that actually owns the fix.
-
-Priority is Linear's own field, not a label. Milestones belong to the project and are
-for outcomes that can be finished, not for phases of work that never end.
-
-`docs/tracker.md` holds the rest: how an issue is written, when it moves, what closes
-it, and the API details worth knowing before wasting a call.
+Linear is the tracker and `docs/tracker.md` is the contract: initiatives, projects,
+milestones, statuses, the two label groups and the loop an issue goes through are all
+defined there, checked against the board, and this page does not carry a copy of them
+because a copy drifts, which is exactly what an earlier version of this section did
+(ORB-45). What a new monorepo project needs is an initiative of its own, named as the
+directory reads to people (`PigroCRM`, not `pigrocrm`) and created by hand in the Linear
+UI since the MCP surface cannot create one, and a first project under it with a scope
+that can actually close, a lead and both members: the initiative is the permanent
+container, the project is the release. Repository-wide work that belongs to no product
+(CI cost, the licence, this documentation) goes under the `Monorepo` initiative, which
+is why `Monorepo hygiene v1` exists and sits under no `projects/<name>/`. The `Area`
+group is shared by everyone: if the new project needs an `area:*` child the board does
+not have, add it under the group rather than inventing a parallel scheme, and record it
+in `docs/tracker.md` in the same change.
