@@ -181,6 +181,20 @@ never rsynced: the deploy excludes it. Two environments on one host must share n
 but the host, which for PigroCRM means separate databases, separate secrets, and no
 production Google credentials in preview.
 
+### If the project answers on a public name
+
+The host's nginx vhost belongs to the project, in `projects/<name>/deploy/`, and it
+decides only what is not the project's container: everything else proxies to it and the
+container owns its own path map. Two projects on one host means two loopback ports
+(PigroCRM 8080 and 8081 for its preview, the website 8082 and 8083) and never
+`0.0.0.0`: the host's nginx is what faces the internet, and publishing wider walks past
+the firewall.
+
+The copy in the repository is plain HTTP and is the source of truth for what the rules
+are. The copy in `/etc/nginx/sites-available/` has certbot's port-443 block on top of
+it: **edit that one in place**, with `nginx -t` before the reload. Overwriting it from
+the repository takes TLS away on the spot.
+
 ## 8. Documentation
 
 `projects/<name>/README.md` and `projects/<name>/AGENTS.md`, plus a row in the
