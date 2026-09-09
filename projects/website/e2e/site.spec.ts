@@ -172,3 +172,28 @@ test.describe('the path map, as production serves it', () => {
     })
   }
 })
+
+// The two policy pages are the two whose text column carries long unbreakable strings:
+// the Gmail scopes on /privacy are read verbatim by Google's review and cannot be
+// shortened. On 2026-09-09 that column was a grid whose one implicit track had grown to
+// the widest of them, 452px on a 390px phone, and the page scrolled sideways (ORB-22).
+// This asserts the symptom rather than the fix, so the next long string added to
+// either page fails here instead of in a visitor's hand.
+test.describe('the policy pages on a phone', () => {
+  for (const width of [360, 390]) {
+    for (const path of ['/privacy', '/termini'] as const) {
+      test(`${path} does not scroll sideways at ${width}px`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 844 })
+        await page.goto(path, { waitUntil: 'networkidle' })
+        const measured = await page.evaluate(() => ({
+          scrollWidth: document.documentElement.scrollWidth,
+          clientWidth: document.documentElement.clientWidth,
+        }))
+        expect(
+          measured.scrollWidth,
+          `${path} at ${width}px: scrollWidth ${measured.scrollWidth}, clientWidth ${measured.clientWidth}`,
+        ).toBe(measured.clientWidth)
+      })
+    }
+  }
+})
