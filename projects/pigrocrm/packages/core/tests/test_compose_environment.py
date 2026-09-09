@@ -1,14 +1,13 @@
 """Every setting an installation is meant to choose reaches the container.
 
 This file exists because of a hole that was real for a few hours on 2026-09-09. Four
-settings were added (`openai_pixel_id`, `openai_conversions_api_key`,
-`orbiters_signup_url`, `openai_conversions_send_hashed_email`), documented in
-`.env.example`, tested in core, wired into the API -- and not listed in
+settings were added for the Orbiters signup conversion (since moved to `projects/hub`),
+documented in `.env.example`, tested in core, wired into the API -- and not listed in
 `docker-compose.yml`. Compose forwards only the variables a service names, so in
-production the API would have seen a bare `Settings()`, `pixel_from_settings` would have
-answered `None`, and no conversion would ever have been sent. Silently: nothing in this
-codebase logs, so the only visible symptom would have been a campaign with no
-conversions, weeks later, with the `.env` on the server looking correct.
+production the API would have seen a bare `Settings()` and no conversion would ever have
+been sent. Silently: nothing in this codebase logs, so the only visible symptom would
+have been a campaign with no conversions, weeks later, with the `.env` on the server
+looking correct.
 
 So the check is mechanical, and the exemptions are a list with reasons. A new field on
 `Settings` fails this file until somebody either forwards it or writes down why it is
@@ -148,13 +147,3 @@ def test_a_secret_is_required_and_never_defaulted() -> None:
     """`JWT_SECRET` uses compose's `:?` form, so a deploy without one fails to start
     instead of running on a value somebody can guess."""
     assert "?" in str(_api_environment()[f"{PREFIX}JWT_SECRET"])
-
-
-def test_the_conversions_key_has_an_empty_default() -> None:
-    """The complement of the test above, and the reason both exist: an installation that
-    runs no campaigns must start normally, so this one defaults to empty rather than
-    refusing to boot -- and it is never given a value here, because the value is a
-    secret that lives in the server's own `.env`."""
-    declared = str(_api_environment()[f"{PREFIX}OPENAI_CONVERSIONS_API_KEY"])
-    assert declared.endswith(":-}")
-    assert "sk-" not in declared

@@ -1,0 +1,31 @@
+FROM python:3.13-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends libpq5 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:0.9.24 /uv /usr/local/bin/uv
+
+WORKDIR /app
+# The build context is the repository root: the uv workspace (pyproject.toml, uv.lock)
+# lives there, shared by every Python project. Every workspace member's pyproject has
+# to be present for the resolution step, PigroCRM's included -- uv refuses a workspace
+# with a member missing -- but only this project's closure is installed.
+COPY pyproject.toml uv.lock ./
+COPY projects/pigrocrm/packages/core/pyproject.toml projects/pigrocrm/packages/core/
+COPY projects/pigrocrm/apps/api/pyproject.toml projects/pigrocrm/apps/api/
+COPY projects/pigrocrm/apps/mcp/pyproject.toml projects/pigrocrm/apps/mcp/
+COPY projects/hub/packages/core/pyproject.toml projects/hub/packages/core/
+COPY projects/hub/apps/api/pyproject.toml projects/hub/apps/api/
+COPY projects/hub/apps/mcp/pyproject.toml projects/hub/apps/mcp/
+RUN uv sync --frozen --no-dev --no-install-workspace --package orbiters-api --package orbiters-mcp
+
+COPY projects/hub/packages ./projects/hub/packages
+COPY projects/hub/apps/api ./projects/hub/apps/api
+COPY projects/hub/apps/mcp ./projects/hub/apps/mcp
+RUN uv sync --frozen --no-dev --package orbiters-api --package orbiters-mcp
+
+EXPOSE 8000
+# Migrations at start-up, one instance. `--no-sync` for the reason PigroCRM's
+# Dockerfile.api records at length: without it `uv run` re-syncs the dev group over the
+# network on every container start.
+CMD ["sh", "-c", "cd projects/hub/packages/core && uv run --no-sync alembic upgrade head && cd /app && uv run --no-sync uvicorn orbiters_api.main:app --host 0.0.0.0 --port 8000"]

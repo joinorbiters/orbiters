@@ -6,7 +6,10 @@ requires-python = ">=3.13,<3.14"
 # resolution, one `uv.lock`: that is the whole point of a single workspace, and it is
 # what stops two projects installing two copies of SQLAlchemy at two versions. A new
 # project adds its packages here and to `[tool.uv.workspace] members` below.
-dependencies = ["pigrocrm-core", "pigrocrm-api", "pigrocrm-mcp"]
+dependencies = [
+  "pigrocrm-core", "pigrocrm-api", "pigrocrm-mcp",
+  "orbiters-core", "orbiters-api", "orbiters-mcp",
+]
 
 [tool.uv.workspace]
 # Listed one by one rather than globbed. `projects/*/apps/*` would also match
@@ -18,12 +21,18 @@ members = [
   "projects/pigrocrm/packages/core",
   "projects/pigrocrm/apps/api",
   "projects/pigrocrm/apps/mcp",
+  "projects/hub/packages/core",
+  "projects/hub/apps/api",
+  "projects/hub/apps/mcp",
 ]
 
 [tool.uv.sources]
 pigrocrm-core = { workspace = true }
 pigrocrm-api = { workspace = true }
 pigrocrm-mcp = { workspace = true }
+orbiters-core = { workspace = true }
+orbiters-api = { workspace = true }
+orbiters-mcp = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -56,6 +65,9 @@ testpaths = [
   "projects/pigrocrm/packages/core/tests",
   "projects/pigrocrm/apps/api/tests",
   "projects/pigrocrm/apps/mcp/tests",
+  "projects/hub/packages/core/tests",
+  "projects/hub/apps/api/tests",
+  "projects/hub/apps/mcp/tests",
 ]
 asyncio_mode = "auto"
 # Nothing skips on either marker by default: a plan assertion that CI skips is a plan
@@ -80,6 +92,9 @@ mypy_path = [
   "projects/pigrocrm/packages/core/src",
   "projects/pigrocrm/apps/api/src",
   "projects/pigrocrm/apps/mcp/src",
+  "projects/hub/packages/core/src",
+  "projects/hub/apps/api/src",
+  "projects/hub/apps/mcp/src",
 ]
 explicit_package_bases = true
 # Matches what .github/workflows/ci.yml passes on the command line exactly, so the
@@ -91,4 +106,7 @@ files = [
   "projects/pigrocrm/packages/core/src",
   "projects/pigrocrm/apps/api/src",
   "projects/pigrocrm/apps/mcp/src",
+  "projects/hub/packages/core/src",
+  "projects/hub/apps/api/src",
+  "projects/hub/apps/mcp/src",
 ]

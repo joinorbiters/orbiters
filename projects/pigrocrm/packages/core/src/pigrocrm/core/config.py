@@ -33,41 +33,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="PIGROCRM_", env_file=".env", extra="ignore")
 
     database_url: str = "postgresql+psycopg://pigrocrm:pigrocrm@localhost:5432/pigrocrm"
-    # The Orbiters signup list (docs/superpowers/specs/2026-09-07-orbiters-landing-design.md)
-    # lives in a database of its own, not in the CRM schema above. Empty means "the same
-    # server and credentials as `database_url`, database named `orbiters`"; set it only to
-    # put that list somewhere else. `orbiters.database.ensure_orbiters_database` creates
-    # the database if it is missing, which needs CREATE DATABASE on the server.
-    orbiters_database_url: str = ""
-    # --- ChatGPT Ads: the Orbiters signup conversion ---------------------------------
-    # The pixel measures the signup from the browser; these values are the server half
-    # (`orbiters/conversions.py`), which exists because the browser event is the one
-    # that gets lost: an ad blocker, a network that drops the SDK, a tab closed before
-    # the ping leaves.
-    #
-    # `openai_pixel_id` is public -- it sits in the website's markup in the clear -- and
-    # is repeated here because the conversions endpoint wants it in the query string.
-    # `openai_conversions_api_key` is a secret with read and write access to the
-    # conversion data source: it lives in the server's `.env`, in no file of this
-    # repository and in no page. With either one empty (the default) no server event is
-    # sent, and that is not an error: it is an installation that runs no campaigns.
-    openai_pixel_id: str = ""
-    openai_conversions_api_key: str = ""
-    # The URL of the page where the conversion happens. Required by the API for a `web`
-    # event, and taken from here rather than from the request: a `source_url` that
-    # arrives from the client is a string the caller chose, and it would be forwarded to
-    # a third party exactly as it came.
-    orbiters_signup_url: str = "https://joinorbiters.com/orbiters"
-    # Whether to also send OpenAI the SHA-256 of the address. It improves attribution,
-    # and a hash of an email is still that person's identifier: it is a decision for
-    # whoever runs the site, so the default is no. IP and user agent travel either way --
-    # they are the request itself, which the pixel in the browser shows in any case.
-    openai_conversions_send_hashed_email: bool = False
     # The registry of spaces -- which slug maps to which database; see
-    # docs/superpowers/specs/2026-09-08-spazi-un-database-per-tenant-design.md. Same rule
-    # as `orbiters_database_url`: empty means the CRM's own server and credentials,
-    # database `pigrocrm_tenants`. Each space's own database is created beside it by
-    # `tenants.service.TenantService.provision`.
+    # docs/superpowers/specs/2026-09-08-spazi-un-database-per-tenant-design.md. Empty
+    # means the CRM's own server and credentials, database `pigrocrm_tenants`. Each
+    # space's own database is created beside it by `tenants.service.TenantService.provision`.
     tenants_database_url: str = ""
     # Where `alembic.ini` lives, for migrating a freshly created space's database with
     # the same env.py production runs. Empty resolves to packages/core/alembic.ini next

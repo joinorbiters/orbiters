@@ -22,7 +22,6 @@ from pigrocrm_api.routers import (
     fiscal_profile,
     gmail,
     invoices,
-    orbiters,
     payment_reminders,
     people,
     period_locks,
@@ -91,8 +90,6 @@ def create_app() -> FastAPI:
         # release added.
         dashboard,
         automations,
-        # Orbiters (2026-09-07). Public, and on its own database: see routers/orbiters.py.
-        orbiters,
         # Spaces (2026-09-08). Public signup, on the registry database: routers/tenants.py.
         tenants,
         # Impostazioni → Spazio: the settings a database decides for itself.

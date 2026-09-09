@@ -1,0 +1,7 @@
+extend = "../../ruff.toml"
+
+[lint.flake8-tidy-imports.banned-api]
+"orbiters_mcp".msg = "apps/api must not import from apps/mcp"
+"pigrocrm".msg = "the hub is a product of its own and imports nothing from PigroCRM"
+"pigrocrm_api".msg = "the hub is a product of its own and imports nothing from PigroCRM"
+"pigrocrm_mcp".msg = "the hub is a product of its own and imports nothing from PigroCRM"

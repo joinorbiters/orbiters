@@ -19,10 +19,13 @@
         "projects/pigrocrm/apps/api/src/**",
         "projects/pigrocrm/apps/mcp/src/**",
         "projects/pigrocrm/packages/core/src/**",
+        "projects/hub/apps/api/src/**",
+        "projects/hub/apps/mcp/src/**",
+        "projects/hub/packages/core/src/**",
         "pyproject.toml",
         "uv.lock"
       ],
-      "why": "mypy --strict over the three source roots. The bare `uv run mypy` works because pyproject.toml's [tool.mypy] files list names them."
+      "why": "mypy --strict over every Python source root, the hub's three included. The bare `uv run mypy` works because pyproject.toml's [tool.mypy] files list names them."
     },
     {
       "id": "pigrocrm-py-test",
@@ -124,6 +127,29 @@
         "pnpm-workspace.yaml"
       ],
       "why": "The build is where the palette plugin runs, so a palette that stopped being extractable fails here rather than shipping pages with no colour."
+    },
+    {
+      "id": "hub-py-lint",
+      "run": "uv run ruff check projects/hub && uv run ruff format --check projects/hub",
+      "when": [
+        "projects/hub/**/*.py",
+        "projects/hub/ruff.toml",
+        "ruff.toml"
+      ],
+      "why": "The hub's lint and format, seconds here against a round trip in CI."
+    },
+    {
+      "id": "hub-py-test",
+      "run": "uv run pytest -q projects/hub/packages/core/tests projects/hub/apps/api/tests projects/hub/apps/mcp/tests",
+      "when": [
+        "projects/hub/apps/api/**",
+        "projects/hub/apps/mcp/**",
+        "projects/hub/packages/**",
+        "projects/hub/conftest.py",
+        "pyproject.toml",
+        "uv.lock"
+      ],
+      "why": "The hub's whole Python suite: a testcontainers Postgres brought to head by the hub's own migrations, about a minute. mypy is covered by pigrocrm-py-types, whose bare `uv run mypy` reads every source root in [tool.mypy] files."
     },
     {
       "id": "website-types",
