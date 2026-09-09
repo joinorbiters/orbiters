@@ -22,9 +22,12 @@ const MEASURED = ['index.html', 'orbiters.html'] as const
 const UNMEASURED = ['privacy.html', 'termini.html'] as const
 const ALL = [...MEASURED, ...UNMEASURED]
 
+// Keyed by the literal names rather than by `string`: `noUncheckedIndexedAccess` makes
+// a string index return `string | undefined`, and the assertions below read the page
+// directly. Same shape as `landing-pages.test.ts`.
 const page = Object.fromEntries(
   ALL.map((name) => [name, readFileSync(join(__dirname, name), 'utf-8')]),
-) as Record<string, string>
+) as Record<(typeof ALL)[number], string>
 const consent = readFileSync(join(__dirname, 'consent.js'), 'utf-8')
 const orbiters = readFileSync(join(__dirname, 'orbiters.js'), 'utf-8')
 

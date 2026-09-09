@@ -91,13 +91,17 @@ describe('once somebody accepts', () => {
 
     const scripts = sdkScripts()
     expect(scripts).toHaveLength(1)
-    expect(scripts[0].async).toBe(true)
+    expect(scripts[0]?.async).toBe(true)
     expect(window.localStorage.getItem(KEY)).toBe('granted')
     // The queue exists so a `measure` call made before the SDK arrives is not lost, and
-    // the init is the first thing in it.
+    // the init is the first thing in it. Copied through `Array.from` because the stub
+    // pushes the real `arguments` object, which `toEqual` does not consider an array,
+    // and asserted whole so an empty queue fails here rather than on an index read.
     const queued = (window as unknown as { oaiq: { q: unknown[][] } }).oaiq.q
-    expect(queued[0][0]).toBe('init')
-    expect(queued[0][1]).toEqual({ pixelId: '9r6qrnPxBV8WDVGtpuaqxh', debug: true })
+    expect(Array.from(queued[0] ?? [])).toEqual([
+      'init',
+      { pixelId: '9r6qrnPxBV8WDVGtpuaqxh', debug: true },
+    ])
   })
 
   it('takes the notice away and does not ask again on the next page', () => {
