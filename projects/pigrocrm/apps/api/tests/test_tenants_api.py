@@ -177,6 +177,14 @@ def test_the_root_slug_is_the_root_itself_and_nobody_elses_name(
             assert client.get("/humancraft/api/tenants/root").json() == {"slug": "humancraft"}
             # The root's own login answers here, and the cookie is the root's (`Path=/`).
             assert client.get("/humancraft/api/auth/me").status_code == 401
+            # A logout under the alias clears the pair scoped to it *and* the pair a plain
+            # `/app/login` once set at `/`: a browser removes a cookie only for a matching
+            # path, and the older pair kept a session alive that the person had ended.
+            logout = client.post("/humancraft/api/auth/logout")
+            assert logout.status_code == 204
+            deletions = logout.headers.get_list("set-cookie")
+            assert sum("Path=/humancraft/;" in c for c in deletions) == 2
+            assert sum("Path=/;" in c for c in deletions) == 2
             assert client.get("/api/tenants/humancraft/disponibile").json()["motivo"] == (
                 "questo nome è riservato"
             )
