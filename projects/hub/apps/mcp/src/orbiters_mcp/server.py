@@ -20,6 +20,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
 
+from orbiters_core.comments import CommentService
 from orbiters_core.companies import CompanyService
 from orbiters_core.errors import DomainError
 from orbiters_core.freelancers import FreelancerService
@@ -31,10 +32,14 @@ SessionFactory = sessionmaker[Session]
 INSTRUCTIONS = (
     "Orbiters, la community di freelance di joinorbiters.com. Gli strumenti leggono chi "
     "ha chiesto di entrare (iscrizioni), i freelance che hanno compilato il profilo con il "
-    "CV e le aziende che cercano persone; possono cambiare lo stato di una candidatura e "
-    "annotarla. Sono dati di altre persone: da usare solo per decidere quando e cosa "
-    "scrivere loro, mai da riportare altrove."
+    "CV e le aziende che cercano persone; possono cambiare lo stato di una candidatura, "
+    "annotarla e lasciare un commento datato nel suo thread. Sono dati di altre persone: da "
+    "usare solo per decidere quando e cosa scrivere loro, mai da riportare altrove."
 )
+
+# Who signs a comment when the caller does not say: the MCP client has no login, so the
+# thread records the channel rather than pretending to know the person behind it.
+DEFAULT_AUTHOR = "MCP"
 
 
 def build_server(factory: SessionFactory) -> MCPServer:
@@ -61,7 +66,8 @@ def build_server(factory: SessionFactory) -> MCPServer:
 
     @mcp.tool()
     def get_freelancer(freelancer_id: str) -> dict[str, Any]:
-        """Un freelance, per id."""
+        """Un freelance, per id, con `commenti`: il thread di chi lo ha seguito, dal più
+        recente, ognuno con autore e data."""
         return _run(lambda s: FreelancerService(s).get(UUID(freelancer_id)))
 
     @mcp.tool()
@@ -77,6 +83,20 @@ def build_server(factory: SessionFactory) -> MCPServer:
         )
 
     @mcp.tool()
+    def add_freelancer_comment(
+        freelancer_id: str, testo: str, autore: str | None = None
+    ) -> dict[str, Any]:
+        """Aggiunge un commento al thread di un freelance, senza toccare stato e note: una
+        telefonata fatta, un'impressione, una cosa da ricordare. Resta com'è scritto, con
+        data e autore; non si modifica e non si cancella. Fino a 4000 caratteri, anche su
+        più righe. `autore` è "MCP" se non dici chi sta scrivendo."""
+        return _run(
+            lambda s: CommentService(s).add(
+                "freelancer", UUID(freelancer_id), testo, autore or DEFAULT_AUTHOR
+            )
+        )
+
+    @mcp.tool()
     def list_companies(limit: int = LIST_LIMIT_DEFAULT, stato: str | None = None) -> dict[str, Any]:
         """Le aziende che hanno descritto un progetto sull'hub, dal più recente: azienda,
         referente, email, progetto, da quando e per quanto, budget a giornata, stato
@@ -85,7 +105,8 @@ def build_server(factory: SessionFactory) -> MCPServer:
 
     @mcp.tool()
     def get_company(company_id: str) -> dict[str, Any]:
-        """Una richiesta di un'azienda, per id."""
+        """Una richiesta di un'azienda, per id, con `commenti`: il thread di chi l'ha
+        seguita, dal più recente, ognuno con autore e data."""
         return _run(lambda s: CompanyService(s).get(UUID(company_id)))
 
     @mcp.tool()
@@ -94,6 +115,20 @@ def build_server(factory: SessionFactory) -> MCPServer:
         return _run(
             lambda s: CompanyService(s).set_status(
                 UUID(company_id), StatusChange(stato=stato, note=note)
+            )
+        )
+
+    @mcp.tool()
+    def add_company_comment(
+        company_id: str, testo: str, autore: str | None = None
+    ) -> dict[str, Any]:
+        """Aggiunge un commento al thread di una richiesta di un'azienda, senza toccare
+        stato e note: come è andata la call, cosa hanno chiesto, cosa resta da fare. Resta
+        com'è scritto, con data e autore; non si modifica e non si cancella. Fino a 4000
+        caratteri, anche su più righe. `autore` è "MCP" se non dici chi sta scrivendo."""
+        return _run(
+            lambda s: CommentService(s).add(
+                "company", UUID(company_id), testo, autore or DEFAULT_AUTHOR
             )
         )
 

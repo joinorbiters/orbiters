@@ -5,7 +5,7 @@ import { useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import { admin, type Company, type Freelancer } from '@/lib/api'
+import { admin, type Comment, type Company, type Freelancer } from '@/lib/api'
 import {
   COMPANY_STATES,
   FREELANCER_STATES,
@@ -16,6 +16,7 @@ import {
   formatEuro,
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { Comments } from './Comments'
 
 const TONE: Record<string, string> = {
   nuovo: 'bg-[var(--color-royal-gold)]',
@@ -175,6 +176,12 @@ export function AdminFreelancerDetail() {
       void client.invalidateQueries({ queryKey: ['freelancers'] })
     },
   })
+  // The thread lives on the detail row, so a new comment goes into the same cache entry
+  // and nothing is fetched twice.
+  const onCommentAdded = (created: Comment) =>
+    client.setQueryData<Freelancer>(['freelancer', id], (current) =>
+      current && { ...current, commenti: [created, ...current.commenti] },
+    )
   if (row.isError) return <Empty>Scheda non trovata.</Empty>
   if (row.isPending) return <Empty>Caricamento…</Empty>
   const f = row.data
@@ -219,6 +226,7 @@ export function AdminFreelancerDetail() {
           onSave={(stato, note) => move.mutate({ stato, note })}
         />
       </div>
+      <Comments kind="freelancers" id={f.id} comments={f.commenti} onAdded={onCommentAdded} />
       <p className="px-6 pb-6">
         <Link to="/admin/freelance" className="inline-flex items-center gap-1 text-sm underline-offset-2 hover:underline">
           <ArrowLeft className="size-4" /> Tutti i developer e CTO
@@ -300,6 +308,10 @@ export function AdminCompanyDetail() {
       void client.invalidateQueries({ queryKey: ['companies'] })
     },
   })
+  const onCommentAdded = (created: Comment) =>
+    client.setQueryData<Company>(['company', id], (current) =>
+      current && { ...current, commenti: [created, ...current.commenti] },
+    )
   if (row.isError) return <Empty>Richiesta non trovata.</Empty>
   if (row.isPending) return <Empty>Caricamento…</Empty>
   const c = row.data
@@ -322,6 +334,7 @@ export function AdminCompanyDetail() {
           onSave={(stato, note) => move.mutate({ stato, note })}
         />
       </div>
+      <Comments kind="companies" id={c.id} comments={c.commenti} onAdded={onCommentAdded} />
       <p className="px-6 pb-6">
         <Link to="/admin/aziende" className="inline-flex items-center gap-1 text-sm underline-offset-2 hover:underline">
           <ArrowLeft className="size-4" /> Tutte le aziende

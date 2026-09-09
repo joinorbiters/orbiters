@@ -1,5 +1,12 @@
 const euro = new Intl.NumberFormat('it-IT', { style: 'currency', currency: 'EUR', useGrouping: 'always' })
 const day = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short', year: 'numeric' })
+const moment = new Intl.DateTimeFormat('it-IT', {
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+})
 
 /** `"450.00"` from the API, as `450,00 €`. Parsed for display only; nothing here is summed. */
 export function formatEuro(value: string): string {
@@ -8,6 +15,11 @@ export function formatEuro(value: string): string {
 
 export function formatDate(value: string): string {
   return day.format(new Date(value))
+}
+
+/** Day and time, for things that happen several times a day: a comment thread. */
+export function formatDateTime(value: string): string {
+  return moment.format(new Date(value))
 }
 
 export function formatBytes(size: number): string {

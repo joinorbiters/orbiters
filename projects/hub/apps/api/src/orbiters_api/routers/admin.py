@@ -15,9 +15,12 @@ from pydantic import BaseModel, EmailStr
 from orbiters_api.deps import ADMIN_COOKIE, AdminDep, SessionDep, SettingsDep
 from orbiters_api.ratelimit import spend_one
 from orbiters_core.admin import AdminRead, AdminService
+from orbiters_core.comments import CommentService
 from orbiters_core.companies import CompanyService
 from orbiters_core.freelancers import FreelancerService
 from orbiters_core.schemas import (
+    CommentCreate,
+    CommentRead,
     CompanyList,
     CompanyRead,
     FreelancerList,
@@ -134,3 +137,44 @@ def move_company(
 @router.get("/signups", response_model=SignupList)
 def list_signups(_: AdminDep, session: SessionDep, limit: Limit = 100) -> SignupList:
     return SignupService(session).list_recent(limit=limit)
+
+
+# ---- comments --------------------------------------------------------------------------
+#
+# Append-only, on the same cookie as everything else here. The author is the admin the
+# cookie resolves to: the body carries the text alone, so nobody can sign as somebody
+# else. No PATCH and no DELETE on purpose: a thread is a record (ORB-59).
+
+
+@router.get("/freelancers/{freelancer_id}/comments", response_model=list[CommentRead])
+def list_freelancer_comments(
+    _: AdminDep, session: SessionDep, freelancer_id: UUID
+) -> list[CommentRead]:
+    return CommentService(session).list("freelancer", freelancer_id)
+
+
+@router.post(
+    "/freelancers/{freelancer_id}/comments",
+    response_model=CommentRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_freelancer_comment(
+    admin: AdminDep, session: SessionDep, freelancer_id: UUID, payload: CommentCreate
+) -> CommentRead:
+    return CommentService(session).add("freelancer", freelancer_id, payload.testo, admin.nome)
+
+
+@router.get("/companies/{company_id}/comments", response_model=list[CommentRead])
+def list_company_comments(_: AdminDep, session: SessionDep, company_id: UUID) -> list[CommentRead]:
+    return CommentService(session).list("company", company_id)
+
+
+@router.post(
+    "/companies/{company_id}/comments",
+    response_model=CommentRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_company_comment(
+    admin: AdminDep, session: SessionDep, company_id: UUID, payload: CommentCreate
+) -> CommentRead:
+    return CommentService(session).add("company", company_id, payload.testo, admin.nome)

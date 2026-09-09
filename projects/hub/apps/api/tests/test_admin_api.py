@@ -25,7 +25,7 @@ def admin(api_engine: Engine, api_session: Session) -> Iterator[None]:
     )
     yield
     api_session.rollback()
-    for table in ("admin_sessions", "admin_users", "freelancers", "companies"):
+    for table in ("comments", "admin_sessions", "admin_users", "freelancers", "companies"):
         api_session.execute(text(f"DELETE FROM {table}"))
     api_session.commit()
 
@@ -94,3 +94,112 @@ def test_login_sets_a_secure_httponly_cookie_and_the_lists_open(
 
     assert client.post("/api/hub/auth/logout").status_code == 204
     assert client.get("/api/hub/auth/me").status_code == 401
+
+
+# ---- comments --------------------------------------------------------------------------
+
+MISSING = "00000000-0000-7000-8000-000000000000"
+
+
+def _login(client: TestClient) -> None:
+    assert client.post("/api/hub/auth/login", json=CREDENTIALS).status_code == 200
+
+
+def _request_company(client: TestClient) -> None:
+    response = client.post(
+        "/api/hub/companies",
+        json={
+            "nome_azienda": "ACME Srl",
+            "referente": "Wile E.",
+            "email": "wile@acme.it",
+            "progetto": "Un backend developer per tre mesi.",
+            "periodo_da": "2026-10-01",
+            "durata": "3 mesi",
+            "budget_giornaliero": "500",
+        },
+    )
+    assert response.status_code == 201, response.text
+
+
+def test_without_the_cookie_the_comment_routes_are_a_401(client: TestClient, admin: None) -> None:
+    for kind in ("freelancers", "companies"):
+        assert client.get(f"/api/hub/{kind}/{MISSING}/comments").status_code == 401
+        assert (
+            client.post(f"/api/hub/{kind}/{MISSING}/comments", json={"testo": "x"}).status_code
+            == 401
+        )
+
+
+def test_a_comment_is_signed_by_the_logged_in_admin_and_read_newest_first(
+    client: TestClient, admin: None
+) -> None:
+    _login(client)
+    _apply(client)
+    freelancer_id = client.get("/api/hub/freelancers").json()["items"][0]["id"]
+
+    assert client.get(f"/api/hub/freelancers/{freelancer_id}/comments").json() == []
+    first = client.post(
+        f"/api/hub/freelancers/{freelancer_id}/comments",
+        json={"testo": "  Sentito al telefono.\nRichiamare lunedì.  "},
+    )
+    assert first.status_code == 201, first.text
+    body = first.json()
+    assert body["testo"] == "Sentito al telefono.\nRichiamare lunedì."
+    assert body["autore"] == "Ivan"
+    assert body["entity_type"] == "freelancer" and body["entity_id"] == freelancer_id
+    second = client.post(
+        f"/api/hub/freelancers/{freelancer_id}/comments", json={"testo": "Ha mandato il portfolio."}
+    )
+    assert second.status_code == 201
+
+    thread = client.get(f"/api/hub/freelancers/{freelancer_id}/comments").json()
+    assert [c["id"] for c in thread] == [second.json()["id"], body["id"]]
+    # The detail carries the same thread; the list does not.
+    detail = client.get(f"/api/hub/freelancers/{freelancer_id}").json()
+    assert [c["id"] for c in detail["commenti"]] == [second.json()["id"], body["id"]]
+    assert detail["note"] is None
+    assert client.get("/api/hub/freelancers").json()["items"][0]["commenti"] == []
+
+
+def test_a_company_gets_its_own_thread(client: TestClient, admin: None) -> None:
+    _login(client)
+    _request_company(client)
+    company_id = client.get("/api/hub/companies").json()["items"][0]["id"]
+    posted = client.post(f"/api/hub/companies/{company_id}/comments", json={"testo": "Budget ok."})
+    assert posted.status_code == 201, posted.text
+    assert posted.json()["autore"] == "Ivan"
+    assert [c["testo"] for c in client.get(f"/api/hub/companies/{company_id}/comments").json()] == [
+        "Budget ok."
+    ]
+    assert [
+        c["testo"] for c in client.get(f"/api/hub/companies/{company_id}").json()["commenti"]
+    ] == ["Budget ok."]
+
+
+def test_a_comment_on_a_missing_row_is_a_404_and_an_empty_one_a_422_naming_the_field(
+    client: TestClient, admin: None
+) -> None:
+    _login(client)
+    assert client.get(f"/api/hub/freelancers/{MISSING}/comments").status_code == 200
+    missing = client.post(f"/api/hub/freelancers/{MISSING}/comments", json={"testo": "Nessuno."})
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == f"freelancer {MISSING} non trovato"
+    assert (
+        client.post(f"/api/hub/companies/{MISSING}/comments", json={"testo": "x"}).status_code
+        == 404
+    )
+
+    _apply(client)
+    freelancer_id = client.get("/api/hub/freelancers").json()["items"][0]["id"]
+    for testo in ("", "   ", "x" * 4001):
+        refused = client.post(
+            f"/api/hub/freelancers/{freelancer_id}/comments", json={"testo": testo}
+        )
+        assert refused.status_code == 422, testo[:10]
+        assert refused.json()["detail"][0]["loc"][-1] == "testo"
+    # The author is the session's, never the body's.
+    forged = client.post(
+        f"/api/hub/freelancers/{freelancer_id}/comments", json={"testo": "ok", "autore": "Altro"}
+    )
+    assert forged.status_code == 422
+    assert client.get(f"/api/hub/freelancers/{freelancer_id}/comments").json() == []

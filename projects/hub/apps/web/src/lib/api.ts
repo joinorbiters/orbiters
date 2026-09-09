@@ -131,6 +131,8 @@ export interface Freelancer {
   utm_source: string | null
   utm_campaign: string | null
   created_at: string
+  /** The thread, newest first. The detail carries it; the list leaves it empty. */
+  commenti: Comment[]
 }
 
 export interface Company {
@@ -146,7 +148,21 @@ export interface Company {
   note: string | null
   utm_source: string | null
   created_at: string
+  commenti: Comment[]
 }
+
+/** One remark in a row's thread: appended, signed and dated, never edited. */
+export interface Comment {
+  id: string
+  entity_type: 'freelancer' | 'company'
+  entity_id: string
+  testo: string
+  autore: string
+  created_at: string
+}
+
+/** The two rows a thread can hang on, as the API paths name them. */
+export type CommentKind = 'freelancers' | 'companies'
 
 export interface Signup {
   id: string
@@ -187,4 +203,9 @@ export const admin = {
       body: JSON.stringify({ stato, note }),
     }),
   signups: () => request<{ totale: number; iscrizioni: Signup[] }>('/api/hub/signups?limit=500'),
+  comments: (kind: CommentKind, id: string) =>
+    request<Comment[]>(`/api/hub/${kind}/${id}/comments`),
+  /** The author is the session's, so the body is the text alone. */
+  addComment: (kind: CommentKind, id: string, testo: string) =>
+    request<Comment>(`/api/hub/${kind}/${id}/comments`, json({ testo })),
 }

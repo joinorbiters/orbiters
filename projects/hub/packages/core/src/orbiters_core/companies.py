@@ -5,6 +5,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from orbiters_core.comments import CommentService
 from orbiters_core.errors import NotFound, ValidationFailed
 from orbiters_core.models import COMPANY_STATES, Company
 from orbiters_core.schemas import CompanyCreate, CompanyList, CompanyRead, StatusChange
@@ -50,7 +51,11 @@ class CompanyService:
         return CompanyList(totale=totale, items=[CompanyRead.model_validate(r) for r in rows])
 
     def get(self, company_id: UUID) -> CompanyRead:
-        return CompanyRead.model_validate(self._require(company_id))
+        """The row with its thread of comments, newest first. Only here: the list
+        leaves `commenti` empty."""
+        read = CompanyRead.model_validate(self._require(company_id))
+        read.commenti = CommentService(self.session).list(ENTITY, company_id)
+        return read
 
     def set_status(self, company_id: UUID, change: StatusChange) -> CompanyRead:
         if change.stato not in COMPANY_STATES:

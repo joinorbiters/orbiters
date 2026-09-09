@@ -1,4 +1,4 @@
-"""`list_signups`: the hub's one MCP read today, over its own database."""
+"""The hub's MCP tools over its own database: the reads, the status moves, the comments."""
 
 import json
 from typing import Any
@@ -114,11 +114,140 @@ async def test_the_admin_tools_read_and_move_a_candidate_without_the_cv(
             "list_freelancers",
             "get_freelancer",
             "set_freelancer_status",
+            "add_freelancer_comment",
             "list_companies",
             "get_company",
             "set_company_status",
+            "add_company_comment",
         }
+    _wipe(factory)
+
+
+def _wipe(factory: sessionmaker[Session]) -> None:
     session = factory()
-    session.execute(text("DELETE FROM freelancers"))
+    for table in ("comments", "freelancers", "companies"):
+        session.execute(text(f"DELETE FROM {table}"))
     session.commit()
     session.close()
+
+
+def _seed_freelancer(factory: sessionmaker[Session]) -> str:
+    from decimal import Decimal
+
+    from orbiters_core.freelancers import FreelancerService
+    from orbiters_core.schemas import FreelancerCreate
+
+    session = factory()
+    try:
+        row = FreelancerService(session).apply(
+            FreelancerCreate(
+                nome="Ada",
+                cognome="Lovelace",
+                email="ada@studio.it",
+                tariffa_giornaliera=Decimal("450"),
+                posizione="Backend developer",
+                remoto="remoto",
+            ),
+            PDF,
+            "cv.pdf",
+            "application/pdf",
+        )
+        return str(row.id)
+    finally:
+        session.close()
+
+
+def _seed_company(factory: sessionmaker[Session]) -> str:
+    from datetime import date
+    from decimal import Decimal
+
+    from orbiters_core.companies import CompanyService
+    from orbiters_core.schemas import CompanyCreate
+
+    session = factory()
+    try:
+        row = CompanyService(session).request(
+            CompanyCreate(
+                nome_azienda="ACME Srl",
+                referente="Wile E.",
+                email="wile@acme.it",
+                progetto="Un backend developer per tre mesi.",
+                periodo_da=date(2026, 10, 1),
+                durata="3 mesi",
+                budget_giornaliero=Decimal("500"),
+            )
+        )
+        return str(row.id)
+    finally:
+        session.close()
+
+
+async def test_a_comment_from_the_mcp_is_signed_mcp_by_default_and_get_returns_the_thread(
+    factory: sessionmaker[Session],
+) -> None:
+    freelancer_id = _seed_freelancer(factory)
+    async with Client(build_server(factory)) as client:
+        first = _payload(
+            await client.call_tool(
+                "add_freelancer_comment",
+                {"freelancer_id": freelancer_id, "testo": "Sentito al telefono."},
+            )
+        )
+        assert (first["autore"], first["testo"]) == ("MCP", "Sentito al telefono.")
+        assert first["entity_type"] == "freelancer" and first["entity_id"] == freelancer_id
+        second = _payload(
+            await client.call_tool(
+                "add_freelancer_comment",
+                {"freelancer_id": freelancer_id, "testo": "Portfolio ricevuto.", "autore": "Ivan"},
+            )
+        )
+        assert second["autore"] == "Ivan"
+
+        detail = _payload(
+            await client.call_tool("get_freelancer", {"freelancer_id": freelancer_id})
+        )
+        assert [c["id"] for c in detail["commenti"]] == [second["id"], first["id"]]
+        # The note is untouched, and the list does not carry the thread.
+        assert detail["note"] is None
+        listed = _payload(await client.call_tool("list_freelancers", {}))
+        assert listed["items"][0]["commenti"] == []
+    _wipe(factory)
+
+
+async def test_a_company_comment_lands_on_the_company_and_a_bad_one_is_a_sentence(
+    factory: sessionmaker[Session],
+) -> None:
+    company_id = _seed_company(factory)
+    freelancer_id = _seed_freelancer(factory)
+    async with Client(build_server(factory)) as client:
+        posted = _payload(
+            await client.call_tool(
+                "add_company_comment", {"company_id": company_id, "testo": "Budget confermato."}
+            )
+        )
+        assert (posted["autore"], posted["entity_type"]) == ("MCP", "company")
+        detail = _payload(await client.call_tool("get_company", {"company_id": company_id}))
+        assert [c["testo"] for c in detail["commenti"]] == ["Budget confermato."]
+
+        # A freelancer id is not a company: not found, as a sentence.
+        wrong = await client.call_tool(
+            "add_company_comment", {"company_id": freelancer_id, "testo": "x"}
+        )
+        assert wrong.is_error and "non trovato" in wrong.content[0].text
+        empty = await client.call_tool(
+            "add_freelancer_comment", {"freelancer_id": freelancer_id, "testo": "   "}
+        )
+        assert empty.is_error and "testo" in empty.content[0].text
+        long = await client.call_tool(
+            "add_freelancer_comment", {"freelancer_id": freelancer_id, "testo": "x" * 4001}
+        )
+        assert long.is_error and "4000" in long.content[0].text
+        untouched = _payload(
+            await client.call_tool("get_freelancer", {"freelancer_id": freelancer_id})
+        )
+        assert untouched["commenti"] == []
+
+        # Nothing edits or deletes a comment, from here or anywhere.
+        names = {tool.name for tool in (await client.list_tools()).tools}
+        assert not [n for n in names if "comment" in n and not n.startswith("add_")]
+    _wipe(factory)
