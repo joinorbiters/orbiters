@@ -132,8 +132,9 @@ The last line of the body: `Linear: ORB-N.`
 
 ## After `gh pr create`
 
-1. Move the issue to **`In Review`** and comment the PR URL on it (the GitHub app is not
-   approved on this org yet, so nothing does this for you).
+1. Move the issue to **`In Review`** and comment the PR URL on it. The PR does link
+   itself within seconds, and that link is not a state change: the status automation is
+   off on this team (PR #33 linked, ORB-80 stayed `In Progress`), so move it yourself.
 2. **Independent review.** Dispatch a fresh, read-only reviewer (an `Agent` of type
    `general-purpose`, told the worktree path, the diff command, the files that give it
    context, and to rank findings by severity with a concrete fix each). Do not review your

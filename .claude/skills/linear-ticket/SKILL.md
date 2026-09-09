@@ -82,8 +82,10 @@ not learn it from here. What that section leaves to the caller:
 - `In Progress` goes with `assignee: "me"` in the same call, and only on a card that is
   already yours (§ Finding before filing). On somebody else's card both fields stay as
   they are.
-- `In Review` is set by you when the PR opens, with a comment carrying the PR URL: the
-  GitHub app is not approved on the org, so nothing does it for you.
+- `In Review` is set by you when the PR opens, with a comment carrying the PR URL. The
+  PR links itself to the issue, so seeing the link is not seeing a state change: the
+  status automation is a per-team setting and it is off here (PR #33 linked, ORB-80
+  stayed `In Progress`). Move it yourself.
 - `Done` takes a closing comment shaped as the `linear-content` skill says (`Evidence:`
   with run ids, sha, what you exercised and what came back). No evidence, no `Done`.
 - Won't-do is `Canceled` (one `l`), with the reason.
