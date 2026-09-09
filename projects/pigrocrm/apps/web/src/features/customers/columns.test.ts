@@ -54,7 +54,7 @@ describe('the customer as an entity in the first cell', () => {
   })
 
   it('keeps the chip to two letters however long the company name is', () => {
-    renderName({ ...BASE_CUSTOMER, ragione_sociale: 'Acme Srl' })
-    expect(screen.getByText('CS')).toBeInTheDocument()
+    renderName({ ...BASE_CUSTOMER, ragione_sociale: 'Prima Società Benefit Srl' })
+    expect(screen.getByText('PS')).toBeInTheDocument()
   })
 })

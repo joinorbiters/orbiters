@@ -189,10 +189,10 @@ def test_an_issue_request_may_carry_a_date_and_nothing_else() -> None:
 
 def _line(**overrides: object) -> dict[str, object]:
     base: dict[str, object] = {
-        "descrizione": "207571/0426/Consulenza AI CTO Safely A2A",
+        "descrizione": "900142/0426/Consulenza AI CTO progetto Aurora",
         "quantita": Decimal("9"),
-        "prezzo_unitario": Decimal("380"),
-        "prezzo_totale": Decimal("3420.00"),
+        "prezzo_unitario": Decimal("300"),
+        "prezzo_totale": Decimal("2700.00"),
         "aliquota_iva": Decimal("0"),
         "natura": "N2.2",
     }
@@ -207,7 +207,7 @@ def _import(**overrides: object) -> dict[str, object]:
         "data_emissione": date(2026, 5, 5),
         "customer_id": uuid4(),
         "righe": [_line()],
-        "imponibile": Decimal("3420.00"),
+        "imponibile": Decimal("2700.00"),
         "imposta": Decimal("0.00"),
         "bollo": Decimal("2.00"),
         "totale": Decimal("3422.00"),
@@ -238,7 +238,7 @@ def test_an_imported_number_stops_at_the_register_ceiling() -> None:
 
     Everywhere else the number is produced by the counter, so it cannot exceed the
     ceiling by accident; an import is the one place a caller names it. Acme prints its
-    own document ids as `207571`, one column away from the register number on the same
+    own document ids as `900142`, one column away from the register number on the same
     screenshot: a slipped value would raise `ultimo_numero` to it -- irreversibly, since
     the counter never moves backwards -- make every later SdI file name ambiguous (it
     embeds `anno * 10000 + numero`), and turn `undeclared_gaps` into a
@@ -250,7 +250,7 @@ def test_an_imported_number_stops_at_the_register_ceiling() -> None:
     with pytest.raises(ValidationError):
         InvoiceImport(**_import(numero=MAX_NUMERO + 1))
     with pytest.raises(ValidationError):
-        InvoiceImport(**_import(numero=207571))
+        InvoiceImport(**_import(numero=900142))
 
 
 def test_a_declared_gap_stops_at_the_same_ceiling() -> None:
@@ -275,7 +275,7 @@ def test_an_import_has_no_riferimento_field() -> None:
 def test_an_imported_line_carries_its_own_natura_and_total() -> None:
     line = InvoiceLineImport(**_line())
     assert line.natura == "N2.2"
-    assert line.prezzo_totale == Decimal("3420.00")
+    assert line.prezzo_totale == Decimal("2700.00")
 
 
 def test_gaps_need_a_reason_each() -> None:

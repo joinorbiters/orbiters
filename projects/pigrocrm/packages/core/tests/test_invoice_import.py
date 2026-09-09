@@ -48,13 +48,13 @@ def test_an_invoice_records_where_it_was_imported_from(db_session: Session) -> N
         numero=7,
         data_emissione=date(2026, 5, 5),
         importata_da="esterno",
-        imponibile=Decimal("3420.00"),
+        imponibile=Decimal("2700.00"),
         imposta=Decimal("0.00"),
         # The stamp is declared and stored, never added: `totale = imponibile + imposta`
         # (slice 3 `totals.py:sum_totals`), because `DatiBollo/BolloVirtuale` says the
         # issuer settled it themselves.
         bollo=Decimal("2.00"),
-        totale=Decimal("3420.00"),
+        totale=Decimal("2700.00"),
     )
     db_session.add(row)
     db_session.flush()
@@ -169,22 +169,22 @@ def _payload(
         "data_emissione": giorno,
         "data_scadenza": date(giorno.year, giorno.month, 28),
         "customer_id": customer_id,
-        "causale": "207571/0426/Consulenza AI CTO Safely A2A",
+        "causale": "900142/0426/Consulenza AI CTO progetto Aurora",
         "righe": [
             {
-                "descrizione": "207571/0426/Consulenza AI CTO Safely A2A",
+                "descrizione": "900142/0426/Consulenza AI CTO progetto Aurora",
                 "quantita": Decimal("9"),
-                "prezzo_unitario": Decimal("380"),
-                "prezzo_totale": Decimal("3420.00"),
+                "prezzo_unitario": Decimal("300"),
+                "prezzo_totale": Decimal("2700.00"),
                 "aliquota_iva": Decimal("0"),
                 "natura": "N2.2",
             }
         ],
-        "imponibile": Decimal("3420.00"),
+        "imponibile": Decimal("2700.00"),
         "imposta": Decimal("0.00"),
         # Declared, and deliberately *not* inside `totale`: see `_check_declared_totals`.
         "bollo": Decimal("2.00"),
-        "totale": Decimal("3420.00"),
+        "totale": Decimal("2700.00"),
         "stato_pagamento": "incassato",
         "data_incasso": date(giorno.year, giorno.month, 20),
         "trasmessa_esternamente_il": giorno,
@@ -204,13 +204,13 @@ def test_an_imported_invoice_is_issued_numbered_and_moves_the_counter(
 
     assert (read.anno, read.numero, read.stato, read.tipo) == (2026, 7, "emessa", "fattura")
     assert read.importata_da == "esterno"
-    assert read.totale == Decimal("3420.00") and read.bollo == Decimal("2.00")
+    assert read.totale == Decimal("2700.00") and read.bollo == Decimal("2.00")
     assert read.stato_pagamento == "incassato" and read.data_incasso == date(2026, 5, 20)
     assert read.xml_hash_sha256 is None and read.pdf_document_id is None
     assert db_session.get(InvoiceCounter, 2026).ultimo_numero == 7
     lines = service.repo.lines(read.id)
     assert [(riga.numero_linea, riga.prezzo_totale, riga.natura) for riga in lines] == [
-        (1, Decimal("3420.00"), "N2.2")
+        (1, Decimal("2700.00"), "N2.2")
     ]
     row = db_session.get(Invoice, read.id)
     assert row.snapshot is not None and row.snapshot["versione"] == 1
@@ -260,9 +260,9 @@ def test_declared_totals_must_add_up_to_the_cent(db_session: Session, tmp_path) 
     cid = _fiscal_customer_id(db_session)
     with pytest.raises(ValidationFailed) as caught:
         service.import_issued(
-            _payload(cid, numero=7, giorno=date(2026, 5, 5), totale=Decimal("3419.99")), ADMIN
+            _payload(cid, numero=7, giorno=date(2026, 5, 5), totale=Decimal("2699.99")), ADMIN
         )
-    assert "3420.00" in caught.value.message and "3419.99" in caught.value.message
+    assert "2700.00" in caught.value.message and "2699.99" in caught.value.message
     with pytest.raises(ValidationFailed):
         service.import_issued(
             _payload(
@@ -301,10 +301,10 @@ def test_the_stamp_duty_is_declared_alongside_and_never_added_to_the_total(
 
     read = service.import_issued(_payload(cid, numero=7, giorno=date(2026, 5, 5)), ADMIN)
     assert (read.imponibile, read.imposta, read.bollo, read.totale) == (
-        Decimal("3420.00"),
+        Decimal("2700.00"),
         Decimal("0.00"),
         Decimal("2.00"),
-        Decimal("3420.00"),
+        Decimal("2700.00"),
     )
 
 
@@ -445,7 +445,7 @@ def test_a_number_beyond_the_register_is_refused_by_the_schema(
     db_session: Session, tmp_path
 ) -> None:  # noqa: ANN001
     """`MAX_NUMERO` is a bound on `InvoiceImport` itself, so a slipped Acme document id
-    (`207571`) never reaches the service: no lock, no counter row, no
+    (`900142`) never reaches the service: no lock, no counter row, no
     two-hundred-thousand-element `undeclared_gaps`. The counter is the witness -- it
     exists only if `lock_counter` ran.
     """
@@ -457,7 +457,7 @@ def test_a_number_beyond_the_register_is_refused_by_the_schema(
     service = _svc(db_session, tmp_path)
     cid = _fiscal_customer_id(db_session)
     with pytest.raises(ValidationError):
-        service.import_issued(_payload(cid, numero=207571, giorno=date(2026, 5, 5)), ADMIN)
+        service.import_issued(_payload(cid, numero=900142, giorno=date(2026, 5, 5)), ADMIN)
     assert db_session.get(InvoiceCounter, 2026) is None
     service.import_issued(_payload(cid, numero=MAX_NUMERO, giorno=date(2026, 5, 5)), ADMIN)
     assert db_session.get(InvoiceCounter, 2026).ultimo_numero == MAX_NUMERO

@@ -344,7 +344,7 @@ class InvoiceImport(BaseModel):
     anno: int = Field(ge=2000, le=2100)
     # `le=MAX_NUMERO`, not merely `ge=1`. Here the number is *declared* by the caller and
     # the counter follows it (§3.2 rule 3), so nothing downstream re-derives it: a slipped
-    # five-digit value -- Acme prints its own document ids as `207571`, one keystroke away
+    # five-digit value -- Acme prints its own document ids as `900142`, one keystroke away
     # from the register number -- would raise `ultimo_numero` to it irreversibly, make every
     # later export refuse (`InvoiceForExport` bounds `numero` at `MAX_NUMERO`, because the
     # SdI file name embeds `anno * 10000 + numero`), and turn `undeclared_gaps` into a

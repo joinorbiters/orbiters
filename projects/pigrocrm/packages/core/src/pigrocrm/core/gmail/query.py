@@ -160,8 +160,8 @@ def build_domain_clause(domain: str) -> str:
     both directions.
 
     The `@` is the whole difference between this and the broad search spec 4 forbids:
-    `from:acme.com` is a free-text match over display names and addresses alike,
-    while `from:@acme.com` matches the address and nothing else. It is also what
+    `from:example.com` is a free-text match over display names and addresses alike,
+    while `from:@example.com` matches the address and nothing else. It is also what
     lets `messages_list_url` accept the clause, whose guard looks for exactly that
     character behind the operator.
     """

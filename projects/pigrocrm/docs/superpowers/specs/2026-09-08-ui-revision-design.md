@@ -53,7 +53,7 @@ fondo, come già fa il badge `destructive`.
 │ ⚇ Clienti    │ │ [Tutte] [Bozze] [Emesse]   🔍 [Periodo ▾] [≡|▦]     │ │
 │ ✦ Deal       │ │ ┌──────────────────────────────────────────────┐   │ │
 │ ▤ Vendite  ⌄ │ │ │ CLIENTE     STATO     TOTALE    DATA      ⋯ │   │ │
-│   Fatture    │ │ │ ● Acme   ● Emessa  8.190 €   3 ago 2026 ⋯│   │ │
+│   Fatture    │ │ │ ● Acme   ● Emessa  6.510 €   3 ago 2026 ⋯│   │ │
 │   Solleciti  │ │ └──────────────────────────────────────────────┘   │ │
 │   Ore        │ │                                                    │ │
 │ ⚙ Impost.  ⌄ │ └────────────────────────────────────────────────────┘ │

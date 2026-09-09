@@ -100,8 +100,8 @@ describe('EntityCell', () => {
   })
 
   it('takes at most two initials, from the first two words', () => {
-    render(<EntityCell name="Acme Srl" />)
-    expect(screen.getByText('CS')).toBeInTheDocument()
+    render(<EntityCell name="Prima Società Benefit Srl" />)
+    expect(screen.getByText('PS')).toBeInTheDocument()
   })
 
   it('falls back to a single initial for a one-word name', () => {

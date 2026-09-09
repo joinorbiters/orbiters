@@ -17,11 +17,11 @@ def _upsert(**overrides: object) -> EmitterProfileUpsert:
         "ragione_sociale": "Humancraft di Ivan Sala",
         "partita_iva": "14518240966",
         "pec": "someone@example.com",
-        "indirizzo": "Via Vittorio Veneto 12'acme 10A",
+        "indirizzo": "Via Roma 1",
         "comune": "Milano",
         "cap": "20053",
         "provincia": "MI",
-        "telefono": "+39 333 1234567",
+        "telefono": "+39 02 1234567",
         "email": "ivansala@humancraft.tech",
         "regime_fiscale": "Regime forfettario, L. 190/2014 art. 1 commi 54-89",
     }

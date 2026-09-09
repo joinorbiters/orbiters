@@ -11556,8 +11556,9 @@ def test_the_courtesy_clauses_that_earned_their_place_are_still_there() -> None:
 def test_no_freelancers_name_appears_in_the_source() -> None:
     """Rifatta la sostanza: a CRM for Italian freelancers cannot carry one freelancer's
     name in its source -- and Acme carried it twice, verbatim, in two builders."""
-    for forbidden in ["Ivan Sala", "CTO", "+39 333 1234567", "humancraft"]:
+    for forbidden in ["Ivan Sala", "CTO", "humancraft"]:
         assert forbidden.lower() not in SOLLECITO_TEMPLATE_SOURCE.lower()
+    assert re.search(r"\+?\d[\d\s.]{8,}", SOLLECITO_TEMPLATE_SOURCE) is None
 
 
 def test_the_signature_comes_from_the_emitter_profile() -> None:
@@ -11670,7 +11671,7 @@ Anywhere a template's `tipo` is compared against a document's, convert explicitl
 `buildReminderInvoiceEmailBody` (`.reference-acme/website/src/App.jsx:2329-2372`) is
 text that went to real clients for years, with the right running order: invoice number,
 date, due date, amount, IBAN. That is carried. What is not carried is the signature --
-`Ivan Sala / CTO / mobile +39 333 1234567 / web https://www.humancraft.tech`,
+`Ivan Sala / CTO / mobile +39 02 1234567 / web https://www.humancraft.tech`,
 duplicated verbatim in both builders -- nor the `NOME_CLIENTE` placeholder syntax, which
 slice 2 already replaced with `{{}}` for the offer.
 

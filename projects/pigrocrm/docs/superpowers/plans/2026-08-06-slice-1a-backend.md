@@ -838,10 +838,10 @@ def test_the_same_password_hashes_differently_each_time() -> None:
 def test_create_user_stores_a_hash_and_normalises_the_email(db_session: Session) -> None:
     service = UserService(db_session)
     user = service.create(
-        UserCreate(email="someone@example.com", password="supersegreta1", nome="Ivan", ruolo="admin"),
+        UserCreate(email="  Mario@Example.IT ", password="supersegreta1", nome="Ivan", ruolo="admin"),
         ADMIN,
     )
-    assert user.email == "someone@example.com"
+    assert user.email == "mario@example.it"
     assert user.ruolo == "admin"
     assert user.attivo is True
     assert not hasattr(user, "password_hash"), "UserRead must never expose the hash"
