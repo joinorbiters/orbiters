@@ -7,8 +7,10 @@ from pigrocrm.core.errors import DomainError
 from pigrocrm_api.errors import domain_error_handler, ensure_validation_error_schemas_are_declared
 from pigrocrm_api.routers import (
     analytics,
+    attivita,
     auth,
     automations,
+    calendario,
     cost_categories,
     costs,
     customers,
@@ -94,6 +96,10 @@ def create_app() -> FastAPI:
         tenants,
         # Impostazioni → Spazio: the settings a database decides for itself.
         space_settings,
+        # Slice 10 (2026-09-09): the commitments, and the month that reads them beside
+        # the hours and the invoices falling due.
+        attivita,
+        calendario,
     ):
         app.include_router(module.router)
 

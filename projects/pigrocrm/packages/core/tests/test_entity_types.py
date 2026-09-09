@@ -21,7 +21,19 @@ from pigrocrm.core.schema_registry import CREATE_MODELS, ENTITY_TYPES, native_fi
 
 WEB_SCHEMA = Path(__file__).resolve().parents[3] / "apps" / "web" / "src" / "lib" / "schema.ts"
 
-EXPECTED = ("customer", "person", "deal", "document", "invoice", "time_entry", "cost")
+EXPECTED = (
+    "customer",
+    "person",
+    "deal",
+    "document",
+    "invoice",
+    "time_entry",
+    "cost",
+    # Slice 10 (2026-09-09). A commitment carries custom fields for the reason
+    # everything else does: whoever runs the installation knows what they need to record
+    # about one, and the alternative is a `note` field holding a form.
+    "attivita",
+)
 
 
 def test_entity_type_literal_covers_this_slice() -> None:
@@ -45,11 +57,17 @@ def test_document_tipo_gained_the_time_report() -> None:
 
 
 def test_the_frontend_literal_agrees() -> None:
-    """`re.fullmatch`, not `re.match` with `$`, per the standing project rule -- and
-    here it also matters: the union spans one line and a `$` would match before a
-    trailing newline inside the file."""
+    """The fifth place, and the one no Python import can reach.
+
+    The union is read up to the blank line that ends the declaration, not to the end of
+    the *line*: with eight members Prettier wraps it one member per line, and a
+    single-line pattern found nothing at all -- a test that passed by asserting the
+    absence of what it was looking for, until `assert match is not None` caught it. The
+    non-greedy `.+?` with `re.DOTALL` stops at the first blank line, which is where a TS
+    type declaration ends.
+    """
     source = WEB_SCHEMA.read_text(encoding="utf-8")
-    match = re.search(r"export type EntityType =([^\n]+)\n", source)
+    match = re.search(r"export type EntityType =(.+?)\n\n", source, re.DOTALL)
     assert match is not None, "EntityType not found in apps/web/src/lib/schema.ts"
-    declared = {part.strip().strip("'") for part in match.group(1).split("|")}
+    declared = {part.strip().strip("'") for part in match.group(1).split("|") if part.strip() != ""}
     assert declared == set(EXPECTED)

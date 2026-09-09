@@ -27,6 +27,7 @@ from pigrocrm.core.timetracking.schemas import (
 )
 from pigrocrm_mcp.context import McpContext
 from pigrocrm_mcp.tools import automations as automation_tools
+from pigrocrm_mcp.tools import calendario as calendar_tools
 from pigrocrm_mcp.tools import customers, deals, documents, invoices, people, timetracking
 from pigrocrm_mcp.tools import dashboard as dashboard_tools
 from pigrocrm_mcp.tools import search as search_tools
@@ -1287,3 +1288,170 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
                 cursor=UUID(cursor) if cursor else None,
             ),
         )
+
+    # -- Attività e calendario (slice 10) -------------------------------------
+    #
+    # On the default surface, all of it: nothing here consumes a number, touches the
+    # fiscal register or rewrites a rate, so none of it is one of the sixteen. The one
+    # rule worth knowing is that closing a commitment is two different operations --
+    # `complete_attivita` says it was done, `cancel_attivita` says it stopped mattering
+    # -- and that neither deletes the row, because six months later the question is
+    # *why*, not «where did it go».
+
+    @mcp.tool()
+    @guard
+    def create_attivita(
+        titolo: str,
+        scadenza: IsoDateStr = None,
+        note: str | None = None,
+        customer_id: str | None = None,
+        person_id: str | None = None,
+        deal_id: str | None = None,
+        invoice_id: str | None = None,
+        assegnata_a: str | None = None,
+        custom_fields: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Crea un impegno con un titolo e, se serve, una scadenza.
+
+        **La scadenza è facoltativa, e lasciarla vuota è la scelta giusta quando non
+        c'è.** «Chiedere a Rossi il codice SDI» è un impegno vero che non scade giovedì:
+        inventare una data riempie di rumore ogni elenco di cose in scadenza. Un'attività
+        senza scadenza non è in ritardo, non è di oggi, e nel calendario compare nella
+        sezione «senza scadenza» e in nessun giorno.
+
+        Si può agganciare a **un solo** fra cliente, persona, deal e fattura -- oppure a
+        nessuno: «fare la fatturazione elettronica di marzo» non è di nessun cliente.
+        Chiama `describe_schema` con `attivita` per sapere quali campi personalizzati
+        esistono."""
+        return calendar_tools.create(
+            context,
+            {
+                "titolo": titolo,
+                "scadenza": scadenza,
+                "note": note,
+                "customer_id": UUID(customer_id) if customer_id else None,
+                "person_id": UUID(person_id) if person_id else None,
+                "deal_id": UUID(deal_id) if deal_id else None,
+                "invoice_id": UUID(invoice_id) if invoice_id else None,
+                "assegnata_a": UUID(assegnata_a) if assegnata_a else None,
+                "custom_fields": custom_fields or {},
+            },
+        )
+
+    @mcp.tool()
+    @guard
+    def update_attivita(attivita_id: str, changes: dict[str, Any]) -> dict[str, Any]:
+        """Cambia un'attività: `titolo`, `note`, `scadenza`, `assegnata_a`, il
+        riferimento, i campi personalizzati.
+
+        Lo **stato non si cambia da qui**: usa `complete_attivita`, `cancel_attivita` o
+        `reopen_attivita`, perché «fatta» porta con sé il giorno in cui è stata fatta e
+        non è un valore che chi chiama possa scegliere.
+
+        Per *togliere* una scadenza servono `scadenza_da_rimuovere: true` (una PATCH non
+        distingue «assente» da «null»), e per staccarla da cliente/deal/persona/fattura
+        `riferimento_da_rimuovere: true`."""
+        return calendar_tools.update(context, attivita_id, changes)
+
+    @mcp.tool()
+    @guard
+    def get_attivita(attivita_id: str) -> dict[str, Any]:
+        """Legge un'attività: titolo, note, scadenza, stato, riferimento."""
+        return calendar_tools.get(context, attivita_id)
+
+    @mcp.tool()
+    @guard
+    def complete_attivita(attivita_id: str) -> dict[str, Any]:
+        """Segna un'attività come fatta, con la data di oggi.
+
+        Idempotente: completare due volte non sposta la data, perché la data è quando il
+        lavoro è stato fatto. Un'attività annullata non si completa: prima la riapri."""
+        return calendar_tools.complete(context, attivita_id)
+
+    @mcp.tool()
+    @guard
+    def cancel_attivita(attivita_id: str) -> dict[str, Any]:
+        """Chiude un'attività dichiarando che non serve più. **Non è «fatta»** e non è una
+        cancellazione: «sollecitare Rossi» annullata perché Rossi ha pagato è
+        un'informazione, la stessa riga cancellata è un buco. Reversibile con
+        `reopen_attivita`."""
+        return calendar_tools.cancel(context, attivita_id)
+
+    @mcp.tool()
+    @guard
+    def reopen_attivita(attivita_id: str) -> dict[str, Any]:
+        """Riporta un'attività chiusa -- completata o annullata -- allo stato aperto, e le
+        toglie la data di completamento."""
+        return calendar_tools.reopen(context, attivita_id)
+
+    @mcp.tool()
+    @guard
+    def archive_attivita(attivita_id: str) -> dict[str, str]:
+        """Archivia un'attività (reversibile con `restore_attivita`). È per l'errore di
+        battitura -- l'attività sbagliata -- non per il cambio di programma, che è
+        `cancel_attivita`."""
+        return calendar_tools.archive(context, attivita_id)
+
+    @mcp.tool()
+    @guard
+    def restore_attivita(attivita_id: str) -> dict[str, Any]:
+        """Ripristina un'attività archiviata."""
+        return calendar_tools.restore(context, attivita_id)
+
+    @mcp.tool()
+    @guard
+    def list_attivita(
+        stato: str | None = None,
+        assegnata_a: str | None = None,
+        customer_id: str | None = None,
+        person_id: str | None = None,
+        deal_id: str | None = None,
+        invoice_id: str | None = None,
+        scade_entro: IsoDateStr = None,
+        senza_scadenza: bool | None = None,
+        limit: BoundedLimit = 50,
+        cursor: str | None = None,
+        sort: str | None = None,
+        dir: str = "asc",
+    ) -> dict[str, Any]:
+        """Elenca gli impegni. `stato` accetta `aperta`, `completata` o `annullata`;
+        senza, tornano tutti -- un elenco che nascondesse le completate si legge come «il
+        lavoro non è stato fatto».
+
+        `scade_entro` è inclusivo e **non** comprende le attività senza scadenza: una
+        data non può rispondere per una riga che non ne ha. Per quelle c'è
+        `senza_scadenza: true`. `sort` accetta `created_at` o `scadenza`."""
+        return calendar_tools.search(
+            context,
+            {
+                "stato": stato,
+                "assegnata_a": UUID(assegnata_a) if assegnata_a else None,
+                "customer_id": UUID(customer_id) if customer_id else None,
+                "person_id": UUID(person_id) if person_id else None,
+                "deal_id": UUID(deal_id) if deal_id else None,
+                "invoice_id": UUID(invoice_id) if invoice_id else None,
+                "scade_entro": scade_entro,
+                "senza_scadenza": senza_scadenza,
+                "limit": cast(int, limit),
+                "cursor": cursor,
+                "sort": sort,
+                "dir": dir,
+            },
+        )
+
+    @mcp.tool()
+    @guard
+    def get_calendar_month(mese: str, tutti: bool = False) -> dict[str, Any]:
+        """Un mese in una sola lettura: le ore per giorno con il dettaglio per deal, le
+        attività che scadono, e le fatture emesse e non incassate che scadono.
+
+        `mese` è `AAAA-MM`. Tornano **solo i giorni che hanno qualcosa**: un mese ha
+        trentuno giorni e chi legge lo sa, mentre trentuno oggetti vuoti sarebbero rumore
+        a ogni richiesta. Le attività senza scadenza stanno fuori dai giorni, in
+        `attivita_senza_scadenza`, perché una data che non c'è non si disegna in una
+        casella.
+
+        Le ore sono quelle di chi possiede il token; `tutti: true` legge quelle di tutto
+        lo spazio. Per registrare ore usa `log_time`: questo strumento legge e non
+        scrive."""
+        return calendar_tools.month(context, mese, tutti)

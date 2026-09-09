@@ -57,7 +57,7 @@ import base64
 import binascii
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal, cast
 from uuid import UUID
 
@@ -67,7 +67,14 @@ from sqlalchemy.orm.attributes import InstrumentedAttribute
 from pigrocrm.core.errors import ValidationFailed
 
 SortDirection = Literal["asc", "desc"]
-SortKind = Literal["text", "datetime"]
+# `date` joined the two originals for `attivita.scadenza` (slice 10). It is a kind of
+# its own and not `text`, because the cursor's value becomes a bound parameter compared
+# against the column: a `Date` column against a text parameter is `date > text`, an
+# operator Postgres does not have, so the keyset seek would fail at the database rather
+# than at the decoder. The `datetime` branch cannot serve it either --
+# `datetime.fromisoformat("2026-09-09")` answers midnight, and a `Date` column compared
+# against a timestamp is a comparison across two types that only accidentally agrees.
+SortKind = Literal["text", "date", "datetime"]
 
 # Bounded for the same reason `limit` is (Global Constraints): an unbounded parameter
 # reaching a decoder is a denial of service with extra steps. The value is derived, not
@@ -148,6 +155,19 @@ def _encode_value(spec: SortSpec, value: object) -> object:
                 expected="datetime",
             )
         return value.isoformat()
+    if spec.kind == "date":
+        # `datetime` first, and this order matters: `datetime` is a subclass of `date`,
+        # so an `isinstance(value, date)` check here would accept a timestamp and encode
+        # it with `date.isoformat()`, silently dropping the time and producing a cursor
+        # that seeks to midnight.
+        if isinstance(value, datetime) or not isinstance(value, date):
+            raise ValidationFailed(
+                _ENTITY,
+                "cursor",
+                "valore di ordinamento non è una data",
+                expected="date",
+            )
+        return value.isoformat()
     return str(value)
 
 
@@ -162,6 +182,13 @@ def _decode_value(spec: SortSpec, raw: object) -> object | None:
         except ValueError as exc:
             raise ValidationFailed(
                 _ENTITY, "cursor", "cursore non valido", expected="data ISO 8601"
+            ) from exc
+    if spec.kind == "date":
+        try:
+            return date.fromisoformat(raw)
+        except ValueError as exc:
+            raise ValidationFailed(
+                _ENTITY, "cursor", "cursore non valido", expected="data AAAA-MM-GG"
             ) from exc
     return raw
 

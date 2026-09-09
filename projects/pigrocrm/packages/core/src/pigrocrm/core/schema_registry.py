@@ -11,6 +11,7 @@ from typing import Any
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.attivita.schemas import AttivitaCreate
 from pigrocrm.core.customers.schemas import CustomerCreate
 from pigrocrm.core.deals.schemas import DealCreate
 from pigrocrm.core.documents.schemas import DocumentCreate
@@ -29,6 +30,7 @@ ENTITY_TYPES: tuple[EntityType, ...] = (
     "invoice",
     "time_entry",
     "cost",
+    "attivita",
 )
 
 CREATE_MODELS: dict[str, type[BaseModel]] = {
@@ -39,6 +41,7 @@ CREATE_MODELS: dict[str, type[BaseModel]] = {
     "invoice": InvoiceCreate,
     "time_entry": TimeEntryCreate,
     "cost": CostCreate,
+    "attivita": AttivitaCreate,
 }
 
 # Native columns an entity has that its Create schema does *not* declare, because they
@@ -88,6 +91,12 @@ EXTRA_NATIVE_FIELDS: dict[str, tuple[str, ...]] = {
         "invoice_line_id",
     ),
     "cost": ("document_id",),
+    # `stato`, `completata_il`, `origine` and `regola` are columns `AttivitaCreate`
+    # deliberately does not declare: the state moves only through `complete`, `cancel`
+    # and `reopen`, and `origine`/`regola` say who created the row -- a caller that
+    # could set them could claim to be an automation. They are listed here so a
+    # custom-field definition cannot be slugified onto one of them.
+    "attivita": ("stato", "completata_il", "origine", "regola"),
 }
 
 

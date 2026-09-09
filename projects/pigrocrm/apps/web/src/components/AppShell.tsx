@@ -3,6 +3,7 @@ import type { LucideIcon } from 'lucide-react'
 import {
   Briefcase,
   Building2,
+  CalendarDays,
   ChevronDown,
   ChevronsUpDown,
   Clock,
@@ -66,6 +67,10 @@ import { cn } from '@/lib/utils'
 // would mean a collaborator could never connect an agent to their own account.
 const TOP_LEVEL = [
   { to: '/app', label: 'Home', icon: LayoutDashboard, exact: true },
+  // Under Home, at Ivan's request (2026-09-09), and top-level rather than inside a
+  // group for the same reason Home is: a month of one's own days and deadlines is a
+  // cross-cutting view, not a step of «Vendite» or of «Amministrazione».
+  { to: '/app/calendario', label: 'Calendario', icon: CalendarDays, exact: false },
   { to: '/app/token', label: 'Token', icon: KeyRound, exact: false },
 ] as const
 
