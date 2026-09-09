@@ -103,14 +103,35 @@ def test_pipeline_summary_groups_open_deals_by_stage(
     assert rows["offerta"].valore_totale == Decimal("500.00")
 
 
-def test_pipeline_summary_excludes_closed_stages(
+def test_pipeline_summary_includes_the_closed_stages_last(
     db_session: Session, customer: Customer, stages: dict[str, Any]
 ) -> None:
-    """`tipo='open'` only. A won deal is not pipeline; it is history."""
+    """Every configured stage, in `posizione` order, closed ones included.
+
+    It used to be `tipo='open'` only, on the reasoning that a won deal is history and
+    not pipeline. The card that reads this then stopped at the last open stage and never
+    said where the work ended up, which is the one thing a pipeline exists to answer --
+    so since 2026-09-09 the closed stages are returned too, each carrying its
+    `stage_tipo` so the renderer can group them by that rather than by a `nome` the user
+    is free to rename. What they count is what sits in the stage *today*: there is no
+    period filter in this query and never was, and the period question belongs to
+    `closed_in_period` on the same card.
+    """
     _deal(db_session, customer, stages["vinto"].id)
     _deal(db_session, customer, stages["perso"].id)
-    codes = {row.stage_code for row in DealRepository(db_session).pipeline_summary()}
-    assert "vinto" not in codes and "perso" not in codes
+
+    rows = DealRepository(db_session).pipeline_summary()
+
+    per_code = {row.stage_code: row for row in rows}
+    assert per_code["vinto"].numero == 1
+    assert per_code["perso"].numero == 1
+    assert per_code["vinto"].stage_tipo == "won"
+    assert per_code["perso"].stage_tipo == "lost"
+    # In `posizione` order, which is what puts the two closed stages at the end: the
+    # order is the contract, because the card renders the rows as they arrive.
+    assert [row.stage_code for row in rows] == sorted(
+        per_code, key=lambda code: stages[code].posizione
+    )
 
 
 def test_pipeline_summary_excludes_soft_deleted_deals(

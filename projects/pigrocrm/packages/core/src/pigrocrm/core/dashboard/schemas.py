@@ -13,7 +13,6 @@ so that a composition layer provably cannot invent a figure.
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -21,6 +20,7 @@ from pigrocrm.core.activities.schemas import ActivityRead
 from pigrocrm.core.analytics.schemas import PeriodPnl, UnbilledBacklog
 from pigrocrm.core.db import month_bounds, today_local, window_from
 from pigrocrm.core.errors import ValidationFailed
+from pigrocrm.core.pipeline.schemas import StageKind
 
 # Ten years and a bit -- the span of the §16 reference corpus. A ceiling exists because
 # §7.3 requires the predicate to always carry a bounded period: without one,
@@ -100,7 +100,7 @@ class PipelineStageSummary(BaseModel):
     # Which kind of stage this is, so a renderer can group the closed ones without
     # matching `stage_nome` -- a label the user is free to change (residuo R15). The same
     # reasoning that made `tipo` exist on `PipelineStage` in the first place.
-    stage_tipo: Literal["open", "won", "lost"]
+    stage_tipo: StageKind
     posizione: int
     numero: int
     valore_totale: Decimal = Field(max_digits=12, decimal_places=2)
