@@ -157,6 +157,13 @@ Two environments, two triggers, and no deploy logic of your own:
 A bare `v1.2.0` cannot work here: it does not say which project it releases. The tag
 is project-scoped for the same reason the directory is.
 
+The tag is also a push `ci.yml` listens to (`tags: ['*-v*']`), so it earns a full CI
+run of its own, every job, and `_deploy-compose.yml` gates the production deploy on
+that run rather than on the trunk's run for the same commit. The trunk tier is
+path-scoped: a docs-only commit after a red change to your project gets a trunk run
+where every one of your jobs is skipped and `ci` concludes success, and a tag on that
+commit would otherwise ship the red code. The price is one full run per release.
+
 The mechanism lives in `.github/workflows/_deploy-compose.yml` and is shared. What a
 project writes is a caller, `deploy-<name>.yml`, with one job per environment, each
 naming four things: the GitHub environment, the compose directory, the compose project
@@ -202,11 +209,23 @@ A fresh repository has neither, so nothing deploys by accident.
 
 ### What the host needs
 
-One directory per environment, each with its own `.env`, its own data directory, its
-own ports, and its own compose project name. The `.env` is never in the repository and
-never rsynced: the deploy excludes it. Two environments on one host must share nothing
-but the host, which for PigroCRM means separate databases, separate secrets, and no
-production Google credentials in preview.
+One directory per environment, `DEPLOY_PATH`, each with its own `.env`, its own data
+directory, its own ports, and its own compose project name. The `.env` is never in the
+repository and never rsynced: the deploy excludes it.
+
+**The `.env` is `${DEPLOY_PATH}/.env`**, at the root of the environment's checkout and
+two levels above the compose file. The deploy passes `--env-file "${DEPLOY_PATH}/.env"`
+explicitly, which replaces compose's default lookup beside the compose file: a `.env`
+in `projects/<name>/` on the server is not read. Write that same location in the
+project's `.env.example` and `AGENTS.md`, and put every variable the compose file
+requires there, the data directory included. Give the data directory no default in the
+compose file (`${<NAME>_DATA_DIR:?}`): a `.env` that forgets it then fails the stack,
+where a relative default brings Postgres up on an empty directory with the health check
+answering 200 and the real rows unmounted. A build interpolates the whole file, so the
+image jobs in `ci.yml` and `preflight.json` pass a throwaway value for it.
+
+Two environments on one host must share nothing but the host, which for PigroCRM means
+separate databases, separate secrets, and no production Google credentials in preview.
 
 ### Taking something over from another project
 
@@ -227,10 +246,20 @@ deployed, curled and left running for as long as you like.
 
 The host's nginx vhost belongs to the project, in `projects/<name>/deploy/`, and it
 decides only what is not the project's container: everything else proxies to it and the
-container owns its own path map. Two projects on one host means two loopback ports
-(PigroCRM 8080 and 8081 for its preview, the website 8082 and 8083) and never
+container owns its own path map. Every stack publishes on the loopback and never on
 `0.0.0.0`: the host's nginx is what faces the internet, and publishing wider walks past
-the firewall.
+the firewall. One host carries every environment of every project, so the ports are
+allocated here and nowhere else; a new project takes the next free ones and adds its
+rows.
+
+| Project | Production | Preview |
+|---|---|---|
+| PigroCRM | web 8080, Postgres 55432 | web 8081 |
+| website | web 8082 | web 8083 |
+| hub (`orbiters`, `orbiters-preview`) | api 8084, web 8085, Postgres 55435 | api 8086, web 8087, Postgres 55436 |
+
+The vhost proxies production only. A preview with no public name is reached on the
+host, by its loopback port, which is also why its deploy job passes no `url`.
 
 The copy in the repository is plain HTTP and is the source of truth for what the rules
 are. The copy in `/etc/nginx/sites-available/` has certbot's port-443 block on top of

@@ -12,7 +12,11 @@
 #      A push that cannot reach a project does not pay for that project's suite, and
 #      each deploy's own `scope` job already decides the same way from the same paths.
 #      When the base commit of a push is unreachable -- a force push, a new branch --
-#      the filters are not consulted and everything runs.
+#      the filters are not consulted and everything runs. A release tag
+#      (`<project>-v<semver>`) is a push too and always earns that full run: a
+#      production deploy is gated on the run of the tag itself, because the trunk's
+#      run for the same commit may have skipped every job of the project being
+#      released and still concluded success (ORB-28).
 #
 # A check that stops running on a PR must appear in preflight.json. Verification did
 # not get cheaper here, it moved; a heavy check in neither tier is a hole.
@@ -26,6 +30,11 @@ on:
     branches: [main]
   push:
     branches: [main]
+    # Every project's release tag. `_deploy-compose.yml` gates a production deploy on
+    # the CI run of the tag itself; this is what gives the tag one. `deploy-*.yml`'s
+    # `workflow_run` triggers filter on `branches: [main]`, and a tag run's head branch
+    # is the tag, so this run never starts a preview.
+    tags: ['*-v*']
   workflow_dispatch:
 
 # Cancelling is right on a PR and wrong on the trunk, and the difference is not
@@ -37,8 +46,14 @@ on:
 # runs -- including the tip. The tip then had no verdict and could not deploy, which
 # is the same shape as a red trunk and harder to read. Grouping by commit on push
 # gives every trunk commit its own run and its own answer; a PR still keeps one.
+#
+# The ref is in the group as well as the commit, because a release tag is a push at a
+# commit the trunk has usually already built. A pending run is cancelled when another
+# run joins its group, so with the commit alone two tags pushed at one commit (two
+# projects released together) would cancel each other's run, and each deploy gates on
+# its own tag's run.
 concurrency:
-  group: ci-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}-${{ github.event_name == 'push' && github.sha || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -88,6 +103,8 @@ jobs:
 
       - name: Is there a base commit to diff against
         id: base
+        env:
+          REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           if [ '${{ github.event_name }}' = 'pull_request' ]; then
@@ -95,7 +112,11 @@ jobs:
             exit 0
           fi
           before='${{ github.event.before }}'
-          if [ -z "$before" ] || [ "$before" = '0000000000000000000000000000000000000000' ] \
+          if [[ "$REF" == refs/tags/* ]]; then
+            # A new tag has no base anyway; saying so here also covers a moved one.
+            echo 'A release tag; running every job.'
+            echo 'all=true' >> "$GITHUB_OUTPUT"
+          elif [ -z "$before" ] || [ "$before" = '0000000000000000000000000000000000000000' ] \
              || ! git cat-file -e "$before^{commit}" 2>/dev/null; then
             echo 'No usable base commit; running every job.'
             echo 'all=true' >> "$GITHUB_OUTPUT"
@@ -150,6 +171,7 @@ jobs:
               - 'pyproject.toml'
               - 'uv.lock'
               - 'ruff.toml'
+              - '.python-version'
               - '.github/workflows/ci.yml'
               - '.github/workflows/_python-gate.yml'
             hub_web:
@@ -408,10 +430,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build both images from the repository root context
         working-directory: projects/hub
-        # Through compose, with `-p orbiters` as the deploy passes it (docs/adding-a-project.md
-        # §7), so this proves the same context and the same files the deploy uses.
+        # Through compose, so this proves the same context and the same files the
+        # deploy uses. `-p orbiters` changes only what the throwaway images are called
+        # (the names the deploy's project gives them, which is what preflight's twin
+        # builds too). The two variables exist because compose interpolates the whole
+        # file before a build and both are `:?` there; a build reads neither, and the
+        # data directory has to stay path-shaped or compose reads the word as a named
+        # volume and refuses the project.
         env:
           POSTGRES_PASSWORD: build-only-never-used
+          ORBITERS_DATA_DIR: ./build-only-never-mounted
         run: docker compose -p orbiters build
 
   ci:

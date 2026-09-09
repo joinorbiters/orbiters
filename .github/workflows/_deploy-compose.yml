@@ -97,34 +97,42 @@ jobs:
         # A deploy workflow is not a status check and nothing stops it from running on
         # a red commit, so it asks. A preview arrives here already knowing the answer,
         # since CI finishing green is what triggered it, and the loop then exits on its
-        # first request; a tag deploys the commit it points at, which is normally a
-        # commit main already built, and this finds that same run. Until 2026-09-09
-        # every preview reached this step while CI was still running and slept through
-        # it on a metered runner: measured on one preview, 458 of 514 billed seconds
-        # were this loop, against 51 seconds of actual deploying.
+        # first request. Until 2026-09-09 every preview reached this step while CI was
+        # still running and slept through it on a metered runner: measured on one
+        # preview, 458 of 514 billed seconds were this loop, against 51 seconds of
+        # actual deploying.
+        #
+        # The run it asks for is the one of the ref being deployed, not any run for the
+        # commit. The trunk tier is path-scoped, so the trunk's run for a commit that
+        # touched only another project skips every job of this one and still concludes
+        # success; a tag on that commit used to find that run and ship code CI had
+        # never built (ORB-28). `ci.yml` runs on every `*-v*` tag with every job, and a
+        # tag deploy waits for that run. For a preview the ref is `main` and the run is
+        # the one that triggered it.
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ inputs.ref || github.sha }}
+          REF: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           for attempt in $(seq 1 60); do
             run=$(gh api "repos/${REPO}/actions/workflows/ci.yml/runs?head_sha=${SHA}&per_page=10" \
-              --jq '.workflow_runs | sort_by(.created_at) | last // empty')
+              | jq -c --arg ref "$REF" '.workflow_runs | map(select(.head_branch == $ref)) | sort_by(.created_at) | last // empty')
             if [ -n "$run" ]; then
               status=$(printf '%s' "$run" | jq -r .status)
               conclusion=$(printf '%s' "$run" | jq -r .conclusion)
               url=$(printf '%s' "$run" | jq -r .html_url)
-              echo "ci.yml for ${SHA}: status=${status} conclusion=${conclusion} (${url})"
+              echo "ci.yml for ${REF} at ${SHA}: status=${status} conclusion=${conclusion} (${url})"
               if [ "$status" = completed ]; then
                 [ "$conclusion" = success ] && exit 0
-                echo "::error::CI concluded ${conclusion} for ${SHA}. See ${url}. Refusing to deploy."
+                echo "::error::CI concluded ${conclusion} for ${REF} at ${SHA}. See ${url}. Refusing to deploy."
                 exit 1
               fi
             fi
             sleep 30
           done
-          echo "::error::No completed ci.yml run for ${SHA} after 30 minutes. Refusing to deploy an unverified commit."
+          echo "::error::No completed ci.yml run for ${REF} at ${SHA} after 30 minutes. Refusing to deploy an unverified commit."
           exit 1
 
       - name: Configure SSH
