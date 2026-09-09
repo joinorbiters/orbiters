@@ -159,7 +159,9 @@ def test_the_root_slug_is_the_root_itself_and_nobody_elses_name(
         return Request({"type": "http", "path": "/api/x", "headers": [], "state": state})
 
     assert cookie_path(_request({})) == "/"
-    assert cookie_path(_request({"prefix": "humancraft"})) == "/humancraft/"
+    # The root under its own name keeps the root's jar: it logs in at the bare
+    # `/app/login` and works under `/humancraft/app`, and only `/` serves both.
+    assert cookie_path(_request({"prefix": "humancraft"})) == "/"
     assert cookie_path(_request({"prefix": "studio", "tenant": "studio"})) == "/studio/"
 
     monkeypatch.setenv("PIGROCRM_ROOT_SLUG", "humancraft")
@@ -177,9 +179,10 @@ def test_the_root_slug_is_the_root_itself_and_nobody_elses_name(
             assert client.get("/humancraft/api/tenants/root").json() == {"slug": "humancraft"}
             # The root's own login answers here, and the cookie is the root's (`Path=/`).
             assert client.get("/humancraft/api/auth/me").status_code == 401
-            # A logout under the alias clears the pair scoped to it *and* the pair a plain
-            # `/app/login` once set at `/`: a browser removes a cookie only for a matching
-            # path, and the older pair kept a session alive that the person had ended.
+            # A logout under the alias clears the root's pair at `/` *and* the pair that
+            # lived at `/humancraft/` before 2026-09-09: a browser removes a cookie only
+            # for a matching path, and a pair left behind kept a session alive that the
+            # person had ended.
             logout = client.post("/humancraft/api/auth/logout")
             assert logout.status_code == 204
             deletions = logout.headers.get_list("set-cookie")

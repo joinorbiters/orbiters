@@ -77,8 +77,39 @@ def tenant_slug(request: Request) -> str | None:
 
 
 def cookie_path(request: Request) -> str:
-    """Session cookies live under the prefix the request wore -- a space's, or the
-    root's own name -- so two spaces in one browser never see each other's session.
-    Only the bare, unprefixed root keeps `/`."""
+    """Session cookies live under a space's prefix, so two spaces in one browser never
+    see each other's session. The root keeps `/` -- under its own name too, since
+    2026-09-09: the root logs in at the bare `/app/login` and works under
+    `/<root_slug>/app`, and one jar at `/` is the only thing both paths can read. A
+    root cookie that reaches a space's API names a user that space does not have, and
+    `get_actor` answers 401 like for any stranger."""
+    slug = tenant_slug(request)
+    return f"/{slug}/" if slug else "/"
+
+
+def cookie_paths_to_clear(request: Request) -> list[str]:
+    """Every path a session cookie of this installation may have been set at, most
+    specific first: the one `cookie_path` uses now, the prefix the request wore (the
+    root alias's own `/humancraft/`, where its cookies lived before 2026-09-09) and
+    `/`. A browser removes a cookie only for a matching path, so a logout that cleared
+    one of them left the others reviving the session."""
+    paths = {cookie_path(request), "/"}
     prefix = getattr(request.state, "prefix", None)
-    return f"/{prefix}/" if isinstance(prefix, str) and prefix else "/"
+    if isinstance(prefix, str) and prefix:
+        paths.add(f"/{prefix}/")
+    return sorted(paths, key=len, reverse=True)
+
+
+def first_cookie(request: Request, name: str) -> str | None:
+    """The value of `name` as the browser ranks it: the first in the header.
+
+    A browser sends every cookie whose path matches, longer paths first (RFC 6265
+    §5.4), so when a space's `/studio/` jar and the root's `/` jar both hold a session
+    the first value is the space's own. `request.cookies` is `SimpleCookie`, which
+    keeps the *last* -- the root's -- and would hand a space the wrong session. Values
+    are JWTs: no `;`, no `=` beyond the first, nothing quoted."""
+    for pair in request.headers.get("cookie", "").split(";"):
+        key, sep, value = pair.strip().partition("=")
+        if sep and key.strip() == name and value.strip():
+            return value.strip()
+    return None

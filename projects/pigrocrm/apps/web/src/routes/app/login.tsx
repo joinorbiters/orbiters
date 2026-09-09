@@ -20,11 +20,27 @@ function LoginPage() {
   // Signup is offered by the root only. The root is the unprefixed page -- or the page
   // under the root's own space name (PIGROCRM_ROOT_SLUG), which only the API knows.
   const [isRoot, setIsRoot] = useState(tenantPrefix === '')
+  // The root's own name, when it has one: where a login on the bare page sends the
+  // person afterwards. `null` until the API has answered, `''` when there is none.
+  const [rootSlug, setRootSlug] = useState<string | null>(null)
   useEffect(() => {
-    if (tenantPrefix === '') return
     void api.GET('/api/tenants/root').then(({ data }) => {
-      if (data?.slug && `/${data.slug}` === tenantPrefix) setIsRoot(true)
-    })
+      const slug = data?.slug ?? ''
+      setRootSlug(slug)
+      if (slug === '') return
+      if (tenantPrefix === '') {
+        setIsRoot(true)
+        return
+      }
+      if (`/${slug}` !== tenantPrefix) return
+      // The login is nobody's page (decision 2026-09-09): a person who has just logged
+      // out, or whose session ran out, must not read a space's name in the address.
+      // The root's login lives at the bare `/app/login`, which nginx leaves alone and
+      // which sets the root's cookies at `/`, the one jar this page and `/<slug>/app`
+      // both read. A replace, not a push: the aliased address is not worth a history
+      // entry.
+      window.location.replace('/app/login')
+    }).catch(() => setRootSlug(''))
   }, [])
 
   /**
@@ -49,13 +65,25 @@ function LoginPage() {
    * form is not a page a live session has any use for.
    */
   useEffect(() => {
+    if (!user) return
+    // A login on the bare page of a root that has a name continues under that name:
+    // `/humancraft/app` is where the CRM lives, and a different basepath is a
+    // different application instance, so this is a navigation, not a router push. The
+    // cookies are the root's, at `/`, and travel with it. Waits for the root endpoint
+    // rather than guessing: a push to `/app` first and a hop afterwards would flash the
+    // bare home for a moment.
+    if (tenantPrefix === '' && rootSlug === null) return
+    if (tenantPrefix === '' && rootSlug !== '') {
+      window.location.assign(`/${rootSlug}/app/`)
+      return
+    }
     // `/app/` declares `validateSearch` since slice 6, so its search params are part of
     // its type and this redirect has to name them. A fresh login has no period in mind,
     // which is what `defaultDashboardSearch()` answers -- and landing with the month
     // already in the URL means the first thing the user could screenshot or paste to a
     // colleague already says which period it is about (§4).
-    if (user) void navigate({ to: '/app', search: defaultDashboardSearch() })
-  }, [user, navigate])
+    void navigate({ to: '/app', search: defaultDashboardSearch() })
+  }, [user, navigate, rootSlug])
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault()
