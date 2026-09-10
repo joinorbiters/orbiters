@@ -26,7 +26,7 @@ export function DashboardPage({
   search: DashboardSearch
   onSearchChange: (next: Partial<DashboardSearch>) => void
 }) {
-  const { tab, da, a } = search
+  const { tab, da, a, base } = search
 
   // The page owns its own intestazione since the 2026-09-08 revision: §4 draws the tabs
   // as part of the header, closed by its rule, and the period picker is the one control
@@ -56,7 +56,13 @@ export function DashboardPage({
             stood here until 6C landed are gone: both dashboards exist now, so a paragraph
             explaining their absence would be the untrue thing on the page. */}
         {tab === 'commerciale' && <CommercialTab periodo={{ da, a }} />}
-        {tab === 'economica' && <EconomicTab periodo={{ da, a }} />}
+        {tab === 'economica' && (
+          <EconomicTab
+            periodo={{ da, a }}
+            base={base}
+            onBaseChange={(next) => onSearchChange({ base: next })}
+          />
+        )}
       </div>
     </Tabs>
   )

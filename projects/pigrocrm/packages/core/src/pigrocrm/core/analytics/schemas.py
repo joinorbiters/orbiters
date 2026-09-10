@@ -62,6 +62,15 @@ class DealPnl(BaseModel):
 # quantity is attributed by its own date whatever the base.
 RevenueBase = Literal["emissione", "competenza"]
 
+# Which month a document's money belongs to in the cash view (ORB-133). `competenza` is
+# the default Ivan asked for: every invoice, paid or not, and every draft or proforma
+# sits in the month of the accrual period it declares, `coalesce(competenza_da,
+# data_emissione)`, the same rule `RevenueBase` "competenza" uses. `incasso` is the
+# reading the charts had before: a paid invoice by `data_incasso`, an unpaid one by
+# `data_scadenza`, a draft or proforma by its own document date. Costs are by their own
+# date under both. The fiscal estimate never takes this base: it is on the money.
+CashBase = Literal["competenza", "incasso"]
+
 
 class PeriodPnlQuery(BaseModel):
     da: date
@@ -234,14 +243,16 @@ class CashMonth(BaseModel):
 
 
 class CashOverview(BaseModel):
-    """The year as money, not as revenue by competence: `incassato` is invoices paid in
-    the year (by `data_incasso`), `da_incassare` invoices issued and unpaid (by due
-    date), `bozze` drafts and proformas not yet turned into invoices, `costi` what was
-    spent. `proiettato` is the first three added up -- what the year would collect if
-    everything issued and drafted came in -- and the two `lordo` figures are income
-    less costs, actual and projected."""
+    """The year as money: `incassato` is invoices paid, `da_incassare` invoices issued
+    and unpaid, `bozze` drafts and proformas not yet turned into invoices, `costi` what
+    was spent. Which month each document falls in is `base` (`CashBase`): by the
+    accrual period it declares, or by the money's own dates. `proiettato` is the first
+    three added up -- what the year would collect if everything issued and drafted came
+    in -- and the two `lordo` figures are income less costs, actual and projected."""
 
     anno: int
+    # Echoed from the request, so the page can label the reading it shows (ORB-133).
+    base: CashBase
     incassato: Decimal = Field(max_digits=12, decimal_places=2)
     da_incassare: Decimal = Field(max_digits=12, decimal_places=2)
     bozze: Decimal = Field(max_digits=12, decimal_places=2)

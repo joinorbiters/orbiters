@@ -56,9 +56,17 @@ describe('validateDashboardSearch', () => {
 
   it('reads back exactly what a shared link carried', () => {
     // The round trip the URL exists for. Without this the period is decoration.
-    expect(validateDashboardSearch({ tab: 'economica', da: '2025-11-03', a: '2025-11-09' })).toEqual(
-      { tab: 'economica', da: '2025-11-03', a: '2025-11-09' },
-    )
+    expect(
+      validateDashboardSearch({ tab: 'economica', da: '2025-11-03', a: '2025-11-09', base: 'incasso' }),
+    ).toEqual({ tab: 'economica', da: '2025-11-03', a: '2025-11-09', base: 'incasso' })
+  })
+
+  it('reads the economic charts by accrual period unless the link says otherwise', () => {
+    // ORB-133: Ivan's default is «competenza»; «incasso» is the other reading, and any
+    // other word falls back rather than reaching the server as a 422 on the home screen.
+    expect(validateDashboardSearch({}).base).toBe('competenza')
+    expect(validateDashboardSearch({ base: 'incasso' }).base).toBe('incasso')
+    expect(validateDashboardSearch({ base: 'emissione' }).base).toBe('competenza')
   })
 
   it('fills in the current month for a bare /app/', () => {
@@ -68,6 +76,7 @@ describe('validateDashboardSearch', () => {
       tab: 'economica',
       da: '2026-03-01',
       a: '2026-03-31',
+      base: 'competenza',
     })
   })
 
@@ -105,6 +114,7 @@ describe('validateDashboardSearch', () => {
     // bounds would answer a different question from the one the link asked.
     expect(validateDashboardSearch({ da: '2026-05-01', a: '2026-04-01' })).toEqual({
       tab: 'economica',
+      base: 'competenza',
       da: '2026-05-01',
       a: '2026-04-01',
     })

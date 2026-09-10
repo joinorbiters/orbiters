@@ -172,3 +172,205 @@ def test_the_estimate_follows_collected_and_projected_revenue(
     assert (
         overview.netto_effettivo == overview.cassa.lordo_effettivo - overview.fiscale.totale_dovuto
     )
+
+
+# --- the two readings of the cash view: by accrual period, or by the money (ORB-133) ---
+
+
+def _issued_for_period(
+    db_session: Session,
+    local_storage: LocalFileStorage,
+    customer_id: UUID,
+    *,
+    competenza_mese: int,
+    prezzo: str,
+    tipo: str = "fattura",
+) -> UUID:
+    """A document dated today whose declared accrual period is another month of the year:
+    the one shape under which the two readings of the cash view visibly disagree."""
+    from datetime import date, timedelta
+
+    from pigrocrm.core.invoices.schemas import InvoiceCreate, InvoiceIssue, InvoiceLineIn
+
+    service = InvoiceService(db_session, local_storage)
+    primo = date(OGGI.year, competenza_mese, 1)
+    ultimo = date(OGGI.year, competenza_mese + 1, 1) - timedelta(days=1)
+    invoice = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            tipo=tipo,
+            data_emissione=OGGI if tipo == "proforma" else None,
+            competenza_da=primo,
+            competenza_a=ultimo,
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal(prezzo))],
+        ),
+        ADMIN,
+    )
+    if tipo == "fattura":
+        service.issue(invoice.id, InvoiceIssue(), ADMIN)
+    return invoice.id
+
+
+def test_the_cash_view_reads_by_accrual_period_by_default_and_by_the_money_on_request(
+    db_session: Session, local_storage: LocalFileStorage, draft_invoice_line_id: UUID
+) -> None:
+    """Ivan, 2026-09-10: «deve essere per mese di competenza non incassato o emissione
+    della fattura», then a switch with competenza as the default. Three documents, all
+    dated today, all declaring another month as their period: a paid invoice, an unpaid
+    one and a proforma. By accrual all three sit in the declared month; by the money the
+    paid one sits where it was collected, the unpaid one where it falls due (its issue
+    date, here) and the proforma on its own document date, exactly as before this card."""
+    service = InvoiceService(db_session, local_storage)
+    customer_id = service.get(_invoice_of(db_session, draft_invoice_line_id), ADMIN).customer_id
+    altro_mese = 1 if OGGI.month != 1 else 2
+
+    paid_id = _issued_for_period(
+        db_session, local_storage, customer_id, competenza_mese=altro_mese, prezzo="1000.00"
+    )
+    service.set_payment_state(
+        paid_id, PaymentState(stato_pagamento="incassato", data_incasso=OGGI), ADMIN
+    )
+    unpaid_id = _issued_for_period(
+        db_session, local_storage, customer_id, competenza_mese=altro_mese, prezzo="200.00"
+    )
+    # `issue` stamps a due date from the fiscal profile's payment terms, so by the money
+    # the unpaid invoice sits in the month it falls due, wherever that is.
+    scadenza = service.get(unpaid_id, ADMIN).data_scadenza
+    assert scadenza is not None
+    _issued_for_period(
+        db_session,
+        local_storage,
+        customer_id,
+        competenza_mese=altro_mese,
+        prezzo="30.00",
+        tipo="proforma",
+    )
+    # The fixture's own draft has no period and no date: it stays in the month it was
+    # created under both readings, which is this one.
+    bozza_oggi = Decimal("100.00")
+
+    analytics = AnalyticsService(db_session)
+
+    competenza = analytics.cash_overview(OGGI.year, COLLABORATORE)
+    assert competenza.base == "competenza"
+    declared = next(m for m in competenza.mesi if m.mese == altro_mese)
+    today = next(m for m in competenza.mesi if m.mese == OGGI.month)
+    assert declared.incassato == Decimal("1000.00")
+    assert declared.da_incassare == Decimal("200.00")
+    assert declared.bozze == Decimal("30.00")
+    assert today.incassato == Decimal("0.00")
+    assert today.da_incassare == Decimal("0.00")
+    assert today.bozze == bozza_oggi
+
+    incasso = analytics.cash_overview(OGGI.year, COLLABORATORE, base="incasso")
+    assert incasso.base == "incasso"
+    declared = next(m for m in incasso.mesi if m.mese == altro_mese)
+    today = next(m for m in incasso.mesi if m.mese == OGGI.month)
+    assert declared.incassato == declared.bozze == Decimal("0.00")
+    assert today.incassato == Decimal("1000.00")
+    assert today.bozze == Decimal("30.00") + bozza_oggi
+    by_month = {m.mese: m.da_incassare for m in incasso.mesi}
+    if scadenza.year == OGGI.year:
+        assert by_month[scadenza.month] == Decimal("200.00")
+        assert declared.da_incassare == (
+            Decimal("200.00") if scadenza.month == altro_mese else Decimal("0.00")
+        )
+    else:
+        # Due next year: by the money it is not this year's projection at all.
+        assert sum(by_month.values()) == Decimal("0.00")
+
+    # In this fixture the paid and the drafted money add up the same under both readings,
+    # since every date involved is in this year: only the month moves. The unpaid invoice
+    # is the one that can leave the year, when it falls due in the next one.
+    assert competenza.incassato == incasso.incassato
+    assert competenza.bozze == incasso.bozze
+
+
+def test_the_estimate_stays_on_the_money_whatever_the_charts_read_by(
+    db_session: Session, local_storage: LocalFileStorage, draft_invoice_line_id: UUID
+) -> None:
+    """The forfettario is taxed on what was collected in the calendar year, so the fiscal
+    block of the overview is computed on the cash reading even when the charts read by
+    accrual period (`docs/design/DECISIONS.md`, 2026-09-10). Proven with the one document
+    whose two readings fall in different years: collected today, for December's work."""
+    from datetime import date
+
+    from pigrocrm.core.fiscal.schemas import FiscalProfileUpsert
+    from pigrocrm.core.fiscal.service import FiscalProfileService
+    from pigrocrm.core.invoices.schemas import InvoiceCreate, InvoiceIssue, InvoiceLineIn
+
+    FiscalProfileService(db_session).upsert(
+        FiscalProfileUpsert(
+            codice_regime="RF19",
+            coefficiente_redditivita=Decimal("67.00"),
+            aliquota_imposta_sostitutiva=Decimal("5.00"),
+            aliquota_inps=Decimal("26.07"),
+        ),
+        ADMIN,
+    )
+    service = InvoiceService(db_session, local_storage)
+    customer_id = service.get(_invoice_of(db_session, draft_invoice_line_id), ADMIN).customer_id
+    invoice = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            competenza_da=date(OGGI.year - 1, 12, 1),
+            competenza_a=date(OGGI.year - 1, 12, 31),
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("1000.00"))],
+        ),
+        ADMIN,
+    )
+    service.issue(invoice.id, InvoiceIssue(), ADMIN)
+    service.set_payment_state(
+        invoice.id, PaymentState(stato_pagamento="incassato", data_incasso=OGGI), ADMIN
+    )
+
+    # The same year boundary for the other two series: a proforma dated today for
+    # December's work, and an unpaid invoice for it. `monthly_bozze` is the one with the
+    # three-way fallback (period, document date, creation day), so it is the one to pin.
+    service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            tipo="proforma",
+            data_emissione=OGGI,
+            competenza_da=date(OGGI.year - 1, 12, 1),
+            competenza_a=date(OGGI.year - 1, 12, 31),
+            righe=[InvoiceLineIn(descrizione="Saldo", prezzo_unitario=Decimal("40.00"))],
+        ),
+        ADMIN,
+    )
+    unpaid = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            competenza_da=date(OGGI.year - 1, 12, 1),
+            competenza_a=date(OGGI.year - 1, 12, 31),
+            righe=[InvoiceLineIn(descrizione="Saldo", prezzo_unitario=Decimal("500.00"))],
+        ),
+        ADMIN,
+    )
+    service.issue(unpaid.id, InvoiceIssue(), ADMIN)
+    scadenza = service.get(unpaid.id, ADMIN).data_scadenza
+    assert scadenza is not None
+
+    analytics = AnalyticsService(db_session)
+    by_accrual = analytics.economic_overview(OGGI.year, ADMIN)
+    by_cash = analytics.economic_overview(OGGI.year, ADMIN, base="incasso")
+
+    # The charts disagree: December's work is last year's by accrual, this year's by cash.
+    # The fixture's own dateless draft (100.00) is this year's under both.
+    assert by_accrual.cassa.base == "competenza"
+    assert by_accrual.cassa.incassato == Decimal("0.00")
+    assert by_cash.cassa.incassato == Decimal("1000.00")
+    assert by_accrual.cassa.bozze == Decimal("100.00")
+    assert by_cash.cassa.bozze == Decimal("140.00")
+    assert by_accrual.cassa.da_incassare == Decimal("0.00")
+    assert by_cash.cassa.da_incassare == (
+        Decimal("500.00") if scadenza.year == OGGI.year else Decimal("0.00")
+    )
+    # The tax block does not: it is the same estimate on the same collected revenue.
+    assert by_accrual.fiscale is not None and by_cash.fiscale is not None
+    assert by_accrual.fiscale.ricavi == by_cash.fiscale.ricavi == Decimal("1000.00")
+    assert by_accrual.fiscale.totale_dovuto == by_cash.fiscale.totale_dovuto
+    assert by_accrual.netto_effettivo == by_cash.netto_effettivo
+    assert by_accrual.fiscale_proiettato is not None and by_cash.fiscale_proiettato is not None
+    assert by_accrual.fiscale_proiettato.ricavi == by_cash.fiscale_proiettato.ricavi
+    assert by_accrual.netto_proiettato == by_cash.netto_proiettato

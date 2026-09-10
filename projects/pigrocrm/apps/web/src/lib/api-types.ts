@@ -1828,7 +1828,8 @@ export interface paths {
          * Economic Overview
          * @description The dashboard's economic tab: the year as cash for everyone, plus the fiscal
          *     estimate on collected and projected revenue for an admin with a profile. No MCP
-         *     tool, for the estimate's own reasons.
+         *     tool, for the estimate's own reasons. `base` moves the charts and the cash cards
+         *     between the two readings (ORB-133); the fiscal block stays on the money.
          */
         get: operations["economic_overview_api_analytics_panoramica_get"];
         put?: never;
@@ -2992,16 +2993,21 @@ export interface components {
         };
         /**
          * CashOverview
-         * @description The year as money, not as revenue by competence: `incassato` is invoices paid in
-         *     the year (by `data_incasso`), `da_incassare` invoices issued and unpaid (by due
-         *     date), `bozze` drafts and proformas not yet turned into invoices, `costi` what was
-         *     spent. `proiettato` is the first three added up -- what the year would collect if
-         *     everything issued and drafted came in -- and the two `lordo` figures are income
-         *     less costs, actual and projected.
+         * @description The year as money: `incassato` is invoices paid, `da_incassare` invoices issued
+         *     and unpaid, `bozze` drafts and proformas not yet turned into invoices, `costi` what
+         *     was spent. Which month each document falls in is `base` (`CashBase`): by the
+         *     accrual period it declares, or by the money's own dates. `proiettato` is the first
+         *     three added up -- what the year would collect if everything issued and drafted came
+         *     in -- and the two `lordo` figures are income less costs, actual and projected.
          */
         CashOverview: {
             /** Anno */
             anno: number;
+            /**
+             * Base
+             * @enum {string}
+             */
+            base: "competenza" | "incasso";
             /** Incassato */
             incassato: string;
             /** Da Incassare */
@@ -22085,6 +22091,8 @@ export interface operations {
         parameters: {
             query: {
                 anno: number;
+                /** @description In quale mese cade il denaro di ogni documento: 'competenza' (il periodo di competenza dichiarato sulla fattura o sulla proforma, con la data del documento per chi non lo dichiara; predefinito) oppure 'incasso' (la data di incasso per le fatture pagate, la scadenza per quelle da incassare, la data del documento per bozze e proforma). La stima fiscale resta sempre sull'incassato dell'anno. */
+                base?: "competenza" | "incasso";
             };
             header?: never;
             path?: never;

@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { EconomicTab } from './EconomicTab'
 import { api } from '@/lib/api'
@@ -96,6 +97,7 @@ const RESPONSE = {
   calcolato_alle: '2026-09-08T10:00:00Z',
   cassa: {
     anno: 2026,
+    base: 'competenza',
     incassato: '20628.62',
     da_incassare: '6954.03',
     bozze: '2500.00',
@@ -113,13 +115,15 @@ const RESPONSE = {
 
 const PERIODO = { da: '2026-09-01', a: '2026-09-30' }
 
-function renderTab(periodo = PERIODO) {
+function renderTab(periodo = PERIODO, base: 'competenza' | 'incasso' = 'competenza') {
+  const onBaseChange = vi.fn()
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(
+  const rendered = render(
     <QueryClientProvider client={client}>
-      <EconomicTab periodo={periodo} />
+      <EconomicTab periodo={periodo} base={base} onBaseChange={onBaseChange} />
     </QueryClientProvider>,
   )
+  return { ...rendered, onBaseChange }
 }
 
 beforeEach(() => {
@@ -132,8 +136,76 @@ describe('EconomicTab', () => {
     renderTab({ da: '2025-03-01', a: '2025-03-31' })
     await screen.findByText(/Vista economica 2025/)
     expect(api.GET).toHaveBeenCalledWith('/api/analytics/panoramica', {
-      params: { query: { anno: 2025 } },
+      params: { query: { anno: 2025, base: 'competenza' } },
     })
+  })
+
+  it('offers the two readings as one switch, marks the current one and hands the other back', async () => {
+    // ORB-133, Ivan: «un interruttore che dia modo di passare da competenza / incasso è
+    // utile, default a competenza». The switch is a radio group so the reading is announced
+    // as a choice, not as two unrelated buttons; the change goes back to the URL through
+    // the callback, never into local state.
+    vi.mocked(api.GET).mockImplementation(byPath(RESPONSE) as never)
+    const { onBaseChange } = renderTab()
+    const gruppo = await screen.findByRole('radiogroup', { name: 'Lettura dei mesi' })
+    const competenza = within(gruppo).getByRole('radio', { name: 'Competenza' })
+    const incasso = within(gruppo).getByRole('radio', { name: 'Incasso' })
+    expect(competenza).toHaveAttribute('aria-checked', 'true')
+    expect(incasso).toHaveAttribute('aria-checked', 'false')
+    await userEvent.click(incasso)
+    expect(onBaseChange).toHaveBeenCalledWith('incasso')
+    expect(onBaseChange).toHaveBeenCalledTimes(1)
+  })
+
+  it('requests the reading it is given and says which one the charts show', async () => {
+    vi.mocked(api.GET).mockImplementation(
+      byPath({ ...RESPONSE, cassa: { ...RESPONSE.cassa, base: 'incasso' } }) as never,
+    )
+    renderTab(PERIODO, 'incasso')
+    await screen.findByRole('figure', { name: 'Andamento economico 2026' })
+    expect(api.GET).toHaveBeenCalledWith('/api/analytics/panoramica', {
+      params: { query: { anno: 2026, base: 'incasso' } },
+    })
+    expect(screen.getByRole('radio', { name: 'Incasso' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByText(/Vista economica 2026 per incasso/)).toBeInTheDocument()
+  })
+
+  it('tells the reader the tax block is on the money whatever the charts read by', async () => {
+    // The estimate follows what was collected in the year (DECISIONS.md, 2026-09-10), so
+    // under the accrual reading its cards say so rather than letting the reader assume
+    // the tax moved with the bars. The projected estimate's hint quotes the revenue the
+    // estimate itself was computed on, which under the accrual reading is not the
+    // `proiettato` the cards above show: here they differ on purpose.
+    vi.mocked(api.GET).mockImplementation(
+      byPath({
+        ...RESPONSE,
+        fiscale_proiettato: { ...RESPONSE.fiscale_proiettato, ricavi: '31082.65' },
+      }) as never,
+    )
+    renderTab()
+    const netto = await screen.findByRole('group', { name: 'Totale netto ricavi' })
+    expect(netto).toHaveTextContent(/su base incasso/)
+    expect(screen.getByRole('group', { name: 'Totale netto ricavi con proiezione' })).toHaveTextContent(
+      /su base incasso/,
+    )
+    const proiezione = screen.getByRole('group', { name: 'Totale da saldare con proiezione' })
+    expect(proiezione).toHaveTextContent('31.082,65 €')
+    expect(proiezione).not.toHaveTextContent('30.082,65 €')
+  })
+
+  it('moves the reading with the arrow keys, as a radio group promises', async () => {
+    // One tab stop and the arrows, the radio keyboard model: two buttons announced as
+    // radios would let a screen-reader user hear «1 of 2» and then find the arrows dead.
+    vi.mocked(api.GET).mockImplementation(byPath(RESPONSE) as never)
+    const { onBaseChange } = renderTab()
+    const competenza = await screen.findByRole('radio', { name: 'Competenza' })
+    competenza.focus()
+    // Held, not tapped: Radix moves focus on a timeout after the keydown and checks the
+    // item on focus only while the arrow is still down, as a finger on a key is. A
+    // `{ArrowRight}` that releases in the same tick never selects, in any browser.
+    await userEvent.keyboard('{ArrowRight>}')
+    await waitFor(() => expect(onBaseChange).toHaveBeenCalledWith('incasso'))
+    await userEvent.keyboard('{/ArrowRight}')
   })
 
   it('shows the money figures from the API strings, cents included', async () => {

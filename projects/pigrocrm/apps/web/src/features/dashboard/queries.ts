@@ -4,6 +4,7 @@ import { api, unwrap } from '@/lib/api'
 import type { components } from '@/lib/api-types'
 import { queryKeys } from '@/lib/query'
 import type { Periodo } from './periodo'
+import type { CashBase } from './search'
 
 export type CommercialDashboard = components['schemas']['CommercialDashboard']
 export type EconomicDashboard = components['schemas']['EconomicDashboard']
@@ -39,11 +40,14 @@ export function useEconomicDashboard(periodo: Periodo) {
 }
 
 /** The economic tab reads the year, not the period: cash is an annual story (the
- *  fiscal estimate only exists per year), so the picker's `da` names the year. */
-export function useEconomicOverview(anno: number) {
+ *  fiscal estimate only exists per year), so the picker's `da` names the year. `base`
+ *  is which month each document falls in (ORB-133), part of the key because the same
+ *  year answers differently under the two readings. */
+export function useEconomicOverview(anno: number, base: CashBase) {
   return useQuery({
-    queryKey: queryKeys.dashboard('panoramica', { anno: String(anno) }),
-    queryFn: () => unwrap(api.GET('/api/analytics/panoramica', { params: { query: { anno } } })),
+    queryKey: queryKeys.dashboard('panoramica', { anno: String(anno), base }),
+    queryFn: () =>
+      unwrap(api.GET('/api/analytics/panoramica', { params: { query: { anno, base } } })),
     staleTime: DASHBOARD_STALE_MS,
   })
 }
