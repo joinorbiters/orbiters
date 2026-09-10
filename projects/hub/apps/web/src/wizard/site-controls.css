@@ -41,10 +41,22 @@
   color: var(--landing-cta-ink);
 }
 
+/* ORB-94: the border-width rule above only ever named `[data-slot='button']`, so
+   Input and Textarea kept Tailwind's default 1px (`border border-input`, input.tsx
+   and textarea.tsx). Input's own base class also carries a fixed `h-9` (36px), which
+   the padding below only shrank into rather than grew past, since `height` -- unlike
+   `padding` -- was never given an unlayered override here: a 390px phone measured a
+   36px box next to a 53px CTA. `height: auto` releases it, the same way the CTA's
+   own `height: auto` already does; Textarea already floors on `min-h-16` rather than
+   a fixed height, which the padding below only ever grows past, so it is untouched. */
 .site [data-slot='input'],
 .site [data-slot='textarea'] {
+  border-width: var(--landing-border-width);
   padding-block: var(--landing-control-padding-block);
   padding-inline: var(--landing-control-padding-inline);
+}
+.site [data-slot='input'] {
+  height: auto;
 }
 
 /* aria-invalid keeps the destructive border orbiters.css's own `.signup
