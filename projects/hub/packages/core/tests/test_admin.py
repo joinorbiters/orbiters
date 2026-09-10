@@ -1,6 +1,7 @@
 """Admins and sessions: one cookie, hashed at rest, sliding, gone on logout."""
 
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 import pytest
 from sqlalchemy import Engine, select, text
@@ -8,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from orbiters_core.admin import AdminService
 from orbiters_core.config import Settings
-from orbiters_core.errors import ValidationFailed
+from orbiters_core.errors import NotFound, ValidationFailed
 from orbiters_core.models import AdminSession
 
 
@@ -100,3 +101,72 @@ def test_list_names_every_admin_oldest_first_and_says_who_is_active(
     assert [row.attivo for row in listed] == [True, False]
     assert all(row.created_at is not None for row in listed)
     assert not any(hasattr(row, "password_hash") for row in listed)
+
+
+def test_update_changes_only_what_is_given_and_keeps_the_rules_of_create(
+    admins: AdminService, hub_session: Session
+) -> None:
+    # ORB-129: a typo in the name, a new address, a forgotten password. Nothing given
+    # means nothing changed; the rules are create's, once; the hash is never stored raw.
+    ivan = admins.create("ivan@orbiters.it", "Ivan", "una-password-lunga")
+    admins.create("lorenzo@orbiters.it", "Lorenzo", "altra-password-lunga")
+    before = hub_session.execute(
+        text("SELECT password_hash FROM admin_users WHERE nome = 'Ivan'")
+    ).scalar()
+
+    same = admins.update(ivan.id)
+    assert (same.email, same.nome) == ("ivan@orbiters.it", "Ivan")
+
+    renamed = admins.update(ivan.id, nome="  Ivan Sala  ", email="Ivan.Sala@Orbiters.it")
+    assert (renamed.email, renamed.nome) == ("ivan.sala@orbiters.it", "Ivan Sala")
+    assert admins.authenticate("ivan.sala@orbiters.it", "una-password-lunga") is not None
+
+    rekeyed = admins.update(ivan.id, password="nuova-password-lunga")
+    assert rekeyed.email == "ivan.sala@orbiters.it"
+    after = hub_session.execute(
+        text("SELECT password_hash FROM admin_users WHERE id = :id"), {"id": ivan.id}
+    ).scalar()
+    assert after != before and after.startswith("$argon2") and "nuova" not in after
+    assert admins.authenticate("ivan.sala@orbiters.it", "una-password-lunga") is None
+    assert admins.authenticate("ivan.sala@orbiters.it", "nuova-password-lunga") is not None
+
+    # The same address on itself is fine; another admin's address is not.
+    assert admins.update(ivan.id, email="IVAN.SALA@orbiters.it").email == "ivan.sala@orbiters.it"
+    for kwargs, field in (
+        ({"email": "lorenzo@orbiters.it"}, "email"),
+        ({"nome": "  "}, "nome"),
+        ({"nome": "x" * 121}, "nome"),
+        ({"password": "breve"}, "password"),
+    ):
+        with pytest.raises(ValidationFailed) as refused:
+            admins.update(ivan.id, **kwargs)
+        assert refused.value.details["field"] == field, kwargs
+    with pytest.raises(NotFound):
+        admins.update(UUID("00000000-0000-7000-8000-000000000000"), nome="Nessuno")
+    # A refused body leaves the row as it was, even when another field was fine.
+    with pytest.raises(ValidationFailed):
+        admins.update(ivan.id, email="altro@orbiters.it", nome="  ")
+    hub_session.expire_all()
+    assert admins.list()[0].email == "ivan.sala@orbiters.it"
+
+
+def test_a_new_password_ends_the_open_sessions_but_spares_the_editors_own(
+    admins: AdminService,
+) -> None:
+    # A reset is also what you do after a leak (ORB-129 review). The editor's own cookie
+    # survives, so changing your own password does not log you out; a new address or name
+    # touches nothing.
+    ivan = admins.create("ivan@orbiters.it", "Ivan", "una-password-lunga")
+    mine = admins.open_session(ivan.id)
+    phone = admins.open_session(ivan.id)
+    admins.update(ivan.id, nome="Ivan Sala", email="ivan.sala@orbiters.it")
+    assert admins.resolve(mine) is not None and admins.resolve(phone) is not None
+    admins.update(ivan.id, password="nuova-password-lunga", keep_session=mine)
+    assert admins.resolve(mine) is not None
+    assert admins.resolve(phone) is None
+    other = admins.open_session(ivan.id)
+    admins.update(ivan.id, password="terza-password-lunga")
+    assert admins.resolve(other) is None and admins.resolve(mine) is None
+    with pytest.raises(ValidationFailed) as blank:
+        admins.update(ivan.id, password="          ")
+    assert blank.value.details["field"] == "password"

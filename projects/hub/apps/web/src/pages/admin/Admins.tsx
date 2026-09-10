@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus } from 'lucide-react'
-import { useState, type FormEvent } from 'react'
+import { Pencil, Plus } from 'lucide-react'
+import { useRef, useState, type FormEvent } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -11,11 +11,10 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { ApiError, admin, type AdminCreate } from '@/lib/api'
+import { ApiError, admin, type Admin, type AdminCreate } from '@/lib/api'
 import { formatDate } from '@/lib/format'
 import { Empty, Header } from './lists'
 
@@ -25,54 +24,67 @@ const PASSWORD_MIN_LENGTH = 10
 
 const EMPTY: AdminCreate = { nome: '', email: '', password: '' }
 
+/** What the one dialog is doing: nothing, creating, or editing one row. */
+type Mode = { kind: 'closed' } | { kind: 'create' } | { kind: 'edit'; admin: Admin }
+
 /**
- * Who reads this area, and a button that adds one more (ORB-123, ORB-125). The page is
- * the list; the form lives in a dialog behind «Nuovo amministratore», so the list reads
- * as a list. The creating admin chooses the password and hands it over out of band, as
- * `orbiters createadmin` does on the server; the rules (one address, ten characters) are
- * the service's, and a 422 comes back naming the field, so the dialog stays open and
- * points at it rather than blaming everything. On success it closes, the list refreshes
- * and the page says who was created. No deactivation and no deletion here, on purpose.
+ * Who reads this area, a button that adds one more, and a pencil on every row (ORB-123,
+ * ORB-125, ORB-129). The page is the list; the form lives in one dialog that either
+ * creates or edits, so the two flows cannot drift. The creating admin chooses the
+ * password and hands it over out of band, as `orbiters createadmin` does on the server;
+ * when editing, an empty password means «keep it». The rules (one address, ten
+ * characters) are the service's, and a 422 comes back naming the field, so the dialog
+ * stays open and points at it. On success it closes, the list refreshes and the page says
+ * who was created or changed. No deactivation and no deletion here, on purpose.
  */
 export function AdminAdmins() {
   const client = useQueryClient()
   const list = useQuery({ queryKey: ADMINS_KEY, queryFn: () => admin.admins() })
-  const [open, setOpen] = useState(false)
-  const [created, setCreated] = useState<string | null>(null)
+  const [mode, setMode] = useState<Mode>({ kind: 'closed' })
+  const [done, setDone] = useState<{ verb: 'creato' | 'aggiornato'; email: string } | null>(null)
   const [draft, setDraft] = useState<AdminCreate>(EMPTY)
-  const create = useMutation({
-    mutationFn: (data: AdminCreate) => admin.createAdmin(data),
-    onSuccess: (made) => {
-      setOpen(false)
-      setCreated(made.email)
+  /** Whatever opened the dialog, the header button or one pencil, gets focus back on close. */
+  const opener = useRef<HTMLElement | null>(null)
+  const save = useMutation({
+    mutationFn: (data: AdminCreate & { id?: string }) =>
+      data.id ? admin.updateAdmin({ ...data, id: data.id }) : admin.createAdmin(data),
+    onSuccess: (saved, data) => {
+      setMode({ kind: 'closed' })
+      setDone({ verb: data.id ? 'aggiornato' : 'creato', email: saved.email })
       void client.invalidateQueries({ queryKey: ADMINS_KEY })
     },
   })
 
-  /** Every opening starts clean: an empty draft and no error from the last attempt. While
-   *  a request is out the dialog stays: closing it would swallow a late refusal, and a
-   *  late success would close whatever dialog had been reopened in the meantime, since
-   *  the mutation's `onSuccess` outlives `reset()`. */
-  function toggle(next: boolean) {
-    if (!next && create.isPending) return
-    if (next) {
-      setDraft(EMPTY)
-      create.reset()
+  const editing = mode.kind === 'edit' ? mode.admin : null
+
+  /** Every opening starts clean: the row's values or an empty draft, and no error from
+   *  the last attempt. While a request is out the dialog stays: closing it would swallow a
+   *  late refusal, and a late success would close whatever dialog had been reopened in the
+   *  meantime, since the mutation's `onSuccess` outlives `reset()`. */
+  function open(next: Mode, from: HTMLElement | null = null) {
+    if (next.kind === 'closed' && save.isPending) return
+    if (next.kind !== 'closed') {
+      // From the event, not `document.activeElement`: Safari does not focus a clicked button.
+      opener.current = from
+      setDraft(next.kind === 'edit' ? { nome: next.admin.nome, email: next.admin.email, password: '' } : EMPTY)
+      save.reset()
     }
-    setOpen(next)
+    setMode(next)
   }
 
-  const failure = create.error instanceof ApiError ? create.error : null
+  const failure = save.error instanceof ApiError ? save.error : null
   const message = failure
     ? failure.message
-    : create.error
-      ? 'Non riesco a creare l’amministratore.'
+    : save.error
+      ? editing
+        ? 'Non riesco a salvare le modifiche.'
+        : 'Non riesco a creare l’amministratore.'
       : null
   const wrong = (field: keyof AdminCreate) => failure?.fields.includes(field) || undefined
 
   function submit(event: FormEvent) {
     event.preventDefault()
-    create.mutate({ ...draft, nome: draft.nome.trim(), email: draft.email.trim() })
+    save.mutate({ ...draft, nome: draft.nome.trim(), email: draft.email.trim(), id: editing?.id })
   }
 
   function field(name: keyof AdminCreate) {
@@ -80,23 +92,25 @@ export function AdminAdmins() {
   }
 
   return (
-    <Dialog open={open} onOpenChange={toggle}>
+    <Dialog open={mode.kind !== 'closed'} onOpenChange={(isOpen) => !isOpen && open({ kind: 'closed' })}>
       <Header title="Amministratori" count={list.data?.length}>
-        {/* A Radix trigger rather than a plain button, so focus comes back here on close. */}
-        <DialogTrigger asChild>
-          <Button type="button" size="sm">
-            <Plus data-icon="inline-start" />
-            Nuovo amministratore
-          </Button>
-        </DialogTrigger>
+        <Button type="button" size="sm" onClick={(event) => open({ kind: 'create' }, event.currentTarget)}>
+          <Plus data-icon="inline-start" />
+          Nuovo amministratore
+        </Button>
       </Header>
 
       {/* Always mounted: a live region that appears already filled is often not read out. */}
-      <p role="status" aria-live="polite" className={created ? 'border-b px-6 py-3 text-sm' : undefined}>
-        {created && (
+      <p role="status" aria-live="polite" className={done ? 'border-b px-6 py-3 text-sm' : undefined}>
+        {done?.verb === 'creato' && (
           <>
-            Amministratore creato: <span className="font-medium">{created}</span>. Ora può accedere con
-            la password che gli hai dato.
+            Amministratore creato: <span className="font-medium">{done.email}</span>. Ora può accedere con la
+            password che gli hai dato.
+          </>
+        )}
+        {done?.verb === 'aggiornato' && (
+          <>
+            Amministratore aggiornato: <span className="font-medium">{done.email}</span>.
           </>
         )}
       </p>
@@ -111,7 +125,10 @@ export function AdminAdmins() {
             <tr className="border-b">
               <th className="px-6 py-2 font-medium">Chi</th>
               <th className="px-3 py-2 font-medium">Stato</th>
-              <th className="px-6 py-2 text-right font-medium">Da quando</th>
+              <th className="px-3 py-2 text-right font-medium">Da quando</th>
+              <th className="px-6 py-2">
+                <span className="sr-only">Azioni</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -124,20 +141,39 @@ export function AdminAdmins() {
                 <td className="px-3 py-2.5">
                   <Badge variant="pill">{row.attivo ? 'Attivo' : 'Disattivato'}</Badge>
                 </td>
-                <td className="px-6 py-2.5 text-right text-muted-foreground">{formatDate(row.created_at)}</td>
+                <td className="px-3 py-2.5 text-right text-muted-foreground">{formatDate(row.created_at)}</td>
+                <td className="px-6 py-1.5 text-right">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={(event) => open({ kind: 'edit', admin: row }, event.currentTarget)}
+                  >
+                    <Pencil />
+                    <span className="sr-only">
+                      Modifica {row.nome} ({row.email})
+                    </span>
+                  </Button>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
 
-      <DialogContent>
+      <DialogContent
+        onCloseAutoFocus={(event) => {
+          event.preventDefault()
+          opener.current?.focus()
+        }}
+      >
         <form onSubmit={submit} className="grid gap-4">
           <DialogHeader>
-            <DialogTitle>Nuovo amministratore</DialogTitle>
+            <DialogTitle>{editing ? 'Modifica amministratore' : 'Nuovo amministratore'}</DialogTitle>
             <DialogDescription>
-              Scegli tu la password, almeno {PASSWORD_MIN_LENGTH} caratteri, e comunicala a voce o su un
-              canale sicuro: qui non viene inviata nessuna email.
+              {editing
+                ? `Lascia la password vuota per non cambiarla. Una nuova password vale da subito, almeno ${PASSWORD_MIN_LENGTH} caratteri, chiude le sue sessioni aperte, e la comunichi tu a voce o su un canale sicuro.`
+                : `Scegli tu la password, almeno ${PASSWORD_MIN_LENGTH} caratteri, e comunicala a voce o su un canale sicuro: qui non viene inviata nessuna email.`}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
@@ -165,13 +201,14 @@ export function AdminAdmins() {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="admin-password">Password</Label>
+            <Label htmlFor="admin-password">{editing ? 'Nuova password' : 'Password'}</Label>
             <Input
               id="admin-password"
               type="password"
-              required
-              minLength={PASSWORD_MIN_LENGTH}
+              required={!editing}
+              minLength={editing && !draft.password ? undefined : PASSWORD_MIN_LENGTH}
               autoComplete="new-password"
+              placeholder={editing ? 'Vuota: resta quella di adesso' : undefined}
               value={draft.password}
               onChange={(event) => field('password')(event.target.value)}
               aria-invalid={wrong('password')}
@@ -184,12 +221,12 @@ export function AdminAdmins() {
           )}
           <DialogFooter>
             <DialogClose asChild>
-              <Button type="button" variant="outline" disabled={create.isPending}>
+              <Button type="button" variant="outline" disabled={save.isPending}>
                 Annulla
               </Button>
             </DialogClose>
-            <Button type="submit" disabled={create.isPending}>
-              {create.isPending ? 'Creo…' : 'Crea amministratore'}
+            <Button type="submit" disabled={save.isPending}>
+              {save.isPending ? 'Salvo…' : editing ? 'Salva modifiche' : 'Crea amministratore'}
             </Button>
           </DialogFooter>
         </form>

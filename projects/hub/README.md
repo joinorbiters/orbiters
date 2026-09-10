@@ -22,7 +22,7 @@ Three public flows and the admin area behind them:
   see or change what they sent.
 - `/hub/admin/login` and the freelancer, company and signup lists behind it — a cookie
   session. The first admin is created with `orbiters createadmin` (below); the next ones
-  from «Amministratori» inside the area.
+  from «Amministratori» inside the area, where they are also edited.
 
 `POST /api/orbiters/signups` is the community site's signup endpoint, moved here
 unchanged on 2026-09-09: the website's form and the ChatGPT Ads conversion still post

@@ -92,6 +92,18 @@ describe('the api client', () => {
     expect(created.nome).toBe('Lorenzo')
   })
 
+  it('changes an admin with a PATCH carrying only what changed', async () => {
+    // ORB-129: an empty password is not sent, so the server keeps the old one.
+    const spy = vi.spyOn(globalThis, 'fetch')
+    spy.mockResolvedValueOnce(answer(200, { id: '2', email: 'lorenzo@orbiters.it', nome: 'Lorenzo Fiore', attivo: true, created_at: '2026-09-10T10:01:00Z' }))
+    const changed = await admin.updateAdmin({ id: '2', nome: 'Lorenzo Fiore', email: 'lorenzo@orbiters.it', password: '' })
+    const [url, init] = spy.mock.calls[0]!
+    expect(url).toBe('/api/hub/admins/2')
+    expect(init?.method).toBe('PATCH')
+    expect(JSON.parse(init?.body as string)).toEqual({ nome: 'Lorenzo Fiore', email: 'lorenzo@orbiters.it' })
+    expect(changed.nome).toBe('Lorenzo Fiore')
+  })
+
   it('points the admin at the CV route by id', () => {
     expect(admin.cvUrl('abc')).toBe('/api/hub/freelancers/abc/cv')
   })

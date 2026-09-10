@@ -124,6 +124,9 @@ export interface AdminCreate {
   password: string
 }
 
+/** The same three fields when the pencil edits a row; an empty password means «keep it». */
+export type AdminUpdate = AdminCreate
+
 export interface Freelancer {
   id: string
   nome: string
@@ -216,6 +219,12 @@ export const admin = {
   /** Who reads this area, oldest first, and one more of them (ORB-123). */
   admins: () => request<Admin[]>('/api/hub/admins'),
   createAdmin: (data: AdminCreate) => request<Admin>('/api/hub/admins', json(data)),
+  /** PATCH with what the form holds; an empty password is left out, so the old one stays. */
+  updateAdmin: ({ password, ...rest }: AdminUpdate & { id: string }) =>
+    request<Admin>(`/api/hub/admins/${rest.id}`, {
+      ...json({ nome: rest.nome, email: rest.email, ...(password ? { password } : {}) }),
+      method: 'PATCH',
+    }),
   comments: (kind: CommentKind, id: string) =>
     request<Comment[]>(`/api/hub/${kind}/${id}/comments`),
   /** The author is the session's, so the body is the text alone. */

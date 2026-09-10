@@ -60,6 +60,7 @@ def test_without_the_cookie_every_admin_route_is_a_401(client: TestClient, admin
         json={"email": "x@orbiters.it", "nome": "X", "password": "una-password-lunga"},
     )
     assert refused.status_code == 401
+    assert client.patch(f"/api/hub/admins/{MISSING}", json={"nome": "X"}).status_code == 401
 
 
 def test_login_sets_a_secure_httponly_cookie_and_the_lists_open(
@@ -293,3 +294,110 @@ def test_creating_an_admin_points_the_form_at_the_field_that_is_wrong(
     )
     assert extra.status_code == 422
     assert [row["email"] for row in client.get("/api/hub/admins").json()] == ["ivan@orbiters.it"]
+
+
+def test_an_admin_changes_another_admins_name_address_or_password(
+    client: TestClient, admin: None
+) -> None:
+    # ORB-129. The password field is optional and means «keep it» when absent.
+    _login(client)
+    created = client.post(
+        "/api/hub/admins",
+        json={"email": "lorenzo@orbiters.it", "nome": "Lorenzo", "password": "una-password-lunga"},
+    ).json()
+
+    renamed = client.patch(f"/api/hub/admins/{created['id']}", json={"nome": " Lorenzo Fiore "})
+    assert renamed.status_code == 200, renamed.text
+    assert (
+        renamed.json()["nome"] == "Lorenzo Fiore"
+        and renamed.json()["email"] == "lorenzo@orbiters.it"
+    )
+    assert "password" not in renamed.text
+
+    moved = client.patch(
+        f"/api/hub/admins/{created['id']}",
+        json={"email": "Lorenzo.Fiore@Orbiters.it", "password": "nuova-password-lunga"},
+    )
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["email"] == "lorenzo.fiore@orbiters.it"
+    listed = client.get("/api/hub/admins").json()
+    assert [row["email"] for row in listed] == ["ivan@orbiters.it", "lorenzo.fiore@orbiters.it"]
+
+    # The new credentials open a session; the old password does not.
+    assert client.post("/api/hub/auth/logout").status_code == 204
+    old = client.post(
+        "/api/hub/auth/login",
+        json={"email": "lorenzo.fiore@orbiters.it", "password": "una-password-lunga"},
+    )
+    assert old.status_code == 401
+    new = client.post(
+        "/api/hub/auth/login",
+        json={"email": "lorenzo.fiore@orbiters.it", "password": "nuova-password-lunga"},
+    )
+    assert new.status_code == 200 and new.json()["nome"] == "Lorenzo Fiore"
+
+
+def test_changing_an_admin_points_the_form_at_the_field_that_is_wrong(
+    client: TestClient, admin: None
+) -> None:
+    _login(client)
+    me = client.get("/api/hub/auth/me").json()
+    other = client.post(
+        "/api/hub/admins",
+        json={"email": "lorenzo@orbiters.it", "nome": "Lorenzo", "password": "una-password-lunga"},
+    ).json()
+    for body, field in (
+        ({"email": "IVAN@orbiters.it"}, "email"),
+        ({"email": "non-una-mail"}, "email"),
+        ({"nome": "   "}, "nome"),
+        ({"nome": "x" * 121}, "nome"),
+        ({"password": "breve"}, "password"),
+        ({"attivo": False}, "attivo"),
+    ):
+        refused = client.patch(f"/api/hub/admins/{other['id']}", json=body)
+        assert refused.status_code == 422, body
+        assert refused.json()["detail"][0]["loc"][-1] == field, body
+    # An empty password in the body is «keep it», not a five-character password.
+    kept = client.patch(f"/api/hub/admins/{other['id']}", json={"password": ""})
+    assert kept.status_code == 200
+    # One's own row is editable like any other; the same address on itself is no duplicate.
+    own = client.patch(
+        f"/api/hub/admins/{me['id']}", json={"email": "IVAN@orbiters.it", "nome": "Ivan S."}
+    )
+    assert own.status_code == 200 and own.json()["nome"] == "Ivan S."
+    assert client.get("/api/hub/auth/me").json()["nome"] == "Ivan S."
+    assert client.patch(f"/api/hub/admins/{MISSING}", json={"nome": "Nessuno"}).status_code == 404
+
+
+def test_a_new_password_logs_the_other_admin_out_and_keeps_me_in(
+    client: TestClient, admin: None
+) -> None:
+    _login(client)
+    other = client.post(
+        "/api/hub/admins",
+        json={"email": "lorenzo@orbiters.it", "nome": "Lorenzo", "password": "una-password-lunga"},
+    ).json()
+    # Lorenzo logs in from his own browser.
+    lorenzo = TestClient(client.app, base_url="https://testserver")
+    assert (
+        lorenzo.post(
+            "/api/hub/auth/login",
+            json={"email": "lorenzo@orbiters.it", "password": "una-password-lunga"},
+        ).status_code
+        == 200
+    )
+    assert lorenzo.get("/api/hub/auth/me").status_code == 200
+
+    # I change his password: his session is gone, mine is untouched.
+    changed = client.patch(
+        f"/api/hub/admins/{other['id']}", json={"password": "nuova-password-lunga"}
+    )
+    assert changed.status_code == 200
+    assert lorenzo.get("/api/hub/auth/me").status_code == 401
+    assert client.get("/api/hub/auth/me").status_code == 200
+
+    # I change my own: I am still in.
+    me = client.get("/api/hub/auth/me").json()
+    own = client.patch(f"/api/hub/admins/{me['id']}", json={"password": "anche-la-mia-nuova"})
+    assert own.status_code == 200
+    assert client.get("/api/hub/auth/me").status_code == 200
