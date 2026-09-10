@@ -30,9 +30,11 @@ export type TabId = (typeof DASHBOARD_TABS)[number]['id']
  */
 export type CashBase = components['schemas']['CashOverview']['base']
 
-export const CASH_BASES: readonly { id: CashBase; label: string }[] = [
-  { id: 'competenza', label: 'Competenza' },
-  { id: 'incasso', label: 'Incasso' },
+/** `label` is the switch's word, `phrase` the one the page's sentence uses («Vista
+ *  economica 2026 per competenza»): the wire value is a contract, never copy. */
+export const CASH_BASES: readonly { id: CashBase; label: string; phrase: string }[] = [
+  { id: 'competenza', label: 'Competenza', phrase: 'per competenza' },
+  { id: 'incasso', label: 'Incasso', phrase: 'per incasso' },
 ]
 
 export type DashboardSearch = { tab: TabId; da: string; a: string; base: CashBase }

@@ -95,7 +95,8 @@ def economic_overview(
                 "di competenza dichiarato sulla fattura o sulla proforma, con la data del "
                 "documento per chi non lo dichiara; predefinito) oppure 'incasso' (la data "
                 "di incasso per le fatture pagate, la scadenza per quelle da incassare, la "
-                "data del documento per bozze e proforma). La stima fiscale resta sempre "
+                "data del documento, o di creazione, per bozze e proforma). La stima "
+                "fiscale resta sempre "
                 "sull'incassato dell'anno."
             )
         ),

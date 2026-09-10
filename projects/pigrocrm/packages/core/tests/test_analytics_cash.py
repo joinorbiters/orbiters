@@ -279,8 +279,9 @@ def test_the_cash_view_reads_by_accrual_period_by_default_and_by_the_money_on_re
         # Due next year: by the money it is not this year's projection at all.
         assert sum(by_month.values()) == Decimal("0.00")
 
-    # The paid and the drafted money add up the same under both readings: only the month
-    # moves. The unpaid invoice is the one exception, and only when it falls due next year.
+    # In this fixture the paid and the drafted money add up the same under both readings,
+    # since every date involved is in this year: only the month moves. The unpaid invoice
+    # is the one that can leave the year, when it falls due in the next one.
     assert competenza.incassato == incasso.incassato
     assert competenza.bozze == incasso.bozze
 
@@ -323,14 +324,48 @@ def test_the_estimate_stays_on_the_money_whatever_the_charts_read_by(
         invoice.id, PaymentState(stato_pagamento="incassato", data_incasso=OGGI), ADMIN
     )
 
+    # The same year boundary for the other two series: a proforma dated today for
+    # December's work, and an unpaid invoice for it. `monthly_bozze` is the one with the
+    # three-way fallback (period, document date, creation day), so it is the one to pin.
+    service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            tipo="proforma",
+            data_emissione=OGGI,
+            competenza_da=date(OGGI.year - 1, 12, 1),
+            competenza_a=date(OGGI.year - 1, 12, 31),
+            righe=[InvoiceLineIn(descrizione="Saldo", prezzo_unitario=Decimal("40.00"))],
+        ),
+        ADMIN,
+    )
+    unpaid = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            competenza_da=date(OGGI.year - 1, 12, 1),
+            competenza_a=date(OGGI.year - 1, 12, 31),
+            righe=[InvoiceLineIn(descrizione="Saldo", prezzo_unitario=Decimal("500.00"))],
+        ),
+        ADMIN,
+    )
+    service.issue(unpaid.id, InvoiceIssue(), ADMIN)
+    scadenza = service.get(unpaid.id, ADMIN).data_scadenza
+    assert scadenza is not None
+
     analytics = AnalyticsService(db_session)
     by_accrual = analytics.economic_overview(OGGI.year, ADMIN)
     by_cash = analytics.economic_overview(OGGI.year, ADMIN, base="incasso")
 
     # The charts disagree: December's work is last year's by accrual, this year's by cash.
+    # The fixture's own dateless draft (100.00) is this year's under both.
     assert by_accrual.cassa.base == "competenza"
     assert by_accrual.cassa.incassato == Decimal("0.00")
     assert by_cash.cassa.incassato == Decimal("1000.00")
+    assert by_accrual.cassa.bozze == Decimal("100.00")
+    assert by_cash.cassa.bozze == Decimal("140.00")
+    assert by_accrual.cassa.da_incassare == Decimal("0.00")
+    assert by_cash.cassa.da_incassare == (
+        Decimal("500.00") if scadenza.year == OGGI.year else Decimal("0.00")
+    )
     # The tax block does not: it is the same estimate on the same collected revenue.
     assert by_accrual.fiscale is not None and by_cash.fiscale is not None
     assert by_accrual.fiscale.ricavi == by_cash.fiscale.ricavi == Decimal("1000.00")

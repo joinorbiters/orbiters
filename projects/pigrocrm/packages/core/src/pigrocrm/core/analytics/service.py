@@ -401,7 +401,9 @@ class AnalyticsService:
         """The year as cash, month by month (`CashOverview`). Read by anyone who may read
         the dashboard: nothing here is fiscal, and every figure is a SUM the repository
         produced plus additions done once, here. `base` says which month a document
-        falls in (ORB-133); the year's totals are the same under both."""
+        falls in (ORB-133). The year's totals agree under the two readings except for a
+        document whose declared period and whose money fall in different years: that
+        one is in one year's view and not the other's."""
         actor.require_agent_allowed("cash_overview")
         incassato = self.repo.monthly_incassato(anno, base)
         da_incassare = self.repo.monthly_da_incassare(anno, base)
@@ -479,6 +481,10 @@ class AnalyticsService:
         move the taxes (`docs/design/DECISIONS.md`, 2026-09-10). Within one year the two
         readings' totals agree except for a document whose period and payment fall in
         different years, which is exactly the case where the tax must follow the money.
+
+        Under `competenza`, the default, that is the cash view read twice: eight
+        aggregates instead of four, on a page that already runs a dozen. Accepted, rather
+        than threading two readings through `cash_overview`, whose one job is one reading.
         """
         cassa = self.cash_overview(anno, actor, base)
         per_fisco = cassa if base == "incasso" else self.cash_overview(anno, actor, "incasso")

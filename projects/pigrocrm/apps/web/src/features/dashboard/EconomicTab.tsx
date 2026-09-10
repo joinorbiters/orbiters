@@ -1,3 +1,4 @@
+import { RadioGroup } from 'radix-ui'
 import { QueryErrorBanner } from '@/components/QueryErrorBanner'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -21,29 +22,29 @@ function dovuto(estimate: FiscalEstimate | null): string {
 }
 
 /**
- * The switch between the two readings of the charts (ORB-133). A radio group rather than
- * two buttons: the reading is one choice with two values, and a screen reader says so.
- * The value is the URL's, through the callback, never local state -- a reading held
- * locally is a reading a shared link cannot carry, the same rule as the period (§4).
+ * The switch between the two readings of the charts (ORB-133). Radix's radio group, not
+ * two buttons: it renders the group and its two `radio`s with the keyboard model that
+ * role promises, one tab stop and the arrows moving the choice, which a hand-rolled pair
+ * of buttons announced as radios would promise and not keep. The value is the URL's,
+ * through the callback, never local state -- a reading held locally is a reading a
+ * shared link cannot carry, the same rule as the period (§4).
  */
 function BaseSwitch({ base, onChange }: { base: CashBase; onChange: (next: CashBase) => void }) {
   return (
-    <div role="radiogroup" aria-label="Lettura dei mesi" className="flex items-center gap-1">
+    <RadioGroup.Root
+      value={base}
+      onValueChange={(next) => onChange(next as CashBase)}
+      aria-label="Lettura dei mesi"
+      className="flex items-center gap-1"
+    >
       {CASH_BASES.map((candidate) => (
-        <Button
-          key={candidate.id}
-          role="radio"
-          aria-checked={candidate.id === base}
-          variant={candidate.id === base ? 'default' : 'outline'}
-          size="sm"
-          onClick={() => {
-            if (candidate.id !== base) onChange(candidate.id)
-          }}
-        >
-          {candidate.label}
-        </Button>
+        <RadioGroup.Item key={candidate.id} value={candidate.id} asChild>
+          <Button variant={candidate.id === base ? 'default' : 'outline'} size="sm">
+            {candidate.label}
+          </Button>
+        </RadioGroup.Item>
       ))}
-    </div>
+    </RadioGroup.Root>
   )
 }
 
@@ -70,6 +71,9 @@ export function EconomicTab({
   }
 
   const { cassa, fiscale, fiscale_proiettato, netto_effettivo, netto_proiettato } = query.data
+  // Named from the server's echo, not from the URL: the sentence describes what was
+  // drawn. Through the label table, because the wire value is a contract and not copy.
+  const lettura = CASH_BASES.find((candidate) => candidate.id === cassa.base)?.phrase ?? ''
 
   return (
     <div className="space-y-6">
@@ -78,7 +82,7 @@ export function EconomicTab({
           {/* The reading is named in words as well as on the switch: the sentence is what
               a screenshot carries, and «per competenza» is the difference between a
               chart of what was earned and a chart of what arrived. */}
-          Vista economica {anno} per {cassa.base}: ricavi, costi passivi e stima fiscale.
+          Vista economica {anno} {lettura}: ricavi, costi passivi e stima fiscale.
         </p>
         <div className="flex flex-wrap items-center gap-4">
           <BaseSwitch base={base} onChange={onBaseChange} />
@@ -133,10 +137,17 @@ export function EconomicTab({
               value={dovuto(fiscale)}
               hint={`imposta sostitutiva ${money(fiscale.imposta_sostitutiva ?? '0.00')} · INPS ${money(fiscale.contributi ?? '0.00')}`}
             />
+            {/* The revenue the estimate was actually computed on, from the estimate
+                itself: under the accrual reading `cassa.proiettato` can be a different
+                figure (a document whose period and payment fall in different years). */}
             <BigNumber
               label="Totale da saldare con proiezione"
               value={dovuto(fiscale_proiettato)}
-              hint={`su ricavi proiettati ${money(cassa.proiettato)}`}
+              hint={
+                fiscale_proiettato
+                  ? `su ricavi proiettati ${money(fiscale_proiettato.ricavi)}, su base incasso`
+                  : undefined
+              }
             />
             {/* The two nets are on the money whatever the switch says (the forfettario is
                 taxed on what was collected in the year; DECISIONS.md, 2026-09-10), so the
