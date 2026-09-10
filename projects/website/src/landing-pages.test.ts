@@ -50,14 +50,16 @@ describe.each(PAGES)('%s', (name) => {
     for (const [, url] of page.matchAll(/(?:href|src)="(https?:\/\/[^"]+)"/g)) {
       // An href the reader clicks -- the repository, the hosted signup, or OpenAI's
       // own privacy policy, which the cookie section has to point at -- is fine; a
-      // subresource is not. `humancraft.tech` is in the list for one reason: Italian
-      // law requires the privacy and terms pages to name the titolare del trattamento
-      // and link to it, so those two pages carry a real company's site and this test
-      // has to allow the origin. It is the only real identity left anywhere in this
-      // repository, and `bin/identity-scan` knows about these three paths for the same
-      // reason.
+      // subresource is not. `humancraft.tech` is in the list because Italian law
+      // requires the privacy and terms pages to name the titolare del trattamento and
+      // link to it, so those two pages carry a real company's site and this test has to
+      // allow the origin; since ORB-116 index.html's footer links the same studio,
+      // restored to what production served before website-v0.4.0. It is the only real
+      // identity left anywhere in this repository, and `orbiters-identity-scan`
+      // (`.github/preflight.json`, `identity-names`) is told about these pages for the
+      // same reason.
       expect(url, 'external subresource').toMatch(
-        /^https:\/\/(?:github\.com|pigro\.joinorbiters\.com|example\.com|openai\.com|humancraft\.tech)\//,
+        /^https:\/\/(?:github\.com|pigro\.joinorbiters\.com|openai\.com|humancraft\.tech)\//,
       )
     }
     expect(page).not.toMatch(/fonts\.googleapis\.com|fonts\.gstatic\.com/)
@@ -184,6 +186,16 @@ describe('index.html', () => {
   it('links the two pages Google reads during verification', () => {
     expect(page).toMatch(/href="\/privacy"/)
     expect(page).toMatch(/href="\/termini"/)
+  })
+
+  it('signs its footer with the studio behind the site, never with a fixture', () => {
+    // ORB-116: the pre-publication sanitisation swapped this link for «Studio Rossi» at
+    // example.com, the suite's stock customer, and website-v0.4.0 shipped it. The studio
+    // is the same entity the two policy pages name as titolare, so the footer says what
+    // they say; a fixture host on a public page fails here and in links.test.ts.
+    const footer = page.match(/<footer[\s\S]*?<\/footer>/)?.[0] ?? ''
+    expect(footer).toMatch(/<a[^>]*\bhref="https:\/\/humancraft\.tech\/"[^>]*>Humancraft<\/a>/)
+    expect(page).not.toMatch(/Studio Rossi|example\.com/)
   })
 
   it('opens a door into the hub admin area from its footer, and only there', () => {
