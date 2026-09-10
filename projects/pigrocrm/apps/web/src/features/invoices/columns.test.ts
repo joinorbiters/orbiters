@@ -261,13 +261,17 @@ describe('the description column', () => {
     expect(accessor('descrizione', { ...ISSUED, causale: '' } as Invoice)).toBe('—')
   })
 
-  it('truncates a long causale in a bounded block and keeps the whole text as the title', () => {
+  /** The column takes what the others leave (`width: 100%` on the header) and the span
+   *  fills exactly that (a block of width zero with a minimum of the whole cell), so
+   *  the text truncates at the column's width instead of widening the table. */
+  it('truncates a long causale at the width the column gets and keeps the whole text as the title', () => {
+    expect(column('descrizione').meta).toEqual({ width: '100%' })
     renderCell('descrizione', { ...ISSUED, causale: LONG_CAUSALE } as Invoice)
     const cell = screen.getByTitle(LONG_CAUSALE)
     expect(cell).toHaveTextContent(LONG_CAUSALE)
-    expect(cell.className).toContain('truncate')
-    expect(cell.className).toContain('block')
-    expect(cell.className).toMatch(/max-w-/)
+    for (const cls of ['block', 'w-0', 'min-w-full', 'truncate']) {
+      expect(cell.className).toContain(cls)
+    }
   })
 
   it('shows the missing causale as a quiet dash', () => {

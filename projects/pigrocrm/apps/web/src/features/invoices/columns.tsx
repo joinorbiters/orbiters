@@ -92,18 +92,22 @@ export function buildInvoiceColumns(
       header: 'Descrizione',
       id: 'descrizione',
       accessorFn: (row) => description(row),
-      // The one cell in this table that truncates (ORB-130). A causale runs to 200
-      // characters, and a column that widened to fit the longest one would push every
-      // other column off the frame. `truncate` works here where it did not on the
-      // customer's name because the span is a block with a maximum width: in an
-      // auto-layout table that width is what the cell's minimum becomes, so the
-      // ellipsis has something to clip against. The whole text stays reachable as the
-      // cell's title.
+      // The one flexible column in this table (ORB-130). A causale runs to 200
+      // characters, and a column sized to its content, or even to a fixed maximum,
+      // pushed the other eight past the frame at 1440px (measured: 24rem left the table
+      // 280px wider than its box). So it is sized the other way round: the header asks
+      // for `100%`, which in an auto-layout table means "whatever the others leave", and
+      // the span is a block of width zero with a minimum of the whole cell, so the cell
+      // contributes nothing to the table's minimum and the text truncates at exactly the
+      // width the column got. `truncate` works here where it did not on the customer's
+      // name because the block has a width to clip against. The whole causale stays
+      // reachable as the cell's title.
+      meta: { width: '100%' },
       cell: ({ row }) => {
         const causale = description(row.original)
         if (causale === EMPTY) return <span className="text-muted-foreground">{EMPTY}</span>
         return (
-          <span className="block max-w-[24rem] truncate" title={causale}>
+          <span className="block w-0 min-w-full truncate" title={causale}>
             {causale}
           </span>
         )
