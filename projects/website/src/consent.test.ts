@@ -247,3 +247,78 @@ describe('when the browser refuses to remember anything', () => {
     }
   })
 })
+
+describe('the notice clears the 44px touch-target floor without shouting (ORB-87)', () => {
+  // The behavioural tests above build the notice in jsdom, which lays out no CSS at
+  // all: a real render is what actually proves a pixel size, and the PR this test
+  // ships with carries one (uishot at 390 and 1440, before and after). What a unit
+  // test can hold is the rule shape, so a later edit that quietly drops the floor or
+  // swaps it for a heavier control fails here before it fails on a phone.
+  const css = readFileSync(join(__dirname, 'system.css'), 'utf-8')
+
+  function rule(selector: string): string {
+    const escaped = selector.replace(/[.[\]*+?^${}()|\\]/g, '\\$&')
+    const body = css.match(new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`))?.[1]
+    expect(body, `rule "${selector}" not found`).toBeTruthy()
+    return body ?? ''
+  }
+
+  it('gives "No" and "Va bene" a floor on both axes, not just a taller box', () => {
+    // Height alone would still leave the two-letter "No" narrower than 44px: the
+    // floor is on `min-width` too.
+    const button = rule('.consent button')
+    expect(button).toMatch(/min-width:\s*2\.75rem/)
+    expect(button).toMatch(/min-height:\s*2\.75rem/)
+    // Padding and a floor, the ORB-64 shape, not the louder one: the border stays
+    // the notice's existing 1px and the resting background stays transparent, no
+    // saturated fill added to make the bigger box easier to see.
+    expect(button).toMatch(/border:\s*1px solid/)
+    expect(button).toMatch(/background-color:\s*transparent/)
+  })
+
+  it('grows the "Dettagli" link\'s hit area without growing its line (ORB-87)', () => {
+    // The link sits mid-sentence, so a real `min-height` would force the paragraph's
+    // lines apart. `position: relative` is what lets the phantom pseudo-element
+    // below anchor to the glyph instead of the page.
+    expect(rule('.consent a')).toMatch(/position:\s*relative/)
+    expect(rule('.consent a')).not.toMatch(/min-height|padding|border/)
+
+    const before = rule('.consent a::before')
+    expect(before).toMatch(/content:\s*['"]['"]/)
+    expect(before).toMatch(/position:\s*absolute/)
+    // No colour and no size property at all: the phantom box paints nothing, so it
+    // cannot make the notice louder by construction, only wider to a thumb.
+    expect(before).not.toMatch(/background|border|width:|height:/)
+    // -14px top/bottom against the glyph's ~16-20px line box clears 44px; the
+    // exact number is measured on a render, this only pins the shape surviving.
+    expect(before).toMatch(/inset:\s*-14px -4px/)
+  })
+
+  it('paints the buttons after the link\'s hit-slop, so a corner click cannot land on the wrong control', () => {
+    // `.consent a::before` is positioned, so without this it paints in tree order
+    // after the row of buttons and can win a hit test in the sliver where the slop
+    // reaches over this row (measured: a real overlap and click-theft toward
+    // "Dettagli" at some notice widths before this rule, none after). z-index stays
+    // auto -- this only changes paint order among same-level positioned boxes, not
+    // anything a reader sees.
+    expect(rule('.consent-actions')).toMatch(/position:\s*relative/)
+  })
+
+  it('keeps every consent control a real `a`/`button`, so the shared focus-visible rule already covers it', () => {
+    // landing.css and orbiters.css each carry one `::where(a, button…):focus-visible`
+    // rule with no scope narrower than the whole page (landing-style.test.ts and
+    // orbiters.test.ts hold those). This notice earns a visible focus ring for free
+    // as long as consent.js keeps building real anchors and buttons rather than a
+    // `div` with a click handler -- checked here on the DOM the same file already
+    // builds, not by grepping the source for the word `createElement`.
+    run().start()
+    const box = notice()
+    expect(box?.querySelector('a')).toBeInstanceOf(window.HTMLAnchorElement)
+    for (const label of ['No', 'Va bene']) {
+      const control = [...(box?.querySelectorAll('button') ?? [])].find(
+        (candidate) => candidate.textContent === label,
+      )
+      expect(control, `nessun bottone "${label}"`).toBeInstanceOf(window.HTMLButtonElement)
+    }
+  })
+})
