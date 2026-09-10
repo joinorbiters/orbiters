@@ -253,3 +253,101 @@ def test_the_deploy_vhosts_keep_the_root_slug_as_a_placeholder() -> None:
         "a deploy vhost redirects under a literal space name instead of `__ROOT_SLUG__`. "
         "The repository copy is plain and substituted at install time: " + "; ".join(offenders)
     )
+
+
+# What a browser downloads: the two SPAs' sources and the static site. Not the tests
+# beside them, which are meant to be full of fixtures, and not the Python packages,
+# whose docstrings discuss the fixtures on purpose.
+_SHIPPED_WEB_SURFACES = (
+    "projects/pigrocrm/apps/web/src",
+    "projects/hub/apps/web/src",
+    "projects/website/src",
+)
+_NOT_SHIPPED = re.compile(r"\.(test|spec)\.[jt]sx?$|/__tests__/|/e2e/")
+
+# Two shapes, and they are separate because their false positives are.
+#
+# A stock company name is a defect wherever it appears in shipped copy: the hub's footer
+# told every visitor for a week that «Orbiters è un progetto di Studio Rossi» (ORB-97).
+#
+# A placeholder domain from RFC 2606 is only a defect when it is *linked*, which is the
+# other half of the same footer (`href="https://example.com/"`). Naming one in a comment
+# is normal and useful -- `orbiters.js` explains an attack with
+# `example.com/?u=linkedin.com/x` -- so matching the bare word would train the next
+# person to reach for the allowlist instead of reading the failure.
+_FIXTURE_COMPANY = re.compile(r"Studio Rossi|(?i:\bacme\b)|Cliente Srl|Committente Srl|Example Ltd")
+_PLACEHOLDER_LINK = re.compile(
+    r"""(?i:(?:href|src|action|url)\s*[=:]\s*["'`]\s*(?:https?:)?//?[^"'`]*example\.(?:com|org|net))"""
+)
+
+# A hit that was read and kept. A form's example value is the honest use of a stock
+# company name, and a code comment naming one is discussing it rather than displaying it.
+_ALLOWED_ON_SHIPPED_SURFACES = frozenset(
+    {
+        # the ragione sociale field's own example, shown greyed inside the empty input
+        ("projects/hub/apps/web/src/pages/CompanyWizard.tsx", "ACME"),
+        # both are comments about how a screen reader announces a company cell
+        ("projects/pigrocrm/apps/web/src/features/people/columns.tsx", "ACME"),
+        ("projects/pigrocrm/apps/web/src/components/cells.tsx", "ACME"),
+    }
+)
+
+
+def _shipped_web_files(root: Path) -> list[str]:
+    listing = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True, check=True)
+    return [
+        n
+        for n in listing.stdout.decode().split("\0")
+        if n and n.startswith(_SHIPPED_WEB_SURFACES) and not _NOT_SHIPPED.search(n) and "." in n
+    ]
+
+
+def test_both_shipped_surface_shapes_can_still_fail() -> None:
+    """Two regexes with an allowlist is enough machinery to stop matching anything."""
+    assert _FIXTURE_COMPANY.findall("progetto di " + "Studio" + " Rossi") == ["Studio Rossi"]
+    assert _FIXTURE_COMPANY.findall('placeholder="' + "ACME" + ' Srl"') == ["ACME"]
+    assert _PLACEHOLDER_LINK.search('<a href="https://' + "example.com" + '/">x</a>')
+    assert _PLACEHOLDER_LINK.search("src: '//" + "example.org" + "/a.js'")
+
+    # The two neighbours that must not fire, or the failure gets muted instead of read:
+    # a placeholder domain discussed in a comment, and a real word containing "acme".
+    assert not _PLACEHOLDER_LINK.search("accepted " + "example.com" + "/?u=linkedin.com/x")
+    assert _FIXTURE_COMPANY.findall("pharmacme e Sacmea") == []
+
+
+def test_no_fixture_identity_reaches_a_shipped_web_surface() -> None:
+    """A fixture name in a bundle is invisible to every check that existed.
+
+    The allowlists above are about *real* identity, so a synthetic one passes them by
+    design, and the shapes are fiscal, so a company name matches nothing. That is how the
+    hub shipped an attribution to a test company: published, served and screenshotted for
+    a week, and what caught it was reading the live page (ORB-97).
+
+    So this asks a different question. Not "is this real", but "is this a fixture, in a
+    file a browser downloads". A form's example value is the honest exception and is
+    allowlisted by path, which is what makes an unlisted hit worth reading rather than
+    muting.
+    """
+    root = _repository_root()
+    shipped = _shipped_web_files(root)
+    assert len(shipped) > 50, f"only {len(shipped)} shipped files were read, so this proves little"
+
+    offenders: list[str] = []
+    for name in shipped:
+        try:
+            text = (root / name).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for hit in _FIXTURE_COMPANY.findall(text):
+            if (name, hit.upper()) in _ALLOWED_ON_SHIPPED_SURFACES:
+                continue
+            offenders.append(f"the company {hit!r} in {name}")
+        if _PLACEHOLDER_LINK.search(text):
+            offenders.append(f"a link to a placeholder domain in {name}")
+
+    assert not offenders, (
+        "a fixture company name, or a link to a placeholder domain, is in a file the "
+        "browser downloads. A visitor reads it as the product's own copy, which is what "
+        "ORB-97 was. Remove it, or if it is a deliberate example in a form, add its path "
+        "to _ALLOWED_ON_SHIPPED_SURFACES with a note: " + "; ".join(sorted(set(offenders)))
+    )
