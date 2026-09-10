@@ -723,6 +723,8 @@ class AnalyticsService:
                     # user had already selected the hours -- with a message about
                     # characters they never typed. Found by taking a bound draft all the
                     # way to `emessa` over HTTP in `apps/api/tests/test_analytics_api.py`.
+                    # Since ORB-140 the writer spells an em dash as a hyphen itself, so
+                    # this is the plain spelling by choice rather than by necessity.
                     descrizione=f"Attività{etichetta} - {ore} ore",
                     quantita=ore,
                     unita_misura="ore",
