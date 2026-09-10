@@ -114,7 +114,12 @@ rather than pinned. The corpus job stays serial on purpose, since every assertio
 in it is about which plan the planner picks and load changes the answer.
 
 `ci` is the aggregate job and the only status check this repository should ever be
-asked to require. Every other job name can change forever without a ruleset edit.
+asked to require, and since 2026-09-10 it is required: the ruleset "main: pull
+request and green ci" refuses a direct push to `main`, a force-push and a branch
+deletion, and asks for a pull request whose `ci` context is green (no approval count,
+since two people merge their own work here). A second ruleset makes tags immutable,
+so a release tag can be created and never moved or deleted. Every other job name can
+change forever without a ruleset edit.
 Two traps that fail silently, both already handled in `ci.yml` and both worth
 knowing before you edit it:
 
