@@ -14,9 +14,7 @@ export function Entra() {
   useEffect(() => {
     if (started.current || !t) return
     started.current = true
-    // '/io' is Task 7's route: the router doesn't type it yet, so the literal needs a
-    // cast until that task adds it to the tree.
-    enter.mutate(t, { onSuccess: () => void navigate({ to: '/io' as never, replace: true }) })
+    enter.mutate(t, { onSuccess: () => void navigate({ to: '/io', replace: true }) })
   }, [t, enter, navigate])
 
   if (!t || enter.isError) {

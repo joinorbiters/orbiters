@@ -19,7 +19,9 @@ import {
   AdminSignups,
 } from '@/pages/admin/lists'
 import { Accedi } from '@/pages/member/Accedi'
+import { Area } from '@/pages/member/Area'
 import { Entra } from '@/pages/member/Entra'
+import { MemberGuard } from '@/pages/member/Guard'
 
 /**
  * The route tree, in code: eleven screens is not enough to want a file-based router and
@@ -67,6 +69,9 @@ const entra = createRoute({
   component: Entra,
 })
 
+const io = createRoute({ getParentRoute: () => publicLayout, path: '/io', component: MemberGuard })
+const ioIndex = createRoute({ getParentRoute: () => io, path: '/', component: Area })
+
 const adminLogin = createRoute({ getParentRoute: () => root, path: '/admin/login', component: AdminLogin })
 const adminArea = createRoute({ getParentRoute: () => root, path: '/admin', component: AdminLayout })
 const adminFreelance = createRoute({
@@ -92,7 +97,7 @@ const adminIscrizioni = createRoute({
 })
 
 const routeTree = root.addChildren([
-  publicLayout.addChildren([chooser, freelance, aziende, grazie, accedi, entra]),
+  publicLayout.addChildren([chooser, freelance, aziende, grazie, accedi, entra, io.addChildren([ioIndex])]),
   adminLogin,
   adminArea.addChildren([adminFreelance, adminFreelanceDetail, adminAziende, adminAziendeDetail, adminIscrizioni]),
 ])
