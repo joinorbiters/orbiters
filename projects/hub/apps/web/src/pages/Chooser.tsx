@@ -15,7 +15,7 @@ export function Chooser() {
       <div className="grid gap-4 sm:grid-cols-2">
         <Link
           to="/freelance"
-          className="group flex flex-col gap-3 border-[length:var(--landing-border-width)] bg-card p-6 shadow-sm transition-colors hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+          className="group flex flex-col gap-3 border-[length:var(--landing-border-width)] bg-card p-6 shadow-sm transition-colors hover:bg-muted focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-(color:--landing-focus)"
         >
           <UserRound className="size-6" aria-hidden="true" />
           <span className="text-lg font-semibold">Sono un developer o un CTO</span>
@@ -28,7 +28,7 @@ export function Chooser() {
         </Link>
         <Link
           to="/aziende"
-          className="group flex flex-col gap-3 border-[length:var(--landing-border-width)] bg-card p-6 shadow-sm transition-colors hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+          className="group flex flex-col gap-3 border-[length:var(--landing-border-width)] bg-card p-6 shadow-sm transition-colors hover:bg-muted focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-(color:--landing-focus)"
         >
           <Briefcase className="size-6" aria-hidden="true" />
           <span className="text-lg font-semibold">Cerco persone per un progetto</span>

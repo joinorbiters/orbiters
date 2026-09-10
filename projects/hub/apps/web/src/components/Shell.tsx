@@ -18,13 +18,13 @@ export function Shell({ children }: { children: ReactNode }) {
       <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-5">
         <Link
           to="/"
-          className="inline-flex items-center gap-2.5 bg-[var(--landing-surface)] px-[0.45rem] py-[0.2rem] text-lg font-medium tracking-tight"
+          className="inline-flex items-center gap-2.5 bg-[var(--landing-surface)] p-[var(--landing-link-pad)] text-lg font-medium tracking-tight"
         >
           <BrandMark className="size-3.5" />
           Orbiters
         </Link>
         <a
-          className="bg-[var(--landing-surface)] px-[0.45rem] py-[0.2rem] text-sm underline-offset-2 hover:underline"
+          className="bg-[var(--landing-surface)] p-[var(--landing-link-pad)] text-sm text-muted-foreground underline-offset-2 hover:underline"
           href="https://joinorbiters.com/"
         >
           joinorbiters.com
@@ -38,21 +38,18 @@ export function Shell({ children }: { children: ReactNode }) {
       <footer className="mx-auto flex w-full max-w-5xl flex-wrap items-center gap-6 border-t-[length:var(--landing-border-width)] px-6 py-8 text-xs text-muted-foreground">
         <a
           href="https://joinorbiters.com/privacy"
-          className="bg-[var(--landing-surface)] px-[0.3rem] py-[0.15rem] underline-offset-2 hover:underline"
+          className="bg-[var(--landing-surface)] p-[var(--landing-link-pad)] underline-offset-2 hover:underline"
         >
           Privacy
         </a>
         <a
           href="https://joinorbiters.com/termini"
-          className="bg-[var(--landing-surface)] px-[0.3rem] py-[0.15rem] underline-offset-2 hover:underline"
+          className="bg-[var(--landing-surface)] p-[var(--landing-link-pad)] underline-offset-2 hover:underline"
         >
           Termini
         </a>
-        <span className="bg-[var(--landing-surface)] px-[0.3rem] py-[0.15rem]">
-          Orbiters è un progetto di{' '}
-          <a href="https://example.com/" className="underline-offset-2 hover:underline">
-            Studio Rossi
-          </a>
+        <span className="bg-[var(--landing-surface)] p-[var(--landing-link-pad)]">
+          Orbiters è un progetto di Studio Rossi
         </span>
       </footer>
     </div>
