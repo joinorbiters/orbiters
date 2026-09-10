@@ -105,10 +105,13 @@ Not: "working on it". Replies in a thread take `parentId`.
 
 ## Project updates
 
-`save_status_update` with `type: "project"`, the project id, a `health` (`onTrack`,
-`atRisk`, `offTrack`) and a body per the `linear-content` skill. Post one when the board
-alone would mislead a reader: a release shipped, a milestone slipped, a decision taken.
-Not one that restates the issue list.
+`save_status_update` with `type: "project"`, the project id in a key called **`project`**,
+a `health` (`onTrack`, `atRisk`, `offTrack`) and a body per the `linear-content` skill.
+Both of those are easy to get wrong once: omitting `type` fails on `type: is required`,
+and passing the id as `projectId` fails on `project is required when creating a project
+status update` while the id is right there in the payload. Post one when the board alone
+would mislead a reader: a release shipped, a milestone slipped, a decision taken. Not one
+that restates the issue list.
 
 ## References in code and commits
 
