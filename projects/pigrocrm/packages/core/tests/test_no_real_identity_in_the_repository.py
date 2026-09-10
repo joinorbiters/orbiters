@@ -224,3 +224,32 @@ def test_no_unapproved_identifier_appears_anywhere(
         "synthetic, in which case add it to the allowlist above with a note saying so: "
         + "; ".join(sorted(set(offenders)))
     )
+
+
+# `return 302 /<segment>/app/` and `return 302 /<segment>$request_uri` are the two shapes
+# in the deploy vhosts that carry the root installation's slug, which is a real company's
+# name. The public-page redirects are absolute URLs and do not match.
+_VHOST_SLUG_REDIRECT = re.compile(r"return\s+30\d\s+/([A-Za-z0-9_-]+)(?:/app/|\$request_uri)")
+
+
+def test_the_deploy_vhosts_keep_the_root_slug_as_a_placeholder() -> None:
+    """The installed copy must never come back into the repository.
+
+    The vhosts on the server are edited in place and hold the real slug; the copies here
+    are the source of truth for the rules and hold `__ROOT_SLUG__`. Pasting the server's
+    copy back is how the name returned once already (ORB-104), and it is invisible: nginx
+    accepts it, the login keeps working, and only the deep links land on a space that
+    does not exist.
+    """
+    confs = sorted((_repository_root() / "projects/pigrocrm/deploy/nginx").glob("*.conf"))
+    assert confs, "no CRM vhost was found, so a pass here means nothing"
+
+    matches = [(c.name, m) for c in confs for m in _VHOST_SLUG_REDIRECT.findall(c.read_text())]
+    assert len(matches) >= 12, (
+        f"the slug-carrying redirects stopped matching, so this test guards nothing: {matches}"
+    )
+    offenders = sorted({f"{name}: /{slug}" for name, slug in matches if slug != "__ROOT_SLUG__"})
+    assert not offenders, (
+        "a deploy vhost redirects under a literal space name instead of `__ROOT_SLUG__`. "
+        "The repository copy is plain and substituted at install time: " + "; ".join(offenders)
+    )
