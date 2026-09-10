@@ -28,6 +28,12 @@ const PROFORMA = {
 
 const WITH_CUSTOMER = { ...ISSUED, customer_ragione_sociale: 'ACME S.r.l.' } as Invoice
 
+const LONG_CAUSALE =
+  'Consulenza tecnica e sviluppo software per il progetto di migrazione della piattaforma, ' +
+  'comprensiva di analisi, implementazione, test e supporto al rilascio in produzione'
+
+const WITH_CAUSALE = { ...ISSUED, causale: 'Consulenza agosto' } as Invoice
+
 const WITH_PERIOD = {
   ...ISSUED,
   competenza_da: '2026-08-01',
@@ -231,5 +237,55 @@ describe('the accrual period column', () => {
 
     renderCell('competenza', ISSUED)
     expect(screen.getByText('—').className).toContain('text-muted-foreground')
+  })
+})
+
+/**
+ * The «Descrizione» column (ORB-130): the causale, which until now the list never
+ * showed. A causale can be 200 characters long, so the cell is the one place in this
+ * table that truncates: a block with a maximum width and an ellipsis, the whole text as
+ * the cell's title, rather than a column that widens the table to fit the longest row.
+ */
+describe('the description column', () => {
+  it('sits right after the customer when the list shows one, and after the number otherwise', () => {
+    const withCustomer = buildInvoiceColumns({ cliente: true }).map((c) => c.id ?? '')
+    expect(withCustomer.indexOf('descrizione')).toBe(withCustomer.indexOf('cliente') + 1)
+    const plain = buildInvoiceColumns().map((c) => c.id ?? '')
+    expect(plain.indexOf('descrizione')).toBe(plain.indexOf('numero') + 1)
+    expect(column('descrizione').header).toBe('Descrizione')
+  })
+
+  it('reads the causale, or the em dash when there is none', () => {
+    expect(accessor('descrizione', WITH_CAUSALE)).toBe('Consulenza agosto')
+    expect(accessor('descrizione', { ...ISSUED, causale: null } as Invoice)).toBe('—')
+    expect(accessor('descrizione', { ...ISSUED, causale: '' } as Invoice)).toBe('—')
+  })
+
+  it('truncates a long causale in a bounded block and keeps the whole text as the title', () => {
+    renderCell('descrizione', { ...ISSUED, causale: LONG_CAUSALE } as Invoice)
+    const cell = screen.getByTitle(LONG_CAUSALE)
+    expect(cell).toHaveTextContent(LONG_CAUSALE)
+    expect(cell.className).toContain('truncate')
+    expect(cell.className).toContain('block')
+    expect(cell.className).toMatch(/max-w-/)
+  })
+
+  it('shows the missing causale as a quiet dash', () => {
+    renderCell('descrizione', { ...ISSUED, causale: null } as Invoice)
+    expect(screen.getByText('—').className).toContain('text-muted-foreground')
+  })
+})
+
+/**
+ * The state column no longer stamps «importata» on a row (ORB-130): in a register where
+ * most rows came from the previous system the word explains nothing a reader of the list
+ * can act on. The detail page keeps it, where it says why the XML and «Rigenera
+ * documenti» are missing.
+ */
+describe('the state column and an imported invoice', () => {
+  it('shows the state and not the provenance', () => {
+    renderCell('stato', { ...ISSUED, importata_da: 'esterno' } as Invoice)
+    expect(screen.getByText('Emessa')).toBeInTheDocument()
+    expect(screen.queryByText(/^importata$/i)).toBeNull()
   })
 })

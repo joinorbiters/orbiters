@@ -300,6 +300,15 @@ describe('InvoiceActions', () => {
     expect(screen.getByText(/^importata$/i)).toBeInTheDocument()
   })
 
+  /** The list turns the pill off (ORB-130); the detail page, which renders the badge
+   *  with no option, keeps it as the reason the XML actions are missing. */
+  it('leaves the "imported" badge out when asked to, and keeps the state', () => {
+    const imported = { ...ISSUED, importata_da: 'esterno' } as Invoice
+    wrap(<InvoiceStateBadge invoice={imported} importata={false} />)
+    expect(screen.getByText('Emessa')).toBeInTheDocument()
+    expect(screen.queryByText(/^importata$/i)).toBeNull()
+  })
+
   // Whatever the column holds -- the value is provenance the CRM keeps for itself, not
   // copy -- the badge says only that the invoice came from elsewhere. A source name
   // reaching the screen is the defect this assertion exists to catch.

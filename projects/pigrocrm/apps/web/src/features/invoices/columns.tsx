@@ -49,6 +49,13 @@ function accrualPeriod(row: Invoice): string {
   return formatPeriod(row.competenza_da, row.competenza_a)
 }
 
+/** The causale, or the dash: `''` and `null` are both "nothing here", as everywhere
+ *  else in this table. */
+function description(row: Invoice): string {
+  const causale = row.causale
+  return causale === null || causale === undefined || causale === '' ? EMPTY : causale
+}
+
 export function buildInvoiceColumns(
   options: InvoiceColumnOptions = {},
 ): ColumnDef<DataTableFeatures, Invoice>[] {
@@ -82,6 +89,27 @@ export function buildInvoiceColumns(
     },
     ...cliente,
     {
+      header: 'Descrizione',
+      id: 'descrizione',
+      accessorFn: (row) => description(row),
+      // The one cell in this table that truncates (ORB-130). A causale runs to 200
+      // characters, and a column that widened to fit the longest one would push every
+      // other column off the frame. `truncate` works here where it did not on the
+      // customer's name because the span is a block with a maximum width: in an
+      // auto-layout table that width is what the cell's minimum becomes, so the
+      // ellipsis has something to clip against. The whole text stays reachable as the
+      // cell's title.
+      cell: ({ row }) => {
+        const causale = description(row.original)
+        if (causale === EMPTY) return <span className="text-muted-foreground">{EMPTY}</span>
+        return (
+          <span className="block max-w-[24rem] truncate" title={causale}>
+            {causale}
+          </span>
+        )
+      },
+    },
+    {
       header: 'Tipo',
       id: 'tipo',
       accessorFn: (row) => INVOICE_TYPE_LABELS[row.tipo as keyof typeof INVOICE_TYPE_LABELS],
@@ -89,7 +117,10 @@ export function buildInvoiceColumns(
     {
       header: 'Stato',
       id: 'stato',
-      cell: ({ row }) => <InvoiceStateBadge invoice={row.original} />,
+      // Without the «importata» pill (ORB-130): in a register where most rows came from
+      // the previous system the word explains nothing a reader of the list can act on.
+      // The detail page keeps it, as the reason its XML actions are missing.
+      cell: ({ row }) => <InvoiceStateBadge invoice={row.original} importata={false} />,
     },
     {
       header: 'Data',
