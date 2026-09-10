@@ -116,4 +116,28 @@ describe('/io/modifica', () => {
       expect(screen.getByRole('alert')).toHaveTextContent('serve una cifra più bassa'),
     )
   })
+
+  it('says the rest was saved when only the CV is refused', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      if (init?.method === 'PATCH') return answer(200, PROFILE)
+      if (init?.method === 'PUT') {
+        return answer(422, { detail: [{ loc: ['body', 'cv'], msg: 'il CV deve essere un PDF' }] })
+      }
+      return answer(200, PROFILE)
+    })
+    mount()
+    const user = userEvent.setup()
+    await screen.findByLabelText('Posizione')
+    await user.upload(
+      screen.getByLabelText('CV'),
+      new File(['%PDF'], 'cv.pdf', { type: 'application/pdf' }),
+    )
+    await user.click(screen.getByRole('button', { name: 'Salva' }))
+    await waitFor(() => {
+      const alert = screen.getByRole('alert')
+      expect(alert).toHaveTextContent('il CV deve essere un PDF')
+      expect(alert).toHaveTextContent('Le altre risposte sono salvate')
+    })
+    expect(screen.getByRole('button', { name: 'Salva' })).toBeInTheDocument()
+  })
 })

@@ -54,16 +54,22 @@ export function Modifica() {
     }
     setErrors(problems)
     if (Object.keys(problems).length) return
+    let saved = false
     try {
       await update.mutateAsync(toUpdate(value))
+      saved = true
       if (value.cv) await replaceCv.mutateAsync(value.cv)
       void navigate({ to: '/io' })
     } catch (error) {
       const refusal = error instanceof ApiError ? error : null
-      if (refusal?.fields.length) {
-        setErrors(Object.fromEntries(refusal.fields.map((field) => [field, refusal.message])))
+      // The PATCH and the CV replacement are two requests: when the first has already
+      // gone through, a refusal on the second must not read as if nothing was saved.
+      const suffix = saved ? ' Le altre risposte sono salvate.' : ''
+      const known = refusal?.fields.filter((field) => EDIT_STEPS.some((step) => step.id === field)) ?? []
+      if (known.length) {
+        setErrors(Object.fromEntries(known.map((field) => [field, refusal!.message + suffix])))
       } else {
-        setFailure(refusal?.message ?? 'Non siamo riusciti a salvare. Riprova.')
+        setFailure((refusal?.message ?? 'Non siamo riusciti a salvare. Riprova.') + suffix)
       }
     }
   }
