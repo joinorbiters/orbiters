@@ -18,9 +18,14 @@ import {
   AdminFreelancers,
   AdminSignups,
 } from '@/pages/admin/lists'
+import { Accedi } from '@/pages/member/Accedi'
+import { Area } from '@/pages/member/Area'
+import { Entra } from '@/pages/member/Entra'
+import { MemberGuard } from '@/pages/member/Guard'
+import { Modifica } from '@/pages/member/Modifica'
 
 /**
- * The route tree, in code: nine screens is not enough to want a file-based router and
+ * The route tree, in code: eleven screens is not enough to want a file-based router and
  * a generated tree beside it. The public pages sit in the `Shell`; the admin area
  * brings its own frame and its own guard (`AdminLayout`).
  */
@@ -55,6 +60,19 @@ const grazie = createRoute({
   }),
   component: Thanks,
 })
+const accedi = createRoute({ getParentRoute: () => publicLayout, path: '/accedi', component: Accedi })
+const entra = createRoute({
+  getParentRoute: () => publicLayout,
+  path: '/entra',
+  validateSearch: (search: Record<string, unknown>): { t: string } => ({
+    t: typeof search.t === 'string' ? search.t : '',
+  }),
+  component: Entra,
+})
+
+const io = createRoute({ getParentRoute: () => publicLayout, path: '/io', component: MemberGuard })
+const ioIndex = createRoute({ getParentRoute: () => io, path: '/', component: Area })
+const ioModifica = createRoute({ getParentRoute: () => io, path: '/modifica', component: Modifica })
 
 const adminLogin = createRoute({ getParentRoute: () => root, path: '/admin/login', component: AdminLogin })
 const adminArea = createRoute({ getParentRoute: () => root, path: '/admin', component: AdminLayout })
@@ -81,7 +99,15 @@ const adminIscrizioni = createRoute({
 })
 
 const routeTree = root.addChildren([
-  publicLayout.addChildren([chooser, freelance, aziende, grazie]),
+  publicLayout.addChildren([
+    chooser,
+    freelance,
+    aziende,
+    grazie,
+    accedi,
+    entra,
+    io.addChildren([ioIndex, ioModifica]),
+  ]),
   adminLogin,
   adminArea.addChildren([adminFreelance, adminFreelanceDetail, adminAziende, adminAziendeDetail, adminIscrizioni]),
 ])

@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, EmailStr
 
 from orbiters_api.deps import ADMIN_COOKIE, AdminDep, SessionDep, SettingsDep
+from orbiters_api.downloads import cv_response
 from orbiters_api.ratelimit import spend_one
 from orbiters_core.admin import AdminRead, AdminService
 from orbiters_core.comments import CommentService
@@ -98,14 +99,7 @@ def get_freelancer(_: AdminDep, session: SessionDep, freelancer_id: UUID) -> Fre
 @router.get("/freelancers/{freelancer_id}/cv")
 def download_cv(_: AdminDep, session: SessionDep, freelancer_id: UUID) -> Response:
     cv = FreelancerService(session).cv(freelancer_id)
-    # ASCII-safe filename: the browser reads it, and a quote or a newline in a name the
-    # applicant chose must not become a header injection.
-    safe = "".join(ch if ch.isalnum() or ch in "._- " else "_" for ch in cv.filename) or "cv.pdf"
-    return Response(
-        content=cv.content,
-        media_type=cv.mime,
-        headers={"Content-Disposition": f'attachment; filename="{safe}"'},
-    )
+    return cv_response(cv)
 
 
 @router.patch("/freelancers/{freelancer_id}", response_model=FreelancerRead)

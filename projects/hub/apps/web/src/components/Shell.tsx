@@ -15,7 +15,7 @@ import { BrandMark } from '@/components/BrandMark'
 export function Shell({ children }: { children: ReactNode }) {
   return (
     <div className="site flex min-h-full flex-col">
-      <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-5">
+      <header className="mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-y-2 px-6 py-5">
         <Link
           to="/"
           className="inline-flex items-center gap-2.5 bg-[var(--landing-surface)] p-[var(--landing-link-pad)] text-lg font-medium tracking-tight"
@@ -23,12 +23,17 @@ export function Shell({ children }: { children: ReactNode }) {
           <BrandMark className="size-3.5" />
           Orbiters
         </Link>
-        <a
-          className="bg-[var(--landing-surface)] p-[var(--landing-link-pad)] text-sm text-muted-foreground underline-offset-2 hover:underline"
-          href="https://joinorbiters.com/"
-        >
-          joinorbiters.com
-        </a>
+        <nav className="flex items-center gap-4 text-sm">
+          <Link to="/io" className="text-muted-foreground underline-offset-2 hover:underline">
+            La tua area
+          </Link>
+          <a
+            className="text-muted-foreground underline-offset-2 hover:underline"
+            href="https://joinorbiters.com/"
+          >
+            joinorbiters.com
+          </a>
+        </nav>
       </header>
       <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col items-center justify-center px-6 py-12">
         <div className="w-full border-[length:var(--landing-border-width)] bg-card px-6 py-10 shadow-xs sm:px-10">

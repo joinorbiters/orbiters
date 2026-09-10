@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from orbiters_api.deps import SessionDep
-from orbiters_api.routers import admin, companies, freelancers, signups
+from orbiters_api.routers import admin, companies, freelancers, members, signups
 from orbiters_core.errors import DomainError, NotFound, ValidationFailed
 
 
@@ -37,6 +37,7 @@ def create_app() -> FastAPI:
     app.include_router(freelancers.router)
     app.include_router(companies.router)
     app.include_router(admin.router)
+    app.include_router(members.router)
 
     @app.get("/health")
     def health(session: SessionDep) -> dict[str, str]:

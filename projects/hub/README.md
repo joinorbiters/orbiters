@@ -18,6 +18,8 @@ Three public flows and the admin area behind them:
 - `/hub/` — the chooser: «Sono un freelance» / «Cerco persone per un progetto».
 - `/hub/freelance` — the freelancer wizard (CV upload included), ending at `/hub/grazie`.
 - `/hub/aziende` — the company wizard.
+- `/hub/accedi` and `/hub/io`: a freelancer gets back in with a magic link by mail, to
+  see or change what they sent.
 - `/hub/admin/login` and the freelancer, company and signup lists behind it — a cookie
   session, created with `orbiters createadmin` (below).
 

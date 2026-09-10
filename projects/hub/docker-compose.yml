@@ -42,6 +42,10 @@ services:
       ORBITERS_OPENAI_CONVERSIONS_API_KEY: ${ORBITERS_OPENAI_CONVERSIONS_API_KEY:-}
       ORBITERS_SIGNUP_URL: ${ORBITERS_SIGNUP_URL:-https://joinorbiters.com/}
       ORBITERS_OPENAI_CONVERSIONS_SEND_HASHED_EMAIL: ${ORBITERS_OPENAI_CONVERSIONS_SEND_HASHED_EMAIL:-false}
+      # The member area's mail. Empty key is a hub with the area's door still closed.
+      ORBITERS_RESEND_API_KEY: ${ORBITERS_RESEND_API_KEY:-}
+      ORBITERS_MAIL_FROM: ${ORBITERS_MAIL_FROM:-Orbiters <ciao@joinorbiters.com>}
+      ORBITERS_HUB_URL: ${ORBITERS_HUB_URL:-https://joinorbiters.com/hub}
     ports:
       # Loopback only: the host's nginx is what faces the internet, and it proxies
       # `/api/orbiters/signups` and `/api/hub/` here.
