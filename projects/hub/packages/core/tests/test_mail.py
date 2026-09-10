@@ -52,6 +52,14 @@ def test_resend_posts_one_json_object_with_the_bearer_key() -> None:
     }
 
 
+def test_resend_sends_the_html_beside_the_text_when_there_is_one() -> None:
+    http = FakeHttp()
+    mail = Mail(to="ada@studio.it", subject="x", text="ciao", html="<p>ciao</p>")
+    assert ResendSender(KEY, FROM, http=http).send(mail) is True
+    body = json.loads(http.calls[0][3])
+    assert body["text"] == "ciao" and body["html"] == "<p>ciao</p>"
+
+
 def test_resend_answers_false_and_never_raises_on_any_failure() -> None:
     mail = Mail(to="ada@studio.it", subject="x", text="y")
     assert ResendSender(KEY, FROM, http=FakeHttp(status=422)).send(mail) is False
@@ -81,3 +89,27 @@ def test_the_magic_link_mail_carries_the_link_and_how_long_it_lasts() -> None:
     assert "https://joinorbiters.com/hub/entra?t=abc" in mail.text
     assert "15 minuti" in mail.text
     assert "una volta sola" in mail.text
+
+
+def test_the_magic_link_mail_has_an_html_version_in_the_landings_system() -> None:
+    """The HTML is the landing's box: paper ground, Prussian Blue ink, the four tiles,
+    the Watermelon call to action, hard edges. The text version stays the fallback."""
+    mail = magic_link_mail("ada@studio.it", "https://joinorbiters.com/hub/entra?t=abc", 15)
+    assert mail.html is not None
+    html = mail.html
+    # The link three times: the button's href, and the bare URL as href and as text for
+    # the clients that block buttons.
+    assert html.count("https://joinorbiters.com/hub/entra?t=abc") == 3
+    assert "Entra nella tua area" in html
+    assert "15 minuti" in html and "una volta sola" in html
+    # The brand's five values and nothing rounded.
+    for colour in ("#f1f2f3", "#011936", "#465362", "#f9dc5c", "#ed254e", "#e5133e"):
+        assert colour in html, colour
+    assert "border-radius" not in html
+    assert 'name="supported-color-schemes"' in html
+    assert "Outfit" in html
+    assert "Privacy" in html and "Termini" in html
+    # Nothing the person typed is interpolated unescaped: the link is the only variable
+    # and it is attribute-safe.
+    hostile = magic_link_mail("ada@studio.it", 'https://x.it/?t="><script>', 15)
+    assert hostile.html is not None and "<script>" not in hostile.html
