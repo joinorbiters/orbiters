@@ -20,7 +20,14 @@ describe.each(PAGES)('%s', (name) => {
 
   it('carries its own title, description and Open Graph', () => {
     const title = page.match(/<title>([^<]+)<\/title>/)?.[1] ?? ''
-    expect(title).toContain('PigroCRM')
+    // Until 2026-09-10 every page here titled itself PigroCRM, including the two
+    // legal pages. ORB-36: privacy.html and termini.html are served on
+    // joinorbiters.com, not on pigro.joinorbiters.com, and it is the Orbiters signup
+    // form that links to them, so they title themselves after the site they are on
+    // rather than after the CRM. index.html keeps PigroCRM in its title under
+    // Ivan's 2026-09-09 exception (ORB-24) for search continuity; see the
+    // brand-link assertion below for the same split.
+    expect(title).toContain(name === 'index.html' ? 'PigroCRM' : 'Orbiters')
     const description = meta(page, 'description') ?? ''
     expect(description.length).toBeGreaterThan(40)
     // The trap named in spec 9.2: the previous system's index.html still carries "Studio Rossi is
@@ -68,11 +75,17 @@ describe.each(PAGES)('%s', (name) => {
   })
 
   it('signs itself with the four-tile glyph before the name', () => {
-    // The landing is Orbiters' since 2026-09-09 and signs as Orbiters; the two policy
-    // pages are the product's and keep its name.
-    const brand = name === 'index.html' ? 'Orbiters' : 'PigroCRM'
+    // Until 2026-09-10 the landing signed as Orbiters and the two legal pages kept
+    // PigroCRM, on the reasoning that a legal page belongs to the product it
+    // covers. ORB-36 reopened that: privacy.html and termini.html are served on
+    // joinorbiters.com, not on pigro.joinorbiters.com, the Orbiters signup form is
+    // what links to them, and their own text already covers Orbiters' data (the
+    // signup) alongside PigroCRM's (orbiters.test.ts separately asserts
+    // privacy.html names Orbiters and links /orbiters). All three pages here sign
+    // as Orbiters now; the titolare del trattamento the two legal pages name, and
+    // the substance of what each policy says, did not move with the brand.
     expect(page).toMatch(
-      new RegExp(`<a class="brand" href="/"><span class="glyph" aria-hidden="true"></span>${brand}</a>`),
+      /<a class="brand" href="\/"><span class="glyph" aria-hidden="true"><\/span>Orbiters<\/a>/,
     )
   })
 
