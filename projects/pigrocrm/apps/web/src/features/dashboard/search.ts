@@ -1,8 +1,9 @@
+import type { components } from '@/lib/api-types'
 import { currentMonth } from './periodo'
 
 /**
- * `/app/?tab=&da=&a=` — the dashboard's search params, and the one function that reads
- * them back.
+ * `/app/?tab=&da=&a=&base=` — the dashboard's search params, and the one function that
+ * reads them back.
  *
  * The period is in the URL because a screenshot or a shared link of a dashboard with no
  * explicit period is a number with no unit (§4). This is the first route in this codebase
@@ -21,7 +22,20 @@ export const DASHBOARD_TABS = [
 
 export type TabId = (typeof DASHBOARD_TABS)[number]['id']
 
-export type DashboardSearch = { tab: TabId; da: string; a: string }
+/**
+ * Which month a document's money falls in on the economic charts (ORB-133): the accrual
+ * period it declares, or the money's own dates. The type is the server's, read off the
+ * response it echoes, so the two readings cannot be spelled differently on the two sides.
+ * Competenza first because it is the default Ivan asked for («default a competenza»).
+ */
+export type CashBase = components['schemas']['CashOverview']['base']
+
+export const CASH_BASES: readonly { id: CashBase; label: string }[] = [
+  { id: 'competenza', label: 'Competenza' },
+  { id: 'incasso', label: 'Incasso' },
+]
+
+export type DashboardSearch = { tab: TabId; da: string; a: string; base: CashBase }
 
 /**
  * A `YYYY-MM-DD` that names a day that exists.
@@ -67,15 +81,19 @@ function isCalendarDate(value: unknown): value is string {
  */
 export function defaultDashboardSearch(): DashboardSearch {
   const { da, a } = currentMonth()
-  return { tab: 'economica', da, a }
+  return { tab: 'economica', da, a, base: 'competenza' }
 }
 
 export function validateDashboardSearch(search: Record<string, unknown>): DashboardSearch {
   const fallback = currentMonth()
   const tab = DASHBOARD_TABS.find((candidate) => candidate.id === search.tab)?.id ?? 'economica'
+  // The same fill-in-rather-than-reject as the tab: a link carrying `base=emissione`
+  // (the P&L's reading, not this view's) opens on the default rather than on a 422.
+  const base = CASH_BASES.find((candidate) => candidate.id === search.base)?.id ?? 'competenza'
   return {
     tab,
     da: isCalendarDate(search.da) ? search.da : fallback.da,
     a: isCalendarDate(search.a) ? search.a : fallback.a,
+    base,
   }
 }

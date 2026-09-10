@@ -19,7 +19,7 @@ from uuid import UUID
 from sqlalchemy import ColumnElement, Select, SQLColumnExpression, func, select
 from sqlalchemy.orm import InstrumentedAttribute, Session
 
-from pigrocrm.core.analytics.schemas import RevenueBase
+from pigrocrm.core.analytics.schemas import CashBase, RevenueBase
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.invoices.models import Invoice, InvoiceLine
 from pigrocrm.core.money import ZERO_MONEY, line_value, round_money, sum_hours, sum_money
@@ -51,16 +51,34 @@ def _revenue_filter() -> tuple[ColumnElement[bool], ...]:
     )
 
 
+def _accrual_date() -> SQLColumnExpression[date | None]:
+    """The one definition of "the month a document's period names":
+    `coalesce(competenza_da, data_emissione)`, so a document that never declared a
+    period is read by the one date it has and a register with no periods reads the same
+    under either base. Shared by the period P&L (ORB-61) and the cash view (ORB-133), so
+    the two screens cannot put the same invoice in two different months."""
+    return func.coalesce(Invoice.competenza_da, Invoice.data_emissione)
+
+
 def _revenue_date(base: RevenueBase) -> SQLColumnExpression[date | None]:
     """The date that puts an invoice's revenue in a period, for the two readings the
     period P&L offers (ORB-61). `emissione` is the recorded default (§7.1);
-    `competenza` is `coalesce(competenza_da, data_emissione)`, so a document that never
-    declared a period is read by the one date it has and a register with no periods
-    reads the same under both. Nothing else in this module takes a base: the fiscal
-    and cash figures are by emission or by collection and stay that way."""
+    `competenza` is `_accrual_date`. The fiscal figures take no base and stay by
+    emission; the cash view has a base of its own (`CashBase`, `_cash_date`)."""
     if base == "competenza":
-        return func.coalesce(Invoice.competenza_da, Invoice.data_emissione)
+        return _accrual_date()
     return Invoice.data_emissione
+
+
+def _cash_date(
+    base: CashBase, by_money: SQLColumnExpression[date | None]
+) -> SQLColumnExpression[date | None]:
+    """The date that puts a document's money in a month of the cash view (ORB-133).
+    Under `competenza` it is `_accrual_date` for every series; under `incasso` it is
+    whatever the money's own reading is for that series, which the caller names."""
+    if base == "competenza":
+        return _accrual_date()
+    return by_money
 
 
 class AnalyticsRepository:
@@ -282,12 +300,14 @@ class AnalyticsRepository:
         ).scalar_one()
         return int(entries) + int(costs)
 
-    def monthly_incassato(self, anno: int) -> dict[int, Decimal]:
-        """`Σ totale` of revenue invoices paid in each month of `anno`, by `data_incasso`
-        -- money in the bank, so `totale`, as `sum_da_incassare` reasons. An invoice
-        marked paid with no date falls back to its issue date rather than vanishing."""
-        month = func.extract("month", func.coalesce(Invoice.data_incasso, Invoice.data_emissione))
-        year = func.extract("year", func.coalesce(Invoice.data_incasso, Invoice.data_emissione))
+    def monthly_incassato(self, anno: int, base: CashBase = "competenza") -> dict[int, Decimal]:
+        """`Σ totale` of revenue invoices paid, per month of `anno` -- money in the bank,
+        so `totale`, as `sum_da_incassare` reasons. By the accrual period the invoice
+        declares, or under `incasso` by `data_incasso`, where an invoice marked paid with
+        no date falls back to its issue date rather than vanishing."""
+        when = _cash_date(base, func.coalesce(Invoice.data_incasso, Invoice.data_emissione))
+        month = func.extract("month", when)
+        year = func.extract("year", when)
         rows = self.session.execute(
             select(month, func.sum(Invoice.totale))
             .where(*_revenue_filter(), Invoice.stato_pagamento == "incassato", year == anno)
@@ -295,11 +315,11 @@ class AnalyticsRepository:
         ).all()
         return {int(m): round_money(Decimal(total)) for m, total in rows}
 
-    def monthly_da_incassare(self, anno: int) -> dict[int, Decimal]:
-        """`Σ totale` of revenue invoices still unpaid, by the month they are due (issue
-        date when no due date was set): the month the money is expected, which is what
-        a projection is about."""
-        when = func.coalesce(Invoice.data_scadenza, Invoice.data_emissione)
+    def monthly_da_incassare(self, anno: int, base: CashBase = "competenza") -> dict[int, Decimal]:
+        """`Σ totale` of revenue invoices still unpaid, per month. By the accrual period
+        the invoice declares, or under `incasso` by the month it falls due (issue date
+        when no due date was set): the month the money is expected."""
+        when = _cash_date(base, func.coalesce(Invoice.data_scadenza, Invoice.data_emissione))
         month = func.extract("month", when)
         year = func.extract("year", when)
         rows = self.session.execute(
@@ -309,18 +329,22 @@ class AnalyticsRepository:
         ).all()
         return {int(m): round_money(Decimal(total)) for m, total in rows}
 
-    def monthly_bozze(self, anno: int) -> dict[int, Decimal]:
+    def monthly_bozze(self, anno: int, base: CashBase = "competenza") -> dict[int, Decimal]:
         """`Σ totale` of what is written but not yet an issued invoice: draft invoices and
         live proformas (not the ones already turned into an invoice, which would count
-        twice). By the document's own date, or the day it was created when it has none.
+        twice). By the accrual period the document declares; under `incasso`, by the
+        document's own date. Either way, the day it was created when it has neither.
 
-        Since ORB-63 a proforma always has one: `data_emissione` is the date the sender
-        put on the document, so a proforma dated 5 September for August's work is
-        September's projected money whatever day it was typed in, exactly as the fattura
-        it becomes will be. A `fattura` draft still has no date until `issue` and stays
-        bucketed by the day it was created; `created_at` is the fallback for it alone.
+        Since ORB-63 a proforma always has a date: `data_emissione` is the one the sender
+        put on the document, so under `incasso` a proforma dated 5 September for August's
+        work is September's projected money, exactly as the fattura it becomes will be;
+        under `competenza` it is August's, because that is the period it declares. A
+        `fattura` draft still has no date until `issue` and stays bucketed by the day it
+        was created when it declares no period; `created_at` is the fallback for it alone.
         """
-        when = func.coalesce(Invoice.data_emissione, func.date(Invoice.created_at))
+        when = func.coalesce(
+            _cash_date(base, Invoice.data_emissione), func.date(Invoice.created_at)
+        )
         month = func.extract("month", when)
         year = func.extract("year", when)
         rows = self.session.execute(

@@ -514,6 +514,36 @@ def test_the_economic_overview_answers_everyone_and_keeps_the_estimate_for_admin
     assert other.json()["fiscale"] is None
 
 
+# --- the cash view reads by accrual period, or by the money (ORB-133) ------------------
+
+
+def test_the_economic_overview_takes_a_cash_base_and_defaults_to_accrual(
+    logged_in: TestClient,
+) -> None:
+    """`base=competenza|incasso` beside `anno`, competenza when omitted (Ivan's default),
+    echoed under `cassa.base` so the page can label what it draws, and a 422 for any
+    other word -- `emissione` included, which is the P&L's base and not this view's. The
+    arithmetic of the two readings is `packages/core/tests/test_analytics_cash.py`."""
+    default = logged_in.get("/api/analytics/panoramica", params={"anno": ANNO})
+    assert default.status_code == 200, default.text
+    assert default.json()["cassa"]["base"] == "competenza"
+
+    incasso = logged_in.get("/api/analytics/panoramica", params={"anno": ANNO, "base": "incasso"})
+    assert incasso.status_code == 200, incasso.text
+    assert incasso.json()["cassa"]["base"] == "incasso"
+
+    for wrong in ("emissione", "cassa"):
+        refused = logged_in.get("/api/analytics/panoramica", params={"anno": ANNO, "base": wrong})
+        assert refused.status_code == 422, refused.text
+
+    paths: dict[str, Any] = logged_in.get("/openapi.json").json()["paths"]
+    params = {p["name"]: p for p in paths["/api/analytics/panoramica"]["get"]["parameters"]}
+    assert params["base"]["required"] is False
+    assert set(params["base"]["schema"]["enum"]) == {"competenza", "incasso"}
+    assert params["base"]["schema"]["default"] == "competenza"
+    assert "competenza" in params["base"]["description"]
+
+
 # --- the second reading of revenue, by accrual period (ORB-61) -----------------------
 
 

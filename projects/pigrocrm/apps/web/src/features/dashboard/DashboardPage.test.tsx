@@ -51,6 +51,7 @@ const EMPTY_OVERVIEW = {
     lordo_effettivo: '0.00',
     lordo_proiettato: '0.00',
     mesi: [],
+    base: 'competenza',
   },
   fiscale: null,
   fiscale_proiettato: null,
@@ -82,7 +83,12 @@ const BY_PATH: Record<string, unknown> = {
   '/api/analytics/fiscale': EMPTY_ESTIMATE,
 }
 
-const SEARCH: DashboardSearch = { tab: 'commerciale', da: '2026-03-01', a: '2026-03-31' }
+const SEARCH: DashboardSearch = {
+  tab: 'commerciale',
+  da: '2026-03-01',
+  a: '2026-03-31',
+  base: 'competenza',
+}
 
 function renderPage(search = SEARCH) {
   const onSearchChange = vi.fn()
@@ -126,7 +132,7 @@ describe('DashboardPage', () => {
   })
 
   it('passes the period from the URL through to the request', async () => {
-    renderPage({ tab: 'commerciale', da: '2024-06-01', a: '2024-06-30' })
+    renderPage({ tab: 'commerciale', da: '2024-06-01', a: '2024-06-30', base: 'competenza' })
     expect(await screen.findByText(/nessun dato nel periodo/i)).toBeInTheDocument()
     expect(api.GET).toHaveBeenCalledWith('/api/dashboard/commerciale', {
       params: { query: { da: '2024-06-01', a: '2024-06-30' } },
@@ -169,6 +175,18 @@ describe('DashboardPage', () => {
     const { onSearchChange } = renderPage({ ...SEARCH, tab: 'economica' })
     await userEvent.click(screen.getByRole('tab', { name: 'Commerciale' }))
     expect(onSearchChange).toHaveBeenCalledWith({ tab: 'commerciale' })
+  })
+
+  it('passes the reading from the URL through to the economic request, and hands a change back', async () => {
+    // ORB-133: the switch is the page's, the state is the URL's. Nothing is held locally,
+    // so a shared link reopens on the same reading.
+    const { onSearchChange } = renderPage({ ...SEARCH, tab: 'economica', base: 'incasso' })
+    await screen.findByRole('group', { name: 'Ricavi incassati' })
+    expect(api.GET).toHaveBeenCalledWith('/api/analytics/panoramica', {
+      params: { query: { anno: 2026, base: 'incasso' } },
+    })
+    await userEvent.click(screen.getByRole('radio', { name: 'Competenza' }))
+    expect(onSearchChange).toHaveBeenCalledWith({ base: 'competenza' })
   })
 
   it('keeps a typed date in the URL too', () => {

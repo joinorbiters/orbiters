@@ -15,6 +15,7 @@ from pigrocrm.core.analytics.schemas import (
     BudgetPage,
     BudgetQuery,
     BudgetVsActualRow,
+    CashBase,
     CashMonth,
     CashOverview,
     DealPnl,
@@ -396,14 +397,15 @@ class AnalyticsService:
             deal_non_preventivati=len(rows) - len(budgeted),
         )
 
-    def cash_overview(self, anno: int, actor: Actor) -> CashOverview:
+    def cash_overview(self, anno: int, actor: Actor, base: CashBase = "competenza") -> CashOverview:
         """The year as cash, month by month (`CashOverview`). Read by anyone who may read
         the dashboard: nothing here is fiscal, and every figure is a SUM the repository
-        produced plus additions done once, here."""
+        produced plus additions done once, here. `base` says which month a document
+        falls in (ORB-133); the year's totals are the same under both."""
         actor.require_agent_allowed("cash_overview")
-        incassato = self.repo.monthly_incassato(anno)
-        da_incassare = self.repo.monthly_da_incassare(anno)
-        bozze = self.repo.monthly_bozze(anno)
+        incassato = self.repo.monthly_incassato(anno, base)
+        da_incassare = self.repo.monthly_da_incassare(anno, base)
+        bozze = self.repo.monthly_bozze(anno, base)
         costi = self.repo.monthly_costi(anno)
         months = range(1, 13)
         zero = ZERO_MONEY
@@ -452,6 +454,7 @@ class AnalyticsService:
         proiettato = round_money(tot_incassato + tot_da_incassare + tot_bozze)
         return CashOverview(
             anno=anno,
+            base=base,
             incassato=tot_incassato,
             da_incassare=tot_da_incassare,
             bozze=tot_bozze,
@@ -462,26 +465,39 @@ class AnalyticsService:
             mesi=mesi,
         )
 
-    def economic_overview(self, anno: int, actor: Actor) -> EconomicOverview:
+    def economic_overview(
+        self, anno: int, actor: Actor, base: CashBase = "competenza"
+    ) -> EconomicOverview:
         """The economic tab of the dashboard, in one answer: the cash view for everyone,
         and for an admin with a fiscal profile the estimate on what was collected and on
         what is projected, with the two nets. **No MCP tool** -- it carries the fiscal
-        estimate, and `get_fiscal_estimate`'s reasons apply unchanged."""
-        cassa = self.cash_overview(anno, actor)
+        estimate, and `get_fiscal_estimate`'s reasons apply unchanged.
+
+        `base` moves the charts and the cash cards only. The fiscal block is always
+        computed on the `incasso` reading, because the forfettario is taxed on what was
+        collected in the calendar year and a chart that reads by accrual period must not
+        move the taxes (`docs/design/DECISIONS.md`, 2026-09-10). Within one year the two
+        readings' totals agree except for a document whose period and payment fall in
+        different years, which is exactly the case where the tax must follow the money.
+        """
+        cassa = self.cash_overview(anno, actor, base)
+        per_fisco = cassa if base == "incasso" else self.cash_overview(anno, actor, "incasso")
         fiscale = fiscale_proiettato = None
         netto = netto_proiettato = None
         if actor.role == "admin":
             try:
-                fiscale = self.get_fiscal_estimate(anno, actor, ricavi=cassa.incassato)
-                fiscale_proiettato = self.get_fiscal_estimate(anno, actor, ricavi=cassa.proiettato)
+                fiscale = self.get_fiscal_estimate(anno, actor, ricavi=per_fisco.incassato)
+                fiscale_proiettato = self.get_fiscal_estimate(
+                    anno, actor, ricavi=per_fisco.proiettato
+                )
             except NotFound:
                 # No fiscal profile yet: the page says so and shows the cash alone.
                 fiscale = fiscale_proiettato = None
         if fiscale is not None and fiscale.totale_dovuto is not None:
-            netto = round_money(cassa.lordo_effettivo - fiscale.totale_dovuto)
+            netto = round_money(per_fisco.lordo_effettivo - fiscale.totale_dovuto)
         if fiscale_proiettato is not None and fiscale_proiettato.totale_dovuto is not None:
             netto_proiettato = round_money(
-                cassa.lordo_proiettato - fiscale_proiettato.totale_dovuto
+                per_fisco.lordo_proiettato - fiscale_proiettato.totale_dovuto
             )
         return EconomicOverview(
             calcolato_alle=datetime.now(UTC),

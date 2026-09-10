@@ -15,6 +15,7 @@ from fastapi import APIRouter, Query
 from pigrocrm.core.analytics.schemas import (
     BudgetPage,
     BudgetQuery,
+    CashBase,
     EconomicOverview,
     FiscalEstimate,
     PeriodPnl,
@@ -83,12 +84,28 @@ def budget_vs_actual(
 
 @router.get("/panoramica", response_model=EconomicOverview)
 def economic_overview(
-    session: SessionDep, actor: ActorDep, anno: Annotated[int, Query(ge=2000, le=2200)]
+    session: SessionDep,
+    actor: ActorDep,
+    anno: Annotated[int, Query(ge=2000, le=2200)],
+    base: Annotated[
+        CashBase,
+        Query(
+            description=(
+                "In quale mese cade il denaro di ogni documento: 'competenza' (il periodo "
+                "di competenza dichiarato sulla fattura o sulla proforma, con la data del "
+                "documento per chi non lo dichiara; predefinito) oppure 'incasso' (la data "
+                "di incasso per le fatture pagate, la scadenza per quelle da incassare, la "
+                "data del documento per bozze e proforma). La stima fiscale resta sempre "
+                "sull'incassato dell'anno."
+            )
+        ),
+    ] = "competenza",
 ) -> EconomicOverview:
     """The dashboard's economic tab: the year as cash for everyone, plus the fiscal
     estimate on collected and projected revenue for an admin with a profile. No MCP
-    tool, for the estimate's own reasons."""
-    return AnalyticsService(session).economic_overview(anno, actor)
+    tool, for the estimate's own reasons. `base` moves the charts and the cash cards
+    between the two readings (ORB-133); the fiscal block stays on the money."""
+    return AnalyticsService(session).economic_overview(anno, actor, base)
 
 
 @router.get("/fiscale", response_model=FiscalEstimate)
