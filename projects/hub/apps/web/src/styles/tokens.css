@@ -2,7 +2,18 @@
    products look like one family. The palette and the typeface come from shared/brand,
    the semantic slots and the radius scale are copied from the CRM's tokens.css (a copy
    on purpose -- the two products must be able to diverge, hub spec 2026-09-09).
-   No shadcn/tailwind.css and no tw-animate-css: the six primitives here need neither. */
+   No shadcn/tailwind.css and no tw-animate-css: the six primitives here need neither.
+
+   That copy is the application's tokens, and it governs the admin area, which is an
+   application. The hub also serves four pages that are not the application: the
+   chooser, the two wizards and the thanks page, reached mid-sentence from the
+   landing's own call to action. `docs/design/DECISIONS.md` (2026-09-10, ORB-73) says
+   those four follow the site's own visual system instead -- no radius, a solid ink
+   line, a stepped offset shadow, never a blur -- and the `.site` scope below is that
+   system, restated here because `projects/website` builds separately and imports
+   nothing from this project. It changes no rendering by itself: nothing carries the
+   `site` class yet, since that is the page chrome ORB-74 adds to `Shell`, and the two
+   wizards' own fields and buttons are ORB-75. */
 @import 'tailwindcss';
 @import '@orbiters/brand/font.css';
 @import '@orbiters/brand/palette.css';
@@ -34,6 +45,59 @@
   --shadow-ink-weak: color-mix(in oklab, var(--color-prussian-blue) 6%, transparent);
   --shadow-ink: color-mix(in oklab, var(--color-prussian-blue) 8%, transparent);
   --shadow-ink-strong: color-mix(in oklab, var(--color-prussian-blue) 12%, transparent);
+  /* The application's own shadow shapes, named so `@theme inline` below can point at
+     them as a single var() each: Tailwind v4 decomposes a compound theme value
+     (`0 1px 1px var(--shadow-ink-weak)`) at build time, baking the "0 1px 1px" into
+     every `shadow-xs` utility and leaving only the innermost var() live, which is
+     why a `.site` override of `--shadow-xs` itself never reached a single rendered
+     element -- confirmed by compiling this file and reading `.shadow-xs` back out of
+     it. A bare `var(--shadow-app-xs)` is not decomposed, so `.site` overriding
+     *this* property is what a `shadow-xs` element actually resolves. */
+  --shadow-app-xs: 0 1px 1px var(--shadow-ink-weak);
+  --shadow-app-sm: 0 1px 2px var(--shadow-ink);
+  --shadow-app-md: 0 4px 12px var(--shadow-ink);
+  --shadow-app-lg: 0 8px 24px var(--shadow-ink-strong);
+}
+
+/* --- The public wizard surface (ORB-73, 2026-09-10 decision): the chooser, the two
+   wizards and the thanks page, not the admin area. Every colour below already equals
+   this scope's inherited application token (`--landing-cta` is the same watermelon as
+   `--primary`, `--landing-focus` the same as `--ring`): restated under the site's own
+   names so a component reaches for `var(--landing-ink)` rather than back across this
+   file for `var(--color-prussian-blue)`. What actually changes for a descendant of
+   `.site` is shape -- radius, border and shadow -- which the four values after the
+   colours repoint. `tokens.test.ts` pins the colours against the shared palette and
+   the shape rules against this block. */
+.site {
+  --landing-surface: var(--color-paper);
+  --landing-ink: var(--color-prussian-blue);
+  --landing-ink-quiet: var(--color-charcoal-blue);
+  --landing-cta: var(--color-watermelon-strong);
+  --landing-cta-ink: #ffffff;
+  --landing-focus: var(--color-watermelon);
+  /* The shadow is an offset, never a blur, moved by this many pixels in the colour of
+     the border (landing.css:31). */
+  --landing-step: 8px;
+  /* landing.css types 2px on each component that carries a line -- `.box` (141),
+     `.card` (156), `.rule` (250), `.cta` (264) -- and never names it; named here so a
+     component reaches for a token instead of typing 2px again. */
+  --landing-border-width: 2px;
+
+  /* The shape tokens every primitive already reads, repointed at the site's values
+     instead of the application's. `--radius-sm` .. `--radius-4xl` in `@theme inline`
+     below all derive from `--radius`, so zeroing it here zeroes the whole scale for
+     anything under `.site`, the application's own scale stays intact everywhere
+     else. */
+  --radius: 0px;
+  --border: var(--landing-ink);
+  --input: var(--landing-ink);
+  /* landing.css's own two magnitudes, never a graduated scale: `.card`'s step is
+     three quarters of `.box`'s (landing.css:158), and the site draws nothing bigger
+     than a box. */
+  --shadow-app-xs: calc(var(--landing-step) * 0.75) calc(var(--landing-step) * 0.75) 0 var(--landing-ink);
+  --shadow-app-sm: calc(var(--landing-step) * 0.75) calc(var(--landing-step) * 0.75) 0 var(--landing-ink);
+  --shadow-app-md: var(--landing-step) var(--landing-step) 0 var(--landing-ink);
+  --shadow-app-lg: var(--landing-step) var(--landing-step) 0 var(--landing-ink);
 }
 
 @layer base {
@@ -54,10 +118,10 @@
 }
 
 @theme inline {
-  --shadow-xs: 0 1px 1px var(--shadow-ink-weak);
-  --shadow-sm: 0 1px 2px var(--shadow-ink);
-  --shadow-md: 0 4px 12px var(--shadow-ink);
-  --shadow-lg: 0 8px 24px var(--shadow-ink-strong);
+  --shadow-xs: var(--shadow-app-xs);
+  --shadow-sm: var(--shadow-app-sm);
+  --shadow-md: var(--shadow-app-md);
+  --shadow-lg: var(--shadow-app-lg);
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
