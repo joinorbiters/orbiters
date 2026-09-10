@@ -26,7 +26,7 @@ import { MemberGuard } from '@/pages/member/Guard'
 import { Modifica } from '@/pages/member/Modifica'
 
 /**
- * The route tree, in code: eleven screens is not enough to want a file-based router and
+ * The route tree, in code: this many screens is not enough to want a file-based router and
  * a generated tree beside it. The public pages sit in the `Shell`, the chooser alone in
  * a `Shell` without its panel (ORB-128); the admin area brings its own frame and its
  * own guard (`AdminLayout`).

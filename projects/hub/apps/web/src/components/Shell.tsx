@@ -15,9 +15,10 @@ import { BrandMark } from '@/components/BrandMark'
  *
  *  `panel={false}` drops the panel and leaves the content straight on the grid. Only
  *  the chooser asks for it (ORB-124, then ORB-128): its two doors draw their own
- *  boxes, and a box around those boxes read as one frame too many. A wizard step, the
- *  thank-you page and the member area have no cards of their own and keep the panel;
- *  ORB-128 is what happened when they lost it too. The bare wrapper is still `w-full`
+ *  boxes, and a box around those boxes read as one frame too many. A wizard step and
+ *  the thank-you page have no cards of their own; the member area draws some, and
+ *  keeps the panel anyway because the owner asked for the chooser alone to go bare
+ *  (ORB-128 is what happened when every page lost it). The bare wrapper is still `w-full`
  *  because `main` is `items-center` and the chooser sets `max-w-2xl` without
  *  `w-full`, so without it the page would shrink to the width of its text. */
 export function Shell({ children, panel = true }: { children: ReactNode; panel?: boolean }) {

@@ -6,7 +6,7 @@ import {
   createRoute,
   createRouter,
 } from '@tanstack/react-router'
-import { cleanup, render, screen } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { Shell } from './Shell'
 
@@ -38,13 +38,15 @@ describe('the public frame', () => {
     expect(document.body.textContent).not.toMatch(/Studio Rossi|example\.com/)
   })
 
-  it('boxes the content in a panel unless a page asks for the bare grid', async () => {
-    // ORB-128: ORB-124 took the panel off the frame itself, so every public page lost
-    // it when only the chooser should have. The panel is the default; the chooser's
-    // layout passes `panel={false}` and is the one page that sits straight on the grid.
+  // ORB-128: ORB-124 took the panel off the frame itself, so every public page lost it
+  // when only the chooser should have. The panel is the default; the chooser's layout
+  // passes `panel={false}` and is the one page that sits straight on the grid.
+  it('boxes the content in a panel by default', async () => {
     mount()
     expect((await screen.findByText('a step')).className).toContain('bg-card')
-    cleanup()
+  })
+
+  it('leaves the content on the bare grid when a page asks for it', async () => {
     mount(false)
     expect((await screen.findByText('a step')).className).not.toContain('bg-card')
   })
