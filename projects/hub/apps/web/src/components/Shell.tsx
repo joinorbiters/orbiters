@@ -3,15 +3,18 @@ import type { ReactNode } from 'react'
 import { BrandMark } from '@/components/BrandMark'
 
 /** The public frame: the mark and the name up top, the two legal links and the
- *  attribution at the foot, one boxed panel in between -- the site's own visual
- *  system (ORB-73's `.site` scope) rather than the application's, so a visitor who
- *  clicked a CTA on joinorbiters.com does not land on a different product. `site`
- *  also carries the page's ground (the same faint grid the landing sits on), and the
- *  panel is centred in the space between header and footer instead of sitting at the
- *  top of an empty page: `justify-center` on `main` only has room to act when the
- *  step is shorter than the viewport, which is the common case here. Each link over
- *  the grid keeps a sliver of the page's own surface behind it, the same treatment
- *  `landing.css`'s `.top a` and `footer .quiet-link` give theirs. */
+ *  attribution at the foot, and the page content straight on the grid in between --
+ *  the site's own visual system (ORB-73's `.site` scope) rather than the
+ *  application's, so a visitor who clicked a CTA on joinorbiters.com does not land on
+ *  a different product. `site` also carries the page's ground (the same faint grid
+ *  the landing sits on). There is no panel around the content: the doors of the
+ *  chooser and the wizard fields draw their own boxes, and a box around those boxes
+ *  read as one frame too many. The content is centred in the space between header
+ *  and footer instead of sitting at the top of an empty page: `justify-center` on
+ *  `main` only has room to act when the step is shorter than the viewport, which is
+ *  the common case here. Each link over the grid keeps a sliver of the page's own
+ *  surface behind it, the same treatment `landing.css`'s `.top a` and
+ *  `footer .quiet-link` give theirs. */
 export function Shell({ children }: { children: ReactNode }) {
   return (
     <div className="site flex min-h-full flex-col">
@@ -36,9 +39,7 @@ export function Shell({ children }: { children: ReactNode }) {
         </nav>
       </header>
       <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col items-center justify-center px-6 py-12">
-        <div className="w-full border-[length:var(--landing-border-width)] bg-card px-6 py-10 shadow-xs sm:px-10">
-          {children}
-        </div>
+        <div className="w-full">{children}</div>
       </main>
       <footer className="mx-auto flex w-full max-w-5xl flex-wrap items-center gap-6 border-t-[length:var(--landing-border-width)] px-6 py-8 text-xs text-muted-foreground">
         <a
