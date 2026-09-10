@@ -1,0 +1,17 @@
+{
+  "output": "projects/hub/packages/core/src/orbiters_core/perks/orbiters-guida-primi-passi-freelance.pdf",
+  "bytes": 49305,
+  "pages": 6,
+  "sha256": "3917782469262153b78cda561df3639ee89ef420c32f4692a513635a6bd4bbde",
+  "sources": {
+    "projects/hub/content/guida-primi-passi-freelance.md": "5f7ecde19f583a86d70c48b1e0ef8aec0ba4f50dc2f77393371cbbfa18e35752",
+    "projects/hub/tools/guide.typ.template": "2ba4e9f4108532162b9e8e44cbdf2dde9a1022ddd791d1b43a1cfaf49ed4aa11",
+    "shared/brand/palette.css": "393a0675891ead3430beaa8371082abe50d54c55cf24d43298a594f47e71a00b",
+    "shared/brand/fonts/outfit-variable-latin.woff2": "6c18d579fd87c3776be068b762cbc83fde3acb543d49eabd3ade842eb987e887",
+    "projects/hub/tools/build_guide_pdf.py": "83c4c8dd57ad5c01164aeffc788db08426f8f66c625bb16d1b357c5c866075c1"
+  },
+  "tools": {
+    "pandoc": "3.8.2",
+    "typst": "0.14.2"
+  }
+}
