@@ -224,7 +224,30 @@ h1 {
   color: var(--color-watermelon-strong);
 }
 
+/* The community page's own version of the header/footer control landing.css treats
+   the same way; landing.css's own comment names this file's footer directly. These
+   two links are what is left of it since ORB-19 removed the `<footer>` element itself
+   (the "PigroCRM" and "Accedi" pair, and the ground-sliver rule that only had meaning
+   on the field behind them): the Privacy link and the "Raccontacelo" link, both still
+   inline in the note under the form. A border and a surface turn each into a tappable
+   control instead of a citation mid-sentence, and `min-height` clears the 44px
+   touch-target floor even at the note's smaller type, where the padding alone would
+   not -- this is the page people actually reach on a phone. No shadow at this tier,
+   the same as `.box`'s own step reads at a different tier entirely. orbiters.css has
+   no shared `*` border reset the way landing.css does, so the border is spelled out in
+   full here rather than as `border-width` alone. */
 .note a {
-  color: inherit;
-  text-underline-offset: 0.2em;
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  background-color: var(--orb-ground);
+  border: 2px solid var(--orb-ink);
+  padding-inline: 0.75rem;
+  color: var(--orb-ink-quiet);
+  text-decoration: none;
+}
+
+.note a:hover {
+  background-color: var(--orb-ink);
+  color: var(--orb-cta-ink);
 }
