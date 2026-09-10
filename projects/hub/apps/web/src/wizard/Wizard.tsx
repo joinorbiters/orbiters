@@ -105,9 +105,16 @@ export function Wizard<T>({
         next()
       }}
     >
+      {/* The page's single accessible heading (ORB-89): the design keeps the step
+          question as an `<h2>` and the review screen's «Tutto giusto?» as another,
+          so this names the wizard itself rather than promoting either -- visually
+          hidden because the breadcrumb below already shows the same title on
+          screen. That breadcrumb span carries `aria-hidden` so a screen reader
+          hears the title once, from this heading, rather than twice. */}
+      <h1 className="sr-only">{title}</h1>
       <div className="space-y-2">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span>{title}</span>
+          <span aria-hidden="true">{title}</span>
           <span aria-live="polite">
             {review ? 'Riepilogo' : `${index + 1} di ${steps.length}`}
           </span>
