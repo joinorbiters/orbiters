@@ -70,7 +70,10 @@ export function InvoicesList({ scadute }: { scadute?: boolean }) {
     scadute,
   })
 
-  const columns = buildInvoiceColumns()
+  // With the customer: this is the one screen that mixes every customer's invoices, so
+  // a row has to say whose it is (ORB-98). The Fatture tab on a customer's or a deal's
+  // page draws the same columns without it -- see `InvoicesTab`.
+  const columns = buildInvoiceColumns({ cliente: true })
 
   return (
     <>

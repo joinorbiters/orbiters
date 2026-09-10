@@ -444,7 +444,7 @@ class InvoiceService:
             {"tipo": invoice.tipo, "righe": len(computed), "totale": str(invoice.totale)},
         )
         self.session.commit()
-        return InvoiceRead.model_validate(invoice)
+        return self._read(invoice)
 
     def update(self, invoice_id: UUID, data: InvoiceUpdate, actor: Actor) -> InvoiceRead:
         actor.require_write("update_invoice")
@@ -487,7 +487,7 @@ class InvoiceService:
             setattr(invoice, key, value)
         self.activities.record(ENTITY, invoice.id, "updated", actor, {"changed": sorted(changes)})
         self.session.commit()
-        return InvoiceRead.model_validate(invoice)
+        return self._read(invoice)
 
     def replace_lines(
         self, invoice_id: UUID, righe: list[InvoiceLineIn], actor: Actor
@@ -518,7 +518,7 @@ class InvoiceService:
             {"righe": len(computed), "totale": str(invoice.totale)},
         )
         self.session.commit()
-        return InvoiceRead.model_validate(invoice)
+        return self._read(invoice)
 
     def confirm_proforma(self, invoice_id: UUID, actor: Actor) -> InvoiceRead:
         """`bozza` -> `confermata` on a proforma: the amount is agreed and the document
@@ -545,7 +545,7 @@ class InvoiceService:
         invoice.stato = "confermata"
         self.activities.record(ENTITY, invoice.id, "confirmed", actor)
         self.session.commit()
-        return InvoiceRead.model_validate(invoice)
+        return self._read(invoice)
 
     def soft_delete(self, invoice_id: UUID, actor: Actor) -> None:
         """Only what never consumed a number, and never a `consumata` proforma.
@@ -639,7 +639,7 @@ class InvoiceService:
             {"stato_pagamento": invoice.stato_pagamento},
         )
         self.session.commit()
-        return InvoiceRead.model_validate(invoice)
+        return self._read(invoice)
 
     def _party_from_customer(self, customer: Customer) -> PartySnapshot:
         return PartySnapshot(
@@ -1030,7 +1030,7 @@ class InvoiceService:
         # `produce_artifacts` next -- which is idempotent and regenerates from the
         # snapshot, so a crash between the two leaves an invoice that is fiscally
         # complete and merely unprinted.
-        return InvoiceRead.model_validate(target)
+        return self._read(target)
 
     def import_issued(self, data: InvoiceImport, actor: Actor) -> InvoiceRead:
         """Register a fattura that another system issued (slice 9 §3).
@@ -1708,7 +1708,7 @@ class InvoiceService:
             {"numero": invoice.numero, "anno": invoice.anno, "motivo": data.motivo},
         )
         self.session.commit()
-        return InvoiceRead.model_validate(invoice)
+        return self._read(invoice)
 
     def _check_transmission_date(self, quando: date, data_emissione: date | None) -> None:
         """The two facts a delivery date has to satisfy: not in the future, not before the
@@ -1770,7 +1770,7 @@ class InvoiceService:
             ENTITY, invoice.id, "transmitted_externally", actor, {"data": data.data.isoformat()}
         )
         self.session.commit()
-        return InvoiceRead.model_validate(invoice)
+        return self._read(invoice)
 
     def _for_export(self, invoice: Invoice) -> InvoiceForExport:
         """The frozen view the exporter and the PDF read. Never the live profiles.
@@ -2147,7 +2147,32 @@ class InvoiceService:
     # ---- reads ---------------------------------------------------------------
 
     def get(self, invoice_id: UUID, actor: Actor) -> InvoiceRead:
-        return InvoiceRead.model_validate(self._require(invoice_id))
+        return self._read(self._require(invoice_id))
+
+    def _read(self, invoice: Invoice) -> InvoiceRead:
+        """The one place an `Invoice` becomes an `InvoiceRead`, so every path -- a
+        mutation's answer, `get`, `list` -- hands back the same shape, the customer's name
+        included. Mirrors `DealService._read`."""
+        return self._reads([invoice])[0]
+
+    def _reads(self, invoices: Sequence[Invoice]) -> list[InvoiceRead]:
+        """The batched form, and the reason `customer_ragione_sociale` is resolved here
+        and not inside `InvoiceRead` itself: one lookup for the whole page
+        (`InvoiceRepository.customer_names`), so a page of invoices costs two queries
+        rather than one per row. A schema-level validator or a lazy ORM relationship would
+        both put the lookup on the row, which is exactly the N+1 this avoids.
+
+        `model_copy` and not a second `model_validate`: the name is not an attribute of
+        `Invoice` at all, so there is nothing on the ORM object for `from_attributes` to
+        read -- and the value comes from a `String` column, already the right type.
+        """
+        names = self.repo.customer_names({invoice.customer_id for invoice in invoices})
+        return [
+            InvoiceRead.model_validate(invoice).model_copy(
+                update={"customer_ragione_sociale": names.get(invoice.customer_id)}
+            )
+            for invoice in invoices
+        ]
 
     def lines(self, invoice_id: UUID, actor: Actor) -> list[InvoiceLineRead]:
         self._require(invoice_id)
@@ -2168,7 +2193,7 @@ class InvoiceService:
         has_more = len(rows) > query.limit
         items = rows[: query.limit]
         return InvoicePage(
-            items=[InvoiceRead.model_validate(i) for i in items],
+            items=self._reads(items),
             next_cursor=items[-1].id if has_more and items else None,
         )
 

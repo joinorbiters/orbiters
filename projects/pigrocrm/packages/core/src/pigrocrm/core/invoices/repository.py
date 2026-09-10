@@ -9,6 +9,7 @@ MCP exclusion list at exactly four names, so a new public method on `InvoiceServ
 force either a new tool or an edit to another slice's declared list.
 """
 
+from collections.abc import Collection
 from datetime import date
 from decimal import Decimal
 from typing import cast
@@ -17,6 +18,7 @@ from uuid import UUID
 from sqlalchemy import ColumnElement, delete, distinct, func, select, text
 from sqlalchemy.orm import Session
 
+from pigrocrm.core.customers.models import Customer
 from pigrocrm.core.db import today_local
 from pigrocrm.core.deals.models import Deal
 from pigrocrm.core.invoices.models import (
@@ -384,6 +386,29 @@ class InvoiceRepository:
                 .limit(limit)
             ).scalars()
         )
+
+    def customer_names(self, customer_ids: Collection[UUID]) -> dict[UUID, str]:
+        """The `ragione_sociale` of each given customer, in one query.
+
+        The same method, for the same reason, as `DealRepository.customer_names`: one
+        statement for a whole page rather than one per row, so a 50-row invoice list costs
+        two queries and never fifty-one. A label lookup for rows already chosen, run after
+        the limit.
+
+        No `deleted_at` filter, deliberately, and here it matters more than for deals: an
+        issued invoice outlives the customer relationship, and `CustomerService.soft_delete`
+        may archive a customer whose invoices stay in the register. An archived customer's
+        name is still the name on those invoices; filtering it out would print a dash on
+        rows that have a perfectly good one.
+
+        An empty input short-circuits: `IN ()` is a query with no possible rows.
+        """
+        if not customer_ids:
+            return {}
+        rows = self.session.execute(
+            select(Customer.id, Customer.ragione_sociale).where(Customer.id.in_(customer_ids))
+        ).all()
+        return {row[0]: row[1] for row in rows}
 
     # `list` must stay the last method defined in this class -- an unconditional
     # project rule (`test_module_imports.py`). Defining a method named `list` rebinds

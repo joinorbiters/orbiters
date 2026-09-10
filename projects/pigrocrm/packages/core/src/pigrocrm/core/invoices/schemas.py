@@ -455,6 +455,20 @@ class InvoiceRead(BaseModel):
     motivo_annullamento: str | None
     note_interne: str | None
     snapshot_versione: int | None
+    # The customer's `ragione_sociale`, denormalised onto the read shape exactly as
+    # `DealRead.customer_ragione_sociale` is (ORB-98): the name lives on `customers` and
+    # renaming a customer must not need a second write here. `InvoiceService._read`
+    # fills it from one batched lookup per page (`InvoiceRepository.customer_names`),
+    # which is why the default is `None` -- a bare `model_validate(invoice)` reads an
+    # `Invoice` that has no such attribute at all.
+    #
+    # Typed `str | None` although `invoices.customer_id` is NOT NULL: the association
+    # always exists, but this schema validates whatever the lookup found, and a name that
+    # could not be resolved must read as absent rather than crash the whole page.
+    #
+    # Read-only: on no Create, Update or Import schema, so `native_fields`
+    # (schema_registry.py derives it from the Create schema) never lists it either.
+    customer_ragione_sociale: str | None = None
     custom_fields: dict[str, Any]
     created_at: datetime
     updated_at: datetime
