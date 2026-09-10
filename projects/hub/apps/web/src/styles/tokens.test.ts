@@ -79,8 +79,8 @@ describe('the .site scope (ORB-73)', () => {
     expect(siteColourHex('--landing-focus')).toBe('#ed254e')
   })
 
-  it('carries the CTA at 4.5:1 for white text, the same pair the application already relies on', () => {
-    expect(contrastRatio('#ffffff', siteColourHex('--landing-cta'))).toBeGreaterThanOrEqual(4.5)
+  it('carries the CTA at 4.5:1 for its own ink, the same pair the application already relies on', () => {
+    expect(contrastRatio(declaration('.site', '--landing-cta-ink'), siteColourHex('--landing-cta'))).toBeGreaterThanOrEqual(4.5)
   })
 
   it('contains no raw hexadecimal in the .site block, other than white', () => {
@@ -107,6 +107,21 @@ describe('the .site scope (ORB-73)', () => {
 
   const SHADOWS = ['xs', 'sm', 'md', 'lg']
 
+  it('points every @theme inline --shadow-* at a bare var(), never a compound expression', () => {
+    // Tailwind v4 decomposes a compound theme value (`0 1px 1px var(--x)`) at build
+    // time, baking the "0 1px 1px" into every `shadow-xs` utility and leaving only
+    // the innermost var() live -- confirmed by compiling this file and reading
+    // `.shadow-xs` back out of the built CSS, where it read `--shadow-ink-weak` and
+    // never `--shadow-xs`. A `.site` override of `--shadow-xs` itself would therefore
+    // never reach a rendered element; this is the one property `.site` must repoint
+    // instead, and this test is what stops a future edit from re-inlining it.
+    for (const step of SHADOWS) {
+      expect(declaration('@theme inline', `--shadow-${step}`), `--shadow-${step}`).toBe(
+        `var(--shadow-app-${step})`,
+      )
+    }
+  })
+
   /** Splits a `box-shadow` value on whitespace outside of any parentheses, so a
    *  `calc(a * b)` or `var(--x)` component is never cut at its own inner paren. */
   function shadowParts(value: string): string[] {
@@ -129,28 +144,28 @@ describe('the .site scope (ORB-73)', () => {
 
   it('casts every shadow as an ink offset, never a blur or a tint', () => {
     for (const step of SHADOWS) {
-      const value = declaration('.site', `--shadow-${step}`)
+      const value = declaration('.site', `--shadow-app-${step}`)
       // <offset-x> <offset-y> 0 var(--landing-ink): the third length is the blur
       // radius, held at exactly 0 (landing.css:31, "an offset, never a blur"), and the
       // colour is the opaque ink rather than one of the application's low-opacity
       // shadow-ink-* tints.
       const parts = shadowParts(value)
-      expect(parts, `--shadow-${step}`).toHaveLength(4)
-      expect(parts[0], `--shadow-${step} offset-x`).toMatch(/^(?:calc\(.*\)|var\(.*\)|[\d.]+px)$/)
-      expect(parts[1], `--shadow-${step} offset-y`).toMatch(/^(?:calc\(.*\)|var\(.*\)|[\d.]+px)$/)
-      expect(parts[2], `--shadow-${step} blur`).toBe('0')
-      expect(parts[3], `--shadow-${step} colour`).toBe('var(--landing-ink)')
+      expect(parts, `--shadow-app-${step}`).toHaveLength(4)
+      expect(parts[0], `--shadow-app-${step} offset-x`).toMatch(/^(?:calc\(.*\)|var\(.*\)|[\d.]+px)$/)
+      expect(parts[1], `--shadow-app-${step} offset-y`).toMatch(/^(?:calc\(.*\)|var\(.*\)|[\d.]+px)$/)
+      expect(parts[2], `--shadow-app-${step} blur`).toBe('0')
+      expect(parts[3], `--shadow-app-${step} colour`).toBe('var(--landing-ink)')
     }
   })
 
   it('draws the box step no smaller than the card step, and neither past 8px', () => {
-    // landing.css's own two magnitudes: 6px for .card, 8px for .box, the larger one
-    // three quarters bigger (landing.css:158). This is the relationship, not a
-    // hand-typed pixel count, so a future edit to --landing-step keeps it.
-    expect(declaration('.site', '--shadow-xs')).toBe(declaration('.site', '--shadow-sm'))
-    expect(declaration('.site', '--shadow-md')).toBe(declaration('.site', '--shadow-lg'))
-    expect(declaration('.site', '--shadow-md')).toContain('var(--landing-step)')
-    expect(declaration('.site', '--shadow-xs')).toContain('calc(var(--landing-step) * 0.75)')
+    // landing.css's own two magnitudes: 6px for .card, 8px for .box, the smaller one
+    // three quarters of the larger (landing.css:31, landing.css:158).
+    expect(declaration('.site', '--landing-step')).toBe('8px')
+    expect(declaration('.site', '--shadow-app-xs')).toBe(declaration('.site', '--shadow-app-sm'))
+    expect(declaration('.site', '--shadow-app-md')).toBe(declaration('.site', '--shadow-app-lg'))
+    expect(shadowParts(declaration('.site', '--shadow-app-md'))[0]).toBe('var(--landing-step)')
+    expect(shadowParts(declaration('.site', '--shadow-app-xs'))[0]).toBe('calc(var(--landing-step) * 0.75)')
   })
 
   it('leaves the admin area on the application tokens', () => {

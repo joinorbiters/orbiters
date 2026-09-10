@@ -45,6 +45,18 @@
   --shadow-ink-weak: color-mix(in oklab, var(--color-prussian-blue) 6%, transparent);
   --shadow-ink: color-mix(in oklab, var(--color-prussian-blue) 8%, transparent);
   --shadow-ink-strong: color-mix(in oklab, var(--color-prussian-blue) 12%, transparent);
+  /* The application's own shadow shapes, named so `@theme inline` below can point at
+     them as a single var() each: Tailwind v4 decomposes a compound theme value
+     (`0 1px 1px var(--shadow-ink-weak)`) at build time, baking the "0 1px 1px" into
+     every `shadow-xs` utility and leaving only the innermost var() live, which is
+     why a `.site` override of `--shadow-xs` itself never reached a single rendered
+     element -- confirmed by compiling this file and reading `.shadow-xs` back out of
+     it. A bare `var(--shadow-app-xs)` is not decomposed, so `.site` overriding
+     *this* property is what a `shadow-xs` element actually resolves. */
+  --shadow-app-xs: 0 1px 1px var(--shadow-ink-weak);
+  --shadow-app-sm: 0 1px 2px var(--shadow-ink);
+  --shadow-app-md: 0 4px 12px var(--shadow-ink);
+  --shadow-app-lg: 0 8px 24px var(--shadow-ink-strong);
 }
 
 /* --- The public wizard surface (ORB-73, 2026-09-10 decision): the chooser, the two
@@ -63,18 +75,12 @@
   --landing-cta: var(--color-watermelon-strong);
   --landing-cta-ink: #ffffff;
   --landing-focus: var(--color-watermelon);
-  /* The grid ground: `projects/website/src/system.css`'s `--system-grid` and
-     `--system-cell`, restated by the same recipe -- the website has no Tailwind and
-     nothing here can `@import` its stylesheet. A page that wants the ground reads
-     these; this file draws no grid itself, since a background-image is page chrome
-     (ORB-74), not a token. */
-  --landing-grid: color-mix(in oklab, var(--color-prussian-blue) 7%, transparent);
-  --landing-cell: 16px;
   /* The shadow is an offset, never a blur, moved by this many pixels in the colour of
      the border (landing.css:31). */
   --landing-step: 8px;
-  /* landing.css hard-codes 2px on `*` and never names it; named here so a component
-     reaches for a token instead of typing 2px again. */
+  /* landing.css types 2px on each component that carries a line -- `.box` (141),
+     `.card` (156), `.rule` (250), `.cta` (264) -- and never names it; named here so a
+     component reaches for a token instead of typing 2px again. */
   --landing-border-width: 2px;
 
   /* The shape tokens every primitive already reads, repointed at the site's values
@@ -88,10 +94,10 @@
   /* landing.css's own two magnitudes, never a graduated scale: `.card`'s step is
      three quarters of `.box`'s (landing.css:158), and the site draws nothing bigger
      than a box. */
-  --shadow-xs: calc(var(--landing-step) * 0.75) calc(var(--landing-step) * 0.75) 0 var(--landing-ink);
-  --shadow-sm: calc(var(--landing-step) * 0.75) calc(var(--landing-step) * 0.75) 0 var(--landing-ink);
-  --shadow-md: var(--landing-step) var(--landing-step) 0 var(--landing-ink);
-  --shadow-lg: var(--landing-step) var(--landing-step) 0 var(--landing-ink);
+  --shadow-app-xs: calc(var(--landing-step) * 0.75) calc(var(--landing-step) * 0.75) 0 var(--landing-ink);
+  --shadow-app-sm: calc(var(--landing-step) * 0.75) calc(var(--landing-step) * 0.75) 0 var(--landing-ink);
+  --shadow-app-md: var(--landing-step) var(--landing-step) 0 var(--landing-ink);
+  --shadow-app-lg: var(--landing-step) var(--landing-step) 0 var(--landing-ink);
 }
 
 @layer base {
@@ -112,10 +118,10 @@
 }
 
 @theme inline {
-  --shadow-xs: 0 1px 1px var(--shadow-ink-weak);
-  --shadow-sm: 0 1px 2px var(--shadow-ink);
-  --shadow-md: 0 4px 12px var(--shadow-ink);
-  --shadow-lg: 0 8px 24px var(--shadow-ink-strong);
+  --shadow-xs: var(--shadow-app-xs);
+  --shadow-sm: var(--shadow-app-sm);
+  --shadow-md: var(--shadow-app-md);
+  --shadow-lg: var(--shadow-app-lg);
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
