@@ -2,7 +2,7 @@ import { Link, useSearch } from '@tanstack/react-router'
 import { Check } from 'lucide-react'
 
 export function Thanks() {
-  const { chi } = useSearch({ from: '/public/grazie' })
+  const { chi } = useSearch({ strict: false }) as { chi?: 'freelance' | 'azienda' }
   const azienda = chi === 'azienda'
   return (
     <div className="mx-auto max-w-xl space-y-6 text-center">
@@ -27,6 +27,15 @@ export function Thanks() {
         </a>
         .
       </p>
+      {!azienda && (
+        <p className="text-sm text-muted-foreground">
+          Vuoi rileggere o cambiare quello che ci hai mandato?{' '}
+          <Link to="/accedi" className="underline underline-offset-2">
+            Entra nella tua area
+          </Link>
+          .
+        </p>
+      )}
       <Link to="/" className="text-sm underline underline-offset-2">
         Torna all’inizio
       </Link>

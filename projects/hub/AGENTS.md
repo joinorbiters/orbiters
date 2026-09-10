@@ -9,7 +9,9 @@ Orbiters, the freelance community, as a product of its own: the signup list the
 community site collects, the freelancer profiles and the company requests the hub's
 wizards will collect, and the admin area that reads them. Its design record is
 `docs/superpowers/specs/`, English, one document per step; read the 2026-09-09 spec
-before changing the shape of anything.
+before changing the shape of anything. Since 2026-09-10 a freelancer can get back in
+with a magic link by mail (`/hub/accedi`, `/hub/io`): spec
+`docs/superpowers/specs/2026-09-10-member-area-design.md`.
 
 ## The one rule
 
@@ -25,7 +27,7 @@ products that need to agree on something agree through `shared/`.
 packages/core/   orbiters_core: models, migrations, services, the ad conversion
 apps/api/        orbiters_api: FastAPI, one process, its own database
 apps/mcp/        orbiters_mcp: stdio, the same services in process
-apps/web/        pnpm package `hub`: the SPA at joinorbiters.com/hub/ (wizards + admin)
+apps/web/        pnpm package `hub`: the SPA at joinorbiters.com/hub/ (wizards, the member area, admin)
 ```
 
 `packages/core` may import neither adapter, and neither adapter may import the other:
@@ -73,4 +75,6 @@ Ports, loopback only, from the table in `docs/adding-a-project.md` §7: producti
 8084, web 8085, Postgres 55435; preview 8086, 8087, 55436. The public paths are `/hub/`
 (web) and `/api/hub/` + `/api/orbiters/signups` (api), proxied to production by the host
 vhost that lives in `projects/website/deploy/joinorbiters.conf`; nothing proxies the
-preview, which is reached on the host only.
+preview, which is reached on the host only. The member area's mail needs
+`ORBITERS_RESEND_API_KEY` and `ORBITERS_MAIL_FROM` in the host `.env`; without the key
+`/hub/accedi` answers 503 with a sentence.
