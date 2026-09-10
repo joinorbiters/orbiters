@@ -108,9 +108,12 @@ describe('orbiters.html', () => {
     expect(html).toMatch(/href="\/privacy"/)
     const privacy = readFileSync(join(__dirname, 'privacy.html'), 'utf-8')
     expect(privacy).toContain('Orbiters')
-    // "/orbiters" is a redirect to "/", where the community page actually lives
-    // (path-map-plugin.ts); the canonical href is the one worth asserting on.
-    expect(privacy).toMatch(/href="\/"/)
+    // "/orbiters" is a 301 to "/", where the community page actually lives
+    // (path-map-plugin.ts). Pinned on the link's own text ("joinorbiters.com", the
+    // paragraph explaining where the signup's data goes) rather than a bare `"/"`,
+    // which the header brand and the footer's "Home" link also match and would pass
+    // even if this specific back-link were ever removed.
+    expect(privacy).toMatch(/href="\/(?:orbiters)?">joinorbiters\.com</)
   })
 
   it('no longer signs itself as a PigroCRM project, and offers no login', () => {
@@ -221,6 +224,9 @@ describe('orbiters.css', () => {
     expect(shell).toMatch(/background-color:\s*var\(--orb-ground\)/)
     expect(shell).toMatch(/border:\s*2px solid var\(--orb-ink\)/)
     // 44px, the touch-target floor: this is the page people actually reach on a phone.
+    // `min-height` only takes effect because the anchor is `inline-flex`, taken out of
+    // normal inline flow; pin that too, or the floor can be silently dropped.
+    expect(shell).toMatch(/display:\s*inline-flex/)
     expect(shell).toMatch(/min-height:\s*2\.75rem/)
     // No shadow at this tier: that is `.box`'s own signal, not a link's.
     expect(shell).not.toMatch(/box-shadow/)
