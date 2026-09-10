@@ -15,7 +15,7 @@ import { BrandMark } from '@/components/BrandMark'
 export function Shell({ children }: { children: ReactNode }) {
   return (
     <div className="site flex min-h-full flex-col">
-      <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-5">
+      <header className="mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-y-2 px-6 py-5">
         <Link
           to="/"
           className="inline-flex items-center gap-2.5 bg-[var(--landing-surface)] p-[var(--landing-link-pad)] text-lg font-medium tracking-tight"
