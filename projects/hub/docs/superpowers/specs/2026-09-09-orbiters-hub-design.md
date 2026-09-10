@@ -150,8 +150,9 @@ hub.
 
 ### Deploy
 
-- `projects/hub/docker-compose.yml`: `db` (its own Postgres, data under
-  `/srv/orbiters-data/postgres`), `api`, `web` on `127.0.0.1:8084`.
+- `projects/hub/docker-compose.yml`: `db` (its own Postgres, data under the host
+  directory `ORBITERS_DATA_DIR` names, outside the repository), `api`, `web` on
+  `127.0.0.1:8084`.
 - Host nginx `joinorbiters.conf`: `location ^~ /hub/` → 8084; `location ^~ /api/hub/`
   and `location = /api/orbiters/signups` → the hub API (the latter re-pointed from the
   PigroCRM API). Nothing on pigro.joinorbiters.com changes.
