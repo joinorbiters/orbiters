@@ -540,10 +540,11 @@ def test_a_collaboratore_may_record_a_payment(
     )
 
 
-def _issued_row(db_session: Session, customer_id: UUID) -> Invoice:
+def _issued_row(db_session: Session, customer_id: UUID, **overrides: object) -> Invoice:
     """An already-issued row inserted directly, so this file's payment tests do not
-    depend on `issue` (next task) being written yet."""
-    invoice = Invoice(
+    depend on `issue` (next task) being written yet. `overrides` are applied before the
+    flush, since `(anno, numero)` is unique and a second row needs its own number."""
+    fields: dict[str, object] = dict(
         customer_id=customer_id,
         tipo="fattura",
         stato="emessa",
@@ -561,6 +562,8 @@ def _issued_row(db_session: Session, customer_id: UUID) -> Invoice:
         snapshot_versione=1,
         custom_fields={},
     )
+    fields.update(overrides)
+    invoice = Invoice(**fields)  # type: ignore[arg-type]
     db_session.add(invoice)
     db_session.flush()
     return invoice
@@ -607,6 +610,25 @@ def test_an_issued_invoice_cannot_be_soft_deleted(
 
 
 # --- listing ------------------------------------------------------------------------
+
+
+def test_the_list_finds_the_fattura_a_consumed_proforma_was_issued_as(
+    service: InvoiceService, db_session: Session, customer_id: UUID
+) -> None:
+    """The fattura points back at its proforma and the proforma points at nothing, so
+    the consumed proforma's page finds its fattura by asking the list for the row whose
+    `origine_proforma_id` is its own id (ORB-134). Another fattura, or another
+    proforma's fattura, does not answer."""
+    proforma = service.create(InvoiceCreate(customer_id=customer_id, tipo="proforma"), ADMIN)
+    other = service.create(InvoiceCreate(customer_id=customer_id, tipo="proforma"), ADMIN)
+    from_proforma = _issued_row(db_session, customer_id, origine_proforma_id=proforma.id)
+    _issued_row(db_session, customer_id, numero=2, origine_proforma_id=other.id)
+    standalone = _issued_row(db_session, customer_id, numero=3)
+
+    found = service.list(InvoiceListQuery(origine_proforma_id=proforma.id), ADMIN).items
+    assert [i.id for i in found] == [from_proforma.id]
+    assert standalone.id not in {i.id for i in found}
+    assert service.list(InvoiceListQuery(origine_proforma_id=uuid4()), ADMIN).items == []
 
 
 def test_the_list_filters_by_tipo_stato_year_and_payment(

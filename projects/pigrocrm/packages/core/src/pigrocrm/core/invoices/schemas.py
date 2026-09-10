@@ -487,6 +487,11 @@ class InvoiceListQuery(BaseModel):
     # (`_overdue_predicate`), so the two cannot drift apart. Same shape as
     # `DocumentListQuery.solo_deal_non_vinto`.
     scadute: bool = False
+    # The way back from a consumed proforma to the fattura it became. The fattura carries
+    # `origine_proforma_id`; the proforma carries nothing, by design (a row is written
+    # once at emission and the proforma is frozen at the same moment), so the page of a
+    # consumed proforma asks the list for the row that points at it (ORB-134).
+    origine_proforma_id: UUID | None = None
     # Bounded here, not only on the router: an MCP tool builds this object directly,
     # with no `Query(...)` bound sitting between it and this schema.
     limit: int = Field(default=50, ge=1, le=200)

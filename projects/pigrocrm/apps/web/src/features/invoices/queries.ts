@@ -39,6 +39,12 @@ export interface InvoiceFilters {
    * today, one already collected -- that the predicate exists to settle.
    */
   scadute?: boolean
+  /**
+   * The fattura a consumed proforma was issued as. The fattura carries
+   * `origine_proforma_id` and the proforma carries nothing, so the proforma's page asks
+   * the list for the one row that points at it (ORB-134).
+   */
+  origine_proforma_id?: string
   limit?: number
   cursor?: string
 }
@@ -336,16 +342,25 @@ export function useSetPaymentState(invoiceId: string) {
   })
 }
 
+/**
+ * `invoiceId` is the row the bar sits on; `mutate(targetId)` names another one. The
+ * one caller that does is «Emetti» on a proforma, whose issued row is a *different*
+ * row (spec 5): rendering the proforma there would produce the proforma's PDF and
+ * leave the fattura, the document the person came for, unprinted (ORB-134).
+ */
 export function useProduceArtifacts(invoiceId: string) {
   const invalidate = useInvoiceInvalidation()
   return useMutation({
-    mutationFn: () =>
+    mutationFn: (targetId?: string) =>
       unwrap(
         api.POST('/api/invoices/{invoice_id}/artifacts', {
-          params: { path: { invoice_id: invoiceId } },
+          params: { path: { invoice_id: targetId ?? invoiceId } },
         }),
       ),
-    onSuccess: () => invalidate(invoiceId),
+    onSuccess: (_data, targetId) => {
+      invalidate(invoiceId)
+      if (targetId) invalidate(targetId)
+    },
   })
 }
 

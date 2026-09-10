@@ -3,6 +3,7 @@ import { Receipt } from 'lucide-react'
 import { EntityDetailLayout } from '@/components/EntityDetailLayout'
 import { QueryErrorBanner } from '@/components/QueryErrorBanner'
 import { StatusPill } from '@/components/StatusPill'
+import { ConsumedProformaNotice } from '@/features/invoices/ConsumedProformaNotice'
 import { InvoiceActions } from '@/features/invoices/InvoiceActions'
 import { InvoiceHeaderEditor } from '@/features/invoices/InvoiceHeaderEditor'
 import { InvoiceLinesEditor } from '@/features/invoices/InvoiceLinesEditor'
@@ -72,7 +73,20 @@ export function InvoiceDetail() {
           <div className="space-y-8">
             {/* A deleted draft has no page: back to the list, which the mutation has already
                 invalidated. */}
-            <InvoiceActions invoice={row} onDeleted={() => void navigate({ to: '/app/fatture' })} />
+            <InvoiceActions
+              invoice={row}
+              onDeleted={() => void navigate({ to: '/app/fatture' })}
+              // From a proforma the numbered row is a new one and this page has just
+              // become a consumed proforma with nothing to do on it, so go where the
+              // XML is. A draft fattura is issued in place and stays (ORB-134).
+              onIssued={(issued) => {
+                if (issued.id !== row.id)
+                  void navigate({ to: '/app/fatture/$invoiceId', params: { invoiceId: issued.id } })
+              }}
+            />
+            {row.tipo === 'proforma' && row.stato === 'consumata' ? (
+              <ConsumedProformaNotice proforma={row} />
+            ) : null}
 
             {/* While the document can still change, its dates are inputs (ORB-61, ORB-63)
                 and the list below states only what nobody can edit here; once frozen, the
