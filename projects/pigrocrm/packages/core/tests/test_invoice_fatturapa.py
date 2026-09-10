@@ -15,6 +15,7 @@ from lxml import etree
 from pigrocrm.core.errors import ValidationFailed
 from pigrocrm.core.invoices.fatturapa import (
     _INDIRIZZO_MAX,
+    _LATIN_SPELLINGS,
     FatturaPAExporter,
     check_document_text_exportable,
     check_party_exportable,
@@ -274,12 +275,17 @@ def test_a_hostile_description_and_causale_are_equally_inert() -> None:
 
 
 def test_a_code_point_xml_cannot_represent_is_refused_not_emitted() -> None:
-    with pytest.raises(ValueError, match="non rappresentabile in XML"):
-        FatturaPAExporter().to_bytes(
-            _invoice(
-                [_line(1, "Consulenza\x0b", "1.000000", "100.000000", "100.00")],
-            )
-        )
+    """A `ValidationFailed` naming the field, no longer the bare `ValueError` from
+    `escape_xml`: U+000B is inside the Latin range, so the range check let it through
+    and the writer crashed on it after the number was spent (ORB-140). The pre-check
+    refuses it the same way, before."""
+    righe = [_line(1, "Consulenza\x0b", "1.000000", "100.000000", "100.00")]
+    with pytest.raises(ValidationFailed, match="non rappresentabile in XML") as writer:
+        FatturaPAExporter().to_bytes(_invoice(righe))
+    assert writer.value.details["field"] == "descrizione"
+    with pytest.raises(ValidationFailed) as pre:
+        check_document_text_exportable("Consulenza", righe)
+    assert pre.value.details == writer.value.details
 
 
 # --- an astral-plane emoji and a legitimate accented name, both round trip --------
@@ -1068,6 +1074,11 @@ def test_a_causale_outside_latin_1_is_refused_by_field_name() -> None:
         ("invoice", "causale", "Консультация — agosto", "Consulenza", None),
         ("invoice_line", "descrizione", "Consulenza", "Sviluppo \U0001f600", None),
         ("invoice_line", "unita_misura", "Consulenza", "Consulenza", "ч"),
+        # `UnitaMisura` is `String10Type`, Basic Latin only: a superscript two is inside
+        # Latin-1 and still a schema error there, and so is an eleventh character once
+        # an ellipsis is spelled.
+        ("invoice_line", "unita_misura", "Consulenza", "Consulenza", "m\u00b2"),
+        ("invoice_line", "unita_misura", "Consulenza", "Consulenza", "abcdefghi\u2026"),
     ],
 )
 def test_document_text_outside_latin_1_is_refused_by_the_pre_check_with_the_writer_s_words(
@@ -1083,7 +1094,7 @@ def test_document_text_outside_latin_1_is_refused_by_the_pre_check_with_the_writ
         check_document_text_exportable(causale, righe)
     assert pre.value.details["entity"] == entity
     assert pre.value.details["field"] == field
-    assert "FPR12 ammette in" in pre.value.details["reason"]
+    assert "FPR12" in pre.value.details["reason"]
 
     with pytest.raises(ValidationFailed) as writer:
         FatturaPAExporter().to_bytes(_invoice(righe, causale=causale))
@@ -1100,4 +1111,48 @@ def test_a_causale_too_long_only_after_the_mapping_is_refused_by_both_alike() ->
     assert pre.value.details["field"] == "causale"
     with pytest.raises(ValidationFailed) as writer:
         FatturaPAExporter().to_bytes(_invoice(righe, causale=causale))
+    assert writer.value.details == pre.value.details
+
+
+def test_a_normative_reference_outside_latin_1_is_refused_by_the_pre_check_like_the_writer() -> (
+    None
+):
+    """The reference travels on the line into `DatiRiepilogo`, so it is the line's to
+    check before the number as much as the description is."""
+    riga = _line(1, "Consulenza", "1.000000", "100.000000", "100.00").model_copy(
+        update={"riferimento_normativo": "Операция не облагается"}
+    )
+    with pytest.raises(ValidationFailed) as pre:
+        check_document_text_exportable("Consulenza", [riga])
+    assert pre.value.details["entity"] == "fiscal_profile"
+    assert pre.value.details["field"] == "riferimento_normativo"
+    with pytest.raises(ValidationFailed) as writer:
+        FatturaPAExporter().to_bytes(_invoice([riga]))
+    assert writer.value.details == pre.value.details
+
+
+def test_the_spellings_cannot_change_the_bytes_of_a_file_already_exported() -> None:
+    """`export_xml` promises a re-export produces the same bytes. That holds because no
+    value that ever produced a hash contains a mapped character: every key sits above
+    U+00FF, where `_LATIN_RE` refused it, and every spelling sits inside Latin-1, where
+    the range accepts it. A future entry that broke either half would silently break
+    `xml_hash_sha256` on the next re-export, so both halves are pinned."""
+    assert all(key > 0xFF for key in _LATIN_SPELLINGS)
+    assert all(
+        ord(char) <= 0xFF for spelling in _LATIN_SPELLINGS.values() for char in str(spelling)
+    )
+
+
+def test_a_pec_too_long_for_fpr12_is_refused_by_the_pre_check_like_the_writer() -> None:
+    """`Email` and `PECDestinatario` are 256 characters in FPR12 and 320 in the column;
+    the pre-check measured their range and not their width, so a long PEC spent the
+    number and the writer refused it. One `_check_text`, one bound, for both."""
+    cliente = _cliente(codice_sdi=None, pec="a" * 250 + "@pec.it")
+    with pytest.raises(ValidationFailed) as pre:
+        check_party_exportable(cliente, "customer")
+    assert pre.value.details["field"] == "pec"
+    with pytest.raises(ValidationFailed) as writer:
+        FatturaPAExporter().to_bytes(
+            _invoice([_line(1, "Consulenza", "1.000000", "100.000000", "100.00")], cliente=cliente)
+        )
     assert writer.value.details == pre.value.details
