@@ -273,4 +273,23 @@ def test_creating_an_admin_points_the_form_at_the_field_that_is_wrong(
     )
     assert malformed.status_code == 422
     assert malformed.json()["detail"][0]["loc"][-1] == "email"
+    for nome in ("   ", "x" * 121, "Ada\x00"):
+        bad_name = client.post(
+            "/api/hub/admins",
+            json={"email": "nome@orbiters.it", "nome": nome, "password": "una-password-lunga"},
+        )
+        assert bad_name.status_code == 422, nome
+        assert bad_name.json()["detail"][0]["loc"][-1] == "nome"
+    # A key the schema does not declare is refused, not silently dropped: nobody creates
+    # an admin with `attivo` chosen from outside.
+    extra = client.post(
+        "/api/hub/admins",
+        json={
+            "email": "extra@orbiters.it",
+            "nome": "Extra",
+            "password": "una-password-lunga",
+            "attivo": False,
+        },
+    )
+    assert extra.status_code == 422
     assert [row["email"] for row in client.get("/api/hub/admins").json()] == ["ivan@orbiters.it"]

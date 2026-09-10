@@ -3,14 +3,15 @@
 One cookie, `orbiters_admin`, opaque and httpOnly, resolved against `admin_sessions` on
 every request (`deps.get_admin`). The login shares the public token bucket, so a
 password guess costs the same budget as a signup flood. Everything under this router
-reads or moves rows other people wrote; nothing here writes on their behalf.
+reads or moves rows other people wrote, or adds one more admin (ORB-123); nothing here
+writes on an applicant's behalf.
 """
 
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from orbiters_api.deps import ADMIN_COOKIE, AdminDep, SessionDep, SettingsDep
 from orbiters_api.downloads import cv_response
@@ -19,6 +20,7 @@ from orbiters_core.admin import AdminRead, AdminService
 from orbiters_core.comments import CommentService
 from orbiters_core.companies import CompanyService
 from orbiters_core.freelancers import FreelancerService
+from orbiters_core.models import NAME_MAX_LENGTH
 from orbiters_core.schemas import (
     CommentCreate,
     CommentRead,
@@ -30,6 +32,7 @@ from orbiters_core.schemas import (
     StatusChange,
 )
 from orbiters_core.service import SignupService
+from orbiters_core.validation import SafeStr
 
 router = APIRouter(prefix="/api/hub", tags=["hub-admin"])
 
@@ -41,11 +44,16 @@ class LoginRequest(BaseModel):
 
 class AdminCreate(BaseModel):
     """The form behind «Amministratori»: the creating admin chooses the password and
-    hands it over out of band, as `orbiters createadmin` does (ORB-123). The length rule
-    lives in `AdminService.create`, once, so the CLI and the form agree."""
+    hands it over out of band, as `orbiters createadmin` does (ORB-123). The rules on the
+    password and the name live in `AdminService.create`, once, so the CLI and the form
+    agree; this only closes what a body can carry that a prompt cannot: a NUL byte, a
+    key nobody declared (`attivo` is not for the caller to choose), and a name past the
+    column before Postgres sees it."""
+
+    model_config = ConfigDict(extra="forbid")
 
     email: EmailStr
-    nome: str
+    nome: SafeStr = Field(min_length=1, max_length=NAME_MAX_LENGTH)
     password: str
 
 

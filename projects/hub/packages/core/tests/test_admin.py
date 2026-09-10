@@ -36,6 +36,14 @@ def test_an_admin_is_created_once_and_the_password_is_never_stored(
         admins.create("ivan@orbiters.it", "Ancora", "altra-password-lunga")
     with pytest.raises(ValidationFailed):
         admins.create("corta@orbiters.it", "Corta", "breve")
+    # A name that is only whitespace, or longer than the column, is refused here and not
+    # left to Postgres (ORB-123 review): the CLI and the form share the rule.
+    with pytest.raises(ValidationFailed) as blank:
+        admins.create("vuoto@orbiters.it", "   ", "una-password-lunga")
+    assert blank.value.details["field"] == "nome"
+    with pytest.raises(ValidationFailed) as long_name:
+        admins.create("lungo@orbiters.it", "x" * 121, "una-password-lunga")
+    assert long_name.value.details["field"] == "nome"
 
 
 def test_authenticate_answers_none_for_every_wrong_answer(admins: AdminService) -> None:

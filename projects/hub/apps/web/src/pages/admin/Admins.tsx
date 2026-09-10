@@ -9,6 +9,7 @@ import { formatDate } from '@/lib/format'
 import { Empty, Header } from './lists'
 
 const ADMINS_KEY = ['admins'] as const
+/** Mirrors `PASSWORD_MIN_LENGTH` in `orbiters_core.admin`; the API is the one that refuses. */
 const PASSWORD_MIN_LENGTH = 10
 
 const EMPTY: AdminCreate = { nome: '', email: '', password: '' }
@@ -105,7 +106,6 @@ export function AdminAdmins() {
               value={draft.nome}
               onChange={(event) => field('nome')(event.target.value)}
               aria-invalid={wrong('nome')}
-              disabled={create.isPending}
             />
           </div>
           <div className="space-y-2">
@@ -118,7 +118,6 @@ export function AdminAdmins() {
               value={draft.email}
               onChange={(event) => field('email')(event.target.value)}
               aria-invalid={wrong('email')}
-              disabled={create.isPending}
             />
           </div>
           <div className="space-y-2">
@@ -132,7 +131,6 @@ export function AdminAdmins() {
               value={draft.password}
               onChange={(event) => field('password')(event.target.value)}
               aria-invalid={wrong('password')}
-              disabled={create.isPending}
             />
           </div>
           {message && (
