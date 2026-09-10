@@ -50,7 +50,7 @@
         "uv.lock"
       ],
       "serial": true,
-      "why": "The fifty-thousand-row corpus: twelve minutes, almost all of it inside PostgreSQL. Serial and never under -n, because every assertion in those two files is about which plan the planner picks and load changes the answer. It selects on core alone: the two files import `pigrocrm_core` and nothing else, so an edit under apps/api or apps/mcp cannot change which plan PostgreSQL picks over core's schema, and it used to buy twelve minutes of waiting for that (ORB-141)."
+      "why": "The fifty-thousand-row corpus: twelve minutes, almost all of it inside PostgreSQL. Serial and never under -n, because every assertion in those two files is about which plan the planner picks and load changes the answer. It selects on core alone: the two files import `pigrocrm.core` and the local `corpus` helper beside them and nothing else, so an edit under apps/api or apps/mcp cannot change which plan PostgreSQL picks over core's schema, and it used to buy twelve minutes of waiting for that (ORB-141)."
     },
     {
       "id": "pigrocrm-py-planner",
@@ -247,8 +247,11 @@
         ".dockerignore",
         "pnpm-lock.yaml"
       ],
+      "unless": [
+        "projects/website/src/**/*.test.ts"
+      ],
       "serial": true,
-      "why": "The deploy builds this image on a single-core server. Building it here is seconds and it is the only check that reads projects/website/deploy/nginx.conf at all."
+      "why": "The deploy builds this image on a single-core server. Building it here is seconds and it is the only check that reads projects/website/deploy/nginx.conf at all. Excluded for the same reason as website-e2e: the Dockerfile runs `pnpm --filter website build`, whose rollup inputs are the four HTML files, so a vitest file under src/ reaches neither dist nor the nginx layer."
     },
     {
       "id": "hub-image",

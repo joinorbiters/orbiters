@@ -169,11 +169,12 @@ jobs:
               - '.python-version'
               - '.github/workflows/ci.yml'
               - '.github/workflows/_python-gate.yml'
-            # The `slow` files import `pigrocrm_core` and nothing else, so the corpus
-            # job below asks a narrower question than the gate above it: an edit under
-            # apps/api or apps/mcp cannot change which plan PostgreSQL picks over
-            # core's schema, and it used to buy twelve minutes on the trunk, in front
-            # of every preview deploy (ORB-141).
+            # The `slow` files import `pigrocrm.core` and the local `corpus` helper
+            # beside them and nothing else, so the corpus job below asks a narrower
+            # question than the gate above it: an edit under apps/api or apps/mcp
+            # cannot change which plan PostgreSQL picks over core's schema, and it
+            # used to buy twelve minutes on the trunk, in front of every preview
+            # deploy (ORB-141).
             pigrocrm_py_corpus:
               - 'projects/pigrocrm/packages/**'
               - 'projects/pigrocrm/conftest.py'
