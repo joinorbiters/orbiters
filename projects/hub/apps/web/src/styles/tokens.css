@@ -149,3 +149,22 @@
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
 }
+
+/* --- The page ground for the .site scope (ORB-74): the same faint grid the landing
+   sits on, `projects/website/src/system.css`'s `--system-grid`/`--system-cell`
+   restated here for the reason the block above restates its colours -- the two
+   projects build separately and share no CSS. A second `.site` rule rather than a
+   line inside the first: the shape tokens above are ORB-73's and this is the ground
+   ORB-74 adds on top of them, so an edit to one never has to scroll past the other's
+   comment to find its own declarations. `--landing-ink` is already this scope's
+   colour, so the tile is drawn from a token this file declares elsewhere, never a
+   fresh mix. */
+.site {
+  --landing-grid: color-mix(in oklab, var(--landing-ink) 7%, transparent);
+  --landing-cell: 16px;
+  background-color: var(--landing-surface);
+  background-image:
+    linear-gradient(to right, var(--landing-grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--landing-grid) 1px, transparent 1px);
+  background-size: var(--landing-cell) var(--landing-cell);
+}
