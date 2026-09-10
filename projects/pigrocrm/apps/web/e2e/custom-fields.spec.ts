@@ -48,8 +48,28 @@ test("a custom field's whole life: appears everywhere with no restart, and a cle
   await createTextField(page, 'Referente')
 
   // The column, with no rebuild: buildCustomerColumns (features/customers/columns.tsx)
-  // reads it straight off GET /api/schema/customer.
-  await page.goto('/app/clienti')
+  // reads it straight off GET /api/schema/customer, and `DataTable`'s own loading gate
+  // (components/DataTable.tsx) is `customers.isLoading` -- so the columnheader depends on
+  // both requests, not just one. `page.goto` here is a genuine hard reload: the whole SPA
+  // bundle, the auth check, and both of those requests, all from scratch. Asserting
+  // `toBeVisible()` right after `goto` bets the suite's fixed `expect.timeout` always
+  // outruns a cold reload plus two round trips -- it does not (ORB-39: failed once,
+  // passed on retry, in the same suite run; reproduced live under load with zero
+  // columnheaders, not just this one, still on screen when the timeout hit). Waiting for
+  // both responses to actually land is the fix: a test bug, not the application's --
+  // `describe_entity`/`FieldDefinitionService.create` already commit before the POST
+  // that creates the field even returns, and every request here reads live.
+  const [, schemaResponse, customersResponse] = await Promise.all([
+    page.goto('/app/clienti'),
+    page.waitForResponse(
+      (response) => response.url().includes('/api/schema/customer') && response.request().method() === 'GET',
+    ),
+    page.waitForResponse(
+      (response) => response.url().includes('/api/customers') && response.request().method() === 'GET',
+    ),
+  ])
+  expect(schemaResponse.ok()).toBe(true)
+  expect(customersResponse.ok()).toBe(true)
   await expect(page.getByRole('columnheader', { name: 'Referente' })).toBeVisible()
 
   // The create-form input, native (Telefono) and custom (Referente) side by side.
