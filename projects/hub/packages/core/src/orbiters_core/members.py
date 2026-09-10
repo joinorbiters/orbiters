@@ -5,7 +5,9 @@ they gave the wizard, a one-time token goes out by mail, the link opens a sessio
 password anywhere. Sessions are the admin's shape in a table of their own. Every change
 the person makes is a comment in the row's thread (ORB-59), so the admin sees what moved
 without an audit table. The service never sends a mail: it returns the one to send, and
-the adapter decides how, so the same code path answers whether the address exists or not.
+the adapter answers the same status and body whether the address exists or not and
+sends in the background; the rate limit on that route is what bounds how many timing
+samples an address can collect.
 """
 
 import hashlib
@@ -13,7 +15,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from orbiters_core.comments import CommentService
@@ -75,8 +77,13 @@ class MemberService:
 
     def enter(self, raw_token: str) -> tuple[MemberProfile, str] | None:
         """The profile and the raw session token for the cookie, or `None` for a wrong,
-        spent or expired link. The token is marked used in the same commit that opens
-        the session, so a link fetched twice opens one session."""
+        spent or expired link. The token is spent by a conditional update gated on it
+        still being unused, so of two requests racing on the same raw token (a mail
+        scanner's prefetch against the person's own click) only one sees its row come
+        back from `RETURNING` and opens a session; the other finds the token already
+        spent and gets `None`. `RETURNING` rather than `rowcount`: the DBAPI's row
+        count is typed on `CursorResult` only, not on the `Result` a generic `execute`
+        returns."""
         if not raw_token:
             return None
         now = datetime.now(UTC)
@@ -88,7 +95,15 @@ class MemberService:
         row = self.session.get(Freelancer, token.freelancer_id)
         if row is None:
             return None
-        token.used_at = now
+        spent = self.session.execute(
+            update(MagicLinkToken)
+            .where(MagicLinkToken.id == token.id, MagicLinkToken.used_at.is_(None))
+            .values(used_at=now)
+            .returning(MagicLinkToken.id)
+        )
+        if len(spent.scalars().all()) != 1:
+            self.session.rollback()
+            return None
         raw_session = secrets.token_urlsafe(32)
         self.session.add(
             MemberSession(
