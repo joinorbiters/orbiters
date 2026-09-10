@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from orbiters_core.config import Settings
-from orbiters_core.errors import ValidationFailed
+from orbiters_core.errors import NotFound, ValidationFailed
 from orbiters_core.models import NAME_MAX_LENGTH, AdminSession, AdminUser
 
 ENTITY = "admin"
@@ -53,20 +53,58 @@ class AdminService:
         """`orbiters createadmin`, and since ORB-123 the form in the admin area. Refuses
         a second admin with the same address, a blank or over-long name and a password
         shorter than ten characters; hashes with argon2, never stores it."""
+        email = self._checked_email(email)
+        nome = self._checked_nome(nome)
+        self._check_password(password)
+        row = AdminUser(email=email, nome=nome, password_hash=_hasher.hash(password))
+        self.session.add(row)
+        self.session.commit()
+        return AdminRead.model_validate(row)
+
+    def update(
+        self,
+        admin_id: UUID,
+        *,
+        nome: str | None = None,
+        email: str | None = None,
+        password: str | None = None,
+    ) -> AdminRead:
+        """The pencil on a row (ORB-129): a new name, a new address, a new password, any
+        of them, under the same rules as `create`. `None` means «keep it». The row's own
+        address is no duplicate of itself; open sessions hang on the id and survive."""
+        row = self.session.get(AdminUser, admin_id)
+        if row is None:
+            raise NotFound(ENTITY, admin_id)
+        if email is not None:
+            row.email = self._checked_email(email, except_id=row.id)
+        if nome is not None:
+            row.nome = self._checked_nome(nome)
+        if password is not None:
+            self._check_password(password)
+            row.password_hash = _hasher.hash(password)
+        self.session.commit()
+        return AdminRead.model_validate(row)
+
+    def _checked_email(self, email: str, except_id: UUID | None = None) -> str:
         email = email.strip().lower()
+        other = self._by_email(email)
+        if other is not None and other.id != except_id:
+            raise ValidationFailed(ENTITY, "email", "esiste già un amministratore con questa email")
+        return email
+
+    @staticmethod
+    def _checked_nome(nome: str) -> str:
         nome = nome.strip()
         if not nome:
             raise ValidationFailed(ENTITY, "nome", "serve un nome")
         if len(nome) > NAME_MAX_LENGTH:
             raise ValidationFailed(ENTITY, "nome", f"al massimo {NAME_MAX_LENGTH} caratteri")
+        return nome
+
+    @staticmethod
+    def _check_password(password: str) -> None:
         if len(password) < PASSWORD_MIN_LENGTH:
             raise ValidationFailed(ENTITY, "password", f"almeno {PASSWORD_MIN_LENGTH} caratteri")
-        if self._by_email(email) is not None:
-            raise ValidationFailed(ENTITY, "email", "esiste già un amministratore con questa email")
-        row = AdminUser(email=email, nome=nome, password_hash=_hasher.hash(password))
-        self.session.add(row)
-        self.session.commit()
-        return AdminRead.model_validate(row)
 
     def authenticate(self, email: str, password: str) -> AdminRead | None:
         """The user, or `None` -- for an unknown address, a wrong password and a

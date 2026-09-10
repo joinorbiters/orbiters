@@ -57,6 +57,19 @@ class AdminCreate(BaseModel):
     password: str
 
 
+class AdminUpdate(BaseModel):
+    """The pencil on a row (ORB-129): each field optional, absent means «keep it». An
+    empty password is «keep it» too, since that is what an untouched password field
+    sends; a present one goes through the service's ten-character rule. `attivo` is not
+    here on purpose: Ivan does not want deactivation from the area yet."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: EmailStr | None = None
+    nome: SafeStr | None = Field(default=None, min_length=1, max_length=NAME_MAX_LENGTH)
+    password: str | None = None
+
+
 @router.post("/auth/login", response_model=AdminRead)
 def login(
     payload: LoginRequest,
@@ -99,8 +112,9 @@ def me(admin: AdminDep) -> AdminRead:
 
 # ---- the admins ------------------------------------------------------------------------
 #
-# Who reads this area, and one more of them. No deactivation and no deletion here, on
-# purpose (ORB-123): the `attivo` flag exists and nothing in the area changes it yet.
+# Who reads this area, one more of them, and a change to one (ORB-123, ORB-129). No
+# deactivation and no deletion here, on purpose: the `attivo` flag exists and nothing in
+# the area changes it yet.
 
 
 @router.get("/admins", response_model=list[AdminRead])
@@ -113,6 +127,18 @@ def create_admin(
     _: AdminDep, session: SessionDep, settings: SettingsDep, payload: AdminCreate
 ) -> AdminRead:
     return AdminService(session, settings).create(payload.email, payload.nome, payload.password)
+
+
+@router.patch("/admins/{admin_id}", response_model=AdminRead)
+def update_admin(
+    _: AdminDep, session: SessionDep, settings: SettingsDep, admin_id: UUID, payload: AdminUpdate
+) -> AdminRead:
+    return AdminService(session, settings).update(
+        admin_id,
+        nome=payload.nome,
+        email=payload.email,
+        password=payload.password or None,
+    )
 
 
 # ---- the lists -------------------------------------------------------------------------
