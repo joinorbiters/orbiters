@@ -17,6 +17,15 @@
 @import '@orbiters/brand/font.css';
 @import '@orbiters/brand/palette.css';
 
+/* Tailwind v4 defaults `dark:` to the OS `prefers-color-scheme` media query. The hub
+   has no dark theme (no dark tokens, nothing that sets a class), so that default's one
+   visible effect was a visitor's OS filling every Input and Textarea with
+   `dark:bg-input/30`: ink at 30% over the paper, grey-blue where the landing's fields
+   are white (ORB-138, `docs/design/DECISIONS.md` 2026-09-10). Bound to a `.dark` class
+   nobody adds, the shadcn primitives' `dark:` utilities stay inert, the same way the
+   CRM's tokens.css already pins them. */
+@custom-variant dark (&:is(.dark *));
+
 @theme {
   --radius: 10px;
 }

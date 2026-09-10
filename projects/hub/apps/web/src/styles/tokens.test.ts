@@ -181,3 +181,30 @@ describe('the .site scope (ORB-73)', () => {
     expect(block(':root')).toMatch(/--shadow-ink-strong:\s*color-mix\(in oklab, var\(--color-prussian-blue\) 12%, transparent\)/)
   })
 })
+
+describe('the dark variant (ORB-138)', () => {
+  const primitives = ['button', 'badge', 'input', 'textarea'].map((name) =>
+    readFileSync(join(__dirname, '..', 'components', 'ui', `${name}.tsx`), 'utf-8'),
+  )
+
+  it('binds dark: to a .dark class nobody sets, never to the OS preference', () => {
+    // Tailwind v4 defaults `dark:` to `prefers-color-scheme: dark`. The hub has no
+    // dark theme, so the only effect that default ever had was a visitor's OS filling
+    // every Input and Textarea ink-at-30% (`dark:bg-input/30`), grey-blue where the
+    // landing's fields are white (ORB-138). The CRM's tokens.css already pins the same
+    // variant to a class (`projects/pigrocrm/apps/web/src/styles/tokens.css`).
+    expect(tokensCss).toMatch(/@custom-variant dark \(&:is\(\.dark \*\)\);/)
+    // The words may appear in a comment; a media query on them may not.
+    expect(tokensCss).not.toMatch(/@media[^{]*prefers-color-scheme/)
+  })
+
+  it('has no primitive whose dark: classes could ever match, since nothing adds .dark', () => {
+    // The shadcn primitives keep their `dark:` utilities (the next one pasted in will
+    // carry them too); this pins that the class they now depend on appears nowhere in
+    // the app, so they stay inert rather than becoming a half-designed second theme.
+    const app = [tokensCss, ...primitives].join('\n')
+    expect(primitives.some((source) => source.includes('dark:'))).toBe(true)
+    expect(app).not.toMatch(/className=[^>]*\bdark\b(?!:)/)
+    expect(tokensCss).not.toMatch(/^\s*\.dark\b/m)
+  })
+})
