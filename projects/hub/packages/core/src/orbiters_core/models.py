@@ -218,3 +218,44 @@ class AdminSession(Base, PrimaryKeyMixin):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+# ---- the member area: how a freelancer gets back in ------------------------------------
+
+TOKEN_HASH_LENGTH = 64  # sha256, hex
+
+
+class MagicLinkToken(Base, PrimaryKeyMixin):
+    """One link, one entry. The raw value travels in the mail and nowhere else; the row
+    holds its sha256, a deadline (`magic_link_minutes`) and the moment it was spent, so a
+    link forwarded or fetched twice opens nothing the second time. Hangs on the
+    freelancer with `ON DELETE CASCADE`: deleting a person deletes their way in."""
+
+    __tablename__ = "magic_link_tokens"
+
+    freelancer_id: Mapped[UUID] = mapped_column(
+        ForeignKey("freelancers.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(TOKEN_HASH_LENGTH), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+class MemberSession(Base, PrimaryKeyMixin):
+    """The admin session's shape, for a freelancer: opaque cookie, hashed at rest, sliding
+    expiry, revoked by deleting the row. A second table and a second cookie rather than
+    a role column on `admin_sessions`, so a member token can never resolve to an admin."""
+
+    __tablename__ = "member_sessions"
+
+    freelancer_id: Mapped[UUID] = mapped_column(
+        ForeignKey("freelancers.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(TOKEN_HASH_LENGTH), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
