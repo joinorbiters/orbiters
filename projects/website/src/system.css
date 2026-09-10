@@ -77,21 +77,27 @@
   inset: -14px -4px;
 }
 
+/* Positioned so this row paints after the link's `::before` hit-slop rather than
+   under it: the slop crosses this row's gap when the notice wraps its paragraph
+   onto its own line, and without this a corner of "No" would report a click on
+   "Dettagli" instead. No visual change -- z-index stays auto. */
 .consent-actions {
+  position: relative;
   display: flex;
   gap: 0.5rem;
   margin-left: auto;
 }
 
-/* Padding and a floor, not a heavier border or a fill: the 44px touch-target
-   floor this milestone names, reached the same way ORB-64's header controls
-   reached it, on both axes so "No" clears it on width as well as height. */
+/* A floor, not heavier padding: `min-width` alone takes "No" from 37px to 44px,
+   and `min-height` already governs over the old vertical padding, so the original
+   padding stays -- widening it would grow `.consent-actions` enough to wrap the
+   notice a line earlier at some widths, the layout change this issue rules out. */
 .consent button {
   cursor: pointer;
   font: inherit;
   min-width: 2.75rem;
   min-height: 2.75rem;
-  padding: 0.5rem 0.9rem;
+  padding: 0.25rem 0.6rem;
   border: 1px solid color-mix(in oklab, var(--color-prussian-blue) 20%, transparent);
   background-color: transparent;
   color: var(--color-prussian-blue);
