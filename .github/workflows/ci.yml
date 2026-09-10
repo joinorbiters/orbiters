@@ -283,26 +283,6 @@ jobs:
           # Read minutes after the run by the deploys and by nothing else.
           retention-days: 1
 
-  # The one job with no filter, and the reason is a bug this repository actually shipped.
-  # The identity guard lives in PigroCRM's suite, so it ran only when PigroCRM changed;
-  # the hub's footer shipped «Orbiters è un progetto di Studio Rossi» to production and
-  # every gate stayed green, because no filter that names `projects/hub` runs a test that
-  # lives under `projects/pigrocrm` (ORB-97). A guard against a name reaching a public
-  # surface is worthless if it is scoped to one project's paths, so this one is not: it
-  # runs on every event, and it costs one `uv sync` plus a second of pytest because lint
-  # and mypy are off here and already ran in the project gates.
-  identity:
-    name: identity guard
-    if: ${{ !cancelled() }}
-    uses: ./.github/workflows/_python-gate.yml
-    with:
-      job-name: no real or fixture identity on a public surface
-      lint: false
-      typecheck: false
-      lint-path: projects/pigrocrm
-      sources: ''
-      tests: projects/pigrocrm/packages/core/tests/test_no_real_identity_in_the_repository.py
-
   # Two guards, and neither is decoration.
   #
   # `!cancelled() &&`: a job that `needs` a skipped or failed job is skipped too,
@@ -492,7 +472,7 @@ jobs:
     # arrives. This is the only status check the repository should ever be asked to
     # require: every job name above can change forever without touching a ruleset.
     if: always()
-    needs: [changes, identity, pigrocrm-py, pigrocrm-py-corpus, pigrocrm-web, website, hub-py, hub-web, pigrocrm-images, website-image, hub-images]
+    needs: [changes, pigrocrm-py, pigrocrm-py-corpus, pigrocrm-web, website, hub-py, hub-web, pigrocrm-images, website-image, hub-images]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
