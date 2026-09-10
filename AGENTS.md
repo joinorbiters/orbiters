@@ -81,14 +81,23 @@ nothing when you are not. Narrow to one project by passing its paths as argument
 3. **`push` to `main`** — the heavy tier (the corpus, the images), scoped by the
    same filters. It was unconditional until 2026-09-09, when the measurement said
    1,564 hosted minutes in eight days against a 2,000/month allowance on a private
-   repository. A push that cannot reach a project does not pay for that project's
-   suite. When a push has no reachable base commit the filters are skipped and
-   everything runs, and so does a release tag (`<project>-v<semver>`, which `ci.yml`
-   also listens to): a production deploy is gated on the run of the tag itself, since
-   the trunk's run for the same commit may have skipped every job of that project and
-   still concluded green. The `changes` job also publishes its verdict as the
-   `changed-paths` artifact, which is what each deploy reads instead of recomputing
-   the same paths for itself.
+   repository. The repository went public 2026-09-10 and hosted minutes are free now,
+   but the scoping stays: a fifteen-minute trunk run on a docs commit is still a cost,
+   just in waiting rather than in money (`docs/design/DECISIONS.md`, 2026-09-10). A
+   push that cannot reach a project does not pay for that project's suite. When a push
+   has no reachable base commit the filters are skipped and everything runs, and so
+   does a release tag (`<project>-v<semver>`, which `ci.yml` also listens to): a
+   production deploy is gated on the run of the tag itself, since the trunk's run for
+   the same commit may have skipped every job of that project and still concluded
+   green. A nightly `schedule` run on `main` (`17 3 * * *` UTC) earns the same full
+   run for a different reason, buying back "the trunk proves the whole tree" without
+   putting it on the critical path of a merge; it costs no separate mechanism, since a
+   `schedule` event carries no `before` either and falls into the same fallback. The
+   `changes` job also publishes its verdict as the `changed-paths` artifact, which is
+   what each deploy reads instead of recomputing the same paths for itself — the
+   schedule run skips publishing it, since `deploy-*.yml`'s `workflow_run` guard
+   already requires `github.event.workflow_run.event == 'push'` and a scheduled run's
+   event never satisfies it, so nothing reads for a nightly run anyway.
 
 **A check that stops running on a PR must appear in `preflight.json`.** Verification
 did not get cheaper, it moved; a heavy check in neither tier is a hole.

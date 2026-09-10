@@ -5,18 +5,26 @@
 #      the answer arrives before the push rather than minutes after it.
 #   2. `pull_request`: one cheap gate per project, scoped to what the diff can break.
 #   3. `push` to main: the heavy tier -- the corpus, the images -- but scoped to the
-#      same filters, because this repository is private and every minute here is
-#      billed. Measured 2026-09-09: 1,564 billable minutes in eight days against a
-#      2,000/month allowance, and a job that hits that limit dies in two seconds with
-#      no log, which reads as a broken workflow rather than as an empty wallet.
-#      A push that cannot reach a project does not pay for that project's suite, and
-#      each deploy's own `scope` job already decides the same way from the same paths.
+#      same filters. Scoping started 2026-09-09 because the repository was private and
+#      every minute here was billed (1,564 of a 2,000/month allowance in eight days,
+#      and a job that hits that limit dies in two seconds with no log, which reads as
+#      a broken workflow rather than as an empty wallet). The repository went public
+#      2026-09-10 and hosted minutes are free now, but the scoping stays: a
+#      fifteen-minute trunk run on a docs commit is still a cost, just in waiting
+#      rather than in money (`docs/design/DECISIONS.md`, 2026-09-10). A push that
+#      cannot reach a project does not pay for that project's suite, and each
+#      deploy's own `scope` job already decides the same way from the same paths.
 #      When the base commit of a push is unreachable -- a force push, a new branch --
 #      the filters are not consulted and everything runs. A release tag
 #      (`<project>-v<semver>`) is a push too and always earns that full run: a
 #      production deploy is gated on the run of the tag itself, because the trunk's
 #      run for the same commit may have skipped every job of the project being
-#      released and still concluded success (ORB-28).
+#      released and still concluded success (ORB-28). A nightly `schedule` run on
+#      `main` earns the same full run, for a different reason: it buys back "the
+#      trunk proves the whole tree" without putting it on the critical path of a
+#      merge. It needs no new code to get there -- a `schedule` event carries no
+#      `before` at all, so it falls into the same "no usable base commit" branch a
+#      force push already takes below, rather than a fourth branch written for it.
 #
 # A check that stops running on a PR must appear in preflight.json. Verification did
 # not get cheaper here, it moved; a heavy check in neither tier is a hole.
@@ -35,6 +43,16 @@ on:
     # `workflow_run` triggers filter on `branches: [main]`, and a tag run's head branch
     # is the tag, so this run never starts a preview.
     tags: ['*-v*']
+  # Nightly, at a quarter past three UTC rather than on the hour, when every other
+  # scheduled workflow on the platform also wakes up and queues behind the runner
+  # fleet. `schedule` only ever runs the workflow version committed to the default
+  # branch, so this always builds `main`, and it always gets `all=true` below (a
+  # `schedule` event carries no `before` at all). It cannot start a deploy: that
+  # guard lives in `deploy-*.yml`, not here, since their `scope` job requires
+  # `github.event.workflow_run.event == 'push'`, which a scheduled run's own
+  # `github.event_name` of `schedule` never satisfies.
+  schedule:
+    - cron: '17 3 * * *'
   workflow_dispatch:
 
 # Cancelling is right on a PR and wrong on the trunk, and the difference is not
@@ -66,7 +84,8 @@ jobs:
   # checked out with its history and the base is the commit the push moved off.
   #
   # `all` is the escape hatch, and it fails open. A force push, a freshly created
-  # branch or a base commit garbage-collected out of the remote all leave nothing to
+  # branch, a base commit garbage-collected out of the remote, or a `schedule` run
+  # (not a push at all, so there is no `before` to speak of) all leave nothing to
   # diff against, and the honest answer to "what changed" is then "assume everything".
   #
   # The `permissions` block is repeated rather than widened at the top because a
@@ -111,6 +130,9 @@ jobs:
             echo 'all=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Unset on `schedule` too, same as on a force push or a freshly created
+          # branch: none of the three is a push with a real "before" commit, so all
+          # three fall into the `elif` below rather than needing a branch of their own.
           before='${{ github.event.before }}'
           if [[ "$REF" == refs/tags/* ]]; then
             # A new tag has no base anyway; saying so here also covers a moved one.
