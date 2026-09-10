@@ -1,0 +1,30 @@
+#set page(
+  margin: (x: 1.25in, top: 2.5in, bottom: 1.25in),
+  numbering: "1",
+  header-ascent: 25%,
+  header: [
+    #grid(
+      columns: (auto, 1fr),
+      column-gutter: 0.6cm,
+      [
+        #box(inset: (top: 6pt))[
+          #image("./media/logo.png", width: 60pt)
+        ]
+      ],
+      [
+        #align(right)[
+          #stack(
+            spacing: 2.5pt,
+            [#text(size: 10pt, weight: "bold")[{{emittente.ragione_sociale}}]],
+            {{#if emittente.identificativo_iva}}[#text(size: 8pt, fill: rgb("#8A8A8A"))[Identificativo fiscale ai fini IVA: {{emittente.identificativo_iva}}]],{{/if}}
+            {{#if emittente.codice_fiscale}}[#text(size: 8pt)[Codice fiscale: {{emittente.codice_fiscale}}]],{{/if}}
+            [#text(size: 8pt)[Regime fiscale: {{fiscale.regime_display}}]],
+            {{#if emittente.codice_sdi}}[#text(size: 8pt)[Codice destinatario: {{emittente.codice_sdi}}]],{{/if}}
+            {{#if emittente.indirizzo_display}}[#text(size: 8pt)[Indirizzo: {{emittente.indirizzo_display}}]],{{/if}}
+            {{#if emittente.email}}[#text(size: 8pt)[Email: {{emittente.email}}]],{{/if}}
+          )
+        ]
+      ],
+    )
+  ],
+)
