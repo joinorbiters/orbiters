@@ -25,7 +25,7 @@ afterEach(() => vi.restoreAllMocks())
 describe('the Amministratori page', () => {
   it('shows the list alone, and the form only inside a dialog the button opens', async () => {
     // ORB-125: Ivan wants the form behind a button, not on the page.
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(answer(200, [IVAN]))
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => answer(200, [IVAN]))
     mount()
     await screen.findByText('ivan@orbiters.it')
     expect(screen.queryByLabelText('Nome')).toBeNull()
@@ -66,6 +66,43 @@ describe('the Amministratori page', () => {
     // Still open, the draft still there: the person corrects one field, not three.
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(within(dialog).getByLabelText('Nome')).toHaveValue('Ancora')
+
+    // «Annulla» closes it, and the next opening carries neither the error nor the draft.
+    await user.click(within(dialog).getByRole('button', { name: 'Annulla' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await user.click(screen.getByRole('button', { name: 'Nuovo amministratore' }))
+    const again = await screen.findByRole('dialog')
+    expect(within(again).queryByRole('alert')).toBeNull()
+    expect(within(again).getByLabelText('Email')).not.toHaveAttribute('aria-invalid')
+    expect(within(again).getByLabelText('Nome')).toHaveValue('')
+  })
+
+  it('stays open while the request is out, so a late answer lands where it was asked', async () => {
+    let settle: (response: Response) => void = () => {}
+    const pending = new Promise<Response>((resolve) => (settle = resolve))
+    const spy = vi.spyOn(globalThis, 'fetch')
+    spy.mockResolvedValueOnce(answer(200, [IVAN]))
+    spy.mockReturnValueOnce(pending)
+    spy.mockResolvedValueOnce(answer(200, [IVAN, ADA]))
+    mount()
+    await screen.findByText('ivan@orbiters.it')
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Nuovo amministratore' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.type(within(dialog).getByLabelText('Nome'), 'Ada')
+    await user.type(within(dialog).getByLabelText('Email'), 'ada@orbiters.it')
+    await user.type(within(dialog).getByLabelText('Password'), 'una-password-lunga')
+    await user.click(within(dialog).getByRole('button', { name: 'Crea amministratore' }))
+    expect(await within(dialog).findByRole('button', { name: 'Creo…' })).toBeDisabled()
+
+    await user.keyboard('{Escape}')
+    expect(within(dialog).getByRole('button', { name: 'Annulla' })).toBeDisabled()
+    await user.click(within(dialog).getByRole('button', { name: 'Annulla' }))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+
+    settle(answer(201, ADA))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(screen.getByRole('status')).toHaveTextContent('ada@orbiters.it')
   })
 
   it('closes on success, refreshes the list and says who was created on the page', async () => {
