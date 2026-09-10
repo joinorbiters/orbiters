@@ -48,10 +48,14 @@ to edit. Where a design choice is already taken, say so and where it is recorded
 reason, so the next person does not reopen a closed question.
 ```
 
-Optional, when they apply: **Evidence** (the reproduction, the measurement, the log
-line), **Blocks** / **Blocked by** (issue ids you have read), **Decision for the
-lead** (the project's lead per `docs/tracker.md`: one question, the options, your
-recommendation first).
+Always, on a card you are about to work: **Adjacent** (the open cards next to this one,
+found as the `linear-ticket` skill says, and what was done about each: linked, narrowed
+around, waited for. When there are none, the sentence that says so, with the calls that
+answered empty and the last Done cards on the same surface, so a reader can tell the
+board was read). Optional, when they apply: **Evidence** (the reproduction, the
+measurement, the log line), **Blocks** / **Blocked by** (issue ids you have read),
+**Decision for the lead** (the project's lead per `docs/tracker.md`: one question, the
+options, your recommendation first).
 
 ## Comments
 
@@ -62,11 +66,20 @@ which kind it is, so a reader can skim the thread.
   Never "working on it".
 - **Found.** `**Cause is different from the title:** ...` The reproduction or measurement,
   and what it changes about the plan.
+- **Scope.** `**Scope, narrowed:** ...` or `**Scope, grown:** ...` What the card now
+  covers that it did not, or no longer covers, and why: a neighbour found late, a file
+  that had to move too, a piece left for its own card (with the id, once filed).
+- **Waiting.** `**Waiting on Lorenzo:** ...` What you are stopped on, from whom, and what
+  you will do when it arrives. One comment when you stop, one when it lifts.
 - **Decision.** `**MCP, decided.** ...` What was chosen, the reason, where it is recorded
   (`DECISIONS.md` row, spec paragraph). If it is the lead's to take: the question, the
   options, your recommendation, and stop.
 - **PR.** `PR: <url> (branch ...)` plus one sentence on what it contains and what is
   still running (review, CI).
+- **Review.** `**Review applied:** ...` How many findings, which changed the code (commit
+  sha), which you left as they were and why. The full record stays on the PR; the card
+  gets the one line that says the PR is not what it was when it opened. The same shape
+  for a CI run that went red (`**CI red:** run ..., <job>, <cause>, fixed in ...`).
 - **Closing.** `**Merged:** <url> (merge commit ...)` or `**In production:** tag ...`
   followed by `Evidence:` and a bulleted list a reader can chase: run ids with the job
   names that went green, test counts, the request you made and what came back, what you

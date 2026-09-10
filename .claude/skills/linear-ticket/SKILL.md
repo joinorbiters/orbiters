@@ -1,6 +1,6 @@
 ---
 name: linear-ticket
-description: Use when filing, finding, moving or closing a Linear issue for this repository (team Orbiters, ORB-N), or posting a project update. The MCP workflow with every field in one call, the state changes at each step, and the API quirks that otherwise cost a wasted call. Triggers on "file this", "move to Done", "update the project", or the Italian «crea ticket», «apri un'issue».
+description: Use when filing, finding, moving or closing a Linear issue for this repository (team Orbiters, ORB-N), or posting a project update, and at the start of any change here, before the first file is touched, to find the card and the cards next to it. The MCP workflow with every field in one call, the neighbour scan, the state changes at each step, and the API quirks that otherwise cost a wasted call. Triggers on "file this", "move to Done", "update the project", on starting a task or a PR, or the Italian «crea ticket», «apri un'issue», «parti da questo ticket».
 ---
 
 # Working the Linear board
@@ -52,6 +52,45 @@ work you may start.
 A new issue is filed only when none exists and the work will outlive this run, and then
 **before** the work starts, never after (`docs/tracker.md`, The loop).
 
+## The neighbours, before the first file changes
+
+Finding the same card is one search. Finding the cards your change can collide with or
+settle is another, and it happens every time, whether the card was found or filed
+(`docs/tracker.md` § The loop). Three reads, each with
+`fields: ["id", "title", "status", "statusType", "labels", "project", "assigneeId"]`:
+
+1. **The area, open states only.** `list_issues` with `team: "Orbiters"`,
+   `label: "<the area:* your change lands in>"` and `state: "started"`, which answers
+   `In Progress` and `In Review` together; then `state: "unstarted"` (`Todo`), then
+   `state: "backlog"`. One `state` per call, so three calls, with `limit` raised past
+   50.
+2. **The surface, by name.** `list_issues` with `query:` one noun of what you are about
+   to touch, one call per noun: the screen («Fatture»), the route (`/api/invoices`), the
+   table (`invoices`), the file's stem (`columns.tsx`). `query` ranks, it does not
+   filter (measured 2026-09-10: `columns.tsx` gave the three invoice-list cards first,
+   then twenty unrelated ones). Read the first handful and stop where the titles stop
+   being about your surface.
+3. **The project**, when the area is the wrong lens (a shared package, `docs/`, a
+   change that spans two apps): `list_issues` with `project:` the id and the three open
+   states.
+
+What comes back is read, not counted:
+
+- **`started` under the other person, on the same surface.** You do not overlap it.
+  Narrow your card to what theirs leaves alone, or wait for theirs, and write which on
+  your card. Never a second PR on the same files, and never a touch on their card beyond
+  a comment (§ above).
+- **`Backlog` or `Todo` that your change would close.** If it is yours to take, take it
+  and do not file a second card; if it is not, `duplicateOf` from yours to theirs, or a
+  comment on theirs saying yours will close it, and leave the rest alone.
+- **A card your change would break, make easier, or has to land after.** `blocks`,
+  `blockedBy`, or `relatedTo` when a reader of either card would want the other. All
+  four relations are arrays on `save_issue`, append-only, and they go in the same call
+  that files or moves your card, never a second one.
+- **Nothing.** Written anyway, as the `**Adjacent.**` lead of the body per the
+  `linear-content` skill, with the calls that answered empty and the last Done cards on
+  the surface. A scan that leaves no trace cannot be told from one that did not happen.
+
 ## Filing: one `save_issue` call
 
 Every field at once; a second call to add the missing ones is the sign the first was
@@ -69,6 +108,7 @@ wrong.
 | `estimate` | the team's points. |
 | `assignee` | never omitted. `"me"` when you will do the work, the person who asked for it when they will. A card filed for later still gets one: an empty assignee reads as free to the other agent. |
 | `state` | `"In Progress"` when you start now, otherwise leave the default. |
+| `relatedTo`, `blocks`, `blockedBy`, `duplicateOf` | what the neighbour scan found (§ above), as arrays of `ORB-N` you have read, in this same call. Append-only: one added by mistake is undone only with `removeRelatedTo`, `removeBlocks`, `removeBlockedBy` or `duplicateOf: null`, so read the id before you write it. |
 
 Label names are case-insensitive workspace-wide and a retired label keeps its name:
 `Chore` resolves to whatever old label owned that name. Use the exact lowercase names
@@ -85,7 +125,8 @@ not learn it from here. What that section leaves to the caller:
 - `In Review` is set by you when the PR opens, with a comment carrying the PR URL. The
   PR links itself to the issue, so seeing the link is not seeing a state change: the
   status automation is a per-team setting and it is off here (PR #33 linked, ORB-80
-  stayed `In Progress`). Move it yourself.
+  stayed `In Progress`). Move it yourself. From there to the merge the card keeps
+  following the PR (§ Commenting): the review, a red run, a reshaped PR.
 - `Done` takes a closing comment shaped as the `linear-content` skill says (`Evidence:`
   with run ids, sha, what you exercised and what came back). No evidence, no `Done`.
 - Won't-do is `Canceled` (one `l`), with the reason.
@@ -98,10 +139,22 @@ history you can read back. Reading the owner first is the only guard.
 
 ## Commenting
 
-`save_comment` with `issueId` (not `issue`) and `body`. When: something changed the
-issue (a reproduction, a measurement, a cause different from the title, a decision that
-is now the project lead's), a PR opened, a step of a plan landed, the closing evidence.
-Not: "working on it". Replies in a thread take `parentId`.
+`save_comment` with `issueId` (not `issue`) and `body`. The card follows the work while
+it happens (`docs/tracker.md` § While you work), so a comment at each of these, in the
+shape the `linear-content` skill gives it:
+
+- something changed the issue: a reproduction, a measurement, a cause different from the
+  title, a decision that is now the project lead's;
+- the work changed shape: a scope dropped or added, a file or a surface you had not
+  planned to touch, a neighbour found late;
+- you are waiting on something outside your hands: what, and from whom;
+- the PR opened; the review's findings and what you did with them; a CI run that went
+  red and why; a push that changed what the PR is;
+- the closing evidence.
+
+Not: "working on it", and not a step a reader could infer from the previous comment.
+Replies in a thread take `parentId`. A card that has read `In Progress` since morning
+with nothing under it is the failure this section exists to prevent.
 
 ## Project updates
 
