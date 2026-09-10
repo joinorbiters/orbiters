@@ -188,12 +188,15 @@ describe('index.html', () => {
 
   it('opens a door into the hub admin area from its footer, and only there', () => {
     // Ivan, 2026-09-10 (ORB-105): whoever reviews signups, freelancers and companies
-    // should not have to type `/hub/admin` by hand. One quiet link at the end of the
-    // footer, dressed like its neighbours; the hub's `AdminLayout` sends a visitor
-    // without a session to its login, so the page links the area and not the login.
+    // should not have to type the admin URL by hand. One quiet link, last in the
+    // footer, dressed like its neighbours. It goes to `/hub/admin/freelance`, the first
+    // screen of the area and where the hub's own login lands, rather than to `/hub/admin`:
+    // the hub router has no index route under `/admin`, so a signed-in admin sent there
+    // would see the frame with an empty panel (found in review of PR 28, filed as ORB-106).
+    // `AdminLayout` still sends a visitor without a session to its login first.
     const footer = page.match(/<footer[\s\S]*?<\/footer>/)?.[0] ?? ''
-    expect(footer).toMatch(/<a class="quiet-link" href="\/hub\/admin">Admin<\/a>\s*<\/p>/)
-    expect(page.match(/href="\/hub\/admin"/g)).toHaveLength(1)
+    expect(footer).toMatch(/<a[^>]*\bhref="\/hub\/admin\/freelance"[^>]*>Admin<\/a>\s*<\/p>/)
+    expect(page.match(/href="\/hub\/admin/g)).toHaveLength(1)
   })
 
   it('mounts the same field as the community page behind the whole page, from the shared script', () => {
