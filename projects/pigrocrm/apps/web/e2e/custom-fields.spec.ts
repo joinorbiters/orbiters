@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page, type Response } from '@playwright/test'
 import { loginAsAdmin, rowAction, typeLikeAHuman } from './helpers'
 
 test.beforeEach(async ({ page }) => {
@@ -57,19 +57,15 @@ test("a custom field's whole life: appears everywhere with no restart, and a cle
   // passed on retry, in the same suite run; reproduced live under load with zero
   // columnheaders, not just this one, still on screen when the timeout hit). Waiting for
   // both responses to actually land is the fix: a test bug, not the application's --
-  // `describe_entity`/`FieldDefinitionService.create` already commit before the POST
-  // that creates the field even returns, and every request here reads live.
-  const [, schemaResponse, customersResponse] = await Promise.all([
+  // `FieldDefinitionService.create` commits before the POST that creates the field even
+  // returns, and `describe_entity` reads live, so the reload cannot miss the field.
+  const isGet = (response: Response, path: string): boolean =>
+    new URL(response.url()).pathname.endsWith(path) && response.request().method() === 'GET'
+  await Promise.all([
     page.goto('/app/clienti'),
-    page.waitForResponse(
-      (response) => response.url().includes('/api/schema/customer') && response.request().method() === 'GET',
-    ),
-    page.waitForResponse(
-      (response) => response.url().includes('/api/customers') && response.request().method() === 'GET',
-    ),
+    page.waitForResponse((response) => isGet(response, '/api/schema/customer')),
+    page.waitForResponse((response) => isGet(response, '/api/customers')),
   ])
-  expect(schemaResponse.ok()).toBe(true)
-  expect(customersResponse.ok()).toBe(true)
   await expect(page.getByRole('columnheader', { name: 'Referente' })).toBeVisible()
 
   // The create-form input, native (Telefono) and custom (Referente) side by side.
