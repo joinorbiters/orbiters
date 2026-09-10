@@ -55,9 +55,7 @@ describe.each(PAGES)('%s', (name) => {
       // link to it, so those two pages carry a real company's site and this test has to
       // allow the origin; since ORB-116 index.html's footer links the same studio,
       // restored to what production served before website-v0.4.0. It is the only real
-      // identity left anywhere in this repository, and `orbiters-identity-scan`
-      // (`.github/preflight.json`, `identity-names`) is told about these pages for the
-      // same reason.
+      // identity left anywhere in this repository.
       expect(url, 'external subresource').toMatch(
         /^https:\/\/(?:github\.com|pigro\.joinorbiters\.com|openai\.com|humancraft\.tech)\//,
       )

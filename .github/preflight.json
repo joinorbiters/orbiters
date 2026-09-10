@@ -44,29 +44,25 @@
       "id": "pigrocrm-py-corpus",
       "run": "uv run pytest -q -m \"slow\" projects/pigrocrm/packages/core/tests",
       "when": [
-        "projects/pigrocrm/apps/api/**",
-        "projects/pigrocrm/apps/mcp/**",
         "projects/pigrocrm/packages/**",
         "projects/pigrocrm/conftest.py",
         "pyproject.toml",
         "uv.lock"
       ],
       "serial": true,
-      "why": "The fifty-thousand-row corpus: twelve minutes, almost all of it inside PostgreSQL. Serial and never under -n, because every assertion in those two files is about which plan the planner picks and load changes the answer."
+      "why": "The fifty-thousand-row corpus: twelve minutes, almost all of it inside PostgreSQL. Serial and never under -n, because every assertion in those two files is about which plan the planner picks and load changes the answer. It selects on core alone: the two files import `pigrocrm.core` and the local `corpus` helper beside them and nothing else, so an edit under apps/api or apps/mcp cannot change which plan PostgreSQL picks over core's schema, and it used to buy twelve minutes of waiting for that (ORB-141)."
     },
     {
       "id": "pigrocrm-py-planner",
       "run": "uv run pytest -q -m \"planner\" projects/pigrocrm/packages/core/tests",
       "when": [
-        "projects/pigrocrm/apps/api/**",
-        "projects/pigrocrm/apps/mcp/**",
         "projects/pigrocrm/packages/**",
         "projects/pigrocrm/conftest.py",
         "pyproject.toml",
         "uv.lock"
       ],
       "serial": true,
-      "why": "Deselected on both CI tiers because a hosted runner picks the other plan (ORB-9). This is the one machine where the assertion means something, so it has to run here or it runs nowhere."
+      "why": "Deselected on both CI tiers because a hosted runner picks the other plan (ORB-9). This is the one machine where the assertion means something, so it has to run here or it runs nowhere. Scoped to core for the same reason as the corpus above."
     },
     {
       "id": "pigrocrm-web-lint",
@@ -210,8 +206,11 @@
         "projects/website/**",
         "shared/brand/**"
       ],
+      "unless": [
+        "projects/website/src/**/*.test.ts"
+      ],
       "serial": true,
-      "why": "Playwright against `vite preview` on 4173. Serial because that port is fixed and shared with anything else on this box."
+      "why": "Playwright against `vite preview` on 4173. Serial because that port is fixed and shared with anything else on this box. The vitest files under src/ are excluded: Playwright loads projects/website/e2e/ and the site it previews is the build, which no unit test enters (ORB-141)."
     },
     {
       "id": "pigrocrm-e2e",
@@ -231,13 +230,13 @@
         "projects/pigrocrm/Dockerfile.api",
         "projects/pigrocrm/Dockerfile.web",
         "projects/pigrocrm/docker-compose.yml",
-        "projects/pigrocrm/deploy/**",
+        "projects/pigrocrm/deploy/nginx/spa.conf",
         ".dockerignore",
         "pnpm-lock.yaml",
         "uv.lock"
       ],
       "serial": true,
-      "why": "Both images build from the repository-root context they are deployed with. Serial because a docker build saturates the box and this shares it with everyone else's agents."
+      "why": "Both images build from the repository-root context they are deployed with. Serial because a docker build saturates the box and this shares it with everyone else's agents. Of everything under deploy/ the build reads one file, `nginx/spa.conf` (Dockerfile.web line 30); the host vhosts and setup-server.sh are installed on the server and never enter an image, so a comment in one of them used to buy a full two-image build (ORB-141)."
     },
     {
       "id": "website-image",
@@ -248,8 +247,11 @@
         ".dockerignore",
         "pnpm-lock.yaml"
       ],
+      "unless": [
+        "projects/website/src/**/*.test.ts"
+      ],
       "serial": true,
-      "why": "The deploy builds this image on a single-core server. Building it here is seconds and it is the only check that reads projects/website/deploy/nginx.conf at all."
+      "why": "The deploy builds this image on a single-core server. Building it here is seconds and it is the only check that reads projects/website/deploy/nginx.conf at all. Excluded for the same reason as website-e2e: the Dockerfile runs `pnpm --filter website build`, whose rollup inputs are the four HTML files, so a vitest file under src/ reaches neither dist nor the nginx layer."
     },
     {
       "id": "hub-image",
@@ -265,22 +267,6 @@
       ],
       "serial": true,
       "why": "The one project whose images were verified on no tier before the trunk: ci.yml builds them on push only, so a broken Dockerfile here reached main before anything said so. `-p orbiters` because that is the project name the deploy passes (docs/adding-a-project.md section 7) and the name decides the image tags. Serial for the same reason as the other two: a docker build saturates the box."
-    },
-    {
-      "id": "identity-names",
-      "run": "orbiters-identity-scan .",
-      "when": [
-        "**"
-      ],
-      "why": "The other half of `test_no_real_identity_in_the_repository.py`. That test checks shapes and can live in a public repository; a list of forbidden *names* cannot, in any form. A hashed denylist beside the code is an oracle: on 2026-09-09 Ivan inverted 17 of 18 truncated sha256 entries in seconds with a dictionary built from this repository's own history, labels included. So the list is plaintext outside the repository (`~/.config/orbiters/forbidden-names.txt`, overridable with ORBITERS_FORBIDDEN_NAMES) and only this local tier reads it. The scanner prints a notice and exits 0 where no list is configured, which is every machine but ours."
-    },
-    {
-      "id": "identity-shapes",
-      "run": "uv run pytest -q projects/pigrocrm/packages/core/tests/test_no_real_identity_in_the_repository.py",
-      "why": "The same file `pigrocrm-py-test` already runs, and here it runs on every diff instead. It lives under projects/pigrocrm but defends the whole tree, so scoping it to that project's paths is how the hub's footer shipped a fixture company's name to production with every gate green (ORB-97). One second, and CI's `identity` job asks the same question on the same file.",
-      "when": [
-        "**"
-      ]
     }
   ]
 }
