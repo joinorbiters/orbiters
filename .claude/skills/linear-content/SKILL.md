@@ -29,7 +29,7 @@ the intended fix, because the fix changes and a title written as a fix ages into
 
 ## The issue body
 
-Four lead words, each a short paragraph or a few bullets. Skip one only when it has
+Five lead words, each a short paragraph or a few bullets. Skip one only when it has
 nothing to say, never because it is inconvenient.
 
 ```markdown
@@ -46,16 +46,18 @@ to edit. Where a design choice is already taken, say so and where it is recorded
 
 **Deliberately not done.** What a reader might expect and will not find, with the
 reason, so the next person does not reopen a closed question.
+
+**Adjacent.** The open cards next to this one, found as the `linear-ticket` skill
+says, and what was done about each: linked, narrowed around, waited for. Or that there
+were none: which area calls answered empty, and the Done cards `query` ranked first for
+the surface, so a reader can tell the board was read.
 ```
 
-Always, on a card you are about to work: **Adjacent** (the open cards next to this one,
-found as the `linear-ticket` skill says, and what was done about each: linked, narrowed
-around, waited for. When there are none, the sentence that says so, with the calls that
-answered empty and the last Done cards on the same surface, so a reader can tell the
-board was read). Optional, when they apply: **Evidence** (the reproduction, the
-measurement, the log line), **Blocks** / **Blocked by** (issue ids you have read),
-**Decision for the lead** (the project's lead per `docs/tracker.md`: one question, the
-options, your recommendation first).
+**Adjacent** is skipped only on a card filed for later, and added when the card is
+picked up (`patch` with `op: "append"`, in the call that moves it). Optional, when they
+apply: **Evidence** (the reproduction, the measurement, the log line), **Blocks** /
+**Blocked by** (issue ids you have read), **Decision for the lead** (the project's lead
+per `docs/tracker.md`: one question, the options, your recommendation first).
 
 ## Comments
 
@@ -79,7 +81,8 @@ which kind it is, so a reader can skim the thread.
 - **Review.** `**Review applied:** ...` How many findings, which changed the code (commit
   sha), which you left as they were and why. The full record stays on the PR; the card
   gets the one line that says the PR is not what it was when it opened. The same shape
-  for a CI run that went red (`**CI red:** run ..., <job>, <cause>, fixed in ...`).
+  for a CI run that went red (`**CI red:** run ..., <job>, <cause>`, written when you
+  see it, with the sha of the fix added to the same comment when you push it).
 - **Closing.** `**Merged:** <url> (merge commit ...)` or `**In production:** tag ...`
   followed by `Evidence:` and a bulleted list a reader can chase: run ids with the job
   names that went green, test counts, the request you made and what came back, what you

@@ -55,9 +55,10 @@ A new issue is filed only when none exists and the work will outlive this run, a
 ## The neighbours, before the first file changes
 
 Finding the same card is one search. Finding the cards your change can collide with or
-settle is another, and it happens every time, whether the card was found or filed
-(`docs/tracker.md` § The loop). Three reads, each with
-`fields: ["id", "title", "status", "statusType", "labels", "project", "assigneeId"]`:
+settle is another, and it happens every time, whether the card is found or filed, and
+before the `save_issue` that files or moves it (`docs/tracker.md` § The loop). Three
+reads, each with `fields: ["id", "title", "status", "statusType", "labels", "project",
+"assigneeId", "createdById"]`:
 
 1. **The area, open states only.** `list_issues` with `team: "Orbiters"`,
    `label: "<the area:* your change lands in>"` and `state: "started"`, which answers
@@ -79,17 +80,19 @@ What comes back is read, not counted:
 - **`started` under the other person, on the same surface.** You do not overlap it.
   Narrow your card to what theirs leaves alone, or wait for theirs, and write which on
   your card. Never a second PR on the same files, and never a touch on their card beyond
-  a comment (§ above).
-- **`Backlog` or `Todo` that your change would close.** If it is yours to take, take it
-  and do not file a second card; if it is not, `duplicateOf` from yours to theirs, or a
-  comment on theirs saying yours will close it, and leave the rest alone.
+  a comment (§ Finding before filing).
+- **`Backlog` or `Todo` that your change would close.** If it is yours to take, it is
+  your card: move it, and file nothing new. If it is not, `duplicateOf` from yours to
+  theirs, or a comment on theirs saying yours will close it, and leave the rest alone.
 - **A card your change would break, make easier, or has to land after.** `blocks`,
-  `blockedBy`, or `relatedTo` when a reader of either card would want the other. All
-  four relations are arrays on `save_issue`, append-only, and they go in the same call
-  that files or moves your card, never a second one.
-- **Nothing.** Written anyway, as the `**Adjacent.**` lead of the body per the
-  `linear-content` skill, with the calls that answered empty and the last Done cards on
-  the surface. A scan that leaves no trace cannot be told from one that did not happen.
+  `blockedBy`, or `relatedTo` when a reader of either card would want the other.
+  `blocks`, `blockedBy` and `relatedTo` are arrays on `save_issue`, append-only;
+  `duplicateOf` is one id, and `null` clears it. All four go in the same call that files
+  or moves your card, never a second one.
+- **Nothing.** Written anyway, as the **Adjacent** paragraph of the body per the
+  `linear-content` skill, with the area calls that answered empty and the Done cards
+  `query` ranked first for the surface. A scan that leaves no trace cannot be told from
+  one that did not happen.
 
 ## Filing: one `save_issue` call
 
@@ -108,7 +111,7 @@ wrong.
 | `estimate` | the team's points. |
 | `assignee` | never omitted. `"me"` when you will do the work, the person who asked for it when they will. A card filed for later still gets one: an empty assignee reads as free to the other agent. |
 | `state` | `"In Progress"` when you start now, otherwise leave the default. |
-| `relatedTo`, `blocks`, `blockedBy`, `duplicateOf` | what the neighbour scan found (§ above), as arrays of `ORB-N` you have read, in this same call. Append-only: one added by mistake is undone only with `removeRelatedTo`, `removeBlocks`, `removeBlockedBy` or `duplicateOf: null`, so read the id before you write it. |
+| `relatedTo`, `blocks`, `blockedBy`, `duplicateOf` | what the neighbour scan found (§ The neighbours): the three arrays of `ORB-N` you have read, or the one id for `duplicateOf`, in this same call. The arrays are append-only, so one added by mistake is undone only with `removeRelatedTo`, `removeBlocks` or `removeBlockedBy`; `duplicateOf: null` clears the one id. Read the id before you write it. |
 
 Label names are case-insensitive workspace-wide and a retired label keeps its name:
 `Chore` resolves to whatever old label owned that name. Use the exact lowercase names
@@ -121,7 +124,10 @@ not learn it from here. What that section leaves to the caller:
 
 - `In Progress` goes with `assignee: "me"` in the same call, and only on a card that is
   already yours (§ Finding before filing). On somebody else's card both fields stay as
-  they are.
+  they are. On a card you found rather than filed, the **Adjacent** paragraph and the
+  relations go in that same call; the paragraph as
+  `patch: [{ "op": "append", "text": "\n\n**Adjacent.** ..." }]`, because `description`
+  on an update replaces the whole body.
 - `In Review` is set by you when the PR opens, with a comment carrying the PR URL. The
   PR links itself to the issue, so seeing the link is not seeing a state change: the
   status automation is a per-team setting and it is off here (PR #33 linked, ORB-80
@@ -140,8 +146,8 @@ history you can read back. Reading the owner first is the only guard.
 ## Commenting
 
 `save_comment` with `issueId` (not `issue`) and `body`. The card follows the work while
-it happens (`docs/tracker.md` § While you work), so a comment at each of these, in the
-shape the `linear-content` skill gives it:
+it happens (`docs/tracker.md` § The loop, While you work), so a comment at each of
+these, in the shape the `linear-content` skill gives it:
 
 - something changed the issue: a reproduction, a measurement, a cause different from the
   title, a decision that is now the project lead's;
@@ -153,8 +159,7 @@ shape the `linear-content` skill gives it:
 - the closing evidence.
 
 Not: "working on it", and not a step a reader could infer from the previous comment.
-Replies in a thread take `parentId`. A card that has read `In Progress` since morning
-with nothing under it is the failure this section exists to prevent.
+Replies in a thread take `parentId`.
 
 ## Project updates
 

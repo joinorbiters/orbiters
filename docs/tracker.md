@@ -114,24 +114,27 @@ means everywhere below, and it is not necessarily the person who is talking to y
 
 ## The loop
 
-**Before starting work.** Search the board for the thing you are about to do. Read who
-owns what comes back, since a card that exists is not automatically available: an issue
-that is yours you use, an issue that is somebody else's you leave. If nothing exists,
-and the work will outlive this run, file one before you start rather than after: an
-issue written afterwards is a summary, and it loses the reasons.
+**Before starting work.** Search the board for the thing you are about to do, and for
+its neighbours (next paragraph), before the first file changes. Read who owns what comes
+back, since a card that exists is not automatically available: an issue that is yours
+you use, an issue that is somebody else's you leave. If nothing exists, and the work will
+outlive this run, file one before you start rather than after: an issue written
+afterwards is a summary, and it loses the reasons.
 
-**Then its neighbours, before the first file changes.** The same card is one search;
-the cards your change can collide with or settle are another, and it happens every
-time, whether the card was found or filed. Neighbours are the open cards in the same
-`area:*`, and the ones whose title or body names the same screen, route, table or file.
-One that is `In Progress` or `In Review` under the other person is work you do not
-overlap: narrow yours to what theirs leaves alone, or wait for it, and say which on your
-card. One in `Backlog` or `Todo` that your change would close, break, make easier or
-has to land after is linked to yours (`relatedTo`, `blocks`, `blockedBy`,
-`duplicateOf`, all on `save_issue`) and named in the body, so it is not rediscovered
-from scratch by the next reader. What the scan found goes on your card before the work
-starts, and "nothing adjacent" is written too: a scan that leaves no trace cannot be
-told from a scan that did not happen.
+**Its neighbours.** The same card is one search; the cards your change can collide with
+or settle are another, and it happens every time, whether the card is found or filed.
+Neighbours are the open cards in the same `area:*`, and the ones whose title or body
+names the same screen, route, table or file. One that is `In Progress` or `In Review`
+under the other person, on the same surface, is work you do not overlap: narrow yours
+to what theirs leaves alone, or wait for it, and say which on your card. One in
+`Backlog` or `Todo` that your change would close is your card, if it is yours to take
+(§ Who owns a card), and nothing new is filed; one that is not yours, or that your
+change would break, make easier or has to land after, is linked to yours (`relatedTo`,
+`blocks`, `blockedBy`, `duplicateOf` on `save_issue`) and named in the body, so it is
+not rediscovered from scratch by the next reader. The scan comes before the `save_issue`
+that files your card or moves it to `In Progress`, so its links and its **Adjacent**
+paragraph land in that call and not a second one. "Nothing adjacent" is written too: a
+scan that leaves no trace cannot be told from a scan that did not happen.
 
 **When you start.** Check the card is yours (§ Who owns a card): assigned to you,
 unassigned and filed by you, or labelled `parallel`. If it is somebody else's, leave it
@@ -139,17 +142,16 @@ alone, comment if you have something to add, and pick another. If it is yours, m
 to `In Progress` and set `assignee` to yourself in the same call, so the other agent can
 see it is taken.
 
-**While you work.** The card follows the work while it happens; it is never rebuilt
-from memory at the end, because a card written afterwards is a summary and loses the
-reasons. A comment when you learn something that changes the issue: a reproduction, a
-measurement, a cause that turned out to be different from the title, a decision that is
-now the project's lead's. A comment when the work changes shape: a scope dropped or
-added, a surface or a file you had not expected to touch, a neighbour you found late. A
-comment when you stop on something outside your hands, saying what you are waiting for
-and from whom, so a reader does not have to find you to know. Comments are cheap and
-they are what makes an issue readable in a month, and a card that has read `In Progress`
-for a day with nothing under it tells the other agent nothing when they are deciding
-whether to touch the same files.
+**While you work.** The card follows the work while it happens, never rebuilt from
+memory at the end. A comment when you learn something that changes the issue: a
+reproduction, a measurement, a cause that turned out to be different from the title, a
+decision that is now the project's lead's. A comment when the work changes shape: a
+scope dropped or added, a surface or a file you had not expected to touch, a neighbour
+you found late. A comment when you stop on something outside your hands, saying what you
+are waiting for and from whom, so a reader does not have to find you to know. Comments
+are cheap and they are what makes an issue readable in a month, and a card that has read
+`In Progress` for a day with nothing under it tells the other agent nothing when they
+are deciding whether to touch the same files.
 
 **When your PR is open.** Move the issue to `In Review`, the status for an issue whose
 PR is open on GitHub, and comment the PR URL on it. The PR links itself to the card
