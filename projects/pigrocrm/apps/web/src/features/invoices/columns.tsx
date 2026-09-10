@@ -39,6 +39,16 @@ function customerName(row: Invoice): string {
   return name === null || name === undefined || name === '' ? EMPTY : name
 }
 
+/**
+ * The accrual period the document declares (ORB-61), as the detail page states it, or
+ * the dash. One helper for the accessor and the cell, as `customerName` above: the two
+ * halves of a column disagreeing about what nothing looks like is a defect this file
+ * has already shipped once (see the `data_emissione` column).
+ */
+function accrualPeriod(row: Invoice): string {
+  return formatPeriod(row.competenza_da, row.competenza_a)
+}
+
 export function buildInvoiceColumns(
   options: InvoiceColumnOptions = {},
 ): ColumnDef<DataTableFeatures, Invoice>[] {
@@ -95,18 +105,14 @@ export function buildInvoiceColumns(
     {
       header: 'Competenza',
       id: 'competenza',
-      // The accrual period the document declares (ORB-61), beside the date it was
-      // issued on (ORB-126): invoicing runs late here, so the two often name different
-      // months, and a list showing only the second does not say what a row is about.
-      // Through `formatPeriod`, the same string the detail page states, and as plain
-      // text: the emission date is the one column with a calendar icon, and a second one
-      // two columns over would make two different kinds of value read as the same.
-      accessorFn: (row) => formatPeriod(row.competenza_da ?? null, row.competenza_a ?? null),
+      // Beside the date the document was issued on (ORB-126): invoicing runs late here,
+      // so the two often name different months, and a list showing only the second does
+      // not say what a row is about. Plain text: the emission date is the one column with
+      // a calendar icon, and a second one two columns over would make two different kinds
+      // of value read as the same.
+      accessorFn: (row) => accrualPeriod(row),
       cell: ({ row }) => {
-        const period = formatPeriod(
-          row.original.competenza_da ?? null,
-          row.original.competenza_a ?? null,
-        )
+        const period = accrualPeriod(row.original)
         return period === EMPTY ? <span className="text-muted-foreground">{EMPTY}</span> : period
       },
     },

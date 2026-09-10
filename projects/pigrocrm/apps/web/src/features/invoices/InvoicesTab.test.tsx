@@ -42,6 +42,12 @@ describe('InvoicesTab', () => {
     expect(screen.queryByRole('columnheader', { name: 'Cliente' })).not.toBeInTheDocument()
   })
 
+  /** The period is not what the page title already says, so the tab shows it (ORB-126). */
+  it('says which period each invoice is about, like the list page', async () => {
+    renderWithClient(<InvoicesTab owner={{ customerId: 'c1' }} />)
+    expect(await screen.findByRole('columnheader', { name: 'Competenza' })).toBeInTheDocument()
+  })
+
   /**
    * The slot exists so the button that creates an invoice sits on the tab that lists
    * them, rather than in the page header where it would be offered from every other tab

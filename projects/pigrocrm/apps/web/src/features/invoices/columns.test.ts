@@ -206,9 +206,11 @@ describe('the customer column', () => {
  * page title already says.
  */
 describe('the accrual period column', () => {
-  it('sits right after the date, in the default columns too', () => {
-    const ids = buildInvoiceColumns().map((candidate) => candidate.id ?? '')
-    expect(ids.indexOf('competenza')).toBe(ids.indexOf('data_emissione') + 1)
+  it('sits right after the date, with and without the customer column', () => {
+    for (const options of [undefined, { cliente: true }]) {
+      const ids = buildInvoiceColumns(options).map((candidate) => candidate.id ?? '')
+      expect(ids.indexOf('competenza')).toBe(ids.indexOf('data_emissione') + 1)
+    }
     expect(column('competenza').header).toBe('Competenza')
   })
 
