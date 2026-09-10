@@ -2967,7 +2967,10 @@ export interface components {
          *
          *     `quote` are the same four amounts as a share of the tallest month of their chart, in
          *     [0, 1], computed here: the browser scales a bar with them and never turns an amount
-         *     string into a number (apps/web/src/test/no-browser-arithmetic.test.ts).
+         *     string into a number (apps/web/src/test/no-browser-arithmetic.test.ts). `totale_*`
+         *     are the two column totals the charts print above a stacked month (ORB-139), summed
+         *     here for the same reason: what the cash chart stacks (`incassato + costi`) and what
+         *     the projection stacks (all four).
          */
         CashMonth: {
             /** Anno */
@@ -2982,6 +2985,10 @@ export interface components {
             bozze: string;
             /** Costi */
             costi: string;
+            /** Totale Andamento */
+            totale_andamento: string;
+            /** Totale Proiezione */
+            totale_proiezione: string;
             /** Quote Andamento */
             quote_andamento: {
                 [key: string]: number;
@@ -22091,7 +22098,7 @@ export interface operations {
         parameters: {
             query: {
                 anno: number;
-                /** @description In quale mese cade il denaro di ogni documento: 'competenza' (il periodo di competenza dichiarato sulla fattura o sulla proforma, con la data del documento per chi non lo dichiara; predefinito) oppure 'incasso' (la data di incasso per le fatture pagate, la scadenza per quelle da incassare, la data del documento per bozze e proforma). La stima fiscale resta sempre sull'incassato dell'anno. */
+                /** @description In quale mese cade il denaro di ogni documento: 'competenza' (il periodo di competenza dichiarato sulla fattura o sulla proforma, con la data del documento per chi non lo dichiara; predefinito) oppure 'incasso' (la data di incasso per le fatture pagate, la scadenza per quelle da incassare, la data del documento, o di creazione, per bozze e proforma). La stima fiscale resta sempre sull'incassato dell'anno. */
                 base?: "competenza" | "incasso";
             };
             header?: never;

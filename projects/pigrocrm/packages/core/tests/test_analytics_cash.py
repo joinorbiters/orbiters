@@ -72,6 +72,13 @@ def test_the_year_adds_up_month_by_month_and_costs_are_not_revenue(
     # Shares of the tallest stack: both present, and the stack adds up to the whole.
     assert month.quote_andamento["incassato"] > 0 and month.quote_andamento["costi"] > 0
     assert abs(month.quote_andamento["incassato"] + month.quote_andamento["costi"] - 1.0) < 1e-9
+    # The column totals the chart prints above a stacked month (ORB-139): summed here,
+    # once, because the browser never turns an amount into a number.
+    assert month.totale_andamento == month.incassato + Decimal("120.00")
+    assert month.totale_proiezione == month.incassato + Decimal("120.00")
+    empty = next(m for m in overview.mesi if m.mese != OGGI.month)
+    assert empty.totale_andamento == Decimal("0.00")
+    assert empty.totale_proiezione == Decimal("0.00")
     assert sum(m.incassato for m in overview.mesi) == overview.incassato
     assert overview.proiettato == overview.incassato  # nothing pending, nothing drafted
     assert overview.lordo_effettivo == overview.incassato - Decimal("120.00")
@@ -89,6 +96,11 @@ def test_an_issued_unpaid_invoice_is_projected_not_collected(
     assert overview.incassato == Decimal("0.00")
     assert overview.da_incassare == Decimal(str(totale))
     assert overview.proiettato == Decimal(str(totale))
+    # Owed money is projected, not collected: it is in the projection's column total
+    # and not in the cash chart's.
+    month = next(m for m in overview.mesi if m.da_incassare > Decimal("0.00"))
+    assert month.totale_proiezione == Decimal(str(totale))
+    assert month.totale_andamento == Decimal("0.00")
 
 
 def test_a_draft_counts_as_a_draft_and_a_paid_invoice_never_twice(

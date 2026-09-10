@@ -230,7 +230,10 @@ class CashMonth(BaseModel):
 
     `quote` are the same four amounts as a share of the tallest month of their chart, in
     [0, 1], computed here: the browser scales a bar with them and never turns an amount
-    string into a number (apps/web/src/test/no-browser-arithmetic.test.ts)."""
+    string into a number (apps/web/src/test/no-browser-arithmetic.test.ts). `totale_*`
+    are the two column totals the charts print above a stacked month (ORB-139), summed
+    here for the same reason: what the cash chart stacks (`incassato + costi`) and what
+    the projection stacks (all four)."""
 
     anno: int
     mese: int
@@ -238,6 +241,8 @@ class CashMonth(BaseModel):
     da_incassare: Decimal = Field(max_digits=12, decimal_places=2)
     bozze: Decimal = Field(max_digits=12, decimal_places=2)
     costi: Decimal = Field(max_digits=12, decimal_places=2)
+    totale_andamento: Decimal = Field(max_digits=12, decimal_places=2)
+    totale_proiezione: Decimal = Field(max_digits=12, decimal_places=2)
     quote_andamento: dict[str, float]
     quote_proiezione: dict[str, float]
 
