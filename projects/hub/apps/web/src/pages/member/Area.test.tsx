@@ -68,7 +68,11 @@ describe('/io', () => {
       'href',
       'https://pigro.joinorbiters.com/app/registrati',
     )
-    expect(screen.getByText('Altro in arrivo')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Scarica la guida/ })).toHaveAttribute(
+      'href',
+      '/api/hub/me/guida',
+    )
+    expect(screen.getByText('PDF, 6 pagine, 48 KB.')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Modifica' })).toHaveAttribute('href', '/io/modifica')
   })
 

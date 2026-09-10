@@ -15,6 +15,7 @@ from orbiters_api.ratelimit import reset_rate_limit
 from orbiters_core.admin import AdminService
 from orbiters_core.config import Settings
 from orbiters_core.mail import Mail, RecordingSender
+from orbiters_core.perks import GUIDE_PATH
 
 PDF = b"%PDF-1.7\n1 0 obj<<>>endobj\n%%EOF\n"
 ADMIN = {"email": "ivan@orbiters.it", "password": "una-password-lunga"}
@@ -120,7 +121,7 @@ def test_the_link_enters_once_sets_the_member_cookie_and_opens_only_the_members_
     client: TestClient, sender: RecordingSender, clean: None
 ) -> None:
     _apply(client, "ada@studio.it")
-    for path in ("/api/hub/me", "/api/hub/me/cv"):
+    for path in ("/api/hub/me", "/api/hub/me/cv", "/api/hub/me/guida"):
         assert client.get(path).status_code == 401, path
 
     profile, entered = _enter(client, sender, "ada@studio.it")
@@ -158,6 +159,34 @@ def test_the_link_enters_once_sets_the_member_cookie_and_opens_only_the_members_
     assert "orbiters_user=" in cleared
     assert 'orbiters_user=""' in cleared or "max-age=0" in cleared
     assert client.get("/api/hub/me").status_code == 401
+
+
+def test_the_guide_is_a_perk_of_the_session_and_not_a_public_file(
+    client: TestClient, sender: RecordingSender, clean: None
+) -> None:
+    """The whole point of ORB-70's second half: the guide is behind the member session.
+
+    Nothing about the file is asserted here beyond it being the one on disk, byte for
+    byte, since `packages/core/tests/test_guide_pdf.py` owns what the PDF is. What this
+    owns is who may have it: an anonymous caller gets the same 401 as `/me`, and a
+    member gets the bytes as an attachment under the name they will see in their
+    downloads folder.
+    """
+    _apply(client, "ada@studio.it")
+    assert client.get("/api/hub/me/guida").status_code == 401
+
+    _enter(client, sender, "ada@studio.it")
+    answer = client.get("/api/hub/me/guida")
+    assert answer.status_code == 200
+    assert answer.headers["content-type"] == "application/pdf"
+    assert (
+        answer.headers["content-disposition"]
+        == 'attachment; filename="orbiters-guida-primi-passi-freelance.pdf"'
+    )
+    assert answer.content == GUIDE_PATH.read_bytes()
+
+    client.post("/api/hub/me/logout")
+    assert client.get("/api/hub/me/guida").status_code == 401
 
 
 def test_a_wrong_token_is_a_401_and_a_malformed_one_a_422(

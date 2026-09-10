@@ -152,6 +152,25 @@ def update_proforma(
     return service.update(identifier, changes, context.actor).model_dump(mode="json")
 
 
+def confirm_proforma(context: McpContext, invoice_id: str) -> dict[str, Any]:
+    """`bozza` -> `confermata` on a proforma (ORB-132): the amount is agreed and the
+    document is ready to be issued, still without touching the register.
+
+    Same guard as `replace_proforma_lines`, so a fattura is refused with the reason before
+    the service refuses it for its own. The service then refuses a proforma that is not a
+    draft and one without lines, naming the field. On the default surface and not behind
+    `mcp_full_access`: confirming consumes nothing and forecloses nothing, since a
+    confirmed proforma stays editable (`_is_editable`: `update_proforma`,
+    `replace_proforma_lines`) and discardable. There is no way back to `bozza`, and none
+    is needed. `issue_invoice`, which turns the confirmed proforma into a numbered
+    document, stays privileged.
+    """
+    service = _invoices(context)
+    identifier = UUID(invoice_id)
+    _require_proforma(service, identifier, context)
+    return service.confirm_proforma(identifier, context.actor).model_dump(mode="json")
+
+
 def discard_proforma(context: McpContext, invoice_id: str) -> dict[str, Any]:
     """The same guard as `replace_proforma_lines`, for the same reason: from the MCP a
     proforma is the only document an agent shapes, and discarding one it got wrong is the

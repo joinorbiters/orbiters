@@ -935,6 +935,16 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
 
     @mcp.tool()
     @guard
+    def confirm_proforma(invoice_id: str) -> dict[str, Any]:
+        """Conferma una proforma in bozza: l'importo e' concordato e il documento e' pronto
+        per l'emissione. Non consuma alcun numero e non tocca il registro: la proforma
+        resta una proforma, con il suo riferimento. Rifiuta una fattura, una proforma gia'
+        confermata o consumata, e una proforma senza righe. Il passo successivo e'
+        `issue_invoice`, disponibile solo dove l'installazione l'ha aperto."""
+        return invoices.confirm_proforma(context, invoice_id)
+
+    @mcp.tool()
+    @guard
     def discard_proforma(invoice_id: str) -> dict[str, Any]:
         """Scarta una proforma: la toglie dagli elenchi senza cancellare nulla
         fisicamente, ma non si ripristina: se serve ancora, si ricrea. Rifiuta una

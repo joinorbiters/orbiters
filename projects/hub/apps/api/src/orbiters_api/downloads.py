@@ -15,3 +15,14 @@ def cv_response(cv: CvFile) -> Response:
         media_type=cv.mime,
         headers={"Content-Disposition": f'attachment; filename="{safe}"'},
     )
+
+
+def perk_response(content: bytes, filename: str) -> Response:
+    """A perk's file as an attachment. Its name is ours rather than something a person
+    typed, so it needs no sanitising, but it is written here anyway so a second perk
+    cannot invent a shape of its own for this header."""
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

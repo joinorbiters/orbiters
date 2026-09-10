@@ -279,5 +279,9 @@ export const member = {
     return request<MemberProfile>('/api/hub/me/cv', { method: 'PUT', body: form })
   },
   cvUrl: '/api/hub/me/cv',
+  /** The guide, the community's second perk. A plain href rather than a fetch: the
+   *  route answers with an attachment, and a session cookie travels with a navigation
+   *  the same way it travels with a request. */
+  guideUrl: '/api/hub/me/guida',
   logout: () => request<void>('/api/hub/me/logout', { method: 'POST' }),
 }

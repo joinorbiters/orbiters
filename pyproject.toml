@@ -52,6 +52,12 @@ dev = [
   # mypy, never imported at runtime, so they have no business in core's own
   # `[project].dependencies` (and the architecture test reads that list literally).
   "types-openpyxl==3.1.5.20260807",
+  # The website's guide PDF (ORB-70) is typeset with pandoc and Typst, the same two
+  # binaries PigroCRM's renderer uses, and neither reads the woff2 the brand ships or
+  # a variable weight axis. fontTools decompresses that one file and pins the two
+  # weights the site's stylesheet uses. `[woff]` is what brings brotli, without which
+  # a woff2 cannot be opened at all. Dev only: nothing imports it at runtime.
+  "fonttools[woff]==4.62.0",
 ]
 
 # Both tables below name one project's paths explicitly, and grow by a few lines per
@@ -130,4 +136,8 @@ files = [
   "projects/hub/packages/core/src",
   "projects/hub/apps/api/src",
   "projects/hub/apps/mcp/src",
+  # Not a package and not part of any project's runtime: the one script that builds
+  # the guide the hub hands to a member (ORB-70). Named explicitly because it sits
+  # outside every `src` above and would otherwise be checked by nothing.
+  "projects/hub/tools",
 ]
