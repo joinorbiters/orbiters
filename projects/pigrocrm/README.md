@@ -46,12 +46,14 @@ in this order.
 - The user running the deploy has to belong to the `docker` group **and** has to be `root` (or
   have sudo equivalent): `deploy/setup-server.sh` writes to `/etc/nginx/sites-available/`,
   creates the symlink in `sites-enabled/`, runs `nginx -t` and `systemctl reload nginx`, all
-  operations that require root privileges. `ci-deploy.yml` runs this same script over
-  SSH assuming that the user configured in `PIGROCRM_USER` already has it; this repository does not
-  try to bypass the requirement with non-interactive `sudo`, because that would only work assuming
-  that every target server already has a passwordless sudoers rule preconfigured for
-  exactly these commands — an assumption that can't be verified from here, and is equivalent to the
-  requirement above under a different name.
+  operations that require root privileges. No workflow runs this script: it is a one-time
+  manual step over SSH, and the deploy (`deploy-pigrocrm.yml`, through
+  `_deploy-compose.yml`) only rsyncs the tree and rebuilds the stack as the environment's
+  `DEPLOY_USER`. This repository does not try to bypass the root requirement with
+  non-interactive `sudo`, because that would only work assuming that every target server
+  already has a passwordless sudoers rule preconfigured for exactly these commands, an
+  assumption that cannot be verified from here and is equivalent to the requirement above
+  under a different name.
 - **`pg_trgm`.** The migrations run `CREATE EXTENSION IF NOT EXISTS pg_trgm`
   when the API starts up. On the compose's `postgres:17-alpine` image the user
   `pigrocrm` is superuser and it works without intervention. On a managed PostgreSQL it takes
