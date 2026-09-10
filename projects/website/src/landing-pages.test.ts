@@ -57,7 +57,7 @@ describe.each(PAGES)('%s', (name) => {
       // repository, and `bin/identity-scan` knows about these three paths for the same
       // reason.
       expect(url, 'external subresource').toMatch(
-        /^https:\/\/(?:github\.com|pigro\.joinorbiters\.com|example\.com|openai\.com|humancraft\.tech)\//,
+        /^https:\/\/(?:github\.com|pigro\.joinorbiters\.com|openai\.com|humancraft\.tech)\//,
       )
     }
     expect(page).not.toMatch(/fonts\.googleapis\.com|fonts\.gstatic\.com/)
@@ -184,6 +184,16 @@ describe('index.html', () => {
   it('links the two pages Google reads during verification', () => {
     expect(page).toMatch(/href="\/privacy"/)
     expect(page).toMatch(/href="\/termini"/)
+  })
+
+  it('signs its footer with the studio behind the site, never with a fixture', () => {
+    // ORB-116: the pre-publication sanitisation swapped this link for «Studio Rossi» at
+    // example.com, the suite's stock customer, and website-v0.4.0 shipped it. The studio
+    // is the same entity the two policy pages name as titolare, so the footer says what
+    // they say; a fixture host on a public page fails here and in links.test.ts.
+    const footer = page.match(/<footer[\s\S]*?<\/footer>/)?.[0] ?? ''
+    expect(footer).toMatch(/<a[^>]*\bhref="https:\/\/humancraft\.tech\/"[^>]*>Humancraft<\/a>/)
+    expect(page).not.toMatch(/Studio Rossi|example\.com/)
   })
 
   it('opens a door into the hub admin area from its footer, and only there', () => {
