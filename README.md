@@ -47,5 +47,6 @@ agents alike.
 
 ## Licence
 
-Not yet chosen. Until one is added this repository is "all rights reserved" by
-default, which is deliberate while it is private.
+[GNU AGPL v3](LICENSE), chosen on 2026-09-10 when this repository went public.
+Self-hosting is free; anyone who runs a modified version as a network service has to
+offer that version's source to its users. Copyright stays with the authors.
