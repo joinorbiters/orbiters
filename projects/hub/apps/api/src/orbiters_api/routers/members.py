@@ -5,6 +5,11 @@ in a background task after the response, so neither the status nor the timing no
 provider failure says whether an address is known. `POST /auth/enter` spends the token
 and sets `orbiters_user`. Everything under `/me` reads the row from the session and
 never from the URL: there is no `/me/{id}`.
+
+`POST /auth/link`, `POST /auth/enter` and `PUT /me/cv` all spend from the public rate
+limit: the first two because they are unauthenticated by design, `PUT /me/cv` because
+FastAPI reads its multipart body while resolving parameters, before `MemberDep` gets a
+chance to reject an anonymous caller with a 401.
 """
 
 from typing import Annotated
@@ -23,6 +28,7 @@ from fastapi import (
 from orbiters_api.deps import MEMBER_COOKIE, MemberDep, SenderDep, SessionDep, SettingsDep
 from orbiters_api.ratelimit import spend_one
 from orbiters_core.members import MemberService
+from orbiters_core.models import CV_MAX_BYTES
 from orbiters_core.schemas import Ack, EnterRequest, LinkRequest, MemberProfile, MemberUpdate
 
 router = APIRouter(prefix="/api/hub", tags=["hub-member"])
@@ -91,12 +97,19 @@ def update_me(
 @router.put("/me/cv", response_model=MemberProfile)
 def replace_my_cv(
     member: MemberDep,
+    request: Request,
     session: SessionDep,
     settings: SettingsDep,
     cv: Annotated[UploadFile, File()],
 ) -> MemberProfile:
+    # The multipart body is already parsed by the time any dependency runs, so an
+    # anonymous caller has made the server read it regardless of the 401 that follows;
+    # charge it to the public bucket and never materialise more than the limit `check_cv`
+    # enforces anyway.
+    spend_one(request)
+    content = cv.file.read(CV_MAX_BYTES + 1)
     return MemberService(session, settings).replace_cv(
-        member.id, cv.file.read(), cv.filename or "", cv.content_type or ""
+        member.id, content, cv.filename or "", cv.content_type or ""
     )
 
 

@@ -3,12 +3,14 @@
 import re
 from collections.abc import Iterator
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from orbiters_api.deps import get_sender
+from orbiters_api.ratelimit import reset_rate_limit
 from orbiters_core.admin import AdminService
 from orbiters_core.config import Settings
 from orbiters_core.mail import RecordingSender
@@ -56,13 +58,15 @@ def _apply(client: TestClient, email: str, nome: str = "Ada") -> None:
     assert response.status_code == 201, response.text
 
 
-def _enter(client: TestClient, sender: RecordingSender, email: str) -> dict[str, object]:
+def _enter(
+    client: TestClient, sender: RecordingSender, email: str
+) -> tuple[dict[str, object], httpx.Response]:
     assert client.post("/api/hub/auth/link", json={"email": email}).status_code == 202
     match = re.search(r"/entra\?t=([A-Za-z0-9_-]+)", sender.sent[-1].text)
     assert match
     entered = client.post("/api/hub/auth/enter", json={"token": match.group(1)})
     assert entered.status_code == 200, entered.text
-    return entered.json()  # type: ignore[no-any-return]
+    return entered.json(), entered
 
 
 def test_without_a_sender_the_link_request_is_a_503_sentence(
@@ -93,11 +97,18 @@ def test_the_link_enters_once_sets_the_member_cookie_and_opens_only_the_members_
     for path in ("/api/hub/me", "/api/hub/me/cv"):
         assert client.get(path).status_code == 401, path
 
-    profile = _enter(client, sender, "ada@studio.it")
+    profile, entered = _enter(client, sender, "ada@studio.it")
     assert profile["email"] == "ada@studio.it"
     assert "stato" not in profile and "note" not in profile and "utm_source" not in profile
     cookie = client.cookies.get("orbiters_user")
     assert cookie
+    set_cookie = entered.headers["set-cookie"].lower()
+    assert "orbiters_user=" in set_cookie
+    assert "httponly" in set_cookie
+    assert "secure" in set_cookie
+    assert "samesite=lax" in set_cookie
+    assert "path=/" in set_cookie
+    assert "max-age=2592000" in set_cookie  # settings.member_session_days * 86400, 30 days
     assert client.get("/api/hub/me").json()["nome"] == "Ada"
 
     # The same link a second time opens nothing.
@@ -115,7 +126,11 @@ def test_the_link_enters_once_sets_the_member_cookie_and_opens_only_the_members_
     assert cv.status_code == 200 and cv.content == PDF
     assert 'filename="Ada CV.pdf"' in cv.headers["content-disposition"]
 
-    assert client.post("/api/hub/me/logout").status_code == 204
+    logged_out = client.post("/api/hub/me/logout")
+    assert logged_out.status_code == 204
+    cleared = logged_out.headers["set-cookie"].lower()
+    assert "orbiters_user=" in cleared
+    assert 'orbiters_user=""' in cleared or "max-age=0" in cleared
     assert client.get("/api/hub/me").status_code == 401
 
 
@@ -124,6 +139,13 @@ def test_a_wrong_token_is_a_401_and_a_malformed_one_a_422(
 ) -> None:
     assert client.post("/api/hub/auth/enter", json={"token": "a" * 43}).status_code == 401
     assert client.post("/api/hub/auth/enter", json={"token": "corto"}).status_code == 422
+
+
+def test_replacing_the_cv_without_a_cookie_is_a_401_even_with_a_valid_pdf(
+    client: TestClient, clean: None
+) -> None:
+    response = client.put("/api/hub/me/cv", files={"cv": ("cv.pdf", PDF, "application/pdf")})
+    assert response.status_code == 401
 
 
 def test_a_member_changes_their_answers_and_the_admin_sees_the_comment(
@@ -170,6 +192,11 @@ def test_a_member_changes_their_answers_and_the_admin_sees_the_comment(
     not_a_pdf = client.put("/api/hub/me/cv", files={"cv": ("x.pdf", b"ciao", "application/pdf")})
     assert not_a_pdf.status_code == 422 and not_a_pdf.json()["detail"][0]["loc"][-1] == "cv"
 
+    # `PUT /me/cv` now spends from the same public bucket as the wizard's routes
+    # (the fix for the unbounded, unmetered upload); a fresh minute here keeps this
+    # test about the admin's view of the thread, not about the rate limit's budget.
+    reset_rate_limit()
+
     # The admin reads the thread the member wrote into.
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
     AdminService(api_session, settings).create(ADMIN["email"], "Ivan", ADMIN["password"])
@@ -190,7 +217,7 @@ def test_a_member_never_sees_another_members_row(
 ) -> None:
     _apply(client, "ada@studio.it", nome="Ada")
     _apply(client, "grace@studio.it", nome="Grace")
-    assert _enter(client, sender, "grace@studio.it")["nome"] == "Grace"
+    assert _enter(client, sender, "grace@studio.it")[0]["nome"] == "Grace"
     assert client.get("/api/hub/me").json()["email"] == "grace@studio.it"
     # There is no route that takes an id: the only row reachable is the session's.
     assert client.get("/api/hub/me/00000000-0000-7000-8000-000000000000").status_code == 404
