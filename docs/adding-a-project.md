@@ -296,10 +296,13 @@ because a copy drifts, which is exactly what an earlier version of this section 
 (ORB-45). What a new monorepo project needs is an initiative of its own, named as the
 directory reads to people (`PigroCRM`, not `pigrocrm`) and created by hand in the Linear
 UI since the MCP surface cannot create one, and a first project under it with a scope
-that can actually close, a lead and both members: the initiative is the permanent
+that can actually close, a lead and both members (the members in the UI too, since
+`save_project` has no field for them), plus its row in the project table of
+`docs/tracker.md` § Where things are in the same change: the initiative is the permanent
 container, the project is the release. Repository-wide work that belongs to no product
-(CI cost, the licence, this documentation) goes under the `Monorepo` initiative, which
-is why `Monorepo hygiene v1` exists and sits under no `projects/<name>/`. The `Area`
+(CI cost, the licence, this documentation) goes under the `Monorepo` initiative; it went
+into `Monorepo hygiene v1`, which sat under no `projects/<name>/` and is closed, and
+where such an issue goes now is that same section of the tracker page. The `Area`
 group is shared by everyone: if the new project needs an `area:*` child the board does
 not have, add it under the group rather than inventing a parallel scheme, and record it
 in `docs/tracker.md` in the same change.

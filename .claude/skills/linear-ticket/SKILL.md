@@ -102,7 +102,7 @@ wrong.
 | Field | Value |
 |---|---|
 | `team` | `"Orbiters"` |
-| `project` | **the project id**, from `list_projects`. Project names carry a version suffix (`PigroCRM v1 - first deploy from CI, with green gates`) and change; a lookup by the old name fails with "Could not find project". |
+| `project` | **the project id**, from `list_projects`, or omitted when the issue is repository-wide and fits no open project (`docs/tracker.md` § Where things are). Project names carry a version suffix (`PigroCRM v1 - first deploy from CI, with green gates`) and change; a lookup by the old name fails with "Could not find project". |
 | `milestone` | the milestone id from `list_milestones(project)`, unless the issue genuinely belongs to no body of work. It is accepted and not echoed back: trust `list_milestones` progress, not the response. |
 | `title` | the observed problem, not the fix: "the invoice page shows the numbers but never the document", not "add a PDF preview". |
 | `description` | per the `linear-content` skill. Real newlines, never `\n` escapes. |

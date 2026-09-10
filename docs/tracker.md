@@ -27,8 +27,8 @@ are not part of this repo's flow.
 The two lists above are the board's, checked against `list_issue_labels` with
 `includeGroups: true` on 2026-09-10, and the board is the authority: an earlier version of
 this page named `Bug` and `core`, and an issue filed with those names failed with "Could
-not find labels" (ORB-33); a later one listed nine area labels for a day after `area:hub`
-had made them ten (ORB-76). Five of the type labels carry a description on the board, and
+not find labels" (ORB-33); a later one still listed nine area labels after `area:hub` had
+made them ten (ORB-76). Five of the type labels carry a description on the board, and
 it is the one to apply: `fix` is something that does not do what it says it does;
 `feature` is new behaviour a user or an agent can observe; `refactor` is existing behaviour
 made better with no new capability; `chore` is maintenance with no change in behaviour;
@@ -37,8 +37,9 @@ made better with no new capability; `chore` is maintenance with no change in beh
 
 The projects on the board, read with `list_projects` on 2026-09-10. This table is a
 snapshot and the board is the authority: `list_projects` with `team: "Orbiters"`, which
-answers completed projects too, is what to trust when the two disagree, and the change
-that opens or closes a project updates this table in the same PR.
+answers completed projects too, is what to trust when the two disagree. Opening or closing
+a project is a board action with no PR of its own, so whoever does it adds or updates the
+row here, in the PR that ships the release or in one of its own.
 
 | Initiative | Project | Lead | State on 2026-09-10 |
 |---|---|---|---|
@@ -53,16 +54,17 @@ that opens or closes a project updates this table in the same PR.
 
 `Monorepo hygiene v1` was where repository-wide work that belongs to no product went
 (CI cost, the licence, this page). It is closed, and nothing has replaced it: a
-repository-wide issue that fits neither open `Monorepo` project is filed with no
-project, which is what ORB-131 and ORB-136 did, until somebody opens a
-`Monorepo hygiene v2` with a scope it can reach.
+repository-wide issue that fits no open `Monorepo` project is filed with no project,
+which is what ORB-131 and ORB-136 did, until somebody opens a `Monorepo hygiene v2` with
+a scope it can reach.
 
 Every project always carries a lead and both members, Lorenzo and Ivan, no matter who
-leads it. A project created without a lead and without both members is incomplete, and
+leads it. A project created without a lead or without both members is incomplete, and
 four of the eight above are: `Hub v1`, `Website v2`, `Deploy and access hygiene v1` and
 `Indexing and SEO v1` carry Lorenzo alone as of 2026-09-10. The MCP surface cannot repair
 that, since `save_project` takes a `lead` and has no member field (§ API details), so the
-second member is added by hand in the Linear UI, at creation.
+second member is added by hand in the Linear UI, at creation, and on those four under
+ORB-137.
 
 This replaces the old rule that gave every monorepo project (`projects/pigrocrm`,
 `projects/website`) its own permanent Linear project. Initiatives are the permanent
@@ -199,9 +201,10 @@ would mislead a reader is worse.
 - A **title that states the observed problem**, not the intended fix: "the backend gate
   installs neither pandoc nor typst" rather than "add pandoc to CI". The fix is often
   not the one you first thought of, and a title written as a fix ages into a lie.
-- **Project**, its **milestone** (unless the issue genuinely belongs to no body of
-  work), one **area:\*** label, one **type** label, a **priority**, an **estimate**, and
-  an **assignee**. `save_issue` takes all of this in the same call, so an issue that is
+- **Project**, when one fits (a repository-wide issue may have none, § Where things
+  are), its **milestone** (unless the issue genuinely belongs to no body of work), one
+  **area:\*** label, one **type** label, a **priority**, an **estimate**, and an
+  **assignee**. `save_issue` takes all of this in the same call, so an issue that is
   missing one of them is a mistake, not the accident of a skipped second call. The
   assignee is yourself when you will do the work, the person who asked for it when they
   will, and never empty: an unowned card is one the other agent will take.
