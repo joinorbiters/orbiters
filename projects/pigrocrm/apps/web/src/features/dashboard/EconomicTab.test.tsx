@@ -3,6 +3,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { EconomicTab } from './EconomicTab'
+import type { CashMonth } from './queries'
 import { api } from '@/lib/api'
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -45,7 +46,16 @@ function failed(error: unknown, status: number) {
   return { error, response: new Response(null, { status }) } as never
 }
 
-function month(mese: number, incassato = '0.00', da_incassare = '0.00', bozze = '0.00', costi = '0.00') {
+/** Typed as the wire shape so a field added to `CashMonth` fails here rather than
+ *  rendering something nobody asserted on (ORB-139: the two `pila_*` heights). The
+ *  heights are illustrative, not sums: the chart prints them, it never checks them. */
+function month(
+  mese: number,
+  incassato = '0.00',
+  da_incassare = '0.00',
+  bozze = '0.00',
+  costi = '0.00',
+): CashMonth {
   return {
     anno: 2026,
     mese,
@@ -53,6 +63,8 @@ function month(mese: number, incassato = '0.00', da_incassare = '0.00', bozze = 
     da_incassare,
     bozze,
     costi,
+    pila_andamento: incassato,
+    pila_proiezione: incassato,
     quote_andamento: { incassato: incassato === '0.00' ? 0 : 1, costi: costi === '0.00' ? 0 : 0.1 },
     quote_proiezione: {
       incassato: incassato === '0.00' ? 0 : 0.6,
