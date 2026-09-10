@@ -85,10 +85,12 @@ jobs:
       compose-project: orbiters-preview
       ref: ${{ github.event.workflow_run.head_sha }}
       # The API's probe touches the database (SELECT 1), so a green deploy means
-      # Postgres is up and migrated, not only that uvicorn answered. No `url`: the
-      # host vhost proxies `/hub/` to production, and nothing serves the preview
-      # publicly. Its ports are in docs/adding-a-project.md §7.
+      # Postgres is up and migrated, not only that uvicorn answered. The `url` is the
+      # preview name, behind basic auth, which since 2026-09-10 serves this stack's
+      # `/hub/` the way joinorbiters.com serves production's. Ports: §7 of
+      # docs/adding-a-project.md.
       health-url: http://127.0.0.1:8086/health
+      url: https://preview.joinorbiters.com/hub/
     secrets: inherit
 
   production:
