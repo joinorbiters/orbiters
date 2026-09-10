@@ -261,6 +261,14 @@
         "**"
       ],
       "why": "The other half of `test_no_real_identity_in_the_repository.py`. That test checks shapes and can live in a public repository; a list of forbidden *names* cannot, in any form. A hashed denylist beside the code is an oracle: on 2026-09-09 Ivan inverted 17 of 18 truncated sha256 entries in seconds with a dictionary built from this repository's own history, labels included. So the list is plaintext outside the repository (`~/.config/orbiters/forbidden-names.txt`, overridable with ORBITERS_FORBIDDEN_NAMES) and only this local tier reads it. The scanner prints a notice and exits 0 where no list is configured, which is every machine but ours."
+    },
+    {
+      "id": "identity-shapes",
+      "run": "uv run pytest -q projects/pigrocrm/packages/core/tests/test_no_real_identity_in_the_repository.py",
+      "why": "The same file `pigrocrm-py-test` already runs, and here it runs on every diff instead. It lives under projects/pigrocrm but defends the whole tree, so scoping it to that project's paths is how the hub's footer shipped a fixture company's name to production with every gate green (ORB-97). One second, and CI's `identity` job asks the same question on the same file.",
+      "when": [
+        "**"
+      ]
     }
   ]
 }

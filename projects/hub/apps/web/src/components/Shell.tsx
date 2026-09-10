@@ -53,9 +53,16 @@ export function Shell({ children }: { children: ReactNode }) {
         >
           Termini
         </a>
-        <span className="bg-[var(--landing-surface)] p-[var(--landing-link-pad)]">
-          Orbiters è un progetto di Studio Rossi
-        </span>
+        {/* The same attribution the landing's own footer carries, in the same shape
+            and pointing at the same host (ORB-116). Two footers that disagree is how
+            this one ended up naming a test fixture in production for a week (ORB-97),
+            so when one changes the other changes with it. */}
+        <a
+          href="https://humancraft.tech/"
+          className="bg-[var(--landing-surface)] p-[var(--landing-link-pad)] underline-offset-2 hover:underline"
+        >
+          Humancraft
+        </a>
       </footer>
     </div>
   )
