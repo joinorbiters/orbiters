@@ -3,7 +3,7 @@ import { DateCell, MoneyCell } from '@/components/cells'
 import type { DataTableFeatures } from '@/components/DataTable'
 import { StatusPill } from '@/components/StatusPill'
 import { InvoiceStateBadge } from './InvoiceStateBadge'
-import { formatDate, formatInvoiceNumber, formatMoney } from './format'
+import { formatDate, formatInvoiceNumber, formatMoney, formatPeriod } from './format'
 import {
   INVOICE_TYPE_LABELS,
   PAYMENT_STATE_LABELS,
@@ -91,6 +91,24 @@ export function buildInvoiceColumns(
       // identical string this accessor does.
       accessorFn: (row) => formatDate(row.data_emissione),
       cell: ({ row }) => <DateCell value={row.original.data_emissione} />,
+    },
+    {
+      header: 'Competenza',
+      id: 'competenza',
+      // The accrual period the document declares (ORB-61), beside the date it was
+      // issued on (ORB-126): invoicing runs late here, so the two often name different
+      // months, and a list showing only the second does not say what a row is about.
+      // Through `formatPeriod`, the same string the detail page states, and as plain
+      // text: the emission date is the one column with a calendar icon, and a second one
+      // two columns over would make two different kinds of value read as the same.
+      accessorFn: (row) => formatPeriod(row.competenza_da ?? null, row.competenza_a ?? null),
+      cell: ({ row }) => {
+        const period = formatPeriod(
+          row.original.competenza_da ?? null,
+          row.original.competenza_a ?? null,
+        )
+        return period === EMPTY ? <span className="text-muted-foreground">{EMPTY}</span> : period
+      },
     },
     {
       header: 'Totale',

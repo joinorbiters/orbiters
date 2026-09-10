@@ -138,6 +138,8 @@ describe('the invoice list', () => {
                 data_emissione: '2026-08-20',
                 totale: '1500.00',
                 customer_ragione_sociale: 'ACME S.r.l.',
+                competenza_da: '2026-08-01',
+                competenza_a: '2026-08-31',
               },
             ],
             next_cursor: null,
@@ -146,6 +148,35 @@ describe('the invoice list', () => {
     renderList()
     expect(await screen.findByRole('columnheader', { name: 'Cliente' })).toBeInTheDocument()
     expect(screen.getByRole('cell', { name: 'ACME S.r.l.' })).toBeInTheDocument()
+  })
+
+  it('says which period each invoice is about, beside its date (ORB-126)', async () => {
+    mockGet.mockImplementation(((path: string) =>
+      path === '/api/invoices'
+        ? ok({
+            items: [
+              {
+                id: 'f1',
+                anno: 2026,
+                numero: 7,
+                riferimento: null,
+                tipo: 'fattura',
+                stato: 'emessa',
+                stato_pagamento: 'da_incassare',
+                data_emissione: '2026-09-02',
+                totale: '1500.00',
+                customer_ragione_sociale: 'ACME S.r.l.',
+                competenza_da: '2026-08-01',
+                competenza_a: '2026-08-31',
+              },
+            ],
+            next_cursor: null,
+          })
+        : ok({ items: [], next_cursor: null })) as never)
+    renderList()
+    const headers = (await screen.findAllByRole('columnheader')).map((h) => h.textContent)
+    expect(headers.indexOf('Competenza')).toBe(headers.indexOf('Data') + 1)
+    expect(screen.getByRole('cell', { name: '01/08/2026 - 31/08/2026' })).toBeInTheDocument()
   })
 
   it('still explains the «scadute» drill-through it arrives with', async () => {
