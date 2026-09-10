@@ -25,6 +25,8 @@ personalizzati definiti dall'utente: non sono codificati negli strumenti e cambi
 Per leggere il contesto completo usa le risorse `customer://`, `person://` e `deal://`.
 Nulla viene cancellato fisicamente: le operazioni di archiviazione sono reversibili.
 L'unica eccezione e' `discard_proforma`, che non si ripristina: una proforma scartata si ricrea.
+`confirm_proforma` non torna indietro, ma non chiude nulla: una proforma confermata resta
+modificabile e si puo' ancora scartare.
 """
 
 
