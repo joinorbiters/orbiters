@@ -496,6 +496,12 @@ _COPERTE_O_UMANE: dict[Method, str] = {
         "lettura interna del registro: e' come `deps.py` traduce il prefisso dell'URL nel "
         "database dello spazio, prima che esista un actor"
     ),
+    ("TenantService", "list"): (
+        "the registry of spaces read by another product, the Orbiters hub, through "
+        "`GET /api/tenants/` with `PIGROCRM_REGISTRY_TOKEN` (ORB-142): the installation's "
+        "spaces are not the titolare's CRM data, and an agent acting in one space has no "
+        "business listing everybody else's"
+    ),
     ("DocumentService", "create"): "create_document_from_template e' l'unica creazione "
     "che non richieda di caricare byte",
     ("DocumentService", "update"): "titolo e campi custom: nessun agente ha motivo di "

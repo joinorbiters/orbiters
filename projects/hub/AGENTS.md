@@ -111,3 +111,11 @@ preview, which is reached on the host only. The member area's mail needs
 `ORBITERS_RESEND_API_KEY` and `ORBITERS_MAIL_FROM` in the host `.env`; without the key
 `/hub/accedi` answers 503 with a sentence. A preview stack that gets a key must also set
 `ORBITERS_HUB_URL` to its own address, or every link it mints points at production.
+
+«Istanze Pigro» in the admin area (ORB-142) reads PigroCRM's registry of spaces through
+the CRM's API, never its database: `ORBITERS_PIGRO_API_URL` (the CRM's public origin,
+also where each space is linked) and `ORBITERS_PIGRO_REGISTRY_TOKEN`, which must equal
+the `PIGROCRM_REGISTRY_TOKEN` in the CRM's own host `.env`. One value, set by hand in
+both files, generated once; without it the page answers 503 with a sentence and the CRM
+side does not even have the route. The call goes through `orbiters_core.http`, the seam
+the mail uses, so the tests hand a fake and never reach a CRM.

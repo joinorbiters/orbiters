@@ -177,6 +177,16 @@ export interface Comment {
 /** The two rows a thread can hang on, as the API paths name them. */
 export type CommentKind = 'freelancers' | 'companies'
 
+/** One space of PigroCRM as the registry knows it, plus the hub member who opened it
+ *  when the address is one the wizard has seen (ORB-142). */
+export interface PigroSpace {
+  slug: string
+  owner_email: string
+  created_at: string
+  url: string
+  membro: { id: string; nome: string; cognome: string } | null
+}
+
 export interface Signup {
   id: string
   email: string
@@ -216,6 +226,9 @@ export const admin = {
       body: JSON.stringify({ stato, note }),
     }),
   signups: () => request<{ totale: number; iscrizioni: Signup[] }>('/api/hub/signups?limit=500'),
+  /** PigroCRM's spaces, read by the hub's API with the token it holds: the browser
+   *  never talks to the CRM (ORB-142). A 503 carries the sentence the page shows. */
+  pigroSpaces: () => request<{ totale: number; items: PigroSpace[] }>('/api/hub/pigro/istanze'),
   /** Who reads this area, oldest first, and one more of them (ORB-123). */
   admins: () => request<Admin[]>('/api/hub/admins'),
   createAdmin: (data: AdminCreate) => request<Admin>('/api/hub/admins', json(data)),

@@ -63,6 +63,14 @@ class TenantService:
         self.session = session
         self.settings = settings
 
+    def list(self) -> list[TenantRead]:
+        """Every space, newest first: what the registry knows, which is who opened it and
+        when, never what is inside it (ORB-142)."""
+        rows = self.session.scalars(
+            select(Tenant).order_by(Tenant.created_at.desc(), Tenant.id.desc())
+        ).all()
+        return [TenantRead.model_validate(row) for row in rows]
+
     def get(self, slug: str) -> Tenant:
         tenant = self.session.scalar(select(Tenant).where(Tenant.slug == slug))
         if tenant is None:

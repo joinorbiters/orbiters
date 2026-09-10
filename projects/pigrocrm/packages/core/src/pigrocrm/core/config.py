@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     # same cookies -- so the titolare's CRM has an address shaped like everyone else's.
     # Empty means the root answers only without a prefix. Reserved for signups when set.
     root_slug: str = ""
+    # Lets another service read the registry of spaces: `GET /api/tenants/` answers a
+    # caller presenting it as a bearer token with every row (slug, owner, date), which is
+    # how the Orbiters hub shows which spaces exist and whose they are (ORB-142). Empty,
+    # the default, means the route does not exist: a self-hosted installation exposes
+    # nothing new. Read from the environment only, never from `space_settings`. A secret
+    # the same way `google_client_secret` is, so `repr=False` keeps it out of logs.
+    registry_token: str = Field(default="", repr=False)
     jwt_secret: str = "change-me-in-production-please-set-a-real-secret"
     access_token_minutes: int = 15
     # Six months, sliding: `/api/auth/refresh` consumes the old jti and issues a new row

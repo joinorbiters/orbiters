@@ -1,5 +1,6 @@
 """The admin area over HTTP: a cookie in, the lists out, and nothing without it."""
 
+import json
 from collections.abc import Iterator
 
 import pytest
@@ -7,8 +8,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 
+from orbiters_api.deps import get_http_call
 from orbiters_core.admin import AdminService
-from orbiters_core.config import Settings
+from orbiters_core.config import Settings, get_settings
 
 PDF = b"%PDF-1.7\n1 0 obj<<>>endobj\n%%EOF\n"
 CREDENTIALS = {"email": "ivan@orbiters.it", "password": "una-password-lunga"}
@@ -53,6 +55,7 @@ def test_without_the_cookie_every_admin_route_is_a_401(client: TestClient, admin
         "/api/hub/companies",
         "/api/hub/signups",
         "/api/hub/admins",
+        "/api/hub/pigro/istanze",
     ):
         assert client.get(path).status_code == 401, path
     refused = client.post(
@@ -401,3 +404,132 @@ def test_a_new_password_logs_the_other_admin_out_and_keeps_me_in(
     own = client.patch(f"/api/hub/admins/{me['id']}", json={"password": "anche-la-mia-nuova"})
     assert own.status_code == 200
     assert client.get("/api/hub/auth/me").status_code == 200
+
+
+# ---- the spaces of PigroCRM (ORB-142) --------------------------------------------------
+#
+# The hub never touches the CRM's database: it asks the CRM's API with a token, through
+# the same HTTP seam the mail and the pixel use, so these tests hand a fake and read what
+# would have left.
+
+PIGRO_TOKEN = "un-token-lungo-solo-per-questa-suite"
+PIGRO_ROWS = [
+    {
+        "id": "0192c6f0-0000-7000-8000-000000000002",
+        "slug": "studio-ada",
+        "owner_email": "ada@studio.it",
+        "created_at": "2026-09-10T09:00:00Z",
+    },
+    {
+        "id": "0192c6f0-0000-7000-8000-000000000001",
+        "slug": "bob-dev",
+        "owner_email": "Bob@Example.org",
+        "created_at": "2026-09-09T09:00:00Z",
+    },
+]
+
+
+class FakePigro:
+    """Answers what a test tells it to and keeps every call it received."""
+
+    def __init__(self, status: int = 200, body: object = None) -> None:
+        self.status = status
+        self.body = json.dumps(PIGRO_ROWS if body is None else body).encode()
+        self.calls: list[tuple[str, str, dict[str, str]]] = []
+        self.raises: Exception | None = None
+
+    def __call__(
+        self, method: str, url: str, headers: dict[str, str], body: bytes
+    ) -> tuple[int, bytes]:
+        self.calls.append((method, url, headers))
+        if self.raises is not None:
+            raise self.raises
+        return self.status, self.body
+
+
+@pytest.fixture
+def pigro(client: TestClient) -> Iterator[FakePigro]:
+    fake = FakePigro()
+    client.app.dependency_overrides[get_http_call] = lambda: fake  # type: ignore[attr-defined]
+    # Both values declared, so a developer's shell exporting `ORBITERS_PIGRO_API_URL`
+    # cannot change what the assertion below expects.
+    client.app.dependency_overrides[get_settings] = lambda: Settings(  # type: ignore[attr-defined]
+        pigro_api_url="https://pigro.joinorbiters.com",
+        pigro_registry_token=PIGRO_TOKEN,
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    yield fake
+
+
+def test_without_a_pigro_token_the_spaces_are_a_503_sentence(
+    client: TestClient, admin: None
+) -> None:
+    _login(client)
+    response = client.get("/api/hub/pigro/istanze")
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"] == (
+        "Il registro di Pigro non è configurato: manca ORBITERS_PIGRO_REGISTRY_TOKEN."
+    )
+
+
+def test_the_spaces_come_from_the_crm_with_the_token_and_name_the_member_who_owns_one(
+    client: TestClient, admin: None, pigro: FakePigro
+) -> None:
+    _login(client)
+    _apply(client, email="ada@studio.it")
+    response = client.get("/api/hub/pigro/istanze")
+    assert response.status_code == 200, response.text
+
+    # One GET to the CRM, the token as a bearer, and nothing else in the request.
+    assert [(method, url) for method, url, _ in pigro.calls] == [
+        ("GET", "https://pigro.joinorbiters.com/api/tenants/")
+    ]
+    assert pigro.calls[0][2]["Authorization"] == f"Bearer {PIGRO_TOKEN}"
+
+    body = response.json()
+    assert body["totale"] == 2
+    ada, bob = body["items"]
+    assert ada["slug"] == "studio-ada"
+    assert ada["url"] == "https://pigro.joinorbiters.com/studio-ada/app/"
+    assert ada["owner_email"] == "ada@studio.it"
+    assert ada["created_at"].startswith("2026-09-10")
+    # Ada filled in the wizard, so her space names her and points at her card.
+    assert ada["membro"]["nome"] == "Ada"
+    assert ada["membro"]["cognome"] == "Lovelace"
+    freelancer_id = ada["membro"]["id"]
+    assert client.get(f"/api/hub/freelancers/{freelancer_id}").json()["email"] == "ada@studio.it"
+    # Bob never did: the address is all the hub knows, as the CRM wrote it.
+    assert bob["slug"] == "bob-dev"
+    assert bob["membro"] is None
+
+
+def test_a_member_is_matched_whatever_the_case_of_the_address(
+    client: TestClient, admin: None, pigro: FakePigro
+) -> None:
+    _login(client)
+    _apply(client, email="bob@example.org")
+    items = client.get("/api/hub/pigro/istanze").json()["items"]
+    assert items[1]["owner_email"] == "Bob@Example.org"
+    assert items[1]["membro"]["nome"] == "Ada"
+
+
+def test_when_the_crm_refuses_or_falls_over_the_answer_is_a_502_sentence(
+    client: TestClient, admin: None, pigro: FakePigro
+) -> None:
+    _login(client)
+    pigro.status = 401
+    pigro.body = b'{"detail":"token non valido"}'
+    refused = client.get("/api/hub/pigro/istanze")
+    assert refused.status_code == 502, refused.text
+    assert refused.json()["detail"] == "Pigro non ha risposto (401)."
+    pigro.status = 200
+    pigro.body = b"<html>not json</html>"
+    garbled = client.get("/api/hub/pigro/istanze")
+    assert garbled.status_code == 502, garbled.text
+    assert garbled.json()["detail"] == "Pigro ha risposto qualcosa che non è un elenco."
+    # A refused connection, a DNS miss or a timeout: the seam raises, and that is the most
+    # likely failure of all, so it too is a 502 sentence rather than a traceback.
+    pigro.raises = OSError("connection refused")
+    down = client.get("/api/hub/pigro/istanze")
+    assert down.status_code == 502, down.text
+    assert down.json()["detail"] == "Pigro non risponde."
