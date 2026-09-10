@@ -61,3 +61,22 @@ the CRM or the hub and a redirect into production would make the suite depend on
 Playwright against `vite preview` on the fixed port 4173, which is why its preflight
 check is `serial: true`. A change to the rendered pages is not done until you have run
 it, and a visual claim needs a render, not a description.
+
+**Two checkouts cannot run that preview at the same time, and it fails loud rather
+than quiet.** `preview.strictPort` is `true` in `vite.config.ts`, so a second `pnpm
+preview` (or a second `pnpm test:e2e`, which chains `build && preview` itself) on a
+box already running one exits immediately: `error when starting preview server:
+Error: Port 4173 is already in use`, confirmed live by running `pnpm exec vite
+preview` against this project while another checkout's preview already held 4173.
+Three agents hit this on 2026-09-10 running the same day's issues in parallel
+checkouts. Wait for the other preview to exit, or run one checkout's e2e suite at a
+time; do not edit `vite.config.ts` or `playwright.config.ts` to move the port
+instead, and if you do to unblock yourself locally, revert it before committing —
+an uncommitted port override is easy to leave in.
+
+The hub's own `vite preview` (`projects/hub/apps/web`) has no `strictPort`, so it
+does not collide the same way: it finds the next free port instead and logs it,
+confirmed live as `4174` while 4173 was held. What it does not do is serve at `/`:
+the hub is built with `base: '/hub/'`, so its preview's root path 404s and the
+wizard pages are at `/hub/`, `/hub/freelance` and `/hub/aziende` — worth knowing
+before assuming a blank page means a broken build.
