@@ -1,7 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Plus } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ApiError, admin, type AdminCreate } from '@/lib/api'
@@ -15,25 +26,41 @@ const PASSWORD_MIN_LENGTH = 10
 const EMPTY: AdminCreate = { nome: '', email: '', password: '' }
 
 /**
- * Who reads this area, and the form that adds one more (ORB-123). The creating admin
- * chooses the password and hands it over out of band, as `orbiters createadmin` does on
- * the server; the rules (one address, ten characters) are the service's, and a 422
- * comes back naming the field, so the form points at it rather than blaming everything.
- * No deactivation and no deletion here, on purpose.
+ * Who reads this area, and a button that adds one more (ORB-123, ORB-125). The page is
+ * the list; the form lives in a dialog behind «Nuovo amministratore», so the list reads
+ * as a list. The creating admin chooses the password and hands it over out of band, as
+ * `orbiters createadmin` does on the server; the rules (one address, ten characters) are
+ * the service's, and a 422 comes back naming the field, so the dialog stays open and
+ * points at it rather than blaming everything. On success it closes, the list refreshes
+ * and the page says who was created. No deactivation and no deletion here, on purpose.
  */
 export function AdminAdmins() {
   const client = useQueryClient()
   const list = useQuery({ queryKey: ADMINS_KEY, queryFn: () => admin.admins() })
-  const [draft, setDraft] = useState<AdminCreate>(EMPTY)
+  const [open, setOpen] = useState(false)
   const [created, setCreated] = useState<string | null>(null)
+  const [draft, setDraft] = useState<AdminCreate>(EMPTY)
   const create = useMutation({
     mutationFn: (data: AdminCreate) => admin.createAdmin(data),
     onSuccess: (made) => {
-      setDraft(EMPTY)
+      setOpen(false)
       setCreated(made.email)
       void client.invalidateQueries({ queryKey: ADMINS_KEY })
     },
   })
+
+  /** Every opening starts clean: an empty draft and no error from the last attempt. While
+   *  a request is out the dialog stays: closing it would swallow a late refusal, and a
+   *  late success would close whatever dialog had been reopened in the meantime, since
+   *  the mutation's `onSuccess` outlives `reset()`. */
+  function toggle(next: boolean) {
+    if (!next && create.isPending) return
+    if (next) {
+      setDraft(EMPTY)
+      create.reset()
+    }
+    setOpen(next)
+  }
 
   const failure = create.error instanceof ApiError ? create.error : null
   const message = failure
@@ -45,7 +72,6 @@ export function AdminAdmins() {
 
   function submit(event: FormEvent) {
     event.preventDefault()
-    setCreated(null)
     create.mutate({ ...draft, nome: draft.nome.trim(), email: draft.email.trim() })
   }
 
@@ -54,8 +80,26 @@ export function AdminAdmins() {
   }
 
   return (
-    <>
-      <Header title="Amministratori" count={list.data?.length} />
+    <Dialog open={open} onOpenChange={toggle}>
+      <Header title="Amministratori" count={list.data?.length}>
+        {/* A Radix trigger rather than a plain button, so focus comes back here on close. */}
+        <DialogTrigger asChild>
+          <Button type="button" size="sm">
+            <Plus data-icon="inline-start" />
+            Nuovo amministratore
+          </Button>
+        </DialogTrigger>
+      </Header>
+
+      {/* Always mounted: a live region that appears already filled is often not read out. */}
+      <p role="status" aria-live="polite" className={created ? 'border-b px-6 py-3 text-sm' : undefined}>
+        {created && (
+          <>
+            Amministratore creato: <span className="font-medium">{created}</span>. Ora può accedere con
+            la password che gli hai dato.
+          </>
+        )}
+      </p>
 
       {list.isError ? (
         <Empty>Non riesco a leggere la lista.</Empty>
@@ -87,15 +131,15 @@ export function AdminAdmins() {
         </table>
       )}
 
-      <section aria-labelledby="nuovo-admin" className="border-t px-6 py-6">
-        <h2 id="nuovo-admin" className="text-sm font-medium">
-          Nuovo amministratore
-        </h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Scegli tu la password, almeno {PASSWORD_MIN_LENGTH} caratteri, e comunicala a voce o su un
-          canale sicuro: qui non viene inviata nessuna email.
-        </p>
-        <form onSubmit={submit} className="mt-4 grid max-w-2xl gap-4 sm:grid-cols-3">
+      <DialogContent>
+        <form onSubmit={submit} className="grid gap-4">
+          <DialogHeader>
+            <DialogTitle>Nuovo amministratore</DialogTitle>
+            <DialogDescription>
+              Scegli tu la password, almeno {PASSWORD_MIN_LENGTH} caratteri, e comunicala a voce o su un
+              canale sicuro: qui non viene inviata nessuna email.
+            </DialogDescription>
+          </DialogHeader>
           <div className="space-y-2">
             <Label htmlFor="admin-nome">Nome</Label>
             <Input
@@ -134,23 +178,22 @@ export function AdminAdmins() {
             />
           </div>
           {message && (
-            <p role="alert" className="text-sm text-destructive sm:col-span-3">
+            <p role="alert" className="text-sm text-destructive">
               {message}
             </p>
           )}
-          {created && !create.isPending && !create.error && (
-            <p role="status" className="text-sm sm:col-span-3">
-              Amministratore creato: <span className="font-medium">{created}</span>. Ora può accedere
-              con la password che gli hai dato.
-            </p>
-          )}
-          <div className="sm:col-span-3">
-            <Button type="submit" size="sm" disabled={create.isPending}>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline" disabled={create.isPending}>
+                Annulla
+              </Button>
+            </DialogClose>
+            <Button type="submit" disabled={create.isPending}>
               {create.isPending ? 'Creo…' : 'Crea amministratore'}
             </Button>
-          </div>
+          </DialogFooter>
         </form>
-      </section>
-    </>
+      </DialogContent>
+    </Dialog>
   )
 }
