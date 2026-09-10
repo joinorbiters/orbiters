@@ -257,6 +257,10 @@ def test_the_list_of_spaces_answers_only_to_the_registry_token(
     assert registry_client.get("/api/tenants/").status_code == 401
     wrong = registry_client.get("/api/tenants/", headers={"Authorization": "Bearer sbagliato"})
     assert wrong.status_code == 401
+    # Starlette decodes headers as latin-1, and `secrets.compare_digest` refuses a `str`
+    # with a non-ASCII character: a stray byte must be a 401 like any wrong token, never a 500.
+    odd = registry_client.get("/api/tenants/", headers={"Authorization": b"Bearer t\xe9ken"})
+    assert odd.status_code == 401, odd.text
     bearer = {"Authorization": f"Bearer {REGISTRY_TOKEN}"}
 
     assert registry_client.get("/api/tenants/", headers=bearer).json() == []

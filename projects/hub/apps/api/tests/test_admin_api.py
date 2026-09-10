@@ -436,11 +436,14 @@ class FakePigro:
         self.status = status
         self.body = json.dumps(PIGRO_ROWS if body is None else body).encode()
         self.calls: list[tuple[str, str, dict[str, str]]] = []
+        self.raises: Exception | None = None
 
     def __call__(
         self, method: str, url: str, headers: dict[str, str], body: bytes
     ) -> tuple[int, bytes]:
         self.calls.append((method, url, headers))
+        if self.raises is not None:
+            raise self.raises
         return self.status, self.body
 
 
@@ -448,7 +451,10 @@ class FakePigro:
 def pigro(client: TestClient) -> Iterator[FakePigro]:
     fake = FakePigro()
     client.app.dependency_overrides[get_http_call] = lambda: fake  # type: ignore[attr-defined]
+    # Both values declared, so a developer's shell exporting `ORBITERS_PIGRO_API_URL`
+    # cannot change what the assertion below expects.
     client.app.dependency_overrides[get_settings] = lambda: Settings(  # type: ignore[attr-defined]
+        pigro_api_url="https://pigro.joinorbiters.com",
         pigro_registry_token=PIGRO_TOKEN,
         _env_file=None,  # type: ignore[call-arg]
     )
@@ -521,3 +527,9 @@ def test_when_the_crm_refuses_or_falls_over_the_answer_is_a_502_sentence(
     garbled = client.get("/api/hub/pigro/istanze")
     assert garbled.status_code == 502, garbled.text
     assert garbled.json()["detail"] == "Pigro ha risposto qualcosa che non è un elenco."
+    # A refused connection, a DNS miss or a timeout: the seam raises, and that is the most
+    # likely failure of all, so it too is a 502 sentence rather than a traceback.
+    pigro.raises = OSError("connection refused")
+    down = client.get("/api/hub/pigro/istanze")
+    assert down.status_code == 502, down.text
+    assert down.json()["detail"] == "Pigro non risponde."

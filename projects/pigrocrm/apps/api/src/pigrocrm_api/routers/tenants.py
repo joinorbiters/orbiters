@@ -48,7 +48,11 @@ def list_spaces(
     if not settings.registry_token:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not Found")
     presented = authorization.removeprefix("Bearer ").strip() if authorization else ""
-    if not presented or not secrets.compare_digest(presented, settings.registry_token):
+    # Bytes, not str: Starlette decodes headers as latin-1 and `compare_digest` refuses a
+    # `str` with a non-ASCII character, which would turn a stray byte into a 500.
+    if not presented or not secrets.compare_digest(
+        presented.encode("utf-8"), settings.registry_token.encode("utf-8")
+    ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "token non valido")
     return TenantService(registry, settings).list()
 

@@ -34,7 +34,9 @@ def urllib_call(method: str, url: str, headers: dict[str, str], body: bytes) -> 
     and "OpenAI accepted it" through one path.
     """
     sent = {"User-Agent": USER_AGENT, **headers}
-    request = urllib.request.Request(url, data=body, headers=sent, method=method)
+    # `None` rather than `b""` for a bodiless request: with `data=b""` urllib writes
+    # `Content-Length: 0` and a form content type on a GET, which some proxies refuse.
+    request = urllib.request.Request(url, data=body or None, headers=sent, method=method)
     try:
         with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
             return int(response.status), response.read()

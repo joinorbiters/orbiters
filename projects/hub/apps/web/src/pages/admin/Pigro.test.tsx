@@ -52,7 +52,7 @@ describe('the Istanze Pigro page', () => {
     expect(screen.getByText('ada@studio.it')).toBeInTheDocument()
     // Bob is not: the address is all there is, and nothing claims otherwise.
     expect(screen.getByText('bob@example.org')).toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /bob/i })).toHaveAttribute('href', 'https://pigro.joinorbiters.com/bob-dev/app/')
+    expect(screen.getByRole('link', { name: /bob/i })).toHaveAttribute('href', 'https://pigro.joinorbiters.com/bob-dev/app/')
     expect(screen.getByRole('heading', { name: /Istanze Pigro/ })).toHaveTextContent('2')
   })
 

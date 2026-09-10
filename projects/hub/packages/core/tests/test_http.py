@@ -40,6 +40,11 @@ def test_every_call_names_itself_unless_the_caller_already_did(
     assert USER_AGENT.startswith("orbiters-hub/")
     assert seen[1].get_header("User-agent") == "altro/1"
     assert seen[0].get_header("Content-type") == "application/json"
+    # A GET with nothing to send carries no body at all: `data=b""` would make urllib
+    # write `Content-Length: 0` and a form content type on a request some proxies then
+    # refuse (the registry read of ORB-142 is such a GET).
+    assert seen[1].data is None
+    assert seen[0].data == b"{}"
 
 
 def test_an_http_error_is_a_status_not_an_exception(monkeypatch: pytest.MonkeyPatch) -> None:

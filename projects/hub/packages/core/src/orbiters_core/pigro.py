@@ -81,7 +81,10 @@ class PigroRegistry:
             "Authorization": f"Bearer {self.settings.pigro_registry_token}",
             "Accept": "application/json",
         }
-        status, body = self.http("GET", base + REGISTRY_PATH, headers, b"")
+        try:
+            status, body = self.http("GET", base + REGISTRY_PATH, headers, b"")
+        except Exception as exc:  # noqa: BLE001 - a refused connection, a DNS miss, a timeout
+            raise PigroUnavailable("Pigro non risponde.") from exc
         if status != 200:
             raise PigroUnavailable(f"Pigro non ha risposto ({status}).")
         try:
