@@ -7,13 +7,16 @@ import { BrandMark } from '@/components/BrandMark'
  *  the site's own visual system (ORB-73's `.site` scope) rather than the
  *  application's, so a visitor who clicked a CTA on joinorbiters.com does not land on
  *  a different product. `site` also carries the page's ground (the same faint grid
- *  the landing sits on). There is no panel around the content: the doors of the
- *  chooser and the wizard fields draw their own boxes, and a box around those boxes
- *  read as one frame too many. The content is centred in the space between header
- *  and footer instead of sitting at the top of an empty page: `justify-center` on
- *  `main` only has room to act when the step is shorter than the viewport, which is
- *  the common case here. Each link over the grid keeps a sliver of the page's own
- *  surface behind it, the same treatment `landing.css`'s `.top a` and
+ *  the landing sits on). There is no panel around the content (ORB-124): the pages
+ *  draw their own cards, the chooser's doors, the wizard's fields and review list,
+ *  the member area's boxes, and a box around those boxes read as one frame too many.
+ *  The bare `w-full` wrapper is load-bearing: `main` is `items-center`, and a page
+ *  such as the chooser sets `max-w-2xl` without `w-full`, so without the wrapper it
+ *  would shrink to the width of its text. The content is centred in the space
+ *  between header and footer instead of sitting at the top of an empty page:
+ *  `justify-center` on `main` only has room to act when the step is shorter than the
+ *  viewport, which is the common case here. Each link over the grid keeps a sliver of
+ *  the page's own surface behind it, the same treatment `landing.css`'s `.top a` and
  *  `footer .quiet-link` give theirs. */
 export function Shell({ children }: { children: ReactNode }) {
   return (

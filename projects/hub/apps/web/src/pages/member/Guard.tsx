@@ -15,7 +15,7 @@ export function MemberGuard() {
   if (me.isPending) return <p className="text-sm text-muted-foreground">Caricamento…</p>
   if (me.isError)
     return (
-      <p role="alert" className="text-sm text-destructive">
+      <p role="alert" className="inline-block bg-card p-(--landing-link-pad) text-sm text-destructive">
         Non riusciamo a leggere la tua area. Riprova tra poco.
       </p>
     )

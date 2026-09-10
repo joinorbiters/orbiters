@@ -71,7 +71,7 @@ export function Accedi() {
         />
       </div>
       {error && (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" className="inline-block bg-card p-(--landing-link-pad) text-sm text-destructive">
           {error}
         </p>
       )}
