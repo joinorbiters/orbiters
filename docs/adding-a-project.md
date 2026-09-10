@@ -254,7 +254,7 @@ rows.
 
 | Project | Production | Preview |
 |---|---|---|
-| PigroCRM | web 8080, Postgres 55432 | web 8081 |
+| PigroCRM | web 8080, Postgres 55432 | web 8081, Postgres 55434 |
 | website | web 8082 | web 8083 |
 | hub (`orbiters`, `orbiters-preview`) | api 8084, web 8085, Postgres 55435 | api 8086, web 8087, Postgres 55436 |
 
@@ -263,9 +263,19 @@ website plus hub map, `preview.pigro.joinorbiters.com` mirrors the CRM's, and bo
 behind HTTP basic auth against `/etc/nginx/.htpasswd-preview` with
 `X-Robots-Tag: noindex` on every answer. So a new project's preview gets a vhost as
 well as a production one, the two files stay the same shape, and only the ports differ.
-Two rules that are the reason it is safe: the password file lives on the server and
-never in the repository, and a preview name only ever proxies preview containers, so a
-click inside preview cannot walk out into production data.
+Three rules that are the reason it is safe: the password file lives on the server and
+never in the repository, the credential itself is in the password manager and not in an
+issue or a commit, and a preview name only ever proxies preview containers, so a click
+inside preview cannot walk out into production data.
+
+TLS on the preview names is a **certificate of their own**, `preview.joinorbiters.com`,
+covering both of them, rather than two more names on the production certificate. The
+reason is blast radius: `certbot --nginx --expand` reinstalls the certificate into every
+vhost whose `server_name` it matches, which means it rewrites the two production files
+to add a preview name, and those are the files that are edited in place. A separate
+certificate touches only the two preview vhosts and renews on its own. Renewal was
+dry-run through the basic auth on 2026-09-10 and passes, because the challenge path is
+`auth_basic off`.
 
 The copy in the repository is plain HTTP and is the source of truth for what the rules
 are. The copy in `/etc/nginx/sites-available/` has certbot's port-443 block on top of
