@@ -134,8 +134,9 @@ describe('InvoiceActions', () => {
     const path = String((vi.mocked(api.POST).mock.calls[0] as unknown as unknown[])[0])
     expect(path).toContain('/confirm')
     expect(path).not.toContain('/issue')
-    expect(toast.success).toHaveBeenCalledWith('Proforma confermata')
-    // No confirmation dialog: unlike emission, this consumes nothing and goes back.
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Proforma confermata'))
+    // No confirmation dialog: unlike emission, this consumes nothing and forecloses
+    // nothing, since a confirmed proforma stays editable and deletable.
     expect(window.confirm).not.toHaveBeenCalled()
   })
 

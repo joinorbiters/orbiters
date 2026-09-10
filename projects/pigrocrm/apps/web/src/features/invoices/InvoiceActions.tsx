@@ -95,6 +95,22 @@ export function InvoiceActions({
     isIssued && isAdmin && !isImported && invoice.trasmessa_esternamente_il === null
 
   /**
+   * No `window.confirm` here, unlike «Emetti» and «Elimina»: confirming consumes no
+   * number, and a confirmed proforma is still editable (`_is_editable` in
+   * `InvoiceService`: header, lines) and still deletable, so a misclick forecloses
+   * nothing. There is no way back to «Bozza», and none is needed: the next step, «Emetti»,
+   * is the one that asks. The server's refusals -- a fattura, a proforma that is not a
+   * draft, a proforma without lines -- land in the same banner every other action uses.
+   */
+  function onConfirm() {
+    setProblem(null)
+    confirm.mutate(undefined, {
+      onSuccess: () => toast.success('Proforma confermata'),
+      onError: (error) => setProblem(toProblem(error)),
+    })
+  }
+
+  /**
    * Emission and the render are two steps, deliberately.
    *
    * `issue()` is one transaction and does not produce the artefacts; the caller does.
@@ -107,21 +123,6 @@ export function InvoiceActions({
    * Saying "emission failed" here would be the more dangerous lie, so the message says
    * exactly what happened and what to press.
    */
-  /**
-   * No `window.confirm` here, unlike «Emetti» and «Elimina»: confirming consumes no
-   * number and the state machine goes back (`confermata -> bozza`), so a misclick costs
-   * nothing that a second click does not undo. The server's refusals -- a fattura, a
-   * proforma that is not a draft, a proforma without lines -- land in the same banner
-   * every other action uses.
-   */
-  function onConfirm() {
-    setProblem(null)
-    confirm.mutate(undefined, {
-      onSuccess: () => toast.success('Proforma confermata'),
-      onError: (error) => setProblem(toProblem(error)),
-    })
-  }
-
   function onIssue() {
     if (!window.confirm(`Emettere questo documento? Il numero assegnato non è più modificabile.`))
       return

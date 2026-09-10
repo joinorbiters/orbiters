@@ -435,7 +435,7 @@ _BYTE: dict[Method, str] = {
 #    future slice could expose any of them -- which is exactly why they are not in the
 #    ban list and why each has to say so out loud.
 #
-#    Nine entries have left this block, and they are the reason it must stay small.
+#    Ten entries have left this block, and they are the reason it must stay small.
 #    `PeriodLockService.list_locks`, `TemplateService.preview`,
 #    `DocumentService.regenerate`, `soft_delete` and `restore` were all recorded here as
 #    "non ha ancora un tool" / "e' una decisione della persona" -- and each turned out to
@@ -462,9 +462,10 @@ _BYTE: dict[Method, str] = {
 #    `confirm_proforma`: "l'agente prepara, la persona conferma" was the last place this
 #    surface stopped an agent short of a proforma it had itself created, rewritten line
 #    by line and rendered, and Ivan asked for the whole path on 2026-09-10. Confirming
-#    consumes nothing and the state machine goes back (`confermata -> bozza`), so it
-#    sits on the default surface with the other proforma tools; the step that does
-#    consume a number, `issue_invoice`, is untouched and stays behind `mcp_full_access`.
+#    consumes nothing and forecloses nothing: a confirmed proforma stays editable
+#    (`_is_editable`) and discardable, so it sits on the default surface with the other
+#    proforma tools; the step that does consume a number, `issue_invoice`, is untouched
+#    and stays behind `mcp_full_access`.
 #    The decision is a row in `docs/design/DECISIONS.md`. A reason that only says
 #    "nobody wrote the tool" is a
 #    placeholder wearing the clothes of a decision; this category is for the ones that
