@@ -6,16 +6,16 @@ import {
   createRoute,
   createRouter,
 } from '@tanstack/react-router'
-import { render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { Shell } from './Shell'
 
-function mount() {
+function mount(panel?: boolean) {
   const root = createRootRoute({ component: () => <Outlet /> })
   const home = createRoute({
     getParentRoute: () => root,
     path: '/',
-    component: () => <Shell>a step</Shell>,
+    component: () => <Shell panel={panel}>a step</Shell>,
   })
   const router = createRouter({
     routeTree: root.addChildren([home]),
@@ -36,6 +36,17 @@ describe('the public frame', () => {
       'https://humancraft.tech/',
     )
     expect(document.body.textContent).not.toMatch(/Studio Rossi|example\.com/)
+  })
+
+  it('boxes the content in a panel unless a page asks for the bare grid', async () => {
+    // ORB-128: ORB-124 took the panel off the frame itself, so every public page lost
+    // it when only the chooser should have. The panel is the default; the chooser's
+    // layout passes `panel={false}` and is the one page that sits straight on the grid.
+    mount()
+    expect((await screen.findByText('a step')).className).toContain('bg-card')
+    cleanup()
+    mount(false)
+    expect((await screen.findByText('a step')).className).not.toContain('bg-card')
   })
 
   it('links the two policy pages on the site they belong to', async () => {

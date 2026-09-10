@@ -27,8 +27,9 @@ import { Modifica } from '@/pages/member/Modifica'
 
 /**
  * The route tree, in code: eleven screens is not enough to want a file-based router and
- * a generated tree beside it. The public pages sit in the `Shell`; the admin area
- * brings its own frame and its own guard (`AdminLayout`).
+ * a generated tree beside it. The public pages sit in the `Shell`, the chooser alone in
+ * a `Shell` without its panel (ORB-128); the admin area brings its own frame and its
+ * own guard (`AdminLayout`).
  */
 const root = createRootRoute({ component: () => <Outlet /> })
 
@@ -42,7 +43,17 @@ const publicLayout = createRoute({
   ),
 })
 
-const chooser = createRoute({ getParentRoute: () => publicLayout, path: '/', component: Chooser })
+const bareLayout = createRoute({
+  getParentRoute: () => root,
+  id: 'bare',
+  component: () => (
+    <Shell panel={false}>
+      <Outlet />
+    </Shell>
+  ),
+})
+
+const chooser = createRoute({ getParentRoute: () => bareLayout, path: '/', component: Chooser })
 const freelance = createRoute({
   getParentRoute: () => publicLayout,
   path: '/freelance',
@@ -105,8 +116,8 @@ const adminAmministratori = createRoute({
 })
 
 const routeTree = root.addChildren([
+  bareLayout.addChildren([chooser]),
   publicLayout.addChildren([
-    chooser,
     freelance,
     aziende,
     grazie,

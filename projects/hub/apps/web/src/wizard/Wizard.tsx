@@ -125,7 +125,7 @@ export function Wizard<T>({
           aria-valuemin={0}
           aria-valuemax={100}
           aria-label="Avanzamento"
-          className="h-2 w-full overflow-hidden border-(length:--landing-border-width) bg-card"
+          className="h-2 w-full overflow-hidden border-(length:--landing-border-width)"
         >
           <div
             className="h-full bg-(--landing-ink) transition-[width] duration-300"
@@ -166,7 +166,7 @@ export function Wizard<T>({
             ))}
           </dl>
           {submitError && !submitError.step && (
-            <p role="alert" className="inline-block bg-card p-(--landing-link-pad) text-sm text-destructive">
+            <p role="alert" className="text-sm text-destructive">
               {submitError.message}
             </p>
           )}
@@ -194,7 +194,7 @@ export function Wizard<T>({
           </div>
           <div>{step.render({ value, set, next, error, autoFocus: true })}</div>
           {error && (
-            <p role="alert" className="inline-block bg-card p-(--landing-link-pad) text-sm text-destructive">
+            <p role="alert" className="text-sm text-destructive">
               {error}
             </p>
           )}

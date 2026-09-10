@@ -10,10 +10,8 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default: "bg-primary text-primary-foreground hover:bg-primary/80",
-        /* The secondary button of the reference: a 12% line on a white surface the
-           button paints itself (`bg-card`), so it reads the same inside the admin's
-           panel and straight on the site's grid, where the public pages sit since
-           ORB-124 took their panel away. */
+        /* The secondary button of the reference: a 12% line on the white surface,
+           not on the Paper page behind it -- these sit inside the content panel. */
         outline:
           "border-border bg-card hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
         secondary:
