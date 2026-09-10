@@ -33,9 +33,7 @@ export function Area() {
         </div>
         <div className="flex items-center gap-2">
           <Button asChild variant="outline" size="sm">
-            {/* '/io/modifica' is Task 8's route: the router doesn't type it yet, so the
-                literal needs a cast until that task adds it to the tree. */}
-            <Link to={'/io/modifica' as never}>
+            <Link to="/io/modifica">
               <Pencil className="mr-2 size-4" />
               Modifica
             </Link>
