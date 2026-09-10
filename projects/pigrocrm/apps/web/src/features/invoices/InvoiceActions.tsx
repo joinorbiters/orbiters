@@ -29,6 +29,7 @@ import { toIsoDate } from '@/lib/dates'
 import {
   downloadInvoiceArtifact,
   useAnnulInvoice,
+  useConfirmProforma,
   useDeleteInvoice,
   useIssueInvoice,
   useMarkTransmitted,
@@ -58,6 +59,7 @@ export function InvoiceActions({
   const isAdmin = useIsAdmin()
 
   const issue = useIssueInvoice(invoice.id)
+  const confirm = useConfirmProforma(invoice.id)
   const annul = useAnnulInvoice(invoice.id)
   const artifacts = useProduceArtifacts(invoice.id)
   const payment = useSetPaymentState(invoice.id)
@@ -66,6 +68,10 @@ export function InvoiceActions({
 
   const isDraftFattura = invoice.tipo === 'fattura' && invoice.stato === 'bozza'
   const isProformaReady = invoice.tipo === 'proforma' && invoice.stato === 'confermata'
+  // The step before «Emetti» on a proforma (ORB-132): until it existed a proforma
+  // created from the web could never be issued from the web, since `issue` wants a
+  // confirmed one and nothing here confirmed it.
+  const isDraftProforma = invoice.tipo === 'proforma' && invoice.stato === 'bozza'
   const canIssue = isDraftFattura || isProformaReady
   const isIssued = invoice.tipo === 'fattura' && invoice.stato === 'emessa'
   // What never consumed a number can go (slice 3 §4: a draft is «cancellabile»): a
@@ -101,6 +107,21 @@ export function InvoiceActions({
    * Saying "emission failed" here would be the more dangerous lie, so the message says
    * exactly what happened and what to press.
    */
+  /**
+   * No `window.confirm` here, unlike «Emetti» and «Elimina»: confirming consumes no
+   * number and the state machine goes back (`confermata -> bozza`), so a misclick costs
+   * nothing that a second click does not undo. The server's refusals -- a fattura, a
+   * proforma that is not a draft, a proforma without lines -- land in the same banner
+   * every other action uses.
+   */
+  function onConfirm() {
+    setProblem(null)
+    confirm.mutate(undefined, {
+      onSuccess: () => toast.success('Proforma confermata'),
+      onError: (error) => setProblem(toProblem(error)),
+    })
+  }
+
   function onIssue() {
     if (!window.confirm(`Emettere questo documento? Il numero assegnato non è più modificabile.`))
       return
@@ -210,6 +231,13 @@ export function InvoiceActions({
       {problem ? <QueryErrorBanner error={problem} /> : null}
 
       <div className="flex flex-wrap gap-2">
+        {isDraftProforma ? (
+          <Button onClick={onConfirm} disabled={confirm.isPending}>
+            <FileCheck2 className="mr-2 size-4" />
+            Conferma
+          </Button>
+        ) : null}
+
         {canIssue ? (
           <Button onClick={onIssue} disabled={issue.isPending}>
             <FileCheck2 className="mr-2 size-4" />

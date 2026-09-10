@@ -41,6 +41,7 @@ const ISSUED = {
 } as unknown as Invoice
 const COLLECTED = { ...ISSUED, stato_pagamento: 'incassato', data_incasso: '2026-09-01' } as Invoice
 const PROFORMA = { id: 'pf-1', tipo: 'proforma', stato: 'confermata' } as unknown as Invoice
+const DRAFT_PROFORMA = { id: 'pf-1', tipo: 'proforma', stato: 'bozza' } as unknown as Invoice
 
 function wrap(children: ReactNode) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -113,6 +114,46 @@ describe('InvoiceActions', () => {
     expect(warning).toContain('emesso correttamente')
     expect(warning).toContain('Rigenera documenti')
     expect(vi.mocked(toast.error)).not.toHaveBeenCalled()
+  })
+
+  // --- the step before emission: confirming a proforma (ORB-132) -------------------------
+
+  /** Until this existed a proforma created from the web could never be issued from the
+   *  web: «Emetti» waits for a confirmed proforma and nothing confirmed one. */
+  it('offers «Conferma» on a draft proforma, where «Emetti» will appear once it is confirmed', () => {
+    wrap(<InvoiceActions invoice={DRAFT_PROFORMA} />)
+    expect(screen.getByRole('button', { name: /^conferma$/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /emetti/i })).toBeNull()
+  })
+
+  it('confirms through the confirm endpoint and says so, with no number consumed', async () => {
+    vi.mocked(api.POST).mockResolvedValue(ok(PROFORMA))
+    wrap(<InvoiceActions invoice={DRAFT_PROFORMA} />)
+    await userEvent.click(screen.getByRole('button', { name: /^conferma$/i }))
+    await waitFor(() => expect(vi.mocked(api.POST)).toHaveBeenCalledTimes(1))
+    const path = String((vi.mocked(api.POST).mock.calls[0] as unknown as unknown[])[0])
+    expect(path).toContain('/confirm')
+    expect(path).not.toContain('/issue')
+    expect(toast.success).toHaveBeenCalledWith('Proforma confermata')
+    // No confirmation dialog: unlike emission, this consumes nothing and goes back.
+    expect(window.confirm).not.toHaveBeenCalled()
+  })
+
+  it('shows the server refusal when a proforma without lines is confirmed', async () => {
+    vi.mocked(api.POST).mockResolvedValue(
+      failed({ detail: 'una proforma senza righe non si conferma' }, 422),
+    )
+    wrap(<InvoiceActions invoice={DRAFT_PROFORMA} />)
+    await userEvent.click(screen.getByRole('button', { name: /^conferma$/i }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/senza righe/))
+  })
+
+  it('offers no «Conferma» on a confirmed proforma or on a fattura', () => {
+    wrap(<InvoiceActions invoice={PROFORMA} />)
+    expect(screen.queryByRole('button', { name: /^conferma$/i })).toBeNull()
+    expect(screen.getByRole('button', { name: /emetti/i })).toBeInTheDocument()
+    wrap(<InvoiceActions invoice={DRAFT} />)
+    expect(screen.queryByRole('button', { name: /^conferma$/i })).toBeNull()
   })
 
   it('offers no issue button once the invoice is issued', () => {

@@ -458,7 +458,15 @@ _BYTE: dict[Method, str] = {
 #    service itself once the proforma is consumed. The tool is guarded like
 #    `replace_proforma_lines` (a proforma only, never a fattura) and passes only the keys
 #    it was given, so the notes and the custom fields the old reason named are still not
-#    reachable through it. A reason that only says "nobody wrote the tool" is a
+#    reachable through it. `InvoiceService.confirm_proforma` left at ORB-132 as
+#    `confirm_proforma`: "l'agente prepara, la persona conferma" was the last place this
+#    surface stopped an agent short of a proforma it had itself created, rewritten line
+#    by line and rendered, and Ivan asked for the whole path on 2026-09-10. Confirming
+#    consumes nothing and the state machine goes back (`confermata -> bozza`), so it
+#    sits on the default surface with the other proforma tools; the step that does
+#    consume a number, `issue_invoice`, is untouched and stays behind `mcp_full_access`.
+#    The decision is a row in `docs/design/DECISIONS.md`. A reason that only says
+#    "nobody wrote the tool" is a
 #    placeholder wearing the clothes of a decision; this category is for the ones that
 #    survive being asked why, and the only way to keep that true is to delete the ones
 #    that do not the moment the tool is written.
@@ -493,8 +501,6 @@ _COPERTE_O_UMANE: dict[Method, str] = {
     "riscriverli su un documento gia' reso",
     ("DocumentService", "add_version"): "richiede byte gia' resi, che l'MCP non produce",
     ("FiscalProfileService", "get"): "describe_fiscal_profile espone gia' il regime",
-    ("InvoiceService", "confirm_proforma"): "e' la conferma umana che precede "
-    "l'emissione: l'agente prepara, la persona conferma",
     ("TemplateService", "get"): "describe_template espone gia' il template",
     # Le cinque righe qui sotto sono cio' che resta di 5B-2 dopo che **B2-10 ha deciso
     # la superficie MCP di questa fetta**, come B1-14 aveva deciso quella di 5B-1.
