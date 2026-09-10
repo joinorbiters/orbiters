@@ -39,6 +39,7 @@ from pigrocrm.core.fiscal.service import FiscalProfileService
 from pigrocrm.core.invoices import pdf as invoice_pdf
 from pigrocrm.core.invoices.fatturapa import (
     FatturaPAExporter,
+    check_document_text_exportable,
     check_party_exportable,
     check_recipient_identity,
     check_recipient_routing,
@@ -899,6 +900,11 @@ class InvoiceService:
                     "attuali: sostituisci le righe prima di emettere",
                     expected=f"natura {natura_attesa} con il riferimento {riferimento_atteso!r}",
                 )
+        # The document's own text, by the writer's rules, before the counter moves. The
+        # parties have had this since ORB-56; the causale and the lines did not, and an
+        # em dash in a causale spent a number whose XML was then refused on every export
+        # (ORB-140). What the check accepts here is what `export_xml` will serialise.
+        check_document_text_exportable(source.causale, righe)
 
         computed = tuple(
             ComputedLine(

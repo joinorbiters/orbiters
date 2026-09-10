@@ -30,8 +30,10 @@ over from a generator whose output the Sistema di Interscambio accepted.
 """
 
 import re
+from collections.abc import Iterable
 from datetime import date
 from decimal import Decimal
+from typing import Protocol
 
 from lxml import etree
 
@@ -104,6 +106,66 @@ _TIPO_PAGAMENTO_RE = re.compile(r"(TP|MP)\d{2}")
 # so it is refused here with the field named instead, rather than emitted and left to
 # be rejected downstream with no context.
 _LATIN_RE = re.compile(r"[\x00-\xff]*")
+# Typographic punctuation is how a person types: an em dash between two halves of a
+# causale, curly quotes around a product name, an ellipsis. None of it is in the range
+# above, and refusing it is a refusal over spelling rather than over content -- it cost
+# a real invoice its file after the number was spent (ORB-140). Each of these has a
+# plain Latin-1 spelling that says the same thing, so the writer spells it that way
+# and the pre-check measures the spelled value. The set is punctuation and spaces
+# only, on purpose: a currency sign or a letter from another script is content, and
+# content the schema cannot carry is refused, before the number, with the field named.
+_LATIN_SPELLINGS = str.maketrans(
+    {
+        "\u2010": "-",  # hyphen
+        "\u2011": "-",  # non-breaking hyphen
+        "\u2012": "-",  # figure dash
+        "\u2013": "-",  # en dash
+        "\u2014": "-",  # em dash
+        "\u2015": "-",  # horizontal bar
+        "\u2212": "-",  # minus sign
+        "\u2022": "-",  # bullet
+        "\u2018": "'",  # left single quotation mark
+        "\u2019": "'",  # right single quotation mark, the apostrophe most keyboards type
+        "\u201a": "'",  # single low-9 quotation mark
+        "\u201b": "'",  # single high-reversed-9 quotation mark
+        "\u2032": "'",  # prime
+        "\u201c": '"',  # left double quotation mark
+        "\u201d": '"',  # right double quotation mark
+        "\u201e": '"',  # double low-9 quotation mark
+        "\u201f": '"',  # double high-reversed-9 quotation mark
+        "\u2033": '"',  # double prime
+        "\u2026": "...",  # horizontal ellipsis
+        "\u2000": " ",  # en quad
+        "\u2001": " ",  # em quad
+        "\u2002": " ",  # en space
+        "\u2003": " ",  # em space
+        "\u2004": " ",  # three-per-em space
+        "\u2005": " ",  # four-per-em space
+        "\u2006": " ",  # six-per-em space
+        "\u2007": " ",  # figure space
+        "\u2008": " ",  # punctuation space
+        "\u2009": " ",  # thin space
+        "\u200a": " ",  # hair space
+        "\u202f": " ",  # narrow no-break space
+        "\u205f": " ",  # medium mathematical space
+        "\u3000": " ",  # ideographic space
+        "\u200b": "",  # zero width space, pasted in from a browser and never seen
+        "\ufeff": "",  # byte order mark, same origin
+    }
+)
+
+
+def latinise(value: str) -> str:
+    """`value` with its typographic punctuation spelled in Latin-1.
+
+    What the writer emits and what the pre-check measures, in one function so the two
+    cannot disagree: an em dash becomes a hyphen, curly quotes become straight ones, an
+    ellipsis becomes three full stops. Anything not in `_LATIN_SPELLINGS` comes back
+    unchanged, and if it is outside the Latin range `_check_text` refuses it by name.
+    """
+    return value.translate(_LATIN_SPELLINGS)
+
+
 # Punctuation and the "IT" prefix are stripped before a fiscal identifier is matched,
 # exactly as the previous system's own normalisation did.
 _FISCAL_ID_NOISE = re.compile(r"[^0-9A-Za-z]")
@@ -256,10 +318,12 @@ def _check_widths(party: PartySnapshot, entity: str, italiano: bool) -> None:
     # address with the postcode appended, so the bound is checked on the composite and a
     # London address one character too long is refused here, by the field the user can
     # shorten, rather than by the writer after the number is spent.
+    # Each value is measured as `latinise` will spell it, since an ellipsis is one
+    # character stored and three written.
     for field, value, limit in (
-        ("ragione_sociale", party.ragione_sociale.strip(), _DENOMINAZIONE_MAX),
-        ("indirizzo", _indirizzo_xml(party), _INDIRIZZO_MAX),
-        ("comune", (party.comune or "").strip(), _COMUNE_MAX),
+        ("ragione_sociale", latinise(party.ragione_sociale.strip()), _DENOMINAZIONE_MAX),
+        ("indirizzo", latinise(_indirizzo_xml(party)), _INDIRIZZO_MAX),
+        ("comune", latinise((party.comune or "").strip()), _COMUNE_MAX),
     ):
         if len(value) > limit:
             raise ValidationFailed(
@@ -296,6 +360,30 @@ def _latin_message(tag: str) -> str:
     return f"FPR12 ammette in {tag} solo caratteri latini di base o Latin-1"
 
 
+def _check_text(
+    value: str, tag: str, *, entity: str, field: str, max_length: int | None = None
+) -> str:
+    """The free-text rules of `String*LatinType`, applied once for everybody.
+
+    Returns the value as the writer will emit it: spelled by `latinise`, within
+    `max_length`, and inside the Latin range. `_text` calls it on the way into the
+    document; `_check_latin` and `check_document_text_exportable` call it before a
+    register number is spent. One function, so a pre-check cannot be laxer than the
+    writer and a refusal reads the same wherever it comes from (ORB-56, ORB-140).
+    """
+    value = latinise(value)
+    if max_length is not None and len(value) > max_length:
+        raise ValidationFailed(
+            entity,
+            field,
+            f"il valore supera i {max_length} caratteri ammessi da FPR12 per {tag}",
+            expected=f"al massimo {max_length} caratteri",
+        )
+    if not _LATIN_RE.fullmatch(value):
+        raise ValidationFailed(entity, field, _latin_message(tag), expected="solo caratteri latini")
+    return value
+
+
 def _check_latin(party: PartySnapshot, entity: str) -> None:
     """The character set, checked before a number is spent (ORB-56).
 
@@ -305,9 +393,9 @@ def _check_latin(party: PartySnapshot, entity: str) -> None:
     number, and every later `export_xml` refused forever. Same failure as ORB-38 and the
     same remedy, on the other constraint the writer applies.
 
-    Each value is the one the writer will pass to `_text`, and each message is the one
-    `_text` would have produced, tag included, so the pre-check cannot be laxer than the
-    writer or describe the refusal differently.
+    Each value is the one the writer will pass to `_text`, and each goes through the
+    same `_check_text`, so the pre-check cannot be laxer than the writer or describe the
+    refusal differently.
     """
     campi: list[tuple[str, str, str]] = [
         ("ragione_sociale", "Denominazione", party.ragione_sociale),
@@ -323,9 +411,58 @@ def _check_latin(party: PartySnapshot, entity: str) -> None:
     elif entity == ISSUER_ENTITY:
         campi.append(("email", "Email", party.email or ""))
     for field, tag, value in campi:
-        if not _LATIN_RE.fullmatch(value):
-            raise ValidationFailed(
-                entity, field, _latin_message(tag), expected="solo caratteri latini"
+        _check_text(value, tag, entity=entity, field=field)
+
+
+class _LineText(Protocol):
+    """What `check_document_text_exportable` reads off a line: the stored row at
+    `issue` time and the frozen `InvoiceLineRead` at export both have these."""
+
+    @property
+    def descrizione(self) -> str: ...
+
+    @property
+    def unita_misura(self) -> str | None: ...
+
+    @property
+    def riferimento_normativo(self) -> str | None: ...
+
+
+def check_document_text_exportable(causale: str | None, righe: Iterable[_LineText]) -> None:
+    """The document's own free text, checked before a number is spent (ORB-140).
+
+    `_check_latin` covered the two parties and nothing covered the invoice: a causale
+    typed with an em dash passed `issue`, spent number 18 of 2026, and every export after
+    it refused by `invoice.causale`. Every value here is the one the writer will pass to
+    `_text`, with the same tag, entity, field and bound, through the same `_check_text`:
+    `Causale`, and per line `Descrizione`, `UnitaMisura` and the `RiferimentoNormativo`
+    the line carries into `DatiRiepilogo`. `issue` calls this before it touches the
+    counter, so a value the mapping cannot spell costs one correction and not a hole in
+    the register.
+    """
+    if (causale or "").strip():
+        _check_text(
+            causale or "", "Causale", entity="invoice", field="causale", max_length=_CAUSALE_MAX
+        )
+    for riga in righe:
+        _check_text(
+            riga.descrizione,
+            "Descrizione",
+            entity="invoice_line",
+            field="descrizione",
+            max_length=_DESCRIZIONE_MAX,
+        )
+        if (riga.unita_misura or "").strip():
+            _check_text(
+                riga.unita_misura or "", "UnitaMisura", entity="invoice_line", field="unita_misura"
+            )
+        if riga.riferimento_normativo:
+            _check_text(
+                riga.riferimento_normativo,
+                "RiferimentoNormativo",
+                entity="fiscal_profile",
+                field="riferimento_normativo",
+                max_length=_RIFERIMENTO_NORMATIVO_MAX,
             )
 
 
@@ -448,22 +585,19 @@ class FatturaPAExporter:
         `escape_xml` runs first and substitutes nothing (see its docstring): it refuses
         a code point XML 1.0 cannot represent. The serialiser is the single escaping
         pass, which is why no second escaper is applied here and why one applied
-        earlier would be a defect rather than extra safety.
+        earlier would be a defect rather than extra safety. `_check_text` then spells
+        the typographic punctuation and applies the width and the Latin range, the same
+        call the pre-checks make before a number is spent.
         """
         value = escape_xml(value)
-        if max_length is not None and len(value) > max_length:
+        if latin_only:
+            value = _check_text(value, tag, entity=entity, field=field, max_length=max_length)
+        elif max_length is not None and len(value) > max_length:
             raise ValidationFailed(
                 entity,
                 field,
                 f"il valore supera i {max_length} caratteri ammessi da FPR12 per {tag}",
                 expected=f"al massimo {max_length} caratteri",
-            )
-        if latin_only and not _LATIN_RE.fullmatch(value):
-            raise ValidationFailed(
-                entity,
-                field,
-                _latin_message(tag),
-                expected="solo caratteri latini",
             )
         if pattern is not None and not pattern.fullmatch(value):
             raise ValidationFailed(

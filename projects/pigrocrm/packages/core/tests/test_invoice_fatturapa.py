@@ -16,6 +16,7 @@ from pigrocrm.core.errors import ValidationFailed
 from pigrocrm.core.invoices.fatturapa import (
     _INDIRIZZO_MAX,
     FatturaPAExporter,
+    check_document_text_exportable,
     check_party_exportable,
     check_recipient_identity,
     normalise_fiscal_id,
@@ -1014,3 +1015,89 @@ def test_a_foreign_customer_with_an_italian_fiscal_code_and_no_vat_is_exportable
     assert anagrafici is not None
     assert anagrafici.find("IdFiscaleIVA") is None
     assert anagrafici.findtext("CodiceFiscale") == "RSSMRA80A01H501U"
+
+
+# --- typographic punctuation is spelled in Latin-1, the rest refused before the number (ORB-140) --
+
+
+def test_typographic_punctuation_is_written_as_its_latin_1_spelling() -> None:
+    """An em dash, an en dash, curly quotes and an ellipsis are how a person types a
+    causale, and none of them is in FPR12's `String*LatinType` range. Refusing them
+    cost a real invoice its file after the number was spent (ORB-140): the writer now
+    spells each with its plain Latin-1 equivalent, which says the same thing, and the
+    document validates."""
+    causale = "Consulting services — FDE – August 2026…"
+    descrizione = "Sviluppo “Remote Console” ‘beta’ • fase 2"
+    xml = FatturaPAExporter().to_bytes(
+        _invoice([_line(1, descrizione, "1.000000", "100.000000", "100.00")], causale=causale)
+    )
+    assert_valid(xml)
+    root = etree.fromstring(xml)
+    assert root.findtext(".//Causale") == "Consulting services - FDE - August 2026..."
+    assert root.findtext(".//Descrizione") == "Sviluppo \"Remote Console\" 'beta' - fase 2"
+
+
+def test_an_em_dash_in_a_party_name_passes_the_pre_check_and_is_written_as_a_hyphen() -> None:
+    """The party pre-check and the writer apply one mapping, so a name the pre-check
+    lets through is a name the writer spells, and neither refuses what the other
+    accepts."""
+    cliente = _cliente(ragione_sociale="Rossi — Bianchi S.r.l.")
+    check_party_exportable(cliente, "customer")
+    xml = FatturaPAExporter().to_bytes(
+        _invoice([_line(1, "Consulenza", "1.000000", "100.000000", "100.00")], cliente=cliente)
+    )
+    assert_valid(xml)
+    assert "Rossi - Bianchi S.r.l." in [e.text for e in etree.fromstring(xml).iter("Denominazione")]
+
+
+def test_a_causale_outside_latin_1_is_refused_by_field_name() -> None:
+    with pytest.raises(ValidationFailed) as caught:
+        FatturaPAExporter().to_bytes(
+            _invoice(
+                [_line(1, "Consulenza", "1.000000", "100.000000", "100.00")],
+                causale="Консультация",
+            )
+        )
+    assert caught.value.details["entity"] == "invoice"
+    assert caught.value.details["field"] == "causale"
+
+
+@pytest.mark.parametrize(
+    ("entity", "field", "causale", "descrizione", "unita"),
+    [
+        ("invoice", "causale", "Консультация — agosto", "Consulenza", None),
+        ("invoice_line", "descrizione", "Consulenza", "Sviluppo \U0001f600", None),
+        ("invoice_line", "unita_misura", "Consulenza", "Consulenza", "ч"),
+    ],
+)
+def test_document_text_outside_latin_1_is_refused_by_the_pre_check_with_the_writer_s_words(
+    entity: str, field: str, causale: str, descrizione: str, unita: str | None
+) -> None:
+    """The invoice's own free text had no pre-check: `_check_latin` covered the two
+    parties (ORB-56) and nothing covered `Causale`, `Descrizione` or `UnitaMisura`, so
+    a causale with a character the mapping cannot spell passed `issue`, spent a number
+    and was refused by every export after. The pre-check now runs the writer's own
+    check on the writer's own values, and the two refusals carry the same details."""
+    righe = [_line(1, descrizione, "1.000000", "100.000000", "100.00", unita=unita)]
+    with pytest.raises(ValidationFailed) as pre:
+        check_document_text_exportable(causale, righe)
+    assert pre.value.details["entity"] == entity
+    assert pre.value.details["field"] == field
+    assert "FPR12 ammette in" in pre.value.details["reason"]
+
+    with pytest.raises(ValidationFailed) as writer:
+        FatturaPAExporter().to_bytes(_invoice(righe, causale=causale))
+    assert writer.value.details == pre.value.details
+
+
+def test_a_causale_too_long_only_after_the_mapping_is_refused_by_both_alike() -> None:
+    """An ellipsis is one character stored and three written, so the bound is measured
+    on what the writer will emit, by the pre-check as by the writer."""
+    causale = "x" * 199 + "…"
+    righe = [_line(1, "Consulenza", "1.000000", "100.000000", "100.00")]
+    with pytest.raises(ValidationFailed) as pre:
+        check_document_text_exportable(causale, righe)
+    assert pre.value.details["field"] == "causale"
+    with pytest.raises(ValidationFailed) as writer:
+        FatturaPAExporter().to_bytes(_invoice(righe, causale=causale))
+    assert writer.value.details == pre.value.details

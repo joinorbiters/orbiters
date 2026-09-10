@@ -10,6 +10,7 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
+from lxml import etree
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -640,3 +641,80 @@ def test_a_fattura_issued_from_a_proforma_inherits_the_period_and_takes_its_own_
     with pytest.raises(ImmutableField):
         service.update(proforma.id, InvoiceUpdate(competenza_a=date(2025, 9, 30)), ADMIN)
     assert service.get(proforma.id, ADMIN).data_emissione == date(2025, 9, 5)
+
+
+# --- the document's own text is checked before the number, like the parties (ORB-140) ---
+
+
+def test_a_causale_outside_latin_1_is_refused_before_the_number_is_taken(
+    service: InvoiceService, db_session: Session
+) -> None:
+    """`_check_latin` covered the parties (ORB-56) and nothing covered the invoice's own
+    text: a causale with a Cyrillic letter passed `issue`, spent a register number, and
+    every `export_xml` after refused it by `invoice.causale`. Refused here instead, by
+    the same field, with the counter untouched."""
+    customer_id = _customer(db_session)
+    draft = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            causale="Консультация agosto",
+            righe=[InvoiceLineIn(descrizione="Consulenza", prezzo_unitario=Decimal("1000.00"))],
+        ),
+        ADMIN,
+    ).id
+    with pytest.raises(ValidationFailed) as caught:
+        service.issue(draft, InvoiceIssue(), ADMIN)
+    assert caught.value.details["entity"] == "invoice"
+    assert caught.value.details["field"] == "causale"
+    _nothing_consumed(db_session)
+    again = service.get(draft, ADMIN)
+    assert again.stato == "bozza"
+    assert again.numero is None
+
+
+def test_a_line_description_outside_latin_1_is_refused_before_the_number_is_taken(
+    service: InvoiceService, db_session: Session
+) -> None:
+    customer_id = _customer(db_session)
+    draft = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            righe=[
+                InvoiceLineIn(descrizione="Sviluppo \U0001f600", prezzo_unitario=Decimal("1000.00"))
+            ],
+        ),
+        ADMIN,
+    ).id
+    with pytest.raises(ValidationFailed) as caught:
+        service.issue(draft, InvoiceIssue(), ADMIN)
+    assert caught.value.details["entity"] == "invoice_line"
+    assert caught.value.details["field"] == "descrizione"
+    _nothing_consumed(db_session)
+    assert service.get(draft, ADMIN).stato == "bozza"
+
+
+def test_an_em_dash_in_the_causale_is_issued_and_its_xml_spells_a_hyphen(
+    service: InvoiceService, db_session: Session
+) -> None:
+    """The case that opened ORB-140: a causale typed with an em dash. It is issued, the
+    row keeps the text as typed, and the FatturaPA file carries the Latin-1 spelling the
+    schema admits."""
+    customer_id = _customer(db_session)
+    causale = "Consulting services — August 2026"
+    draft = service.create(
+        InvoiceCreate(
+            customer_id=customer_id,
+            causale=causale,
+            righe=[
+                InvoiceLineIn(descrizione="Consulting — August", prezzo_unitario=Decimal("1000.00"))
+            ],
+        ),
+        ADMIN,
+    ).id
+    issued = service.issue(draft, InvoiceIssue(), ADMIN)
+    assert issued.causale == causale
+    service.export_xml(issued.id, ADMIN)
+    data, _, _ = service.download(issued.id, "xml", ADMIN)
+    root = etree.fromstring(data)
+    assert root.findtext(".//Causale") == "Consulting services - August 2026"
+    assert root.findtext(".//Descrizione") == "Consulting - August"
