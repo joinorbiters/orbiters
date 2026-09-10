@@ -18,9 +18,11 @@ import {
   AdminFreelancers,
   AdminSignups,
 } from '@/pages/admin/lists'
+import { Accedi } from '@/pages/member/Accedi'
+import { Entra } from '@/pages/member/Entra'
 
 /**
- * The route tree, in code: nine screens is not enough to want a file-based router and
+ * The route tree, in code: eleven screens is not enough to want a file-based router and
  * a generated tree beside it. The public pages sit in the `Shell`; the admin area
  * brings its own frame and its own guard (`AdminLayout`).
  */
@@ -55,6 +57,15 @@ const grazie = createRoute({
   }),
   component: Thanks,
 })
+const accedi = createRoute({ getParentRoute: () => publicLayout, path: '/accedi', component: Accedi })
+const entra = createRoute({
+  getParentRoute: () => publicLayout,
+  path: '/entra',
+  validateSearch: (search: Record<string, unknown>): { t: string } => ({
+    t: typeof search.t === 'string' ? search.t : '',
+  }),
+  component: Entra,
+})
 
 const adminLogin = createRoute({ getParentRoute: () => root, path: '/admin/login', component: AdminLogin })
 const adminArea = createRoute({ getParentRoute: () => root, path: '/admin', component: AdminLayout })
@@ -81,7 +92,7 @@ const adminIscrizioni = createRoute({
 })
 
 const routeTree = root.addChildren([
-  publicLayout.addChildren([chooser, freelance, aziende, grazie]),
+  publicLayout.addChildren([chooser, freelance, aziende, grazie, accedi, entra]),
   adminLogin,
   adminArea.addChildren([adminFreelance, adminFreelanceDetail, adminAziende, adminAziendeDetail, adminIscrizioni]),
 ])

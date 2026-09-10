@@ -27,12 +27,14 @@ export default defineConfig([
     // The route tree is code, not files: `router.tsx` exports the router and the pages
     // it mounts; `wizard/Wizard.tsx` exports the engine's component beside the step
     // type it takes; the two wizard pages export their step lists beside the page, so
-    // the tests can validate a step without mounting the page; `lib/auth.tsx` is hooks.
+    // the tests can validate a step without mounting the page; `lib/auth.tsx` and
+    // `lib/member.tsx` are hooks.
     files: [
       'src/router.tsx',
       'src/wizard/Wizard.tsx',
       'src/pages/*Wizard.tsx',
       'src/lib/auth.tsx',
+      'src/lib/member.tsx',
     ],
     rules: { 'react-refresh/only-export-components': 'off' },
   },

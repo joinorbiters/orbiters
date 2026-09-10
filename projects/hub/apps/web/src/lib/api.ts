@@ -1,6 +1,7 @@
 /**
- * The hub's HTTP client: plain `fetch`, same origin, cookies included. The API is six
- * routes and two shapes, so a generated client would be more machinery than code.
+ * The hub's HTTP client: plain `fetch`, same origin, cookies included. The API is a
+ * handful of routes and three shapes, so a generated client would be more machinery
+ * than code.
  *
  * Every failure becomes an `ApiError` carrying the status and, for a 422, the field
  * names FastAPI put in `detail[].loc`, which is what a wizard needs to point at the
@@ -208,4 +209,54 @@ export const admin = {
   /** The author is the session's, so the body is the text alone. */
   addComment: (kind: CommentKind, id: string, testo: string) =>
     request<Comment>(`/api/hub/${kind}/${id}/comments`, json({ testo })),
+}
+
+// ---- the member area ------------------------------------------------------------------
+
+/** The row as its owner reads it: what they gave, never the admin's fields. */
+export interface MemberProfile {
+  id: string
+  nome: string
+  cognome: string
+  email: string
+  linkedin_url: string | null
+  cv_filename: string
+  cv_size: number
+  tariffa_giornaliera: string
+  posizione: string
+  remoto: Remoto
+  links: string[]
+  created_at: string
+  updated_at: string
+}
+
+/** The seven answers a member may change. The email is not among them. */
+export interface MemberUpdate {
+  nome: string
+  cognome: string
+  linkedin_url: string | null
+  tariffa_giornaliera: string
+  posizione: string
+  remoto: Remoto
+  links: string[]
+}
+
+export const member = {
+  /** 202 whether the address is known or not; the page says one thing in both cases. */
+  requestLink: (email: string) => request<{ ok: true }>('/api/hub/auth/link', json({ email })),
+  enter: (token: string) => request<MemberProfile>('/api/hub/auth/enter', json({ token })),
+  me: () => request<MemberProfile>('/api/hub/me'),
+  update: (data: MemberUpdate) =>
+    request<MemberProfile>('/api/hub/me', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }),
+  replaceCv: (file: File) => {
+    const form = new FormData()
+    form.set('cv', file, file.name)
+    return request<MemberProfile>('/api/hub/me/cv', { method: 'PUT', body: form })
+  },
+  cvUrl: '/api/hub/me/cv',
+  logout: () => request<void>('/api/hub/me/logout', { method: 'POST' }),
 }
