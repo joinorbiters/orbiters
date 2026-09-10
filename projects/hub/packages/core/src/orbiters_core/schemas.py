@@ -249,15 +249,15 @@ def _https_url(value: str) -> str:
     return trimmed
 
 
-class FreelancerCreate(BaseModel):
-    """What the wizard collects. The CV travels beside this body, not inside it: the API
-    takes it as a multipart file and hands the bytes to the service with this schema."""
+class FreelancerFields(BaseModel):
+    """The seven answers the wizard asks for and the person may later change. One set of
+    rules for the wizard (`FreelancerCreate`) and the member area (`MemberUpdate`), so
+    the two can never accept different things."""
 
     model_config = ConfigDict(extra="forbid")
 
     nome: SafeStr = Field(min_length=1, max_length=NAME_MAX_LENGTH)
     cognome: SafeStr = Field(min_length=1, max_length=NAME_MAX_LENGTH)
-    email: EmailStr
     linkedin_url: SafeStr | None = Field(default=None, max_length=LINKEDIN_URL_MAX_LENGTH)
     tariffa_giornaliera: Decimal = Field(
         max_digits=7, decimal_places=2, ge=TARIFFA_MIN, le=TARIFFA_MAX
@@ -265,7 +265,6 @@ class FreelancerCreate(BaseModel):
     posizione: SafeStr = Field(min_length=1, max_length=POSIZIONE_MAX_LENGTH)
     remoto: Remoto
     links: list[SafeStr] = Field(default_factory=list, max_length=LINKS_MAX)
-    utm: SignupUtm | None = None
 
     @field_validator("nome", "cognome", "posizione", mode="after")
     @classmethod
@@ -284,6 +283,19 @@ class FreelancerCreate(BaseModel):
         if any(len(link) > LINK_MAX_LENGTH for link in cleaned):
             raise ValueError(f"un link può avere al massimo {LINK_MAX_LENGTH} caratteri")
         return cleaned
+
+
+class FreelancerCreate(FreelancerFields):
+    """What the wizard collects. The CV travels beside this body, not inside it: the API
+    takes it as a multipart file and hands the bytes to the service with this schema."""
+
+    email: EmailStr
+    utm: SignupUtm | None = None
+
+
+class MemberUpdate(FreelancerFields):
+    """What a member changes about themselves: the wizard's answers, never the email
+    (it is the identity the link proved) and never the admin's fields."""
 
 
 class CompanyCreate(BaseModel):
@@ -339,6 +351,42 @@ class CommentCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     testo: SafeStr = Field(min_length=1, max_length=COMMENT_MAX_LENGTH)
+
+
+class MemberProfile(BaseModel):
+    """The row as its owner reads it: what they gave, and nothing the admin wrote.
+    No `stato`, no `note`, no attribution, and never the CV bytes."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    nome: str
+    cognome: str
+    email: str
+    linkedin_url: str | None
+    cv_filename: str
+    cv_size: int
+    tariffa_giornaliera: Decimal
+    posizione: str
+    remoto: str
+    links: list[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+class LinkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: EmailStr
+
+
+class EnterRequest(BaseModel):
+    """The raw token from the link. `token_urlsafe(32)` is 43 characters; the bounds
+    leave room without accepting a paragraph."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(min_length=20, max_length=200, pattern=r"^[A-Za-z0-9_-]+$")
 
 
 class FreelancerRead(BaseModel):
