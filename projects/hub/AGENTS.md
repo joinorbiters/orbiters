@@ -47,6 +47,14 @@ The tests bring a `testcontainers` Postgres to `head` with this package's migrat
 never with `create_all`: a table the model declares and the migration forgets fails
 here rather than on the server.
 
+**Its `vite preview` serves under `/hub/`, not `/`.** The web app is built with
+`base: '/hub/'`, so the preview's root path 404s and the wizard pages are at `/hub/`,
+`/hub/freelance` and `/hub/aziende`. A blank page at `/` is that, not a broken build.
+Unlike the website's, this preview has no `strictPort`, so a second checkout does not
+collide with the first: it takes the next free port and logs it, confirmed live as `4174`
+while another agent held 4173 on 2026-09-10. Read the port off its own output rather than
+assuming 4173.
+
 ## The database was inherited
 
 `signups` was created by PigroCRM's sidecar in production and holds real rows.

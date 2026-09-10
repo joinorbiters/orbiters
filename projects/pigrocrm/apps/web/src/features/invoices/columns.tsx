@@ -14,7 +14,53 @@ import {
 
 const EMPTY = '—'
 
-export function buildInvoiceColumns(): ColumnDef<DataTableFeatures, Invoice>[] {
+/**
+ * `cliente` adds the «Cliente» column (ORB-98). Opt-in rather than always there because
+ * the same columns draw two screens: the list page, which mixes every customer's
+ * invoices and is where a row has to say whose it is, and the Fatture tab inside a
+ * customer's or a deal's page, where every row belongs to the customer already named in
+ * the title and the column would only repeat it on each line.
+ */
+export interface InvoiceColumnOptions {
+  cliente?: boolean
+}
+
+/**
+ * The name the API resolved for the row, or the dash. `customer_ragione_sociale` is
+ * `str | None` on the server: the association always exists (`customer_id` is NOT NULL),
+ * the name may fail to resolve, and that reads as the same em dash every other empty
+ * cell shows rather than as an empty string a reader could take for a nameless customer.
+ * `''` gets the same dash: `ragione_sociale` is a `SafeStr` with no minimum length, so an
+ * empty name is a value the column can legitimately hold, and a blank cell would read as
+ * a rendering fault rather than as what it is.
+ */
+function customerName(row: Invoice): string {
+  const name = row.customer_ragione_sociale
+  return name === null || name === undefined || name === '' ? EMPTY : name
+}
+
+export function buildInvoiceColumns(
+  options: InvoiceColumnOptions = {},
+): ColumnDef<DataTableFeatures, Invoice>[] {
+  const cliente: ColumnDef<DataTableFeatures, Invoice>[] = options.cliente
+    ? [
+        {
+          header: 'Cliente',
+          id: 'cliente',
+          accessorFn: (row) => customerName(row),
+          // Plain text, like «Tipo»: the table is auto-layout and `TableCell` already
+          // says `whitespace-nowrap`, so a long name widens its column and the table
+          // scrolls inside its frame, the way every other text column here behaves. A
+          // `truncate` on an inline span in a `<td>` with no width would promise an
+          // ellipsis the DOM cannot deliver.
+          cell: ({ row }) => {
+            const name = customerName(row.original)
+            return name === EMPTY ? <span className="text-muted-foreground">{EMPTY}</span> : name
+          },
+        },
+      ]
+    : []
+
   return [
     {
       header: 'Numero',
@@ -24,6 +70,7 @@ export function buildInvoiceColumns(): ColumnDef<DataTableFeatures, Invoice>[] {
       // `formatInvoiceNumber` cannot derive a reference from a number.
       accessorFn: (row) => formatInvoiceNumber(row),
     },
+    ...cliente,
     {
       header: 'Tipo',
       id: 'tipo',

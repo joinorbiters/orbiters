@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page, type Response } from '@playwright/test'
 import { loginAsAdmin, rowAction, typeLikeAHuman } from './helpers'
 
 test.beforeEach(async ({ page }) => {
@@ -48,8 +48,24 @@ test("a custom field's whole life: appears everywhere with no restart, and a cle
   await createTextField(page, 'Referente')
 
   // The column, with no rebuild: buildCustomerColumns (features/customers/columns.tsx)
-  // reads it straight off GET /api/schema/customer.
-  await page.goto('/app/clienti')
+  // reads it straight off GET /api/schema/customer, and `DataTable`'s own loading gate
+  // (components/DataTable.tsx) is `customers.isLoading` -- so the columnheader depends on
+  // both requests, not just one. `page.goto` here is a genuine hard reload: the whole SPA
+  // bundle, the auth check, and both of those requests, all from scratch. Asserting
+  // `toBeVisible()` right after `goto` bets the suite's fixed `expect.timeout` always
+  // outruns a cold reload plus two round trips -- it does not (ORB-39: failed once,
+  // passed on retry, in the same suite run; reproduced live under load with zero
+  // columnheaders, not just this one, still on screen when the timeout hit). Waiting for
+  // both responses to actually land is the fix: a test bug, not the application's --
+  // `FieldDefinitionService.create` commits before the POST that creates the field even
+  // returns, and `describe_entity` reads live, so the reload cannot miss the field.
+  const isGet = (response: Response, path: string): boolean =>
+    new URL(response.url()).pathname.endsWith(path) && response.request().method() === 'GET'
+  await Promise.all([
+    page.goto('/app/clienti'),
+    page.waitForResponse((response) => isGet(response, '/api/schema/customer')),
+    page.waitForResponse((response) => isGet(response, '/api/customers')),
+  ])
   await expect(page.getByRole('columnheader', { name: 'Referente' })).toBeVisible()
 
   // The create-form input, native (Telefono) and custom (Referente) side by side.

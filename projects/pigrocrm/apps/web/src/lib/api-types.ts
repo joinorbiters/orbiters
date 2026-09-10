@@ -1783,7 +1783,8 @@ export interface paths {
          * Period Pnl
          * @description Two columns, closed deals and deals in progress. There is deliberately no combined
          *     total: adding a finished job's margin to a half-done one produces a figure that is
-         *     neither.
+         *     neither. `base` picks which of the two readings of revenue the report gives
+         *     (ORB-61); everything else about it is the same.
          */
         get: operations["period_pnl_api_analytics_pnl_get"];
         put?: never;
@@ -2365,36 +2366,6 @@ export interface paths {
         get: operations["runs_api_automation_runs_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/orbiters/signups": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Subscribe
-         * @description 201 and `{"ok": true}`, whether the address was new or already on the list.
-         *
-         *     The person is on the list either way, which is the only thing the page says and the
-         *     only thing this answers: telling a caller *which* of the two happened is telling
-         *     them whether an address they do not own is a subscriber.
-         *
-         *     The ad conversion is measured after the answer, never before it: see
-         *     `_measure_the_conversion`. It is scheduled even for an address already on the list,
-         *     because the browser fires its own event on the same submit and the two carry one id
-         *     -- suppressing the server half would not remove that event, it would only remove the
-         *     half that survives an ad blocker.
-         */
-        post: operations["subscribe_api_orbiters_signups_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4682,18 +4653,14 @@ export interface components {
             tipo: "fattura" | "proforma";
             /** Causale */
             causale?: string | null;
+            /** Note Interne */
+            note_interne?: string | null;
+            /** Data Emissione */
+            data_emissione?: string | null;
             /** Competenza Da */
             competenza_da?: string | null;
             /** Competenza A */
             competenza_a?: string | null;
-            /**
-             * Data Emissione
-             * @description The proforma's own document date; refused on a fattura, whose date is
-             *     assigned at emission. Defaults to today.
-             */
-            data_emissione?: string | null;
-            /** Note Interne */
-            note_interne?: string | null;
             /** Righe */
             righe?: components["schemas"]["InvoiceLineIn"][];
             /**
@@ -4716,8 +4683,8 @@ export interface components {
          *     of it: the stamp duty is declared alongside, validated non-negative, and never added
          *     to the total. `DatiBollo/BolloVirtuale` says the issuer settled it virtually (slice 3
          *     §6.1 rule 4 and §7.2), which is why `sum_totals` stores the same identity for a
-         *     natively issued invoice -- and the previous system's own register agrees: its «Totale» column always
-         *     equals «Imp. Reddito».
+         *     natively issued invoice -- and the previous system's own register agrees: its «Totale» column
+         *     always equals «Imp. Reddito».
          *
          *     No `riferimento`: `invoices.riferimento` is constrained by
          *     `ck_invoices_riferimento_only_on_proforma` to `NULL` on every `tipo = 'fattura'`
@@ -4745,6 +4712,10 @@ export interface components {
             deal_id?: string | null;
             /** Causale */
             causale?: string | null;
+            /** Competenza Da */
+            competenza_da?: string | null;
+            /** Competenza A */
+            competenza_a?: string | null;
             /** Righe */
             righe: components["schemas"]["InvoiceLineImport"][];
             /** Imponibile */
@@ -4977,6 +4948,8 @@ export interface components {
             note_interne: string | null;
             /** Snapshot Versione */
             snapshot_versione: number | null;
+            /** Customer Ragione Sociale */
+            customer_ragione_sociale?: string | null;
             /** Custom Fields */
             custom_fields: {
                 [key: string]: unknown;
@@ -5002,30 +4975,32 @@ export interface components {
         };
         /**
          * InvoiceUpdate
-         * @description Only what stays mutable after emission (spec 4).
+         * @description What a draft may still change, and what stays mutable after emission (spec 4).
          *
-         *     Everything typed and clearable is absent, which removes the A14 shape from this
-         *     surface instead of reproducing it: lines are replaced in bulk, `stato_pagamento`
-         *     and `data_incasso` go through `set_payment_state`, and `stato` goes through
-         *     `issue`/`annul`. Both native fields here are text-shaped, so `""` is a real
-         *     "clear it" spelling for each.
+         *     Lines are replaced in bulk, `stato_pagamento` and `data_incasso` go through
+         *     `set_payment_state`, and `stato` goes through `issue`/`annul`. `supplied_changes`
+         *     reads this with `exclude_unset`, so an explicit `null` clears a column and an omitted
+         *     key leaves it alone -- which is what lets the three `date` columns sit here without
+         *     reproducing A14.
          *
-         *     `causale` is on this schema because a draft has to be correctable before it is
-         *     issued, and it is frozen afterwards by `InvoiceService.update`, which raises
-         *     `ImmutableField` -- not by leaving it off the schema, which would have made a
-         *     draft's own subject line unfixable.
+         *     `causale`, the accrual period and a proforma's `data_emissione` are on this schema
+         *     because a draft has to be correctable before it is issued, and they are frozen
+         *     afterwards by `InvoiceService.update`, which raises `ImmutableField` -- not by
+         *     leaving them off the schema, which would have made a draft's own subject line
+         *     unfixable. The period is cleared as a pair and a proforma's date is never cleared;
+         *     a fattura's `data_emissione` is refused here outright, since `issue` owns it.
          */
         InvoiceUpdate: {
             /** Causale */
             causale?: string | null;
+            /** Note Interne */
+            note_interne?: string | null;
+            /** Data Emissione */
+            data_emissione?: string | null;
             /** Competenza Da */
             competenza_da?: string | null;
             /** Competenza A */
             competenza_a?: string | null;
-            /** Data Emissione */
-            data_emissione?: string | null;
-            /** Note Interne */
-            note_interne?: string | null;
             /** Custom Fields */
             custom_fields?: {
                 [key: string]: unknown;
@@ -5248,6 +5223,11 @@ export interface components {
             a: string;
             /** Customer Id */
             customer_id: string | null;
+            /**
+             * Base
+             * @enum {string}
+             */
+            base: "emissione" | "competenza";
             chiusi: components["schemas"]["PnlTotals"];
             in_corso: components["schemas"]["PnlTotals"];
             /** Spese Generali */
@@ -5661,61 +5641,6 @@ export interface components {
             /** Collegamento */
             collegamento: string | null;
         };
-        /**
-         * SignupAck
-         * @description What the public POST answers, and all it answers: the request was accepted.
-         *
-         *     The same body and the same 201 for a first signup and for the hundredth, so the
-         *     reply does not say whether the address was already on the list either. The landing
-         *     needs nothing more -- it branches on the status alone -- and anything more would be
-         *     readable by anyone who can guess an email address.
-         */
-        SignupAck: {
-            /**
-             * Ok
-             * @default true
-             */
-            ok: boolean;
-        };
-        /** SignupCreate */
-        SignupCreate: {
-            /**
-             * Email
-             * Format: email
-             */
-            email: string;
-            /** Nome */
-            nome: string;
-            /** Cognome */
-            cognome: string;
-            /** Linkedin Url */
-            linkedin_url?: string | null;
-            utm?: components["schemas"]["SignupUtm"] | null;
-            /** Pixel Event Id */
-            pixel_event_id?: string | null;
-            /** Oppref */
-            oppref?: string | null;
-        };
-        /**
-         * SignupUtm
-         * @description The attribution the landing read from its own URL, if any. Every key optional and
-         *     bounded: an ad platform's macro left unexpanded (`{{AD_SET_ID}}`) is stored as the
-         *     literal it arrived as, because that is what happened.
-         */
-        SignupUtm: {
-            /** Utm Source */
-            utm_source?: string | null;
-            /** Utm Medium */
-            utm_medium?: string | null;
-            /** Utm Campaign */
-            utm_campaign?: string | null;
-            /** Utm Content */
-            utm_content?: string | null;
-            /** Utm Term */
-            utm_term?: string | null;
-            /** Utm Id */
-            utm_id?: string | null;
-        };
         /** SollecitiPage */
         SollecitiPage: {
             /** Items */
@@ -5736,8 +5661,8 @@ export interface components {
          *     sum recomputed at reminder time: a demand for payment that names a figure the
          *     client's copy of the invoice does not carry is a demand they are right to ignore.
          *
-         *     `ultima_risposta_il` is the signal the previous system could not have had, and it is `None` on an
-         *     installation with no mailbox connected -- the honest degradation, not a claim that
+         *     `ultima_risposta_il` is the signal the previous system could not have had, and it is `None` on
+         *     an installation with no mailbox connected -- the honest degradation, not a claim that
          *     nobody replied.
          */
         SollecitoCandidate: {
@@ -21914,10 +21839,7 @@ export interface operations {
                 /** @description Fine del periodo, YYYY-MM-DD */
                 to: string;
                 customer_id?: string | null;
-                /**
-                 * @description Data a cui attribuire i ricavi: `emissione` (la data della fattura) o `competenza` (il periodo di competenza, quando c'è)
-                 * @default emissione
-                 */
+                /** @description Quale data colloca il ricavo di una fattura nel periodo: 'emissione' (la data del documento, predefinita) oppure 'competenza' (il periodo di competenza dichiarato sulla fattura, con la data di emissione per chi non lo dichiara). Costi e ore restano attribuiti alla propria data. */
                 base?: "emissione" | "competenza";
             };
             header?: never;
@@ -25865,127 +25787,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AutomationRun"][];
-                };
-            };
-            /** @description Permesso negato: l'actor non ha il ruolo richiesto. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": {
-                        /** Type */
-                        type: string;
-                        /** Title */
-                        title: string;
-                        /** Status */
-                        status: number;
-                        /** Detail */
-                        detail: string;
-                        /** Code */
-                        code: string;
-                        /** Instance */
-                        instance: string;
-                    } & {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description La risorsa richiesta non esiste o è stata rimossa. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": {
-                        /** Type */
-                        type: string;
-                        /** Title */
-                        title: string;
-                        /** Status */
-                        status: number;
-                        /** Detail */
-                        detail: string;
-                        /** Code */
-                        code: string;
-                        /** Instance */
-                        instance: string;
-                    } & {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description La richiesta è in conflitto con lo stato attuale della risorsa. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": {
-                        /** Type */
-                        type: string;
-                        /** Title */
-                        title: string;
-                        /** Status */
-                        status: number;
-                        /** Detail */
-                        detail: string;
-                        /** Code */
-                        code: string;
-                        /** Instance */
-                        instance: string;
-                    } & {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Una regola di dominio non è stata rispettata (application/problem+json), oppure il corpo, i parametri o il path della richiesta non hanno la forma attesa e non hanno mai raggiunto l'endpoint (application/json). */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": {
-                        /** Type */
-                        type: string;
-                        /** Title */
-                        title: string;
-                        /** Status */
-                        status: number;
-                        /** Detail */
-                        detail: string;
-                        /** Code */
-                        code: string;
-                        /** Instance */
-                        instance: string;
-                    } & {
-                        [key: string]: unknown;
-                    };
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    subscribe_api_orbiters_signups_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SignupCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SignupAck"];
                 };
             };
             /** @description Permesso negato: l'actor non ha il ruolo richiesto. */

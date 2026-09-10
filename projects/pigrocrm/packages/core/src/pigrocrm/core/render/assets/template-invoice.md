@@ -1,42 +1,47 @@
 ```{=typst}
 #let muted = rgb("#465362")
 #let divider = rgb("#E2E2E2")
+{{#if fattura.dichiarazione_proforma}}
 
-#text(size: 9pt, fill: muted)[{{fattura.etichetta}}] | #text(size: 9pt, fill: muted)[Numero: {{fattura.numero}}] | #text(size: 9pt, fill: muted)[Data: {{fattura.data}}]
+#block(fill: rgb("#F9DC5C"), inset: 8pt, radius: 4pt, width: 100%)[
+  #align(center)[#text(size: 11pt, weight: "bold")[{{fattura.dichiarazione_proforma}}]]
+]
+
+#v(12pt)
+{{/if}}
+
+#text(size: 9pt, fill: muted)[{{fattura.etichetta}} | Numero: {{fattura.numero}} | Data: {{fattura.data}}]
 {{#if fattura.periodo_competenza}}
 
 #text(size: 9pt, fill: muted)[Periodo di competenza: {{fattura.periodo_competenza}}]
 {{/if}}
 
-#v(10pt)
-
+#v(14pt)
 #text(size: 9pt, weight: "bold", fill: muted)[Committente]
+#v(6pt)
 #stack(
-  spacing: 2pt,
-  [#text(size: 9pt)[{{cliente.ragione_sociale}}]],
-  [#text(size: 9pt)[P.IVA: {{cliente.partita_iva}} | CF: {{cliente.codice_fiscale}}]],
-  [#text(size: 9pt)[{{cliente.indirizzo_display}}]],
-  [#text(size: 9pt)[PEC: {{cliente.pec}} | Codice destinatario: {{cliente.codice_destinatario}}]],
+  spacing: 2.5pt,
+  [#text(size: 9pt)[{{cliente.riga_identita}}]],
+  [#text(size: 9pt)[{{cliente.riga_recapiti}}]],
 )
 
-#v(14pt)
+#v(18pt)
 #text(size: 9pt, weight: "bold", fill: muted)[Dettaglio]
 #table(
-  columns: (0.46fr, 0.1fr, 0.14fr, 0.1fr, 0.2fr),
-  align: (left, right, right, center, right),
+  columns: (0.62fr, 0.14fr, 0.24fr),
+  align: (left, center, right),
   inset: (x: 4pt, y: 6pt),
   stroke: none,
   table.header(
     [#text(size: 8pt, weight: "bold", fill: muted)[DESCRIZIONE]],
-    [#text(size: 8pt, weight: "bold", fill: muted)[QTA]],
-    [#text(size: 8pt, weight: "bold", fill: muted)[PREZZO]],
     [#text(size: 8pt, weight: "bold", fill: muted)[%IVA]],
-    [#text(size: 8pt, weight: "bold", fill: muted)[TOTALE]],
+    [#text(size: 8pt, weight: "bold", fill: muted)[PREZZO TOTALE]],
   ),
-  {{#each righe}}[#text(size: 9pt)[{{descrizione}}]], [#text(size: 9pt)[{{quantita}}]], [#text(size: 9pt)[{{prezzo_unitario}}]], [#text(size: 9pt)[{{aliquota_iva}}]], [#text(size: 9pt)[{{prezzo_totale}}]],{{/each}}
+  {{#each righe}}[#text(size: 9pt)[{{descrizione}}]], [#text(size: 9pt)[{{iva}}]], [#text(size: 9pt)[{{prezzo_totale}}]],{{/each}}
 )
+{{#if fattura.mostra_totali}}
 
-#v(10pt)
+#v(6pt)
 #align(right)[
   #table(
     columns: (auto, auto),
@@ -48,8 +53,9 @@
     [#text(size: 10pt, weight: "bold")[Totale documento]], [#text(size: 10pt, weight: "bold")[{{fattura.totale}}]],
   )
 ]
+{{/if}}
 
-#v(14pt)
+#v(18pt)
 #text(size: 9pt, weight: "bold", fill: muted)[Modalita pagamento]
 #table(
   columns: (0.2fr, 0.44fr, 0.16fr, 0.2fr),
@@ -57,22 +63,43 @@
   inset: (x: 4pt, y: 6pt),
   stroke: none,
   table.header(
-    [#text(size: 8pt, weight: "bold", fill: muted)[MODALITA]],
-    [#text(size: 8pt, weight: "bold", fill: muted)[IBAN]],
-    [#text(size: 8pt, weight: "bold", fill: muted)[SCADENZA]],
+    [#text(size: 8pt, weight: "bold", fill: muted)[MODALITA PAGAMENTO]],
+    [#text(size: 8pt, weight: "bold", fill: muted)[DETTAGLI]],
+    [#text(size: 8pt, weight: "bold", fill: muted)[SCADENZE]],
     [#text(size: 8pt, weight: "bold", fill: muted)[IMPORTO]],
   ),
-  [#text(size: 9pt)[{{fiscale.modalita_pagamento}}]],
-  [#text(size: 9pt)[{{fiscale.iban}}]],
+  [#text(size: 9pt)[{{pagamento.codice}}]],
+  [#text(size: 9pt)[{{pagamento.dettagli}}]],
   [#text(size: 9pt)[{{fattura.data_scadenza}}]],
   [#text(size: 9pt)[{{fattura.totale}}]],
 )
 
-#v(14pt)
+#v(18pt)
 #line(length: 100%, stroke: 0.6pt + divider)
-#v(10pt)
+{{#if fattura.dichiarazione_regime}}
 
+#v(8pt)
 #text(size: 8pt, fill: muted)[{{fattura.dichiarazione_regime}}]
+{{/if}}
+{{#if fattura.dichiarazione_bollo}}
 
+#v(4pt)
 #text(size: 8pt, fill: muted)[{{fattura.dichiarazione_bollo}}]
+{{/if}}
+
+#v(16pt)
+#grid(
+  columns: (1fr, 1fr),
+  [#text(size: 12pt, weight: "bold")[Thank you!]],
+  [
+    #align(right)[
+      #stack(
+        spacing: 2.5pt,
+        {{#if emittente.email}}[#text(size: 9pt)[{{emittente.email}}]],{{/if}}
+        {{#if emittente.telefono}}[#text(size: 9pt)[{{emittente.telefono}}]],{{/if}}
+        {{#if emittente.sito_web}}[#text(size: 9pt)[{{emittente.sito_web}}]],{{/if}}
+      )
+    ]
+  ],
+)
 ```

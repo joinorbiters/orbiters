@@ -140,7 +140,7 @@ footer .quiet-link {
 
 /* Plain inline flow otherwise (privacy.html and termini.html's two-link footers
    carry no gap of their own), so consecutive links need their own breathing room;
-   the first stays flush with the content edge. On index.html's four-link footer,
+   the first stays flush with the content edge. On index.html's flex footer,
    which already carries a flex `gap`, the DOM adjacency still matches and this
    only adds a negligible amount on top. */
 footer .quiet-link + .quiet-link {

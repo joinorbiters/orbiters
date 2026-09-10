@@ -105,9 +105,16 @@ export function Wizard<T>({
         next()
       }}
     >
+      {/* The page's single accessible heading (ORB-89): the design keeps the step
+          question as an `<h2>` and the review screen's «Tutto giusto?» as another,
+          so this names the wizard itself rather than promoting either -- visually
+          hidden because the breadcrumb below already shows the same title on
+          screen. That breadcrumb span carries `aria-hidden` so a screen reader
+          hears the title once, from this heading, rather than twice. */}
+      <h1 className="sr-only">{title}</h1>
       <div className="space-y-2">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span>{title}</span>
+          <span aria-hidden="true">{title}</span>
           <span aria-live="polite">
             {review ? 'Riepilogo' : `${index + 1} di ${steps.length}`}
           </span>
@@ -137,14 +144,17 @@ export function Wizard<T>({
           </div>
           <dl className="divide-y rounded-2xl border bg-card">
             {steps.map((candidate, at) => (
-              <div key={candidate.id} className="flex items-start gap-4 px-4 py-3 text-sm">
-                <dt className="w-40 shrink-0 text-muted-foreground">{candidate.title}</dt>
-                <dd className="min-w-0 flex-1 break-words font-medium">
+              <div
+                key={candidate.id}
+                className="flex flex-col gap-1 px-4 py-3 text-sm sm:flex-row sm:items-start sm:gap-4"
+              >
+                <dt className="text-muted-foreground sm:w-40 sm:shrink-0">{candidate.title}</dt>
+                <dd className="break-words font-medium sm:min-w-0 sm:flex-1">
                   {candidate.summary(value) || '—'}
                 </dd>
                 <button
                   type="button"
-                  className="shrink-0 text-xs text-muted-foreground underline-offset-2 hover:underline"
+                  className="mt-1 self-start text-xs text-muted-foreground underline-offset-2 hover:underline sm:mt-0 sm:shrink-0"
                   onClick={() => {
                     setError(null)
                     setIndex(at)

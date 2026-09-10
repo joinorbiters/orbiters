@@ -81,6 +81,20 @@ describe('Wizard', () => {
     expect(onSubmit).toHaveBeenCalledTimes(1)
   })
 
+  it('carries exactly one level-one heading naming the wizard, on the step screen and on the review', async () => {
+    const user = userEvent.setup()
+    render(<Harness onSubmit={() => {}} />)
+
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+    expect(screen.getByRole('heading', { level: 1, name: 'Test' })).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('Nome'), 'Ada{Enter}')
+    await user.type(screen.getByLabelText('Email'), 'ada@studio.it{Enter}')
+    expect(screen.getByRole('heading', { name: 'Tutto giusto?' })).toBeInTheDocument()
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+    expect(screen.getByRole('heading', { level: 1, name: 'Test' })).toBeInTheDocument()
+  })
+
   it('goes back to the step a server error names', async () => {
     const user = userEvent.setup()
     const { rerender } = render(<Harness onSubmit={() => {}} />)

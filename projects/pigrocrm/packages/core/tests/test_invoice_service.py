@@ -7,9 +7,11 @@ a scenario in this file -- it is impossible by construction. The number appears 
 
 from datetime import date
 from decimal import Decimal
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.activities.service import ActivityService
@@ -800,3 +802,56 @@ def test_a_proforma_date_is_editable_while_a_draft_and_never_cleared(
     with pytest.raises(ValidationFailed) as caught:
         service.update(proforma.id, InvoiceUpdate(data_emissione=None), ADMIN)
     assert caught.value.details["field"] == "data_emissione"
+
+
+# --- the customer's name on the read shape -------------------------------------------
+
+
+def test_every_read_carries_the_customer_s_name(service: InvoiceService, customer_id: UUID) -> None:
+    """`InvoiceRead.customer_ragione_sociale` is denormalised from `customers` at read
+    time, exactly as `DealRead` does it (ORB-98): the list page has to say whose invoice
+    a row is without a request per row. Every path that hands back an `InvoiceRead`
+    carries it, so a mutation's answer and the next `get` agree on the same shape."""
+    created = service.create(InvoiceCreate(customer_id=customer_id), ADMIN)
+    assert created.customer_ragione_sociale == "Acme S.r.l."
+
+    assert service.get(created.id, ADMIN).customer_ragione_sociale == "Acme S.r.l."
+
+    updated = service.update(created.id, InvoiceUpdate(causale="Consulenza"), ADMIN)
+    assert updated.customer_ragione_sociale == "Acme S.r.l."
+
+    page = service.list(InvoiceListQuery(), ADMIN)
+    assert [item.customer_ragione_sociale for item in page.items] == ["Acme S.r.l."]
+
+
+def test_the_customer_name_costs_one_query_for_the_whole_page(
+    service: InvoiceService, db_session: Session
+) -> None:
+    """Counted, not reasoned about, for the same reason `test_deals.py` counts it: an N+1
+    reintroduced by a later refactor is invisible to every other assertion here."""
+    for index in range(3):
+        customer = Customer(ragione_sociale=f"ACME {index}", nazione="IT")
+        db_session.add(customer)
+        db_session.flush()
+        service.create(InvoiceCreate(customer_id=customer.id), ADMIN)
+
+    statements: list[str] = []
+
+    def record(conn: Any, cursor: Any, statement: str, *args: Any) -> None:
+        statements.append(statement)
+
+    connection = db_session.connection()
+    event.listen(connection, "after_cursor_execute", record)
+    try:
+        page = service.list(InvoiceListQuery(), ADMIN)
+    finally:
+        event.remove(connection, "after_cursor_execute", record)
+
+    assert len(page.items) == 3
+    # The list itself, plus exactly one lookup for the three customer names.
+    assert len(statements) == 2, statements
+    assert sorted(item.customer_ragione_sociale or "" for item in page.items) == [
+        "ACME 0",
+        "ACME 1",
+        "ACME 2",
+    ]

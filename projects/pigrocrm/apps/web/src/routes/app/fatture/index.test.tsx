@@ -119,6 +119,35 @@ describe('the invoice list', () => {
     expect(within(filters).getByLabelText('Filtra per tipo')).toBeInTheDocument()
   })
 
+  /** The list is the one screen that mixes customers, so it is the one that says whose
+   *  invoice each row is (ORB-98). The tab inside a customer's page does not: see
+   *  `InvoicesTab.test.tsx`. */
+  it('says which customer each invoice belongs to', async () => {
+    mockGet.mockImplementation(((path: string) =>
+      path === '/api/invoices'
+        ? ok({
+            items: [
+              {
+                id: 'f1',
+                anno: 2026,
+                numero: 7,
+                riferimento: null,
+                tipo: 'fattura',
+                stato: 'emessa',
+                stato_pagamento: 'da_incassare',
+                data_emissione: '2026-08-20',
+                totale: '1500.00',
+                customer_ragione_sociale: 'ACME S.r.l.',
+              },
+            ],
+            next_cursor: null,
+          })
+        : ok({ items: [], next_cursor: null })) as never)
+    renderList()
+    expect(await screen.findByRole('columnheader', { name: 'Cliente' })).toBeInTheDocument()
+    expect(screen.getByRole('cell', { name: 'ACME S.r.l.' })).toBeInTheDocument()
+  })
+
   it('still explains the «scadute» drill-through it arrives with', async () => {
     renderList(true)
     expect(await screen.findByRole('status')).toHaveTextContent(/scadute e non incassate/i)
