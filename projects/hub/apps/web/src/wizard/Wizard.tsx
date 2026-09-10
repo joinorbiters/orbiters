@@ -105,6 +105,11 @@ export function Wizard<T>({
         next()
       }}
     >
+      {/* The page's single accessible heading (ORB-89): the design keeps the step
+          question as an `<h2>` and the review screen's «Tutto giusto?» as another,
+          so this names the wizard itself rather than promoting either -- visually
+          hidden because the breadcrumb below already says the same title out loud. */}
+      <h1 className="sr-only">{title}</h1>
       <div className="space-y-2">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>{title}</span>
