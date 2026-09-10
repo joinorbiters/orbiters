@@ -11,6 +11,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from orbiters_core.admin import AdminRead, AdminService
 from orbiters_core.config import Settings, get_settings
 from orbiters_core.db import create_engine_from_settings, session_factory
+from orbiters_core.mail import EmailSender, sender_from_settings
+from orbiters_core.members import MemberService
+from orbiters_core.schemas import MemberProfile
 
 ADMIN_COOKIE = "orbiters_admin"
 
@@ -51,3 +54,25 @@ def get_admin(request: Request, session: SessionDep, settings: SettingsDep) -> A
 
 
 AdminDep = Annotated[AdminRead, Depends(get_admin)]
+
+MEMBER_COOKIE = "orbiters_user"
+
+
+def get_member(request: Request, session: SessionDep, settings: SettingsDep) -> MemberProfile:
+    """The freelancer behind the member cookie, or 401. Never the admin cookie: the two
+    tables and the two cookies are separate on purpose (member area spec)."""
+    member = MemberService(session, settings).resolve(request.cookies.get(MEMBER_COOKIE))
+    if member is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Autenticazione richiesta")
+    return member
+
+
+MemberDep = Annotated[MemberProfile, Depends(get_member)]
+
+
+def get_sender(settings: SettingsDep) -> EmailSender | None:
+    """`None` without a key: the route answers 503 and nothing pretends to send."""
+    return sender_from_settings(settings)
+
+
+SenderDep = Annotated[EmailSender | None, Depends(get_sender)]

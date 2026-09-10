@@ -1,0 +1,119 @@
+"""The member area's API: a link in, a cookie out, one row behind it.
+
+`POST /auth/link` answers 202 whether the address applied or not, and the mail goes out
+in a background task after the response, so neither the status nor the timing nor a
+provider failure says whether an address is known. `POST /auth/enter` spends the token
+and sets `orbiters_user`. Everything under `/me` reads the row from the session and
+never from the URL: there is no `/me/{id}`.
+"""
+
+from typing import Annotated
+
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    File,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
+
+from orbiters_api.deps import MEMBER_COOKIE, MemberDep, SenderDep, SessionDep, SettingsDep
+from orbiters_api.ratelimit import spend_one
+from orbiters_core.members import MemberService
+from orbiters_core.schemas import Ack, EnterRequest, LinkRequest, MemberProfile, MemberUpdate
+
+router = APIRouter(prefix="/api/hub", tags=["hub-member"])
+
+
+@router.post("/auth/link", response_model=Ack, status_code=status.HTTP_202_ACCEPTED)
+def request_link(
+    payload: LinkRequest,
+    request: Request,
+    background: BackgroundTasks,
+    session: SessionDep,
+    settings: SettingsDep,
+    sender: SenderDep,
+) -> Ack:
+    spend_one(request)
+    if sender is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "L'accesso via email non è ancora attivo. Riprova più avanti.",
+        )
+    mail = MemberService(session, settings).request_link(payload.email)
+    if mail is not None:
+        background.add_task(sender.send, mail)
+    return Ack()
+
+
+@router.post("/auth/enter", response_model=MemberProfile)
+def enter(
+    payload: EnterRequest,
+    request: Request,
+    response: Response,
+    session: SessionDep,
+    settings: SettingsDep,
+) -> MemberProfile:
+    spend_one(request)
+    outcome = MemberService(session, settings).enter(payload.token)
+    if outcome is None:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, "Link non valido o scaduto. Chiedine un altro."
+        )
+    profile, raw = outcome
+    response.set_cookie(
+        MEMBER_COOKIE,
+        raw,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite="lax",
+        max_age=settings.member_session_days * 86400,
+        path="/",
+    )
+    return profile
+
+
+@router.get("/me", response_model=MemberProfile)
+def me(member: MemberDep) -> MemberProfile:
+    return member
+
+
+@router.patch("/me", response_model=MemberProfile)
+def update_me(
+    member: MemberDep, session: SessionDep, settings: SettingsDep, payload: MemberUpdate
+) -> MemberProfile:
+    return MemberService(session, settings).update(member.id, payload)
+
+
+@router.put("/me/cv", response_model=MemberProfile)
+def replace_my_cv(
+    member: MemberDep,
+    session: SessionDep,
+    settings: SettingsDep,
+    cv: Annotated[UploadFile, File()],
+) -> MemberProfile:
+    return MemberService(session, settings).replace_cv(
+        member.id, cv.file.read(), cv.filename or "", cv.content_type or ""
+    )
+
+
+@router.get("/me/cv")
+def my_cv(member: MemberDep, session: SessionDep, settings: SettingsDep) -> Response:
+    cv = MemberService(session, settings).cv(member.id)
+    safe = "".join(ch if ch.isalnum() or ch in "._- " else "_" for ch in cv.filename) or "cv.pdf"
+    return Response(
+        content=cv.content,
+        media_type=cv.mime,
+        headers={"Content-Disposition": f'attachment; filename="{safe}"'},
+    )
+
+
+@router.post("/me/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(
+    request: Request, response: Response, session: SessionDep, settings: SettingsDep
+) -> None:
+    MemberService(session, settings).close_session(request.cookies.get(MEMBER_COOKIE))
+    response.delete_cookie(MEMBER_COOKIE, path="/")

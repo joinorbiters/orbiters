@@ -1,0 +1,196 @@
+"""The member area over HTTP: a link in, a cookie out, and only your own row behind it."""
+
+import re
+from collections.abc import Iterator
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from orbiters_api.deps import get_sender
+from orbiters_core.admin import AdminService
+from orbiters_core.config import Settings
+from orbiters_core.mail import RecordingSender
+
+PDF = b"%PDF-1.7\n1 0 obj<<>>endobj\n%%EOF\n"
+ADMIN = {"email": "ivan@orbiters.it", "password": "una-password-lunga"}
+
+
+@pytest.fixture
+def sender(client: TestClient) -> Iterator[RecordingSender]:
+    recording = RecordingSender()
+    client.app.dependency_overrides[get_sender] = lambda: recording  # type: ignore[attr-defined]
+    yield recording
+
+
+@pytest.fixture
+def clean(api_session: Session) -> Iterator[None]:
+    yield
+    api_session.rollback()
+    for table in (
+        "member_sessions",
+        "magic_link_tokens",
+        "comments",
+        "admin_sessions",
+        "admin_users",
+        "freelancers",
+    ):
+        api_session.execute(text(f"DELETE FROM {table}"))
+    api_session.commit()
+
+
+def _apply(client: TestClient, email: str, nome: str = "Ada") -> None:
+    response = client.post(
+        "/api/hub/freelancers",
+        data={
+            "nome": nome,
+            "cognome": "Lovelace",
+            "email": email,
+            "tariffa_giornaliera": "450",
+            "posizione": "Backend developer",
+            "remoto": "remoto",
+        },
+        files={"cv": ("Ada CV.pdf", PDF, "application/pdf")},
+    )
+    assert response.status_code == 201, response.text
+
+
+def _enter(client: TestClient, sender: RecordingSender, email: str) -> dict[str, object]:
+    assert client.post("/api/hub/auth/link", json={"email": email}).status_code == 202
+    match = re.search(r"/entra\?t=([A-Za-z0-9_-]+)", sender.sent[-1].text)
+    assert match
+    entered = client.post("/api/hub/auth/enter", json={"token": match.group(1)})
+    assert entered.status_code == 200, entered.text
+    return entered.json()  # type: ignore[no-any-return]
+
+
+def test_without_a_sender_the_link_request_is_a_503_sentence(
+    client: TestClient, clean: None
+) -> None:
+    client.app.dependency_overrides[get_sender] = lambda: None  # type: ignore[attr-defined]
+    response = client.post("/api/hub/auth/link", json={"email": "ada@studio.it"})
+    assert response.status_code == 503
+    assert "non è ancora attivo" in response.json()["detail"]
+
+
+def test_the_link_request_answers_the_same_whether_the_address_applied_or_not(
+    client: TestClient, sender: RecordingSender, clean: None
+) -> None:
+    _apply(client, "ada@studio.it")
+    known = client.post("/api/hub/auth/link", json={"email": "Ada@studio.it"})
+    unknown = client.post("/api/hub/auth/link", json={"email": "nessuno@studio.it"})
+    assert known.status_code == unknown.status_code == 202
+    assert known.json() == unknown.json() == {"ok": True}
+    assert [mail.to for mail in sender.sent] == ["ada@studio.it"]
+    assert "/entra?t=" in sender.sent[0].text
+
+
+def test_the_link_enters_once_sets_the_member_cookie_and_opens_only_the_members_routes(
+    client: TestClient, sender: RecordingSender, clean: None
+) -> None:
+    _apply(client, "ada@studio.it")
+    for path in ("/api/hub/me", "/api/hub/me/cv"):
+        assert client.get(path).status_code == 401, path
+
+    profile = _enter(client, sender, "ada@studio.it")
+    assert profile["email"] == "ada@studio.it"
+    assert "stato" not in profile and "note" not in profile and "utm_source" not in profile
+    cookie = client.cookies.get("orbiters_user")
+    assert cookie
+    assert client.get("/api/hub/me").json()["nome"] == "Ada"
+
+    # The same link a second time opens nothing.
+    match = re.search(r"/entra\?t=([A-Za-z0-9_-]+)", sender.sent[-1].text)
+    assert match
+    again = client.post("/api/hub/auth/enter", json={"token": match.group(1)})
+    assert again.status_code == 401
+    assert again.json()["detail"].startswith("Link non valido o scaduto")
+
+    # A member cookie is not an admin cookie.
+    assert client.get("/api/hub/freelancers").status_code == 401
+    assert client.get("/api/hub/auth/me").status_code == 401
+
+    cv = client.get("/api/hub/me/cv")
+    assert cv.status_code == 200 and cv.content == PDF
+    assert 'filename="Ada CV.pdf"' in cv.headers["content-disposition"]
+
+    assert client.post("/api/hub/me/logout").status_code == 204
+    assert client.get("/api/hub/me").status_code == 401
+
+
+def test_a_wrong_token_is_a_401_and_a_malformed_one_a_422(
+    client: TestClient, sender: RecordingSender, clean: None
+) -> None:
+    assert client.post("/api/hub/auth/enter", json={"token": "a" * 43}).status_code == 401
+    assert client.post("/api/hub/auth/enter", json={"token": "corto"}).status_code == 422
+
+
+def test_a_member_changes_their_answers_and_the_admin_sees_the_comment(
+    client: TestClient, sender: RecordingSender, api_session: Session, clean: None
+) -> None:
+    _apply(client, "ada@studio.it")
+    _enter(client, sender, "ada@studio.it")
+
+    refused = client.patch(
+        "/api/hub/me",
+        json={
+            "nome": "Ada",
+            "cognome": "Lovelace",
+            "linkedin_url": "http://linkedin.com/in/ada",
+            "tariffa_giornaliera": "500",
+            "posizione": "Backend developer",
+            "remoto": "remoto",
+            "links": [],
+        },
+    )
+    assert refused.status_code == 422
+    assert refused.json()["detail"][0]["loc"][-1] == "linkedin_url"
+
+    changed = client.patch(
+        "/api/hub/me",
+        json={
+            "nome": "Ada",
+            "cognome": "Lovelace",
+            "linkedin_url": None,
+            "tariffa_giornaliera": "500",
+            "posizione": "Staff engineer",
+            "remoto": "ibrido",
+            "links": ["https://github.com/ada"],
+        },
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["posizione"] == "Staff engineer"
+
+    new_pdf = PDF + b"\n% v2\n"
+    replaced = client.put(
+        "/api/hub/me/cv", files={"cv": ("Ada 2026.pdf", new_pdf, "application/pdf")}
+    )
+    assert replaced.status_code == 200 and replaced.json()["cv_filename"] == "Ada 2026.pdf"
+    not_a_pdf = client.put("/api/hub/me/cv", files={"cv": ("x.pdf", b"ciao", "application/pdf")})
+    assert not_a_pdf.status_code == 422 and not_a_pdf.json()["detail"][0]["loc"][-1] == "cv"
+
+    # The admin reads the thread the member wrote into.
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    AdminService(api_session, settings).create(ADMIN["email"], "Ivan", ADMIN["password"])
+    assert client.post("/api/hub/auth/login", json=ADMIN).status_code == 200
+    listed = client.get("/api/hub/freelancers").json()["items"]
+    assert len(listed) == 1 and listed[0]["posizione"] == "Staff engineer"
+    thread = client.get(f"/api/hub/freelancers/{listed[0]['id']}/comments").json()
+    assert [comment["testo"] for comment in thread] == [
+        "CV aggiornato dalla persona",
+        "Profilo aggiornato dalla persona: tariffa giornaliera, posizione, modalità di lavoro, "
+        "link",
+    ]
+    assert thread[0]["autore"] == "Ada Lovelace"
+
+
+def test_a_member_never_sees_another_members_row(
+    client: TestClient, sender: RecordingSender, clean: None
+) -> None:
+    _apply(client, "ada@studio.it", nome="Ada")
+    _apply(client, "grace@studio.it", nome="Grace")
+    assert _enter(client, sender, "grace@studio.it")["nome"] == "Grace"
+    assert client.get("/api/hub/me").json()["email"] == "grace@studio.it"
+    # There is no route that takes an id: the only row reachable is the session's.
+    assert client.get("/api/hub/me/00000000-0000-7000-8000-000000000000").status_code == 404
