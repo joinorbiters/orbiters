@@ -72,6 +72,11 @@ REGIMI: dict[str, str] = {
     "RF19": "Regime forfettario",
 }
 
+# The word after the `TipoDocumento` code on the first line (`TD01 fattura`). The
+# product issues `TD01` and nothing else today (`invoices/models.py`); a code this table
+# does not know prints alone rather than as "fattura" by default.
+TIPI_DOCUMENTO: dict[str, str] = {"TD01": "fattura"}
+
 # The words for FPR12's `ModalitaPagamentoType`, for the DETTAGLI column
 # (`MP05` in the first column, `Bonifico IBAN IT…` in the second). Same fallback rule.
 MODALITA_PAGAMENTO: dict[str, str] = {
@@ -164,17 +169,24 @@ def indirizzo_display(party: dict[str, Any]) -> str:
 def identificativo_iva(party: dict[str, Any]) -> str:
     """`IT01234567890`: the country before the number, the way `IdPaese` precedes
     `IdCodice` in the XML, or `""` for a party with no VAT id. The previous system
-    printed `IT` in front of a London customer's number; the country is the party's."""
+    printed `IT` in front of a London customer's number; the country is the party's,
+    and an empty `nazione` falls back to `IT` exactly as `fatturapa.py` does, so the
+    PDF and the XML of one invoice never disagree on the prefix."""
     partita_iva = (party.get("partita_iva") or "").strip()
     if not partita_iva:
         return _EMPTY
-    return f"{(party.get('nazione') or '').strip().upper()}{partita_iva}"
+    return f"{(party.get('nazione') or 'IT').strip().upper()}{partita_iva}"
 
 
 def _bars(*segments: str) -> str:
     """Segments joined with ` | `, the empty ones dropped: a customer with no PEC loses
     the segment, never keeps a `PEC:` in front of nothing."""
     return " | ".join(segment for segment in segments if segment)
+
+
+def _bars_space(*segments: str) -> str:
+    """Like `_bars`, with a space: `RF19 Regime forfettario`, `Bonifico IBAN IT…`."""
+    return " ".join(segment for segment in segments if segment)
 
 
 def _labelled(label: str, value: str) -> str:
@@ -244,7 +256,13 @@ def build_scope(export: InvoiceForExport, *, riferimento: str | None) -> dict[st
         "fattura": {
             # `TD01 fattura` for a fiscal document. A proforma is not one, so it names
             # no TD code: printing one would claim a status the row does not have.
-            "etichetta": "Fattura proforma" if proforma else f"{export.tipo_documento} fattura",
+            "etichetta": (
+                "Fattura proforma"
+                if proforma
+                else _bars_space(
+                    export.tipo_documento, TIPI_DOCUMENTO.get(export.tipo_documento, _EMPTY)
+                )
+            ),
             "numero": (
                 riferimento
                 if riferimento is not None
@@ -260,13 +278,16 @@ def build_scope(export: InvoiceForExport, *, riferimento: str | None) -> dict[st
             "periodo_competenza": _periodo_competenza(export),
             "imponibile": format_euro(export.imponibile),
             "imposta": format_euro(export.imposta),
-            "riga_bollo": format_euro(export.bollo) if bollo else _EMPTY,
             "totale": format_euro(export.totale),
             # The register printed no totals block: the payment table carries the
             # amount. It comes back only when there is something the payment row does
-            # not say -- VAT to show, or a stamp -- so a forfettario invoice matches the
-            # register and an ordinario one still shows its tax.
-            "mostra_totali": export.imposta > Decimal("0.00") or bollo,
+            # not say, VAT to show, so a forfettario invoice matches the register and an
+            # ordinario one still shows its tax. The stamp is never a row here: the total
+            # does not include it (`totals.py`) and the emitter bears it, so a `2,00 €`
+            # line under Imposta would read as charged to the customer; the declaration
+            # under the rule is where it is stated. A `bool`, the one non-string in this
+            # scope, because only `{{#if}}` reads it.
+            "mostra_totali": export.imposta > Decimal("0.00"),
             "dichiarazione_bollo": dichiarazione_bollo,
             "dichiarazione_regime": _dichiarazione_regime(export),
             "dichiarazione_proforma": PROFORMA_DECLARATION if proforma else _EMPTY,
@@ -281,11 +302,6 @@ def build_scope(export: InvoiceForExport, *, riferimento: str | None) -> dict[st
             for riga in export.righe
         ],
     }
-
-
-def _bars_space(*segments: str) -> str:
-    """Like `_bars`, with a space: `RF19 Regime forfettario`, `Bonifico IBAN IT…`."""
-    return " ".join(segment for segment in segments if segment)
 
 
 def _periodo_competenza(export: InvoiceForExport) -> str:

@@ -50,7 +50,6 @@
     stroke: none,
     [#text(size: 9pt, fill: muted)[Imponibile]], [#text(size: 9pt)[{{fattura.imponibile}}]],
     [#text(size: 9pt, fill: muted)[Imposta]], [#text(size: 9pt)[{{fattura.imposta}}]],
-    {{#if fattura.riga_bollo}}[#text(size: 9pt, fill: muted)[Imposta di bollo]], [#text(size: 9pt)[{{fattura.riga_bollo}}]],{{/if}}
     [#text(size: 10pt, weight: "bold")[Totale documento]], [#text(size: 10pt, weight: "bold")[{{fattura.totale}}]],
   )
 ]

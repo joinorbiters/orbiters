@@ -195,6 +195,18 @@ def test_a_customer_missing_a_field_loses_the_segment_not_the_label() -> None:
 def test_the_emitter_block_carries_what_the_inherited_header_printed() -> None:
     scope = build_scope(_export(), riferimento=None)
     assert scope["emittente"]["identificativo_iva"] == "IT01234567890"
+    # An emitter row with no country yet reads `IT`, the same fallback the XML applies.
+    senza_nazione = EMITTENTE.model_copy(update={"nazione": ""})
+    export = _export().model_copy(
+        update={
+            "snapshot": InvoiceSnapshot(
+                versione=1, emittente=senza_nazione, cliente=CLIENTE, fiscale=FORFETTARIO
+            )
+        }
+    )
+    assert (
+        build_scope(export, riferimento=None)["emittente"]["identificativo_iva"] == "IT01234567890"
+    )
     assert scope["emittente"]["indirizzo_display"] == "Via Roma 1, 20053 Milano (MI) IT"
     assert scope["fiscale"]["regime_display"] == "RF19 Regime forfettario"
 
@@ -214,20 +226,23 @@ def test_the_payment_row_carries_the_code_and_its_words() -> None:
     assert pagamento["dettagli"] == "Bonifico IBAN IT60X0542811101000000123456"
 
 
-def test_the_totals_block_appears_only_when_there_is_vat_or_stamp_duty() -> None:
-    """A forfettario invoice has neither, and the inherited layout printed no totals
+def test_the_totals_block_appears_only_when_there_is_vat() -> None:
+    """A forfettario invoice has no VAT, and the inherited layout printed no totals
     block at all: the payment table already carries the amount. An ordinario invoice
-    must still show its VAT, and a stamped one its stamp."""
+    must still show its VAT. The stamp never brings the block back: nearly every
+    forfettario invoice above 77,47 EUR carries one, its declaration under the rule
+    already states it, and a `2,00 €` row under Imposta would read as charged to the
+    customer when the total does not include it."""
     assert build_scope(_export(), riferimento=None)["fattura"]["mostra_totali"] is False
+    assert build_scope(_export(bollo="2.00"), riferimento=None)["fattura"]["mostra_totali"] is False
     assert build_scope(_export(imposta="22.00"), riferimento=None)["fattura"]["mostra_totali"]
-    assert build_scope(_export(bollo="2.00"), riferimento=None)["fattura"]["mostra_totali"]
 
 
 # --- the rendered document ----------------------------------------------------------
 
 needs_toolchain = pytest.mark.skipif(
     any(shutil.which(tool) is None for tool in ("pandoc", "typst", "pdftotext")),
-    reason="pandoc, typst e pdftotext vivono nell'immagine dell'API (Dockerfile.api)",
+    reason="pandoc, typst and pdftotext live in the API image (Dockerfile.api)",
 )
 
 
@@ -240,7 +255,9 @@ def _text(pdf: bytes) -> str:
 
 @needs_toolchain
 def test_the_invoice_pdf_reads_like_the_inherited_register() -> None:
-    _, pdf = render_invoice_pdf(_export(), riferimento=None, settings=SETTINGS)
+    # With the stamp a real forfettario invoice above 77,47 EUR carries: the register
+    # printed no totals block on those either, and the stamp is stated under the rule.
+    _, pdf = render_invoice_pdf(_export(bollo="2.00"), riferimento=None, settings=SETTINGS)
     testo = _text(pdf)
     # The header the invoice owns, not the one offers and time reports share.
     assert "Identificativo fiscale ai fini IVA: IT01234567890" in testo
@@ -257,8 +274,9 @@ def test_the_invoice_pdf_reads_like_the_inherited_register() -> None:
     assert "mario@example.com" in testo
     assert "Imponibile" not in testo
     assert PROFORMA_DECLARATION not in testo
-    # The declaration the law wants on a forfettario invoice stays, small, under the rule.
+    # The declarations the law wants on a forfettario invoice stay, small, under the rule.
     assert "art. 1 c. 54-89 L. 190/2014" in testo
+    assert "Imposta di bollo di 2,00 € assolta in modo virtuale" in testo
 
 
 @needs_toolchain

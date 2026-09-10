@@ -16,11 +16,11 @@
           #stack(
             spacing: 2.5pt,
             [#text(size: 10pt, weight: "bold")[{{emittente.ragione_sociale}}]],
-            [#text(size: 8pt, fill: rgb("#8A8A8A"))[Identificativo fiscale ai fini IVA: {{emittente.identificativo_iva}}]],
+            {{#if emittente.identificativo_iva}}[#text(size: 8pt, fill: rgb("#8A8A8A"))[Identificativo fiscale ai fini IVA: {{emittente.identificativo_iva}}]],{{/if}}
             {{#if emittente.codice_fiscale}}[#text(size: 8pt)[Codice fiscale: {{emittente.codice_fiscale}}]],{{/if}}
             [#text(size: 8pt)[Regime fiscale: {{fiscale.regime_display}}]],
             {{#if emittente.codice_sdi}}[#text(size: 8pt)[Codice destinatario: {{emittente.codice_sdi}}]],{{/if}}
-            [#text(size: 8pt)[Indirizzo: {{emittente.indirizzo_display}}]],
+            {{#if emittente.indirizzo_display}}[#text(size: 8pt)[Indirizzo: {{emittente.indirizzo_display}}]],{{/if}}
             {{#if emittente.email}}[#text(size: 8pt)[Email: {{emittente.email}}]],{{/if}}
           )
         ]
