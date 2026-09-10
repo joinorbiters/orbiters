@@ -19,7 +19,11 @@
 # `listen 443 ssl` shows up in it (certbot's own signature), leave it alone.
 set -euo pipefail
 
-DOMAIN="${PIGROCRM_DOMAIN:-pigrocrm.example.com}"
+if [ -z "${PIGROCRM_DOMAIN:-}" ]; then
+  echo "PIGROCRM_DOMAIN must be set, e.g. PIGROCRM_DOMAIN=tuodominio.it bash deploy/setup-server.sh -- there is no default, so a fresh install never points at somebody else's domain." >&2
+  exit 1
+fi
+DOMAIN="$PIGROCRM_DOMAIN"
 CONF="/etc/nginx/sites-available/${DOMAIN}"
 
 if [ -f "$CONF" ] && grep -q 'listen 443 ssl' "$CONF"; then
