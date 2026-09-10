@@ -46,6 +46,10 @@ services:
       ORBITERS_RESEND_API_KEY: ${ORBITERS_RESEND_API_KEY:-}
       ORBITERS_MAIL_FROM: ${ORBITERS_MAIL_FROM:-Orbiters <ciao@joinorbiters.com>}
       ORBITERS_HUB_URL: ${ORBITERS_HUB_URL:-https://joinorbiters.com/hub}
+      # PigroCRM's spaces in the admin area (ORB-142): the CRM's public URL, and the
+      # token its own `.env` carries as PIGROCRM_REGISTRY_TOKEN. Empty token: 503.
+      ORBITERS_PIGRO_API_URL: ${ORBITERS_PIGRO_API_URL:-https://pigro.joinorbiters.com}
+      ORBITERS_PIGRO_REGISTRY_TOKEN: ${ORBITERS_PIGRO_REGISTRY_TOKEN:-}
     ports:
       # Loopback only: the host's nginx is what faces the internet, and it proxies
       # `/api/orbiters/signups` and `/api/hub/` here.

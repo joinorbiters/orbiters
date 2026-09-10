@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from orbiters_core.admin import AdminRead, AdminService
 from orbiters_core.config import Settings, get_settings
 from orbiters_core.db import create_engine_from_settings, session_factory
+from orbiters_core.http import HttpCall, urllib_call
 from orbiters_core.mail import EmailSender, sender_from_settings
 from orbiters_core.members import MemberService
 from orbiters_core.schemas import MemberProfile
@@ -76,3 +77,12 @@ def get_sender(settings: SettingsDep) -> EmailSender | None:
 
 
 SenderDep = Annotated[EmailSender | None, Depends(get_sender)]
+
+
+def get_http_call() -> HttpCall:
+    """The one HTTP seam, as a dependency so a test can hand a fake where production
+    hands `urllib_call`: the registry of PigroCRM's spaces is read through it (ORB-142)."""
+    return urllib_call
+
+
+HttpCallDep = Annotated[HttpCall, Depends(get_http_call)]

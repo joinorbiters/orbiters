@@ -55,6 +55,15 @@ class Settings(BaseSettings):
     # Sliding, as the admin's.
     member_session_days: int = 30
 
+    # --- PigroCRM's spaces, read-only -------------------------------------------------
+    # The admin area lists which spaces of PigroCRM exist and whose they are (ORB-142) by
+    # asking the CRM's API, never its database: the two products share nothing but this
+    # token, which PigroCRM reads as `PIGROCRM_REGISTRY_TOKEN`. Empty means the page
+    # answers 503 with a sentence, like the member area without a mail key. The URL is
+    # also where a space is linked: `{pigro_api_url}/<slug>/app/`.
+    pigro_api_url: str = "https://pigro.joinorbiters.com"
+    pigro_registry_token: str = ""
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
