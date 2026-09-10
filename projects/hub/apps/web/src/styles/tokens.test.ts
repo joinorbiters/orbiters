@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -179,5 +179,41 @@ describe('the .site scope (ORB-73)', () => {
     // must still be the CRM's copy this file opens with.
     expect(css).toMatch(/@theme\s*\{\s*--radius:\s*10px;\s*\}/)
     expect(block(':root')).toMatch(/--shadow-ink-strong:\s*color-mix\(in oklab, var\(--color-prussian-blue\) 12%, transparent\)/)
+  })
+})
+
+describe('the dark variant (ORB-138)', () => {
+  const webRoot = join(__dirname, '..', '..')
+  /** Every source that can put a class on an element: the app's own TypeScript and
+   *  the HTML shell it mounts into. Tests are included on purpose, since a `.dark`
+   *  set in a test would be pinning behaviour the app does not have; this file is the
+   *  one exception, since its own test names say the word. */
+  const sources = [
+    ...readdirSync(join(webRoot, 'src'), { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile() && /\.tsx?$/.test(entry.name) && entry.name !== 'tokens.test.ts')
+      .map((entry) => join(entry.parentPath, entry.name)),
+    join(webRoot, 'index.html'),
+  ].map((path) => ({ path, text: readFileSync(path, 'utf-8') }))
+
+  it('binds dark: to a .dark class, never to the OS preference', () => {
+    // Tailwind v4 defaults `dark:` to `prefers-color-scheme: dark`. The hub has no
+    // dark theme, so the only effect that default ever had was a visitor's OS filling
+    // every Input and Textarea ink-at-30% (`dark:bg-input/30`), grey-blue where the
+    // landing's fields are white (ORB-138). Bound to a class instead, as the CRM's
+    // tokens.css binds it for its own `.dark` block, the OS reaches nothing.
+    expect(tokensCss).toMatch(/@custom-variant dark \(&:is\(\.dark \*\)\);/)
+  })
+
+  it('has nothing that adds the .dark class, so every dark: utility stays inert', () => {
+    // The shadcn primitives keep their `dark:` utilities (the next one pasted in will
+    // carry them too). What makes that harmless is that no string in the app, and no
+    // rule in this stylesheet, ever names the bare class the variant now depends on:
+    // a `dark` inside a string literal that is not the `dark:` prefix is the day a
+    // half-designed second theme starts, and this is where that fails.
+    expect(sources.some(({ text }) => text.includes('dark:'))).toBe(true)
+    for (const { path, text } of sources) {
+      expect(text, path).not.toMatch(/(["'`])[^"'`\n]*\bdark\b(?!:)[^"'`\n]*\1/)
+    }
+    expect(tokensCss).not.toMatch(/^\s*\.dark\b/m)
   })
 })
