@@ -83,7 +83,7 @@ jobs:
       # request that proves the container started, nginx parsed its config and the
       # build produced the page map the config expects.
       health-url: http://127.0.0.1:8083/
-      url: https://joinorbiters.com
+      url: https://preview.joinorbiters.com
     secrets: inherit
 
   production:

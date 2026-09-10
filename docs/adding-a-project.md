@@ -258,8 +258,14 @@ rows.
 | website | web 8082 | web 8083 |
 | hub (`orbiters`, `orbiters-preview`) | api 8084, web 8085, Postgres 55435 | api 8086, web 8087, Postgres 55436 |
 
-The vhost proxies production only. A preview with no public name is reached on the
-host, by its loopback port, which is also why its deploy job passes no `url`.
+Since 2026-09-10 preview has public names too: `preview.joinorbiters.com` mirrors the
+website plus hub map, `preview.pigro.joinorbiters.com` mirrors the CRM's, and both are
+behind HTTP basic auth against `/etc/nginx/.htpasswd-preview` with
+`X-Robots-Tag: noindex` on every answer. So a new project's preview gets a vhost as
+well as a production one, the two files stay the same shape, and only the ports differ.
+Two rules that are the reason it is safe: the password file lives on the server and
+never in the repository, and a preview name only ever proxies preview containers, so a
+click inside preview cannot walk out into production data.
 
 The copy in the repository is plain HTTP and is the source of truth for what the rules
 are. The copy in `/etc/nginx/sites-available/` has certbot's port-443 block on top of
