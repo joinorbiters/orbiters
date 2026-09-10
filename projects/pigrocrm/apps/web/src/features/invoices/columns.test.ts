@@ -243,8 +243,9 @@ describe('the accrual period column', () => {
 /**
  * The «Descrizione» column (ORB-130): the causale, which until now the list never
  * showed. A causale can be 200 characters long, so the cell is the one place in this
- * table that truncates: a block with a maximum width and an ellipsis, the whole text as
- * the cell's title, rather than a column that widens the table to fit the longest row.
+ * table that truncates: the column takes what the others leave, down to a floor, and the
+ * text clips there with the whole causale as the cell's title, rather than a column that
+ * widens the table to fit the longest row.
  */
 describe('the description column', () => {
   it('sits right after the customer when the list shows one, and after the number otherwise', () => {
@@ -262,14 +263,15 @@ describe('the description column', () => {
   })
 
   /** The column takes what the others leave (`width: 100%` on the header) and the span
-   *  fills exactly that (a block of width zero with a minimum of the whole cell), so
-   *  the text truncates at the column's width instead of widening the table. */
+   *  fills exactly that (a block of width zero whose minimum is the whole cell, never
+   *  less than 12rem), so the text truncates at the column's width instead of widening
+   *  the table, and the column cannot shrink to its header on a narrow screen. */
   it('truncates a long causale at the width the column gets and keeps the whole text as the title', () => {
     expect(column('descrizione').meta).toEqual({ width: '100%' })
     renderCell('descrizione', { ...ISSUED, causale: LONG_CAUSALE } as Invoice)
     const cell = screen.getByTitle(LONG_CAUSALE)
     expect(cell).toHaveTextContent(LONG_CAUSALE)
-    for (const cls of ['block', 'w-0', 'min-w-full', 'truncate']) {
+    for (const cls of ['block', 'w-0', 'min-w-[max(100%,12rem)]', 'truncate']) {
       expect(cell.className).toContain(cls)
     }
   })

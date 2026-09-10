@@ -35,8 +35,12 @@ export interface InvoiceColumnOptions {
  * a rendering fault rather than as what it is.
  */
 function customerName(row: Invoice): string {
-  const name = row.customer_ragione_sociale
-  return name === null || name === undefined || name === '' ? EMPTY : name
+  return textOrDash(row.customer_ragione_sociale)
+}
+
+/** `null`, `undefined` and `''` are all "nothing here", as everywhere else in this table. */
+function textOrDash(value: string | null | undefined): string {
+  return value === null || value === undefined || value === '' ? EMPTY : value
 }
 
 /**
@@ -49,11 +53,9 @@ function accrualPeriod(row: Invoice): string {
   return formatPeriod(row.competenza_da, row.competenza_a)
 }
 
-/** The causale, or the dash: `''` and `null` are both "nothing here", as everywhere
- *  else in this table. */
+/** The causale, or the dash. */
 function description(row: Invoice): string {
-  const causale = row.causale
-  return causale === null || causale === undefined || causale === '' ? EMPTY : causale
+  return textOrDash(row.causale)
 }
 
 export function buildInvoiceColumns(
@@ -97,17 +99,23 @@ export function buildInvoiceColumns(
       // pushed the other eight past the frame at 1440px (measured: 24rem left the table
       // 280px wider than its box). So it is sized the other way round: the header asks
       // for `100%`, which in an auto-layout table means "whatever the others leave", and
-      // the span is a block of width zero with a minimum of the whole cell, so the cell
-      // contributes nothing to the table's minimum and the text truncates at exactly the
-      // width the column got. `truncate` works here where it did not on the customer's
-      // name because the block has a width to clip against. The whole causale stays
-      // reachable as the cell's title.
+      // the span is a block of width zero whose minimum is the whole cell, so the text
+      // truncates at exactly the width the column got. `truncate` works here where it
+      // did not on the customer's name because the block has a width to clip against.
+      //
+      // The 12rem inside the `max()` is a floor: without it the column shrank to its
+      // header at 1280px (measured, 81px) and read as an ellipsis, which defeats the
+      // column. A percentage resolves to zero while the table measures its minimum, so
+      // the floor is the only part of the minimum the cell contributes; at 1440px with the
+      // sidebar open it costs about 70px of horizontal scroll inside the frame, which the
+      // table already handles, and from 1512px up nothing scrolls. The whole causale
+      // stays reachable as the cell's title.
       meta: { width: '100%' },
       cell: ({ row }) => {
         const causale = description(row.original)
         if (causale === EMPTY) return <span className="text-muted-foreground">{EMPTY}</span>
         return (
-          <span className="block w-0 min-w-full truncate" title={causale}>
+          <span className="block w-0 min-w-[max(100%,12rem)] truncate" title={causale}>
             {causale}
           </span>
         )

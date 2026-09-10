@@ -294,14 +294,19 @@ describe('InvoiceActions', () => {
     expect(screen.getByRole('button', { name: /^PDF$/i })).toBeInTheDocument()
   })
 
+})
+
+/** The badge lives in its own file (see there for why); its tests live here beside the
+ *  actions that read the same `importata_da` flag. */
+describe('InvoiceStateBadge', () => {
   it('shows the "imported" badge next to the state badge, naming no source', () => {
     const imported = { ...ISSUED, importata_da: 'esterno' } as Invoice
     wrap(<InvoiceStateBadge invoice={imported} />)
     expect(screen.getByText(/^importata$/i)).toBeInTheDocument()
   })
 
-  /** The list turns the pill off (ORB-130); the detail page, which renders the badge
-   *  with no option, keeps it as the reason the XML actions are missing. */
+  /** The list turns the pill off (ORB-130). Rendered with no option, as the detail page
+   *  does, the badge keeps it: that is the test above this one. */
   it('leaves the "imported" badge out when asked to, and keeps the state', () => {
     const imported = { ...ISSUED, importata_da: 'esterno' } as Invoice
     wrap(<InvoiceStateBadge invoice={imported} importata={false} />)

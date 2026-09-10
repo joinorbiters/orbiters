@@ -38,7 +38,10 @@ import { cn } from '@/lib/utils'
  * itself would leave its own header on the left. `width` is a plain CSS length passed
  * to the header cell, which is enough to keep the «⋯» column from taking a fair share
  * of the table's width -- v9's real column sizing is a feature (`columnSizingFeature`)
- * this table deliberately does not register.
+ * this table deliberately does not register. A percentage works too, and means the
+ * opposite thing: in an auto-layout table a `100%` column is handed whatever the other
+ * columns leave, which is how the invoice list's «Descrizione» column stays flexible
+ * (`features/invoices/columns.tsx`).
  */
 export interface DataTableColumnMeta {
   align?: 'left' | 'right'
