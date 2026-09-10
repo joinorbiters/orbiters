@@ -108,7 +108,12 @@ describe('orbiters.html', () => {
     expect(html).toMatch(/href="\/privacy"/)
     const privacy = readFileSync(join(__dirname, 'privacy.html'), 'utf-8')
     expect(privacy).toContain('Orbiters')
-    expect(privacy).toMatch(/href="\/orbiters"/)
+    // "/orbiters" is a 301 to "/", where the community page actually lives
+    // (path-map-plugin.ts). Pinned on the link's own text ("joinorbiters.com", the
+    // paragraph explaining where the signup's data goes) rather than a bare `"/"`,
+    // which the header brand and the footer's "Home" link also match and would pass
+    // even if this specific back-link were ever removed.
+    expect(privacy).toMatch(/href="\/(?:orbiters)?">joinorbiters\.com</)
   })
 
   it('no longer signs itself as a PigroCRM project, and offers no login', () => {
@@ -205,6 +210,31 @@ describe('orbiters.css', () => {
 
   it('does not import the landing sheet', () => {
     expect(css).not.toMatch(/@import/)
+  })
+
+  it('draws the note links as bordered controls, not a bare rectangle (ORB-88)', () => {
+    // Until 2026-09-09 these two links lived in a real `<footer>`, sitting on the
+    // field with a ground-sliver background of its own; ORB-19 removed that footer
+    // (git history: `.foot a`, the "PigroCRM" and "Accedi" pair). What is left of it
+    // is the Privacy link and "Raccontacelo", both inline in the note under the form
+    // now, and this is landing.css's own header/footer treatment (ORB-64) applied to
+    // them, so the two stylesheets stop disagreeing on what a link control looks like.
+    const shell = css.match(/\.note a\s*\{([^}]*)\}/)?.[1]
+    expect(shell, 'the note link control shell rule was not found').toBeTruthy()
+    expect(shell).toMatch(/background-color:\s*var\(--orb-ground\)/)
+    expect(shell).toMatch(/border:\s*2px solid var\(--orb-ink\)/)
+    // 44px, the touch-target floor: this is the page people actually reach on a phone.
+    // `min-height` only takes effect because the anchor is `inline-flex`, taken out of
+    // normal inline flow; pin that too, or the floor can be silently dropped.
+    expect(shell).toMatch(/display:\s*inline-flex/)
+    expect(shell).toMatch(/min-height:\s*2\.75rem/)
+    // No shadow at this tier: that is `.box`'s own signal, not a link's.
+    expect(shell).not.toMatch(/box-shadow/)
+
+    const hover = css.match(/\.note a:hover\s*\{([^}]*)\}/)?.[1]
+    expect(hover, 'the note link hover rule was not found').toBeTruthy()
+    expect(hover).toMatch(/background-color:\s*var\(--orb-ink\)/)
+    expect(hover).toMatch(/color:\s*var\(--orb-cta-ink\)/)
   })
 })
 
