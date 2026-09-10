@@ -90,7 +90,7 @@ code {
   overflow-wrap: anywhere;
 }
 
-/* --- Header: the brand and one link. */
+/* --- Header: the brand and one link, both real controls on the field. */
 .top {
   display: flex;
   align-items: center;
@@ -98,23 +98,59 @@ code {
   padding-block: 1.25rem;
 }
 
-/* The header and the footer sit on the field, so each link carries a sliver of the
-   page's own ground behind it and stays readable over a dark tile: the same move
-   orbiters.css makes for its footer. */
-.top a,
+/* The header and the footer sit on the field, so each control carries a sliver of
+   the page's own ground behind it and stays readable over a dark tile: the same
+   move orbiters.css makes for its footer. A border is what turns that sliver into
+   a control instead of a hole punched through the tiles, and this tier carries no
+   shadow, the same as the two hero doors below: a shadow reads as `.box`/`.card`,
+   not as a link. `min-height` clears the 44px touch-target floor even at the
+   footer's smaller type, where the padding alone would not. Scoped to `.quiet-link`
+   rather than to every `a` in `.top`, so the brand gets its own rule instead of
+   inheriting a patch meant for a control it isn't. */
+.brand,
+.top .quiet-link,
 footer .quiet-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
   background-color: var(--landing-surface);
-  padding: 0.2rem 0.45rem;
+  border-width: 2px;
+  padding-inline: 0.75rem;
 }
 
 .brand {
-  display: inline-flex;
-  align-items: center;
   gap: 0.6rem;
   font-size: 1.125rem;
   font-weight: 500;
   color: var(--landing-ink);
   text-decoration: none;
+}
+
+/* An offset shadow, not the ink-invert the two links get below: the glyph draws two
+   of its four tiles in `--color-prussian-blue`, the same colour as `--landing-ink`,
+   so inverting the ground would erase half the mark. */
+.brand:hover {
+  box-shadow: 4px 4px 0 var(--landing-ink);
+}
+
+.top .quiet-link,
+footer .quiet-link {
+  text-decoration: none;
+}
+
+/* Plain inline flow otherwise (privacy.html and termini.html's two-link footers
+   carry no gap of their own), so consecutive links need their own breathing room;
+   the first stays flush with the content edge. On index.html's four-link footer,
+   which already carries a flex `gap`, the DOM adjacency still matches and this
+   only adds a negligible amount on top. */
+footer .quiet-link + .quiet-link {
+  margin-inline-start: 0.4rem;
+}
+
+.top .quiet-link:hover,
+footer .quiet-link:hover {
+  background-color: var(--landing-ink);
+  color: var(--landing-cta-ink);
 }
 
 /* --- Hero: the field behind, one box in front. */
@@ -270,6 +306,9 @@ li {
   border-color: var(--landing-ink);
 }
 
+/* The generic form: an underlined citation inline in running text, on privacy.html
+   and termini.html. The header link and the footer's carry the bordered control
+   above instead, which wins on specificity without needing `!important`. */
 .quiet-link {
   color: var(--landing-ink-quiet);
   text-decoration: underline;
