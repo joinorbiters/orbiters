@@ -8,6 +8,7 @@ the settings it was built under.
 """
 
 from collections.abc import Iterator
+from contextlib import contextmanager
 
 import pytest
 from fastapi.testclient import TestClient
@@ -22,6 +23,7 @@ from pigrocrm_api.main import create_app
 from pigrocrm_api.tenancy import split_tenant_prefix
 
 SLUG = "studio-prova"
+REGISTRY_TOKEN = "un-token-lungo-solo-per-questa-suite"
 SIGNUP = {
     "slug": SLUG,
     "nome": "Ada Lovelace",
@@ -40,16 +42,17 @@ def container_settings(api_engine: Engine) -> Settings:
     )
 
 
-@pytest.fixture
-def spaces_client(container_settings: Settings, api_engine: Engine) -> Iterator[TestClient]:
+@contextmanager
+def _serving(settings: Settings) -> Iterator[TestClient]:
     """A client whose root database is the container's CRM database and whose spaces are
     real databases on the same server. `get_session` is deliberately *not* overridden:
-    the point is that `deps` picks the database from the request."""
+    the point is that `deps` picks the database from the request. Every space the test
+    created under `SLUG` is dropped on the way out, and the registry emptied."""
     reset_session_factories()
     get_settings.cache_clear()
     app = create_app()
-    app.dependency_overrides[get_settings] = lambda: container_settings
-    registry = ensure_tenants_database(container_settings)
+    app.dependency_overrides[get_settings] = lambda: settings
+    registry = ensure_tenants_database(settings)
     try:
         with TestClient(app, base_url="https://testserver") as client:
             yield client
@@ -58,10 +61,23 @@ def spaces_client(container_settings: Settings, api_engine: Engine) -> Iterator[
             connection.execute(text("DELETE FROM tenants"))
         registry.dispose()
         reset_session_factories()
-        drop_database(
-            container_settings, tenant_database_url(container_settings, tenant_database_name(SLUG))
-        )
+        drop_database(settings, tenant_database_url(settings, tenant_database_name(SLUG)))
         get_settings.cache_clear()
+
+
+@pytest.fixture
+def spaces_client(container_settings: Settings) -> Iterator[TestClient]:
+    with _serving(container_settings) as client:
+        yield client
+
+
+@pytest.fixture
+def registry_client(container_settings: Settings) -> Iterator[TestClient]:
+    """The same installation with `PIGROCRM_REGISTRY_TOKEN` set: the one that lets the
+    Orbiters hub read the list of spaces (ORB-142)."""
+    with_token = container_settings.model_copy(update={"registry_token": REGISTRY_TOKEN})
+    with _serving(with_token) as client:
+        yield client
 
 
 def test_the_prefix_is_split_only_for_a_space_and_only_before_api_or_health() -> None:
@@ -218,3 +234,38 @@ def test_the_root_space_endpoint_names_the_root_or_says_there_is_none(
     spaces_client: TestClient,
 ) -> None:
     assert spaces_client.get("/api/tenants/root").json() == {"slug": None}
+
+
+def test_without_a_registry_token_the_list_of_spaces_does_not_exist(
+    spaces_client: TestClient,
+) -> None:
+    """A self-hosted installation that never set the token exposes nothing new: the
+    route is a 404 whatever the caller presents, not a 401 that says «there is a door»."""
+    assert spaces_client.get("/api/tenants/").status_code == 404
+    assert (
+        spaces_client.get("/api/tenants/", headers={"Authorization": "Bearer qualcosa"}).status_code
+        == 404
+    )
+
+
+def test_the_list_of_spaces_answers_only_to_the_registry_token(
+    registry_client: TestClient,
+) -> None:
+    """ORB-142: the hub's admin area reads which spaces exist and whose they are. The
+    token is the whole credential, so a missing or wrong one is a 401; the right one gets
+    every registry row, newest first, and nothing about the database behind a row."""
+    assert registry_client.get("/api/tenants/").status_code == 401
+    wrong = registry_client.get("/api/tenants/", headers={"Authorization": "Bearer sbagliato"})
+    assert wrong.status_code == 401
+    bearer = {"Authorization": f"Bearer {REGISTRY_TOKEN}"}
+
+    assert registry_client.get("/api/tenants/", headers=bearer).json() == []
+
+    created = registry_client.post("/api/tenants/", json=SIGNUP)
+    assert created.status_code == 201, created.text
+    listed = registry_client.get("/api/tenants/", headers=bearer)
+    assert listed.status_code == 200, listed.text
+    rows = listed.json()
+    assert [row["slug"] for row in rows] == [SLUG]
+    assert rows[0]["owner_email"] == SIGNUP["email"]
+    assert set(rows[0]) == {"id", "slug", "owner_email", "created_at"}

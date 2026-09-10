@@ -72,6 +72,8 @@ services:
       PIGROCRM_PUBLIC_URL: ${PIGROCRM_PUBLIC_URL:-}
       PIGROCRM_GOOGLE_APP_UNVERIFIED: ${PIGROCRM_GOOGLE_APP_UNVERIFIED:-false}
       PIGROCRM_ROOT_SLUG: ${PIGROCRM_ROOT_SLUG:-}
+      # Lets the Orbiters hub read the list of spaces (ORB-142). Empty: no such route.
+      PIGROCRM_REGISTRY_TOKEN: ${PIGROCRM_REGISTRY_TOKEN:-}
       # PIGROCRM_COOKIE_SECURE is deliberately NOT set here -- do not add it.
       # .env (this same file, shared with the plain `uv run uvicorn`/`uv run pytest`
       # local-dev flow) carries PIGROCRM_COOKIE_SECURE=false for that flow's own

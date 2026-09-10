@@ -7,7 +7,10 @@ differently, but the page never offers it there, and a space creating spaces is 
 thing this product means.
 """
 
-from fastapi import APIRouter, Response, status
+import secrets
+from typing import Annotated
+
+from fastapi import APIRouter, Header, HTTPException, Response, status
 from pydantic import BaseModel
 
 from pigrocrm.core.tenants import TenantAvailability, TenantRead, TenantService, TenantSignup
@@ -29,6 +32,25 @@ def root_space(settings: SettingsDep) -> RootSpace:
     """What the SPA asks under a prefix to learn whether it is the root wearing its own
     name -- in which case its login may still offer to create a space."""
     return RootSpace(slug=settings.root_slug or None)
+
+
+@router.get("/", response_model=list[TenantRead])
+def list_spaces(
+    registry: TenantsRegistryDep,
+    settings: SettingsDep,
+    authorization: Annotated[str | None, Header()] = None,
+) -> list[TenantRead]:
+    """Every space in the registry, newest first, for the one caller that holds
+    `PIGROCRM_REGISTRY_TOKEN`: the Orbiters hub, whose admin area shows which spaces
+    exist and whose they are (ORB-142). Without the token configured the route does not
+    exist (404), so nothing says there is a door; with it, a missing or wrong bearer is a
+    401. What comes back is the registry row and nothing about the database behind it."""
+    if not settings.registry_token:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not Found")
+    presented = authorization.removeprefix("Bearer ").strip() if authorization else ""
+    if not presented or not secrets.compare_digest(presented, settings.registry_token):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "token non valido")
+    return TenantService(registry, settings).list()
 
 
 @router.get("/{slug}/disponibile", response_model=TenantAvailability)
