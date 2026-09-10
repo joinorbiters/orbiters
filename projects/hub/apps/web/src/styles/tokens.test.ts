@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -183,28 +183,37 @@ describe('the .site scope (ORB-73)', () => {
 })
 
 describe('the dark variant (ORB-138)', () => {
-  const primitives = ['button', 'badge', 'input', 'textarea'].map((name) =>
-    readFileSync(join(__dirname, '..', 'components', 'ui', `${name}.tsx`), 'utf-8'),
-  )
+  const webRoot = join(__dirname, '..', '..')
+  /** Every source that can put a class on an element: the app's own TypeScript and
+   *  the HTML shell it mounts into. Tests are included on purpose, since a `.dark`
+   *  set in a test would be pinning behaviour the app does not have; this file is the
+   *  one exception, since its own test names say the word. */
+  const sources = [
+    ...readdirSync(join(webRoot, 'src'), { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile() && /\.tsx?$/.test(entry.name) && entry.name !== 'tokens.test.ts')
+      .map((entry) => join(entry.parentPath, entry.name)),
+    join(webRoot, 'index.html'),
+  ].map((path) => ({ path, text: readFileSync(path, 'utf-8') }))
 
-  it('binds dark: to a .dark class nobody sets, never to the OS preference', () => {
+  it('binds dark: to a .dark class, never to the OS preference', () => {
     // Tailwind v4 defaults `dark:` to `prefers-color-scheme: dark`. The hub has no
     // dark theme, so the only effect that default ever had was a visitor's OS filling
     // every Input and Textarea ink-at-30% (`dark:bg-input/30`), grey-blue where the
-    // landing's fields are white (ORB-138). The CRM's tokens.css already pins the same
-    // variant to a class (`projects/pigrocrm/apps/web/src/styles/tokens.css`).
+    // landing's fields are white (ORB-138). Bound to a class instead, as the CRM's
+    // tokens.css binds it for its own `.dark` block, the OS reaches nothing.
     expect(tokensCss).toMatch(/@custom-variant dark \(&:is\(\.dark \*\)\);/)
-    // The words may appear in a comment; a media query on them may not.
-    expect(tokensCss).not.toMatch(/@media[^{]*prefers-color-scheme/)
   })
 
-  it('has no primitive whose dark: classes could ever match, since nothing adds .dark', () => {
+  it('has nothing that adds the .dark class, so every dark: utility stays inert', () => {
     // The shadcn primitives keep their `dark:` utilities (the next one pasted in will
-    // carry them too); this pins that the class they now depend on appears nowhere in
-    // the app, so they stay inert rather than becoming a half-designed second theme.
-    const app = [tokensCss, ...primitives].join('\n')
-    expect(primitives.some((source) => source.includes('dark:'))).toBe(true)
-    expect(app).not.toMatch(/className=[^>]*\bdark\b(?!:)/)
+    // carry them too). What makes that harmless is that no string in the app, and no
+    // rule in this stylesheet, ever names the bare class the variant now depends on:
+    // a `dark` inside a string literal that is not the `dark:` prefix is the day a
+    // half-designed second theme starts, and this is where that fails.
+    expect(sources.some(({ text }) => text.includes('dark:'))).toBe(true)
+    for (const { path, text } of sources) {
+      expect(text, path).not.toMatch(/(["'`])[^"'`\n]*\bdark\b(?!:)[^"'`\n]*\1/)
+    }
     expect(tokensCss).not.toMatch(/^\s*\.dark\b/m)
   })
 })

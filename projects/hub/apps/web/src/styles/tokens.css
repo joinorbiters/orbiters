@@ -22,8 +22,9 @@
    visible effect was a visitor's OS filling every Input and Textarea with
    `dark:bg-input/30`: ink at 30% over the paper, grey-blue where the landing's fields
    are white (ORB-138, `docs/design/DECISIONS.md` 2026-09-10). Bound to a `.dark` class
-   nobody adds, the shadcn primitives' `dark:` utilities stay inert, the same way the
-   CRM's tokens.css already pins them. */
+   nobody adds, the shadcn primitives' `dark:` utilities stay inert. The CRM's tokens.css
+   carries the same line for the opposite reason: it owns a `.dark` token block and wants
+   the variant to follow that class rather than the OS. Same binding, no theme here. */
 @custom-variant dark (&:is(.dark *));
 
 @theme {
