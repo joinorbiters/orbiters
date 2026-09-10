@@ -104,7 +104,7 @@ export function Modifica() {
             autoFocus: false,
           })}
           {errors[step.id] && (
-            <p role="alert" className="inline-block bg-card p-(--landing-link-pad) text-sm text-destructive">
+            <p role="alert" className="text-sm text-destructive">
               {errors[step.id]}
             </p>
           )}
@@ -112,7 +112,7 @@ export function Modifica() {
       ))}
 
       {failure && (
-        <p role="alert" className="inline-block bg-card p-(--landing-link-pad) text-sm text-destructive">
+        <p role="alert" className="text-sm text-destructive">
           {failure}
         </p>
       )}
