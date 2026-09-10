@@ -156,6 +156,15 @@ describe('the invoice list', () => {
     expect(screen.getByRole('cell', { name: 'ACME S.r.l.' })).toBeInTheDocument()
   })
 
+  it('says what each invoice is for, right after the customer (ORB-130)', async () => {
+    mockInvoices([invoice({ causale: 'Consulenza agosto', importata_da: 'esterno' })])
+    renderList()
+    const headers = (await screen.findAllByRole('columnheader')).map((h) => h.textContent)
+    expect(headers.indexOf('Descrizione')).toBe(headers.indexOf('Cliente') + 1)
+    expect(screen.getByRole('cell', { name: 'Consulenza agosto' })).toBeInTheDocument()
+    expect(screen.queryByText(/^importata$/i)).toBeNull()
+  })
+
   it('says which period each invoice is about, beside its date (ORB-126)', async () => {
     mockInvoices([
       invoice({

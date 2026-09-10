@@ -21,7 +21,15 @@ import {
  *  could fire (a wire string the cast below lies about) it would render a grey pill whose
  *  label is `undefined`, which is worse than nothing at all. If that cast ever stops being
  *  safe, the fix is to narrow it here, not to tint an empty pill. */
-export function InvoiceStateBadge({ invoice }: { invoice: Invoice }) {
+export function InvoiceStateBadge({
+  invoice,
+  importata = true,
+}: {
+  invoice: Invoice
+  /** Whether an imported invoice also gets its «importata» pill. The detail page wants
+   *  it, as the reason the XML actions are missing; the list does not (ORB-130). */
+  importata?: boolean
+}) {
   const stato = invoice.stato as InvoiceStato
   return (
     <span className="inline-flex items-center gap-1.5">
@@ -35,7 +43,7 @@ export function InvoiceStateBadge({ invoice }: { invoice: Invoice }) {
 
           A pill with no dot, deliberately: «importata» is not one of the fiscal states
           and must not read as a sixth one sitting in the same row. */}
-      {invoice.importata_da != null ? (
+      {importata && invoice.importata_da != null ? (
         <Badge variant="pill" className="text-muted-foreground">
           importata
         </Badge>

@@ -294,10 +294,24 @@ describe('InvoiceActions', () => {
     expect(screen.getByRole('button', { name: /^PDF$/i })).toBeInTheDocument()
   })
 
+})
+
+/** The badge lives in its own file (see there for why); its tests live here beside the
+ *  actions that read the same `importata_da` flag. */
+describe('InvoiceStateBadge', () => {
   it('shows the "imported" badge next to the state badge, naming no source', () => {
     const imported = { ...ISSUED, importata_da: 'esterno' } as Invoice
     wrap(<InvoiceStateBadge invoice={imported} />)
     expect(screen.getByText(/^importata$/i)).toBeInTheDocument()
+  })
+
+  /** The list turns the pill off (ORB-130). Rendered with no option, as the detail page
+   *  does, the badge keeps it: that is the test above this one. */
+  it('leaves the "imported" badge out when asked to, and keeps the state', () => {
+    const imported = { ...ISSUED, importata_da: 'esterno' } as Invoice
+    wrap(<InvoiceStateBadge invoice={imported} importata={false} />)
+    expect(screen.getByText('Emessa')).toBeInTheDocument()
+    expect(screen.queryByText(/^importata$/i)).toBeNull()
   })
 
   // Whatever the column holds -- the value is provenance the CRM keeps for itself, not

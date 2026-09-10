@@ -48,6 +48,13 @@ describe('InvoicesTab', () => {
     expect(await screen.findByRole('columnheader', { name: 'Competenza' })).toBeInTheDocument()
   })
 
+  /** The tab has no customer column, so the description follows the number (ORB-130). */
+  it('says what each invoice is for, right after the number', async () => {
+    renderWithClient(<InvoicesTab owner={{ customerId: 'c1' }} />)
+    const headers = (await screen.findAllByRole('columnheader')).map((h) => h.textContent)
+    expect(headers.indexOf('Descrizione')).toBe(headers.indexOf('Numero') + 1)
+  })
+
   /**
    * The slot exists so the button that creates an invoice sits on the tab that lists
    * them, rather than in the page header where it would be offered from every other tab
