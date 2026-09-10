@@ -11,9 +11,8 @@
    those four follow the site's own visual system instead -- no radius, a solid ink
    line, a stepped offset shadow, never a blur -- and the `.site` scope below is that
    system, restated here because `projects/website` builds separately and imports
-   nothing from this project. It changes no rendering by itself: nothing carries the
-   `site` class yet, since that is the page chrome ORB-74 adds to `Shell`, and the two
-   wizards' own fields and buttons are ORB-75. */
+   nothing from this project. `Shell` carries the `site` class on all four public
+   pages (ORB-74); the two wizards' own fields and buttons are still ORB-75. */
 @import 'tailwindcss';
 @import '@orbiters/brand/font.css';
 @import '@orbiters/brand/palette.css';
@@ -159,4 +158,32 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* --- The page ground for the .site scope (ORB-74): the same faint grid the landing
+   sits on, `projects/website/src/system.css`'s `--system-grid`/`--system-cell`
+   restated here for the reason the block above restates its colours -- the two
+   projects build separately and share no CSS. A second `.site` rule rather than a
+   line inside the first: the shape tokens above are ORB-73's and this is the ground
+   ORB-74 adds on top of them, so an edit to one never has to scroll past the other's
+   comment to find its own declarations. `--landing-ink` is already this scope's
+   colour, so the tile is drawn from a token this file declares elsewhere, never a
+   fresh mix. `--landing-link-pad` is the one pad `landing.css`'s `.top a` and
+   `footer .quiet-link` both use (landing.css:104-108) to keep a link legible over a
+   tile it sits on; named here so `Shell` reaches for it once instead of typing
+   `0.2rem 0.45rem` on every link that needs it. Wrapped in `@layer base` so a
+   `bg-*` utility on the same element still wins over the ground: Tailwind emits
+   its own utilities into `@layer utilities`, and an unlayered rule beats a layered
+   one regardless of specificity. */
+@layer base {
+  .site {
+    --landing-grid: color-mix(in oklab, var(--landing-ink) 7%, transparent);
+    --landing-cell: 16px;
+    --landing-link-pad: 0.2rem 0.45rem;
+    background-color: var(--landing-surface);
+    background-image:
+      linear-gradient(to right, var(--landing-grid) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--landing-grid) 1px, transparent 1px);
+    background-size: var(--landing-cell) var(--landing-cell);
+  }
 }

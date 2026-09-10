@@ -18,12 +18,18 @@ const brandCss = readFileSync(
 )
 const css = `${brandCss}\n${tokensCss}`
 
-/** The declarations of one rule of tokens.css, by exact selector. */
+/** Every declaration of a selector in tokens.css, concatenated in file order. A
+ *  selector like `.site` can legitimately appear more than once (ORB-74 adds a
+ *  second `.site` rule for the page ground rather than editing ORB-73's), and a
+ *  non-global match would silently see only the first one, exempting every later
+ *  occurrence from the assertions below -- including the raw-hex guard. */
 function block(selector: string): string {
   const escaped = selector.replace(/[.[\]*+?^${}()|\\]/g, '\\$&')
-  const body = css.match(new RegExp(`(?:^|\\n)${escaped}\\s*\\{([\\s\\S]*?)\\n\\}`))?.[1]
-  if (!body) throw new Error(`rule "${selector}" not found in tokens.css`)
-  return body
+  const bodies = [
+    ...css.matchAll(new RegExp(`(?:^|\\n)[ \\t]*${escaped}\\s*\\{([\\s\\S]*?)\\n[ \\t]*\\}`, 'g')),
+  ].map((match) => match[1])
+  if (bodies.length === 0) throw new Error(`rule "${selector}" not found in tokens.css`)
+  return bodies.join('\n')
 }
 
 const site = block('.site')
