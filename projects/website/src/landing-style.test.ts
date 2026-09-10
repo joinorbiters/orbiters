@@ -165,4 +165,34 @@ describe('the landing shares the product system', () => {
     expect(rule('.cta')).not.toMatch(/border-radius/)
     expect(rule('.cta:hover')).toMatch(/background-color:\s*var\(--landing-ink\)/)
   })
+
+  it('draws the header and footer links as bordered controls, not a borderless patch (ORB-64)', () => {
+    // The brand, "Accedi" and the footer links used to be `.top a, footer
+    // .quiet-link` with a background colour and nothing else: no border, no
+    // hover surface, and the brand caught the same treatment though it isn't a
+    // control. This is the shell all three share now.
+    const shell = css.match(
+      /\.brand,\s*\.top \.quiet-link,\s*footer \.quiet-link\s*\{([^}]*)\}/,
+    )?.[1]
+    expect(shell, 'the header/footer control shell rule was not found').toBeTruthy()
+    expect(shell).toMatch(/background-color:\s*var\(--landing-surface\)/)
+    expect(shell).toMatch(/border-width:\s*2px/)
+    // 44px, the touch-target floor: at the footer's smaller type the padding
+    // alone falls short, so the floor is explicit rather than incidental.
+    expect(shell).toMatch(/min-height:\s*2\.75rem/)
+    // No shadow at this tier: that is `.box`/`.card`'s signal, not a link's.
+    expect(shell).not.toMatch(/box-shadow/)
+
+    const hover = css.match(
+      /\.top \.quiet-link:hover,\s*footer \.quiet-link:hover\s*\{([^}]*)\}/,
+    )?.[1]
+    expect(hover, 'the header/footer hover rule was not found').toBeTruthy()
+    expect(hover).toMatch(/background-color:\s*var\(--landing-ink\)/)
+    expect(hover).toMatch(/color:\s*var\(--landing-cta-ink\)/)
+
+    // The same class doubles as an inline citation in privacy.html and
+    // termini.html's running text, which must stay underlined prose rather
+    // than turn into a button mid-sentence.
+    expect(rule('.quiet-link')).toMatch(/text-decoration:\s*underline/)
+  })
 })
