@@ -126,16 +126,25 @@ footer .quiet-link {
   text-decoration: none;
 }
 
+/* An offset shadow, not the ink-invert the two links get below: the glyph draws two
+   of its four tiles in `--color-prussian-blue`, the same colour as `--landing-ink`,
+   so inverting the ground would erase half the mark. */
+.brand:hover {
+  box-shadow: 4px 4px 0 var(--landing-ink);
+}
+
 .top .quiet-link,
 footer .quiet-link {
   text-decoration: none;
 }
 
 /* Plain inline flow otherwise (privacy.html and termini.html's two-link footers
-   carry no gap of their own), so the boxes need their own breathing room; on
-   index.html's four-link footer this only adds to the flex `gap` already there. */
-footer .quiet-link {
-  margin-inline: 0.2rem;
+   carry no gap of their own), so consecutive links need their own breathing room;
+   the first stays flush with the content edge. On index.html's four-link footer,
+   which already carries a flex `gap`, the DOM adjacency still matches and this
+   only adds a negligible amount on top. */
+footer .quiet-link + .quiet-link {
+  margin-inline-start: 0.4rem;
 }
 
 .top .quiet-link:hover,

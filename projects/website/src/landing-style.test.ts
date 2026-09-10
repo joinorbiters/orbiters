@@ -190,9 +190,16 @@ describe('the landing shares the product system', () => {
     expect(hover).toMatch(/background-color:\s*var\(--landing-ink\)/)
     expect(hover).toMatch(/color:\s*var\(--landing-cta-ink\)/)
 
+    // The brand doesn't invert on hover the way the two links do: half its glyph
+    // is drawn in the same colour as the ink ground, so it gets an offset shadow
+    // instead, still without a blur.
+    expect(rule('.brand:hover')).toMatch(/box-shadow:\s*4px 4px 0 var\(--landing-ink\)/)
+
     // The same class doubles as an inline citation in privacy.html and
     // termini.html's running text, which must stay underlined prose rather
-    // than turn into a button mid-sentence.
+    // than turn into a button mid-sentence: a later edit that moves the box
+    // properties onto the generic rule would be the regression to catch.
     expect(rule('.quiet-link')).toMatch(/text-decoration:\s*underline/)
+    expect(rule('.quiet-link')).not.toMatch(/border-width|min-height|display:/)
   })
 })
