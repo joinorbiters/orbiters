@@ -24,9 +24,11 @@ describe.each(PAGES)('%s', (name) => {
     // legal pages. ORB-36: privacy.html and termini.html are served on
     // joinorbiters.com, not on pigro.joinorbiters.com, and it is the Orbiters signup
     // form that links to them, so they title themselves after the site they are on
-    // rather than after the CRM. index.html keeps PigroCRM in its title under
-    // Ivan's 2026-09-09 exception (ORB-24) for search continuity; see the
-    // brand-link assertion below for the same split.
+    // rather than after the CRM. index.html is PigroCRM's own landing page (served
+    // at /pigrocrm; orbiters.html is the community page at /), so it keeps naming
+    // the CRM in its title regardless of Ivan's separate «freelance» exception
+    // (ORB-24, positioning.md line 85); see the brand-link assertion below for the
+    // same title/brand split.
     expect(title).toContain(name === 'index.html' ? 'PigroCRM' : 'Orbiters')
     const description = meta(page, 'description') ?? ''
     expect(description.length).toBeGreaterThan(40)
@@ -36,7 +38,10 @@ describe.each(PAGES)('%s', (name) => {
     // a product that exists nowhere in that codebase. It is the easiest mistake
     // to repeat, and it is text Google reads during verification.
     expect(description).not.toMatch(/AI optimization platform/i)
-    expect(meta(page, 'og:title')).toBeTruthy()
+    // All three pages' og:title already begins "Orbiters" (index.html's own title
+    // keeps the "Con PigroCRM gratis" suffix, but its og:title does not repeat it),
+    // so this one assertion covers every page in PAGES with no ternary.
+    expect(meta(page, 'og:title')).toContain('Orbiters')
     expect(meta(page, 'og:description')).toBeTruthy()
     expect(meta(page, 'og:type')).toBe('website')
   })
