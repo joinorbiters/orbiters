@@ -387,15 +387,24 @@ def customers_at_reference_scale(db_engine: Engine) -> Iterator[Engine]:
     for the same step: leaving `customers` bloated here would be exactly the noise this
     fixture exists to remove, for whichever test runs next.
     """
-    # `customers` is empty of live rows here -- nothing before this fixture in the session
-    # commits into it -- but a plain `VACUUM` before the insert, not only `VACUUM (ANALYZE)`
-    # after it, is what actually discards whatever dead pages earlier tests' rollbacks left
-    # behind: at REFERENCE scale the leftover bloat is not a rounding error next to the
-    # corpus itself the way it is for `inflated`'s fifty thousand rows, so inserting into it
-    # first and only vacuuming afterwards still costs a `Seq Scan` on however many dead
-    # pages happened to precede it. Truncating the trailing empty pages before this corpus
-    # exists is what makes `customers`'s physical size a property of this fixture alone.
+    # `customers` should be empty of live rows here -- nothing before this fixture in the
+    # session commits into it and survives its own teardown -- but that is a claim about
+    # every other file sharing this container, not something this fixture controls, so it
+    # is checked rather than assumed: the failure this file exists to prevent is exactly a
+    # plan silently costed on a corpus that turned out not to be REFERENCE-scale. A plain
+    # `VACUUM` before the insert, not only `VACUUM (ANALYZE)` after it, is what actually
+    # discards whatever dead pages earlier tests' rollbacks left behind: at REFERENCE scale
+    # the leftover bloat is not a rounding error next to the corpus itself the way it is for
+    # `inflated`'s fifty thousand rows, so inserting into it first and only vacuuming
+    # afterwards still costs a `Seq Scan` on however many dead pages happened to precede it.
+    # Truncating the trailing empty pages before this corpus exists is what makes
+    # `customers`'s physical size a property of this fixture alone.
     with db_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+        live = connection.execute(text("SELECT count(*) FROM customers")).scalar_one()
+        assert live == 0, (
+            f"{live} committed customers survived an earlier test; this fixture's plan "
+            "would not be measured at REFERENCE scale"
+        )
         connection.execute(text("VACUUM customers"))
     factory = session_factory(db_engine)
     with factory() as session:
@@ -420,8 +429,13 @@ def customers_at_reference_scale(db_engine: Engine) -> Iterator[Engine]:
                 delete(PipelineStage).where(PipelineStage.id.notin_(pre_existing_stages))
             )
             session.commit()
+        # All five tables this fixture committed into, not only `customers`: `inflated`
+        # re-vacuums every table it dirtied for the same reason, and a plan assertion
+        # added to this file later against `people`, `deals`, `documents` or `invoices`
+        # deserves the same clean slate this test needed.
         with db_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            connection.execute(text("VACUUM (ANALYZE) customers"))
+            for table in ("customers", "people", "deals", "documents", "invoices"):
+                connection.execute(text(f"VACUUM (ANALYZE) {table}"))
 
 
 @pytest.fixture
@@ -438,12 +452,16 @@ def customers_session(customers_at_reference_scale: Engine) -> Iterator[Session]
 def test_the_planner_left_alone_still_prefers_a_sequential_scan_at_this_scale(
     customers_session: Session,
 ) -> None:
-    """The free planner's own choice on a genuinely REFERENCE-scale `customers`: no
-    `Seq Scan` above sits with `Filter` doing the excluding here, `Index Cond` doing the
-    excluding above. 500 narrow rows are cheaper to read whole, and it is right not to use
-    the trigram index -- this is what makes `enable_seqscan = off` necessary in
-    `_isolated_plan` above, and it is pinned here so a future reader does not take those
-    forced plans for a claim about what production does on a small table.
+    """The free planner's own choice on a genuinely REFERENCE-scale `customers`: the
+    `Seq Scan` the forced plans above never show, with `Filter` doing the excluding here
+    and `Index Cond` doing it above. 500 narrow rows are cheaper to read whole, and it is
+    right not to use the trigram index -- this is what makes `enable_seqscan = off`
+    necessary in `_isolated_plan` above, and it is pinned here so a future reader does not
+    take those forced plans for a claim about what production does on a small table.
+
+    No longer `@pytest.mark.planner`: that marker meant the plan depended on which machine
+    ran it, and `customers_at_reference_scale` is what removes the dependency, so this now
+    runs in the ordinary gate instead of preflight's single-machine lane.
 
     `customers_at_reference_scale` is what makes this a property of the data instead of a
     property of which tests happened to run first: see its own docstring for the table-bloat

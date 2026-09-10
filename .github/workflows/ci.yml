@@ -311,11 +311,13 @@ jobs:
       # `slow` builds a fifty-thousand-row corpus, so a PR does not pay for it and the
       # trunk does. `planner` is a different thing and is deselected on both: it asserts
       # which plan Postgres picks, the winning plan sits within a few percent of the
-      # loser at this row count, and a hosted runner picks the other one. It failed on
-      # the trunk run of the merge commit for exactly that reason, on code that had
-      # passed the same assertion on the devbox minutes earlier. It stays in preflight,
-      # which runs on one known machine, and ORB-9 tracks making the assertion say what
-      # it actually means instead of naming a plan.
+      # loser at this row count, and a hosted runner picks the other one.
+      # `test_trgm_escape.py`'s case (ORB-9) failed on the trunk run of the merge commit
+      # for exactly that reason, on code that had passed the same assertion on the devbox
+      # minutes earlier; its fix stopped costing the plan on whatever bloat the rest of
+      # the suite happened to leave behind, so it no longer carries the marker.
+      # `test_sort_plan.py` still does, for its own sort-plan assertions, and stays in
+      # preflight, which runs on one known machine.
       #
       # `slow` is not skipped on the trunk, it moved: the job below runs it in
       # parallel with this one. Measured 2026-09-09, the two are 10m and 12m of a
