@@ -35,8 +35,12 @@ import { REDIRECTS, route } from './path-map-plugin'
  *   site does not control (`/orbiters`, from before the community page took `/`);
  *   markup this build produces itself should say what it means directly. That rule is
  *   what the three links this issue names actually trip: none of them 404, all three
- *   still 301 to a page that exists, and all three are "wrong" only in that sense --
+ *   still 301 to a page that exists, and all three are "wrong" only in that sense,
  *   which is exactly why nothing before this test noticed them.
+ * - A path under `ELSEWHERE` (`/app/`, `/hub/...`) resolves to another tenant of the
+ *   origin, named in `deploy/joinorbiters.conf` and served by a container this suite
+ *   never runs, so the check stops at "the path map hands it away" and does not, and
+ *   cannot, follow it further.
  */
 
 const PAGE_FILES = ['index.html', 'orbiters.html', 'privacy.html', 'termini.html'] as const
@@ -55,11 +59,11 @@ function idsOn(page: string): Set<string> {
 }
 
 /** The site's own trusted external destinations. Mirrors the allowlist
- *  `landing-pages.test.ts:42` already enforces for `href`/`src` subresources, kept as
- *  its own list here because that file does not cover `orbiters.html`, and because an
- *  `<a>` a visitor clicks is a different concern from a subresource the page fetches
- *  for itself: this list is free to diverge from that one without either test lying
- *  about what it guarantees. */
+ *  `landing-pages.test.ts`'s "requests nothing from another origin" test already
+ *  enforces for `href`/`src` subresources, kept as its own list here because that
+ *  file does not cover `orbiters.html`, and because an `<a>` a visitor clicks is a
+ *  different concern from a subresource the page fetches for itself: this list is
+ *  free to diverge from that one without either test lying about what it guarantees. */
 const EXTERNAL_HOSTS = ['github.com', 'pigro.joinorbiters.com', 'example.com', 'openai.com', 'humancraft.tech']
 
 function checkExternal(href: string): string | undefined {
@@ -74,13 +78,19 @@ function checkExternal(href: string): string | undefined {
   return undefined
 }
 
-/** Resolves one internal path (no fragment) against the path map, applying the
- *  redirect-is-wrong rule from the file comment above. */
+/** Resolves one internal path (no fragment, no query string) against the path map,
+ *  applying the redirect-is-wrong rule from the file comment above. */
 function checkInternalPath(pathname: string): string | undefined {
   const result = route(pathname)
   if (result.kind === 'not-found') return `${pathname} is not served: the path map 404s it`
   if (result.kind === 'redirect') {
     return `${pathname} is a redirect to ${result.to}; link to ${result.to} directly instead of through the redirect`
+  }
+  // route() calls anything with a dot a "file" without checking it exists (that is
+  // what lets a hashed build asset through in preview); a source-tree check is not
+  // proof of a built one, but it does catch a plain typo in a link to a static asset.
+  if (result.kind === 'file' && !existsSync(join(SRC_DIR, pathname))) {
+    return `${pathname} is not served: no file under src/ answers it`
   }
   return undefined
 }
@@ -94,7 +104,11 @@ function checkHref(pageFile: PageFile, href: string): string | undefined {
   }
   if (/^https?:\/\//.test(href)) return checkExternal(href)
   if (href.startsWith('/')) {
-    const [pathname, fragment] = href.split('#') as [string, string | undefined]
+    // route() -- and the middleware built on it -- both drop the query string before
+    // matching a path; the same has to happen here, or a page's own campaign link to
+    // itself (e.g. "?utm_source=...") 404s in this check while nginx serves it fine.
+    const [pathWithoutQuery] = href.split('?') as [string]
+    const [pathname, fragment] = pathWithoutQuery.split('#') as [string, string | undefined]
     const pathFailure = checkInternalPath(pathname)
     if (pathFailure) return pathFailure
     if (fragment === undefined) return undefined
@@ -105,6 +119,10 @@ function checkHref(pageFile: PageFile, href: string): string | undefined {
     const targetFile = result.file.replace(/^\//, '') as PageFile
     return idsOn(html[targetFile] ?? '').has(fragment) ? undefined : `${href}: no id="${fragment}" on ${targetFile}`
   }
+  // A scheme this file does not otherwise recognise (tel:, sms:, data:, javascript:,
+  // ...) is not a page this site serves either, for the same reason mailto: above is
+  // skipped rather than resolved.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return undefined
   // A relative reference (e.g. "./file.pdf"), resolved against this project's src/ the
   // way a browser resolves it against the page: it has to exist on disk. None of the
   // four pages' <a> tags use one today; this is the fallback for the day one does.
@@ -135,5 +153,23 @@ describe('idsOn, the id-extraction helper behind the fragment check', () => {
     const page = '<h2 id="come-funziona">Come funziona</h2>'
     expect(idsOn(page).has('come-funziona')).toBe(true)
     expect(idsOn(page).has('altro')).toBe(false)
+  })
+})
+
+describe('checkHref, edge cases none of the four pages exercise today', () => {
+  it('catches a mistyped absolute asset path, and passes the real one', () => {
+    expect(checkHref('index.html', '/orbiters-logo.svg')).toBeUndefined()
+    expect(checkHref('index.html', '/orbiter-logo.svg')).toMatch(/no file under src\/ answers it/)
+  })
+
+  it('drops the query string before routing, like the dev server does', () => {
+    expect(checkHref('index.html', '/privacy?utm_source=newsletter')).toBeUndefined()
+    // The redirect-is-wrong rule still applies once the query string is gone.
+    expect(checkHref('index.html', '/orbiters?utm_source=newsletter')).toMatch(/is a redirect to \//)
+  })
+
+  it('skips a scheme it does not otherwise resolve, the same way it skips mailto:', () => {
+    expect(checkHref('index.html', 'tel:+390000000')).toBeUndefined()
+    expect(checkHref('index.html', 'javascript:void(0)')).toBeUndefined()
   })
 })
