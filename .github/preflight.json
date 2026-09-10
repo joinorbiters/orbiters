@@ -44,29 +44,25 @@
       "id": "pigrocrm-py-corpus",
       "run": "uv run pytest -q -m \"slow\" projects/pigrocrm/packages/core/tests",
       "when": [
-        "projects/pigrocrm/apps/api/**",
-        "projects/pigrocrm/apps/mcp/**",
         "projects/pigrocrm/packages/**",
         "projects/pigrocrm/conftest.py",
         "pyproject.toml",
         "uv.lock"
       ],
       "serial": true,
-      "why": "The fifty-thousand-row corpus: twelve minutes, almost all of it inside PostgreSQL. Serial and never under -n, because every assertion in those two files is about which plan the planner picks and load changes the answer."
+      "why": "The fifty-thousand-row corpus: twelve minutes, almost all of it inside PostgreSQL. Serial and never under -n, because every assertion in those two files is about which plan the planner picks and load changes the answer. It selects on core alone: the two files import `pigrocrm_core` and nothing else, so an edit under apps/api or apps/mcp cannot change which plan PostgreSQL picks over core's schema, and it used to buy twelve minutes of waiting for that (ORB-141)."
     },
     {
       "id": "pigrocrm-py-planner",
       "run": "uv run pytest -q -m \"planner\" projects/pigrocrm/packages/core/tests",
       "when": [
-        "projects/pigrocrm/apps/api/**",
-        "projects/pigrocrm/apps/mcp/**",
         "projects/pigrocrm/packages/**",
         "projects/pigrocrm/conftest.py",
         "pyproject.toml",
         "uv.lock"
       ],
       "serial": true,
-      "why": "Deselected on both CI tiers because a hosted runner picks the other plan (ORB-9). This is the one machine where the assertion means something, so it has to run here or it runs nowhere."
+      "why": "Deselected on both CI tiers because a hosted runner picks the other plan (ORB-9). This is the one machine where the assertion means something, so it has to run here or it runs nowhere. Scoped to core for the same reason as the corpus above."
     },
     {
       "id": "pigrocrm-web-lint",
@@ -210,8 +206,11 @@
         "projects/website/**",
         "shared/brand/**"
       ],
+      "unless": [
+        "projects/website/src/**/*.test.ts"
+      ],
       "serial": true,
-      "why": "Playwright against `vite preview` on 4173. Serial because that port is fixed and shared with anything else on this box."
+      "why": "Playwright against `vite preview` on 4173. Serial because that port is fixed and shared with anything else on this box. The vitest files under src/ are excluded: Playwright loads projects/website/e2e/ and the site it previews is the build, which no unit test enters (ORB-141)."
     },
     {
       "id": "pigrocrm-e2e",
@@ -231,13 +230,13 @@
         "projects/pigrocrm/Dockerfile.api",
         "projects/pigrocrm/Dockerfile.web",
         "projects/pigrocrm/docker-compose.yml",
-        "projects/pigrocrm/deploy/**",
+        "projects/pigrocrm/deploy/nginx/spa.conf",
         ".dockerignore",
         "pnpm-lock.yaml",
         "uv.lock"
       ],
       "serial": true,
-      "why": "Both images build from the repository-root context they are deployed with. Serial because a docker build saturates the box and this shares it with everyone else's agents."
+      "why": "Both images build from the repository-root context they are deployed with. Serial because a docker build saturates the box and this shares it with everyone else's agents. Of everything under deploy/ the build reads one file, `nginx/spa.conf` (Dockerfile.web line 30); the host vhosts and setup-server.sh are installed on the server and never enter an image, so a comment in one of them used to buy a full two-image build (ORB-141)."
     },
     {
       "id": "website-image",

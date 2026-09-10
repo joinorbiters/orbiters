@@ -102,6 +102,7 @@ jobs:
     outputs:
       all: ${{ steps.base.outputs.all }}
       pigrocrm_py: ${{ steps.filter.outputs.pigrocrm_py }}
+      pigrocrm_py_corpus: ${{ steps.filter.outputs.pigrocrm_py_corpus }}
       pigrocrm_web: ${{ steps.filter.outputs.pigrocrm_web }}
       pigrocrm_image: ${{ steps.filter.outputs.pigrocrm_image }}
       website: ${{ steps.filter.outputs.website }}
@@ -165,6 +166,19 @@ jobs:
               - 'pyproject.toml'
               - 'uv.lock'
               - 'ruff.toml'
+              - '.python-version'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/_python-gate.yml'
+            # The `slow` files import `pigrocrm_core` and nothing else, so the corpus
+            # job below asks a narrower question than the gate above it: an edit under
+            # apps/api or apps/mcp cannot change which plan PostgreSQL picks over
+            # core's schema, and it used to buy twelve minutes on the trunk, in front
+            # of every preview deploy (ORB-141).
+            pigrocrm_py_corpus:
+              - 'projects/pigrocrm/packages/**'
+              - 'projects/pigrocrm/conftest.py'
+              - 'pyproject.toml'
+              - 'uv.lock'
               - '.python-version'
               - '.github/workflows/ci.yml'
               - '.github/workflows/_python-gate.yml'
@@ -347,7 +361,7 @@ jobs:
   pigrocrm-py-corpus:
     name: pigrocrm · python corpus
     needs: changes
-    if: ${{ !cancelled() && github.event_name != 'pull_request' && (needs.changes.outputs.all == 'true' || needs.changes.outputs.pigrocrm_py == 'true') }}
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && (needs.changes.outputs.all == 'true' || needs.changes.outputs.pigrocrm_py_corpus == 'true') }}
     uses: ./.github/workflows/_python-gate.yml
     with:
       job-name: the fifty-thousand-row corpus
