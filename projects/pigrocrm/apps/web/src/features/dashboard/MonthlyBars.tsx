@@ -20,10 +20,13 @@ import type { CashMonth } from './queries'
  *
  * The figures on the columns (ORB-139). Every segment tall enough to hold the text says
  * its own value inside; a column too short for a label says its value above itself
- * rather than nowhere; a stacked column says its total above, so the figure on top of a
- * month is the whole month and not one segment mistaken for it. The totals come from the
- * server (`totale_andamento`, `totale_proiezione`): a sum is a figure, and no figure is
- * born in the browser.
+ * rather than nowhere; a stacked column says its height as money above, so the figure on
+ * top of a month is the bar a reader measures and not one segment mistaken for it. That
+ * height comes from the server (`pila_andamento`, `pila_proiezione`), costs included
+ * since the bar includes them: a sum is a figure, and no figure is born in the browser.
+ * A payload without it, an API a deploy behind the web, prints nothing above rather than
+ * `NaN €`. Below 72px of column the labels hide instead of clipping (a container query):
+ * a cut-off amount is a wrong amount, and the tooltip and the table keep the full one.
  */
 
 const MONTHS = ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic']
@@ -31,9 +34,10 @@ const PLOT_HEIGHT = 180
 /** The room a 10px label with its padding needs: below this a segment stays mute, and a
  *  column made only of mute segments lifts its value above itself instead. */
 const LABEL_HEIGHT = 16
-/** Reserved above the plot for the lifted values and the totals, so a full-height column
- *  does not push its own figure out of the card. */
-const HEADROOM = 16
+/** Reserved above the plot for the lifted value: its fixed 16px slot, the 2px flex gap
+ *  under it, and the 2px gaps between up to four stacked segments, so a full-height
+ *  column carries its figure without growing past the plot and dropping its baseline. */
+const HEADROOM = 24
 
 function isZero(value: string): boolean {
   return /^-?0(?:\.0+)?$/.test(value)
@@ -51,7 +55,7 @@ export function MonthlyBars({
   shares: 'quote_andamento' | 'quote_proiezione'
 }) {
   const empty = months.every((month) => series.every((key) => isZero(month[key])))
-  const totals = shares === 'quote_andamento' ? 'totale_andamento' : 'totale_proiezione'
+  const heights = shares === 'quote_andamento' ? 'pila_andamento' : 'pila_proiezione'
 
   return (
     <figure className="border bg-card p-4" aria-labelledby={`${shares}-title`}>
@@ -93,12 +97,16 @@ export function MonthlyBars({
                 height: Math.max(2, segment.share * PLOT_HEIGHT),
               }))
             const labelled = segments.filter((segment) => segment.height >= LABEL_HEIGHT)
-            // Above the column: the total when the month stacks more than one segment,
-            // the lone value when its only segment is too short to carry it. A month with
-            // one segment tall enough says its figure once, inside.
+            // Above the column: the stack's height as money when the month stacks more
+            // than one segment, the lone value when its only segment is too short to carry
+            // it. A month with one segment tall enough says its figure once, inside. An
+            // older payload carries no `pila_*`: then nothing, never `NaN €`.
+            const pila: string | undefined = month[heights]
             const above =
               segments.length > 1
-                ? money(month[totals])
+                ? pila === undefined
+                  ? null
+                  : money(pila)
                 : segments.length === 1 && labelled.length === 0
                   ? money(segments[0]!.value)
                   : null
@@ -106,12 +114,12 @@ export function MonthlyBars({
               <div
                 key={month.mese}
                 data-testid={`column-${month.mese}`}
-                className="flex h-full flex-col justify-end gap-0.5"
+                className="@container flex h-full min-h-0 flex-col justify-end gap-0.5"
               >
                 {above !== null && (
                   <span
-                    data-testid="column-total"
-                    className="mb-0.5 truncate text-center text-[10px] font-medium text-muted-foreground"
+                    data-testid="lifted-value"
+                    className="hidden h-4 text-center text-[10px] leading-4 font-medium text-muted-foreground @min-[72px]:block"
                   >
                     {above}
                   </span>
@@ -130,7 +138,7 @@ export function MonthlyBars({
                   >
                     {segment.height >= LABEL_HEIGHT && (
                       <span
-                        className="absolute inset-x-0 top-1 truncate px-1 text-center text-[10px] font-medium"
+                        className="absolute inset-x-0 top-1 hidden px-1 text-center text-[10px] font-medium @min-[72px]:block"
                         style={{
                           color:
                             segment.key === 'da_incassare'

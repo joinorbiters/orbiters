@@ -3,7 +3,7 @@
  * value, the tallest, and only when it filled more than a third of the plot: most months
  * said nothing and the one figure shown read as the column's total when it was one
  * segment's. Now every segment tall enough to hold the text says its value, a column too
- * short for a label says it above, and a stacked column says its total above.
+ * short for a label says it above, and a stacked column says its height as money above.
  */
 import { render, screen, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
@@ -14,7 +14,7 @@ function month(
   mese: number,
   amounts: Partial<Record<'incassato' | 'da_incassare' | 'bozze' | 'costi', string>>,
   shares: Record<string, number>,
-  totals: { andamento?: string; proiezione?: string } = {},
+  pila: { andamento?: string; proiezione?: string } = {},
 ): CashMonth {
   return {
     anno: 2026,
@@ -23,15 +23,19 @@ function month(
     da_incassare: amounts.da_incassare ?? '0.00',
     bozze: amounts.bozze ?? '0.00',
     costi: amounts.costi ?? '0.00',
-    totale_andamento: totals.andamento ?? amounts.incassato ?? '0.00',
-    totale_proiezione: totals.proiezione ?? amounts.incassato ?? '0.00',
+    pila_andamento: pila.andamento ?? amounts.incassato ?? '0.00',
+    pila_proiezione: pila.proiezione ?? amounts.incassato ?? '0.00',
     quote_andamento: shares,
     quote_proiezione: shares,
-  } as CashMonth
+  }
 }
 
 const ZERO = { incassato: 0, da_incassare: 0, bozze: 0, costi: 0 }
-const EMPTY = Array.from({ length: 9 }, (_, i) => month(i + 4, {}, ZERO))
+
+/** `count` empty months starting at `from`, to fill the row beside the one under test. */
+function empties(from: number, count: number): CashMonth[] {
+  return Array.from({ length: count }, (_, i) => month(from + i, {}, ZERO))
+}
 
 function column(mese: number) {
   return screen.getByTestId(`column-${mese}`)
@@ -62,7 +66,7 @@ describe('MonthlyBars', () => {
     expect(within(gennaio).getByText('2.000,00 €')).toBeInTheDocument()
   })
 
-  it('says the total above a stacked column, so the figure on top is the whole month', () => {
+  it("says the stack's height as money above a stacked column, so the figure on top is the whole bar", () => {
     render(
       <MonthlyBars
         title="Proiezione"
@@ -73,28 +77,76 @@ describe('MonthlyBars', () => {
             { ...ZERO, incassato: 0.3, da_incassare: 0.4, bozze: 0.2 },
             { proiezione: '22784.03' },
           ),
-          ...EMPTY.slice(0, 2),
+          ...empties(10, 2),
         ]}
         series={['incassato', 'da_incassare', 'bozze', 'costi']}
         shares="quote_proiezione"
       />,
     )
     const agosto = column(8)
-    expect(within(agosto).getByTestId('column-total')).toHaveTextContent('22.784,03 €')
+    expect(within(agosto).getByTestId('lifted-value')).toHaveTextContent('22.784,03 €')
   })
 
-  it('prints no total above a column with one segment: its value already says it', () => {
+  /** August in the screenshot that opened ORB-139: a tall revenue segment and a sliver
+   *  of cost too short for its own label. The lifted figure still says the whole bar. */
+  it('says the height above a stack whose second segment is a sliver', () => {
     render(
       <MonthlyBars
         title="Andamento"
-        months={[month(6, { incassato: '7740.72' }, { ...ZERO, incassato: 1 }), ...EMPTY.slice(0, 2)]}
+        months={[
+          month(
+            8,
+            { incassato: '7813.91', costi: '320.00' },
+            { ...ZERO, incassato: 0.96, costi: 0.04 },
+            { andamento: '8133.91' },
+          ),
+          ...empties(10, 2),
+        ]}
+        series={['incassato', 'costi']}
+        shares="quote_andamento"
+      />,
+    )
+    const agosto = column(8)
+    expect(within(agosto).getByTestId('lifted-value')).toHaveTextContent('8.133,91 €')
+    expect(within(agosto).getByText('7.813,91 €')).toBeInTheDocument()
+    expect(within(agosto).getAllByTestId('segment')).toHaveLength(2)
+  })
+
+  /** An API one deploy behind the web sends no `pila_*`: the chart says nothing above
+   *  the stack rather than `NaN €`, and the segments keep their own figures. */
+  it('prints nothing above a stacked column when the payload has no height for it', () => {
+    const senza = month(
+      8,
+      { incassato: '7813.91', da_incassare: '9970.12' },
+      { ...ZERO, incassato: 0.4, da_incassare: 0.5 },
+    ) as Partial<CashMonth>
+    delete senza.pila_proiezione
+    render(
+      <MonthlyBars
+        title="Proiezione"
+        months={[senza as CashMonth, ...empties(10, 2)]}
+        series={['incassato', 'da_incassare', 'bozze', 'costi']}
+        shares="quote_proiezione"
+      />,
+    )
+    const agosto = column(8)
+    expect(within(agosto).queryByTestId('lifted-value')).toBeNull()
+    expect(within(agosto).queryByText(/NaN/)).toBeNull()
+    expect(within(agosto).getByText('9.970,12 €')).toBeInTheDocument()
+  })
+
+  it('prints no figure above a column with one segment: its value already says it', () => {
+    render(
+      <MonthlyBars
+        title="Andamento"
+        months={[month(6, { incassato: '7740.72' }, { ...ZERO, incassato: 1 }), ...empties(10, 2)]}
         series={['incassato', 'costi']}
         shares="quote_andamento"
       />,
     )
     const giugno = column(6)
     expect(within(giugno).getByText('7.740,72 €')).toBeInTheDocument()
-    expect(within(giugno).queryByTestId('column-total')).toBeNull()
+    expect(within(giugno).queryByTestId('lifted-value')).toBeNull()
   })
 
   /** feb and apr in the screenshot that opened ORB-139: a column of a few pixels cannot
@@ -106,14 +158,14 @@ describe('MonthlyBars', () => {
         months={[
           month(2, { incassato: '1000.00' }, { ...ZERO, incassato: 0.05 }),
           month(6, { incassato: '20000.00' }, { ...ZERO, incassato: 1 }),
-          ...EMPTY.slice(0, 1),
+          ...empties(10, 1),
         ]}
         series={['incassato', 'costi']}
         shares="quote_andamento"
       />,
     )
     const febbraio = column(2)
-    expect(within(febbraio).getByTestId('column-total')).toHaveTextContent('1.000,00 €')
+    expect(within(febbraio).getByTestId('lifted-value')).toHaveTextContent('1.000,00 €')
     // Inside the segment there is no room, so no second copy of the figure sits there.
     expect(within(febbraio).getByTestId('segment')).not.toHaveTextContent('1.000,00 €')
   })
@@ -122,12 +174,12 @@ describe('MonthlyBars', () => {
     render(
       <MonthlyBars
         title="Andamento"
-        months={[month(6, { incassato: '20000.00' }, { ...ZERO, incassato: 1 }), ...EMPTY.slice(0, 2)]}
+        months={[month(6, { incassato: '20000.00' }, { ...ZERO, incassato: 1 }), ...empties(10, 2)]}
         series={['incassato', 'costi']}
         shares="quote_andamento"
       />,
     )
-    expect(within(column(4)).queryByTestId('column-total')).toBeNull()
-    expect(within(column(4)).queryByTestId('segment')).toBeNull()
+    expect(within(column(10)).queryByTestId('lifted-value')).toBeNull()
+    expect(within(column(10)).queryByTestId('segment')).toBeNull()
   })
 })

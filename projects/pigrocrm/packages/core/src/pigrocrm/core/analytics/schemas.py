@@ -230,10 +230,13 @@ class CashMonth(BaseModel):
 
     `quote` are the same four amounts as a share of the tallest month of their chart, in
     [0, 1], computed here: the browser scales a bar with them and never turns an amount
-    string into a number (apps/web/src/test/no-browser-arithmetic.test.ts). `totale_*`
-    are the two column totals the charts print above a stacked month (ORB-139), summed
-    here for the same reason: what the cash chart stacks (`incassato + costi`) and what
-    the projection stacks (all four)."""
+    string into a number (apps/web/src/test/no-browser-arithmetic.test.ts). `pila_*` are
+    the heights of the two stacked columns as money (ORB-139), summed here for the same
+    reason: what the cash chart stacks (`incassato + costi`) and what the projection
+    stacks (all four). A column's height, not an income: the costs are inside it, which
+    is why the field is not called a total and `proiettato` on `CashOverview` excludes
+    them. The chart prints it above a stacked month, where the figure has to match the
+    bar a reader measures."""
 
     anno: int
     mese: int
@@ -241,8 +244,22 @@ class CashMonth(BaseModel):
     da_incassare: Decimal = Field(max_digits=12, decimal_places=2)
     bozze: Decimal = Field(max_digits=12, decimal_places=2)
     costi: Decimal = Field(max_digits=12, decimal_places=2)
-    totale_andamento: Decimal = Field(max_digits=12, decimal_places=2)
-    totale_proiezione: Decimal = Field(max_digits=12, decimal_places=2)
+    pila_andamento: Decimal = Field(
+        max_digits=12,
+        decimal_places=2,
+        description=(
+            "Altezza della colonna dell'andamento come importo: incassato + costi passivi. "
+            "Non e' un ricavo: i costi sono dentro."
+        ),
+    )
+    pila_proiezione: Decimal = Field(
+        max_digits=12,
+        decimal_places=2,
+        description=(
+            "Altezza della colonna della proiezione come importo: incassato + da incassare + "
+            "bozze/proforma + costi passivi. Non e' un ricavo: i costi sono dentro."
+        ),
+    )
     quote_andamento: dict[str, float]
     quote_proiezione: dict[str, float]
 

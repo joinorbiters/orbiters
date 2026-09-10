@@ -2967,10 +2967,13 @@ export interface components {
          *
          *     `quote` are the same four amounts as a share of the tallest month of their chart, in
          *     [0, 1], computed here: the browser scales a bar with them and never turns an amount
-         *     string into a number (apps/web/src/test/no-browser-arithmetic.test.ts). `totale_*`
-         *     are the two column totals the charts print above a stacked month (ORB-139), summed
-         *     here for the same reason: what the cash chart stacks (`incassato + costi`) and what
-         *     the projection stacks (all four).
+         *     string into a number (apps/web/src/test/no-browser-arithmetic.test.ts). `pila_*` are
+         *     the heights of the two stacked columns as money (ORB-139), summed here for the same
+         *     reason: what the cash chart stacks (`incassato + costi`) and what the projection
+         *     stacks (all four). A column's height, not an income: the costs are inside it, which
+         *     is why the field is not called a total and `proiettato` on `CashOverview` excludes
+         *     them. The chart prints it above a stacked month, where the figure has to match the
+         *     bar a reader measures.
          */
         CashMonth: {
             /** Anno */
@@ -2985,10 +2988,16 @@ export interface components {
             bozze: string;
             /** Costi */
             costi: string;
-            /** Totale Andamento */
-            totale_andamento: string;
-            /** Totale Proiezione */
-            totale_proiezione: string;
+            /**
+             * Pila Andamento
+             * @description Altezza della colonna dell'andamento come importo: incassato + costi passivi. Non e' un ricavo: i costi sono dentro.
+             */
+            pila_andamento: string;
+            /**
+             * Pila Proiezione
+             * @description Altezza della colonna della proiezione come importo: incassato + da incassare + bozze/proforma + costi passivi. Non e' un ricavo: i costi sono dentro.
+             */
+            pila_proiezione: string;
             /** Quote Andamento */
             quote_andamento: {
                 [key: string]: number;

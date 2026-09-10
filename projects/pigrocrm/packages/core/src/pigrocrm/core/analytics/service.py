@@ -436,8 +436,8 @@ class AnalyticsService:
                 da_incassare=da_incassare.get(m, zero),
                 bozze=bozze.get(m, zero),
                 costi=costi.get(m, zero),
-                totale_andamento=round_money(incassato.get(m, zero) + costi.get(m, zero)),
-                totale_proiezione=round_money(
+                pila_andamento=round_money(incassato.get(m, zero) + costi.get(m, zero)),
+                pila_proiezione=round_money(
                     incassato.get(m, zero)
                     + da_incassare.get(m, zero)
                     + bozze.get(m, zero)
