@@ -59,9 +59,22 @@
   flex: 1 1 12rem;
 }
 
+/* "Dettagli" sits mid-sentence, so growing its own box would force the line
+   apart and read as loud where the notice means to stay quiet. `::before`
+   grows the hit area instead of the glyph: nothing paints, nothing shifts,
+   and a thumb still finds the 44px floor this milestone names. It sits over
+   the line above, which carries no other control, so nothing is stolen from
+   it. */
 .consent a {
+  position: relative;
   color: inherit;
   text-underline-offset: 0.2em;
+}
+
+.consent a::before {
+  content: '';
+  position: absolute;
+  inset: -14px -4px;
 }
 
 .consent-actions {
@@ -70,10 +83,15 @@
   margin-left: auto;
 }
 
+/* Padding and a floor, not a heavier border or a fill: the 44px touch-target
+   floor this milestone names, reached the same way ORB-64's header controls
+   reached it, on both axes so "No" clears it on width as well as height. */
 .consent button {
   cursor: pointer;
   font: inherit;
-  padding: 0.25rem 0.6rem;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.9rem;
   border: 1px solid color-mix(in oklab, var(--color-prussian-blue) 20%, transparent);
   background-color: transparent;
   color: var(--color-prussian-blue);
