@@ -42,6 +42,19 @@ class Settings(BaseSettings):
     # who uses the admin area never sees the login again and someone who does not does.
     admin_session_days: int = 30
 
+    # --- the member area -------------------------------------------------------------
+    # Resend sends the magic link. An empty key means no sender, and the API answers the
+    # link request with a 503 sentence rather than pretending a mail went out: the key
+    # lives in the server's `.env` only (`.env.example`).
+    resend_api_key: str = ""
+    mail_from: str = "Orbiters <ciao@joinorbiters.com>"
+    # Where the SPA answers, for the link in the mail: `{hub_url}/entra?t=...`. Local
+    # development points it at the Vite dev server.
+    hub_url: str = "https://joinorbiters.com/hub"
+    magic_link_minutes: int = 15
+    # Sliding, as the admin's.
+    member_session_days: int = 30
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

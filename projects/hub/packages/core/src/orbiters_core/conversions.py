@@ -33,13 +33,12 @@ person. What may travel is a status code.
 import hashlib
 import json
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from orbiters_core.config import Settings
+from orbiters_core.http import HTTP_TIMEOUT_SECONDS, NETWORK_ERROR_STATUS, HttpCall, urllib_call
 
 # Documented endpoint. The pixel id goes in the query string, the key in the header.
 CONVERSIONS_URL = "https://bzr.openai.com/v1/events"
@@ -47,20 +46,10 @@ REGISTRATION_COMPLETED = "registration_completed"
 CUSTOMER_ACTION = "customer_action"
 WEB = "web"
 
-HTTP_TIMEOUT_SECONDS = 10
-# "No HTTP response was ever received", travelling through the same channel as a real
-# status rather than a second failure path -- the convention PigroCRM's Gmail and Drive
-# transports use, and the same number.
-NETWORK_ERROR_STATUS = 599
-
 # A user agent is a header somebody else writes and it can be arbitrarily long. Cut
 # rather than refused: a truncated user agent is still a matching signal, and dropping
 # the event over a header would be losing the conversion to save a string.
 USER_AGENT_MAX_LENGTH = 512
-
-# (method, url, headers, body) -> (status, body). Narrower than the Gmail seam on
-# purpose: there is no retry here, so a `Retry-After` would have nothing to inform.
-HttpCall = Callable[[str, str, dict[str, str], bytes], tuple[int, bytes]]
 
 
 @dataclass(frozen=True)
@@ -139,7 +128,7 @@ class ConversionsPixel:
             # Unreachable with the types above, and cheap to answer honestly rather
             # than to let it escape into a background task where nobody would see it.
             return ConversionOutcome(sent=False, status=0, detail="corpo non serializzabile")
-        call = self.http or _urllib_call
+        call = self.http or urllib_call
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -232,18 +221,3 @@ def _short(answer: bytes) -> str:
     """The first line of OpenAI's own error, bounded. Their words about our event, which
     is the one thing worth keeping from a refusal; it contains nothing of ours."""
     return answer.decode("utf-8", errors="replace").strip().splitlines()[0][:200] if answer else ""
-
-
-def _urllib_call(method: str, url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
-    """`urllib`, no dependency.
-
-    An HTTP error is a *status*, not an exception: `urllib` raises `HTTPError` for a
-    4xx, and unwrapping it here is what lets `send` treat "OpenAI refused the event"
-    and "OpenAI accepted it" through one path.
-    """
-    request = urllib.request.Request(url, data=body, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
-            return int(response.status), response.read()
-    except urllib.error.HTTPError as error:
-        return int(error.code), error.read()
