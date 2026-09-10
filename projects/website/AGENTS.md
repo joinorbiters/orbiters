@@ -73,10 +73,3 @@ checkouts. Wait for the other preview to exit, or run one checkout's e2e suite a
 time; do not edit `vite.config.ts` or `playwright.config.ts` to move the port
 instead, and if you do to unblock yourself locally, revert it before committing —
 an uncommitted port override is easy to leave in.
-
-The hub's own `vite preview` (`projects/hub/apps/web`) has no `strictPort`, so it
-does not collide the same way: it finds the next free port instead and logs it,
-confirmed live as `4174` while 4173 was held. What it does not do is serve at `/`:
-the hub is built with `base: '/hub/'`, so its preview's root path 404s and the
-wizard pages are at `/hub/`, `/hub/freelance` and `/hub/aziende` — worth knowing
-before assuming a blank page means a broken build.
