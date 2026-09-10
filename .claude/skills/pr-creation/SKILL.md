@@ -1,6 +1,6 @@
 ---
 name: pr-creation
-description: Use when opening, describing or merging a pull request in this monorepo. Enforces the branch, the Conventional Commit title, the body in the repository's own template sections, the review and merge loop, and the hand-off to Linear. Triggers on "open a PR", "submit for review", "review and merge", or the Italian «apri una PR», «fai review e mergia».
+description: Use when starting a change that will end in a pull request, and when opening, describing or merging one in this monorepo. Enforces the card and its neighbours before the branch, the branch, the Conventional Commit title, the body in the repository's own template sections, the review and merge loop, and the Linear card kept current from the first file to the merge. Triggers on starting a task, "open a PR", "submit for review", "review and merge", or the Italian «lavora su questo ticket», «apri una PR», «fai review e mergia».
 ---
 
 # Opening a pull request here
@@ -14,15 +14,25 @@ it and a document disagree, the document is right and the skill has a bug.
 
 ## Before the branch exists
 
-1. **A Linear issue exists, is yours, and is `In Progress`.** Find it with `list_issues`
-   or file it with the `linear-ticket` skill. No issue, no branch: the issue is where the
-   reasons live, and a PR written first loses them. Yours means what
-   `docs/tracker.md` § Who owns a card says: assigned to the account this session writes
-   as, or unassigned and filed by it, or labelled `parallel` and unclaimed. A card
-   assigned to the other person is not made yours by opening a PR for it, nor by their
-   having asked you for it, and a PR on their card is worse than no PR: it is their work
-   done twice.
-2. **The branch is Linear's.** Use the issue's `gitBranchName` (`mariorossi/orb-42-...`),
+1. **A Linear issue exists and is yours.** Find it with `list_issues` or file it with
+   the `linear-ticket` skill. No issue, no branch: the issue is where the reasons live,
+   and a PR written first loses them. Yours means what `docs/tracker.md` § Who owns a
+   card says: assigned to the account this session writes as, or unassigned and filed by
+   it, or labelled `parallel` and unclaimed. A card assigned to the other person is not
+   made yours by opening a PR for it, nor by their having asked you for it, and a PR on
+   their card is worse than no PR: it is their work done twice.
+2. **Its neighbours have been read, and the card is `In Progress` with the result on
+   it.** Before the first file changes, the open cards next to this one: same `area:*`
+   in `started`, `unstarted` and `backlog`, and the same screen, route, table or file by
+   name, as the `linear-ticket` skill § The neighbours says. One `In Progress` or
+   `In Review` under the other person on the same files is a PR you do not open: narrow
+   yours around it, or wait, and write which on the card. One in `Backlog` or `Todo`
+   your change would settle or break is linked (`relatedTo`, `blocks`, `blockedBy`,
+   `duplicateOf`) and named in the body. Nothing found is written as well, as the body's
+   **Adjacent** paragraph. The one `save_issue` that moves the card to `In Progress`
+   with `assignee: "me"` carries the links and that paragraph. No scan on the card, no
+   branch.
+3. **The branch is Linear's.** Use the issue's `gitBranchName` (`mariorossi/orb-42-...`),
    which Linear renders for whoever reads the issue rather than for its assignee, so it
    tells you nothing about ownership and is only the name to use once step 1 holds. In a
    git worktree of its own, never on `main` and never in the shared checkout:
@@ -35,7 +45,16 @@ it and a document disagree, the document is right and the skill has a bug.
    ```
 
    Other sessions write to the same index; a worktree is what keeps your commit yours.
-3. **Read the project's `AGENTS.md`** (`projects/<name>/AGENTS.md`) before its source.
+4. **Read the project's `AGENTS.md`** (`projects/<name>/AGENTS.md`) before its source.
+
+## While the work happens
+
+The card follows the work, per `docs/tracker.md` § The loop, While you work, and the PR
+body is written from the card at the end, never the card from the PR. A comment, in the
+`linear-content` shapes, when a finding changes the plan, when the scope moves (a
+neighbour found late, a file that had to move too, a piece left for its own card), and
+when you are waiting on something outside your hands. Not one per commit, and none that
+says "working on it".
 
 ## Commits
 
@@ -140,16 +159,22 @@ The last line of the body: `Linear: ORB-N.`
    context, and to rank findings by severity with a concrete fix each). Do not review your
    own diff and call it a review.
 3. **Apply the findings in a second commit**, push, and record the review on the PR as
-   a comment: each finding, what you did with it, and what you left as is and why.
+   a comment: each finding, what you did with it, and what you left as is and why. Then
+   one line on the card (`**Review applied:** ...`, the `linear-content` shape): the
+   count, the sha, what stayed as it was. The card is where the other agent reads that
+   the PR is no longer what it was when it opened.
 4. **Wait for CI**: `gh pr checks <n> --watch`. The `ci` job is the only status that
-   matters; the others may skip by path filter.
+   matters; the others may skip by path filter. A red run gets a line on the card too
+   (`**CI red:** run ..., <job>, <cause>`) when you see it, and the sha of the fix on
+   the same comment when you push it.
 5. **Merge with a merge commit**, the repository's shape:
    `gh pr merge <n> --merge --delete-branch`. Never squash a two-commit PR whose second
    commit is the review: the history is the record.
 6. **Clean up**: `git worktree remove ../<repo>-orb<N>`, `git worktree prune`.
 7. **Close on Linear only with evidence**: run ids, commit sha, the test counts, what
    you opened and saw. Preview deploys on the green trunk run; **production moves only
-   on a tag** (`docs/design/DECISIONS.md`, 2026-09-09) and only when asked.
+   on a tag** (`docs/design/DECISIONS.md`, 2026-09-09) and only when asked, and when it
+   does, the card gets its `**In production:**` comment with the tag and what answered.
 
 ## What never goes in a PR
 

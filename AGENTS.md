@@ -213,6 +213,17 @@ tested on a branch and is proven on the trunk instead.
 - An issue carries exactly one `type` label and exactly one `area:*` label, both from
   enforced groups, so Linear drops a second one silently. Priority and effort are
   Linear's native fields and are never labels.
+- **The board is read before the first file changes, and the card is written while
+  the work happens.** Before starting: the card for the thing itself, and the open cards
+  next to it (same `area:*` in `started`, `unstarted` and `backlog`; same screen, route,
+  table or file by name), so a neighbour in progress under the other person is not done
+  twice and a neighbour in `Backlog` or `Todo` is linked rather than rediscovered. What
+  the scan found, or that it found nothing, goes on the card first, in the same call
+  that moves it. While working: the card never lags the work; a comment at every turn a
+  reader could not infer (a finding, a change of scope, a wait), `In Review` the moment
+  the PR opens, one line for the review and for a red run, and `Done` only with the
+  evidence. A card that has read `In Progress` all day with nothing under it is the
+  other agent's only view of your work (`docs/tracker.md` § The loop).
 - `In Review` is a status on the team, and it is where an issue sits while its PR
   is open on GitHub.
 - **A project update is written whenever something changed that the issue list

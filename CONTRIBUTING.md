@@ -40,11 +40,14 @@ a product and is permanent; a **project** is a release with an end, closed when 
 ships; a **project milestone** is an outcome inside a release; an **issue** is one
 agent run, one PR. Every issue carries exactly one `type` label and exactly one `area:*`
 label, both from enforced groups, and priority and effort as Linear's own fields, never
-labels. Move the issue to
+labels. Before the first file changes, read the open cards next to yours (same area,
+same screen or table) and link or narrow around them; while you work, keep your card
+current with a comment at every turn a reader could not infer. Move the issue to
 `In Review` while its PR is open on GitHub, and leave a project status update whenever
-something changed that the issue list alone does not show. The GitHub integration is
-requested and pending on this org, so nothing closes itself yet: move the card by hand
-and put the evidence in a comment. Full conventions are in `docs/tracker.md`.
+something changed that the issue list alone does not show. Linear's GitHub app links a
+PR to its card, and the team's status automation is off, so nothing moves a state for
+you: move the card by hand and put the evidence in a comment. Full conventions are in
+`docs/tracker.md`.
 
 ## Commits
 

@@ -114,11 +114,27 @@ means everywhere below, and it is not necessarily the person who is talking to y
 
 ## The loop
 
-**Before starting work.** Search the board for the thing you are about to do. Read who
-owns what comes back, since a card that exists is not automatically available: an issue
-that is yours you use, an issue that is somebody else's you leave. If nothing exists,
-and the work will outlive this run, file one before you start rather than after: an
-issue written afterwards is a summary, and it loses the reasons.
+**Before starting work.** Search the board for the thing you are about to do, and for
+its neighbours (next paragraph), before the first file changes. Read who owns what comes
+back, since a card that exists is not automatically available: an issue that is yours
+you use, an issue that is somebody else's you leave. If nothing exists, and the work will
+outlive this run, file one before you start rather than after: an issue written
+afterwards is a summary, and it loses the reasons.
+
+**Its neighbours.** The same card is one search; the cards your change can collide with
+or settle are another, and it happens every time, whether the card is found or filed.
+Neighbours are the open cards in the same `area:*`, and the ones whose title or body
+names the same screen, route, table or file. One that is `In Progress` or `In Review`
+under the other person, on the same surface, is work you do not overlap: narrow yours
+to what theirs leaves alone, or wait for it, and say which on your card. One in
+`Backlog` or `Todo` that your change would close is your card, if it is yours to take
+(§ Who owns a card), and nothing new is filed; one that is not yours, or that your
+change would break, make easier or has to land after, is linked to yours (`relatedTo`,
+`blocks`, `blockedBy`, `duplicateOf` on `save_issue`) and named in the body, so it is
+not rediscovered from scratch by the next reader. The scan comes before the `save_issue`
+that files your card or moves it to `In Progress`, so its links and its **Adjacent**
+paragraph land in that call and not a second one. "Nothing adjacent" is written too: a
+scan that leaves no trace cannot be told from a scan that did not happen.
 
 **When you start.** Check the card is yours (§ Who owns a card): assigned to you,
 unassigned and filed by you, or labelled `parallel`. If it is somebody else's, leave it
@@ -126,15 +142,24 @@ alone, comment if you have something to add, and pick another. If it is yours, m
 to `In Progress` and set `assignee` to yourself in the same call, so the other agent can
 see it is taken.
 
-**While you work.** A comment when you learn something that changes the issue: a
+**While you work.** The card follows the work while it happens, never rebuilt from
+memory at the end. A comment when you learn something that changes the issue: a
 reproduction, a measurement, a cause that turned out to be different from the title, a
-decision that is now the project's lead's. Comments are cheap and they are what makes an
-issue readable in a month.
+decision that is now the project's lead's. A comment when the work changes shape: a
+scope dropped or added, a surface or a file you had not expected to touch, a neighbour
+you found late. A comment when you stop on something outside your hands, saying what you
+are waiting for and from whom, so a reader does not have to find you to know. Comments
+are cheap and they are what makes an issue readable in a month, and a card that has read
+`In Progress` for a day with nothing under it tells the other agent nothing when they
+are deciding whether to touch the same files.
 
 **When your PR is open.** Move the issue to `In Review`, the status for an issue whose
-PR is open on GitHub. Until the GitHub integration is approved on this org (see
-Commits and issues below), nothing moves it there for you, so do this by hand when you
-open the PR.
+PR is open on GitHub, and comment the PR URL on it. The PR links itself to the card
+within seconds; the state does not move, because the team's status automation is off
+(§ Commits and issues), so do this by hand when you open the PR. From here to the merge
+the card keeps following the PR: the review's findings and what you did with them, a CI
+run that went red and why, a push that changed what the PR is. One line each is enough,
+and silence is not.
 
 **When you finish.** `Done` means verified on the surface the issue is about, and the
 comment that closes it says how. A green CI check closes a CI issue. A deploy issue
@@ -243,6 +268,14 @@ paragraph plus the two skills that repeat it can drop the manual step, with the 
   `cursor`, so an unbounded one answers with a slice of a board already past ORB-58 that
   reads like the whole of it. Narrow server-side first (`state: "Todo"`, then
   `state: "Backlog"`) and raise `limit`.
+- `list_issues` takes one `state` per call, and a state **type** is a valid value:
+  `state: "started"` answers `In Progress` and `In Review` together, `"unstarted"` is
+  `Todo`, `"backlog"` is `Backlog` (measured 2026-09-10). Three calls cover every open
+  card; combined with `label`, they are the neighbour scan of § The loop.
+- `list_issues` with `query` ranks, it does not filter: `query: "columns.tsx"` answered
+  the three invoice-list cards first and then twenty unrelated ones with a next page
+  (measured 2026-09-10). Read the first handful and stop where the titles stop being
+  about your surface; a count of what came back means nothing.
 - Initiatives cannot be created from the MCP surface at all. `save_project` can attach
   an existing initiative with `addInitiatives`, but there is no `save_initiative`.
   Initiatives are created by hand in the Linear UI; automation only creates projects and
