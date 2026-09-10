@@ -33,6 +33,15 @@ describe('InvoicesTab', () => {
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 
+  /** Every row on this tab belongs to the customer (or the deal's customer) named in
+   *  the page title above it, so the «Cliente» column the list page shows (ORB-98) would
+   *  only repeat that title on each line. */
+  it('does not repeat the customer on every row', async () => {
+    renderWithClient(<InvoicesTab owner={{ customerId: 'c1' }} />)
+    expect(await screen.findByRole('columnheader', { name: 'Numero' })).toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: 'Cliente' })).not.toBeInTheDocument()
+  })
+
   /**
    * The slot exists so the button that creates an invoice sits on the tab that lists
    * them, rather than in the page header where it would be offered from every other tab
