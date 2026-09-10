@@ -20,29 +20,49 @@ are not part of this repo's flow.
 | Effort | Linear's own estimate field. Never a label |
 | Statuses | `Backlog`, `Todo`, `In Progress`, `In Review`, `Done`, `Canceled` |
 | Type labels | group **type**, exactly one, Linear enforces it because it is a group: `feature`, `fix`, `refactor`, `test`, `chore`, `ci`, `docs`, `design`, `security`, `spike` |
-| Area labels | group **Area**, exactly one, Linear enforces it because it is a group: `area:api`, `area:brand`, `area:ci`, `area:core`, `area:infra`, `area:mcp`, `area:repo`, `area:web`, `area:website` |
+| Area labels | group **Area**, exactly one, Linear enforces it because it is a group: `area:api`, `area:brand`, `area:ci`, `area:core`, `area:hub`, `area:infra`, `area:mcp`, `area:repo`, `area:web`, `area:website` |
 | Assignee | who owns the card and will do the work. A claim, not a hint: see § Who owns a card |
 | Other flat labels | `flagship` for headline work, `parallel` for an issue that collides with nothing, in the files or between us, so whoever is free may pick it up whoever filed it, as long as nobody has claimed it yet |
 
 The two lists above are the board's, checked against `list_issue_labels` with
-`includeGroups: true` on 2026-09-09, and the board is the authority: an earlier version of
+`includeGroups: true` on 2026-09-10, and the board is the authority: an earlier version of
 this page named `Bug` and `core`, and an issue filed with those names failed with "Could
-not find labels" (ORB-33). Five of the type labels carry a description on the board, and
+not find labels" (ORB-33); a later one listed nine area labels for a day after `area:hub`
+had made them ten (ORB-76). Five of the type labels carry a description on the board, and
 it is the one to apply: `fix` is something that does not do what it says it does;
 `feature` is new behaviour a user or an agent can observe; `refactor` is existing behaviour
 made better with no new capability; `chore` is maintenance with no change in behaviour;
 `docs` is documentation that stands on its own. `test`, `ci`, `design`, `security` and
 `spike` mean what their names say.
 
-The four current projects, each with a lead and both of us as members:
+The projects on the board, read with `list_projects` on 2026-09-10. This table is a
+snapshot and the board is the authority: `list_projects` with `team: "Orbiters"`, which
+answers completed projects too, is what to trust when the two disagree, and the change
+that opens or closes a project updates this table in the same PR.
 
-- `Website v1 - the public site, live and correct on a phone`. Lead: Lorenzo.
-- `Hub v0 - signups and the company flow, deployed`. Lead: Ivan.
-- `PigroCRM v1 - first deploy from CI, with green gates`. Lead: Ivan.
-- `Monorepo hygiene v1 - CI cost, licence and the English rule`. Lead: Lorenzo.
+| Initiative | Project | Lead | State on 2026-09-10 |
+|---|---|---|---|
+| `PigroCRM` | `PigroCRM v1 - first deploy from CI, with green gates` | Ivan | In Progress |
+| `Hub` | `Hub v0 - signups and the company flow, deployed` | Ivan | In Progress |
+| `Hub` | `Hub v1 - the wizards look like the site` | Lorenzo | In Progress |
+| `Website` | `Website v1 - the public site, live and correct on a phone` | Lorenzo | In Progress |
+| `Website` | `Website v2 - the new landing takes the front door` | Lorenzo | In Progress |
+| `Monorepo` | `Deploy and access hygiene v1` | Lorenzo | In Progress |
+| `Monorepo` | `Indexing and SEO v1 - what a crawler sees` | Lorenzo | In Progress |
+| `Monorepo` | `Monorepo hygiene v1 - CI cost, licence and the English rule` | Lorenzo | Completed, 2026-09-10 |
+
+`Monorepo hygiene v1` was where repository-wide work that belongs to no product went
+(CI cost, the licence, this page). It is closed, and nothing has replaced it: a
+repository-wide issue that fits neither open `Monorepo` project is filed with no
+project, which is what ORB-131 and ORB-136 did, until somebody opens a
+`Monorepo hygiene v2` with a scope it can reach.
 
 Every project always carries a lead and both members, Lorenzo and Ivan, no matter who
-leads it. A project created without a lead and without both members is incomplete.
+leads it. A project created without a lead and without both members is incomplete, and
+four of the eight above are: `Hub v1`, `Website v2`, `Deploy and access hygiene v1` and
+`Indexing and SEO v1` carry Lorenzo alone as of 2026-09-10. The MCP surface cannot repair
+that, since `save_project` takes a `lead` and has no member field (§ API details), so the
+second member is added by hand in the Linear UI, at creation.
 
 This replaces the old rule that gave every monorepo project (`projects/pigrocrm`,
 `projects/website`) its own permanent Linear project. Initiatives are the permanent
@@ -280,3 +300,7 @@ paragraph plus the two skills that repeat it can drop the manual step, with the 
   an existing initiative with `addInitiatives`, but there is no `save_initiative`.
   Initiatives are created by hand in the Linear UI; automation only creates projects and
   issues underneath them.
+- Project members cannot be set from the MCP surface either. `save_project` takes `lead`
+  and has no member field, and `list_projects` with `includeMembers: true` only reads
+  them, so the rule that every project carries both members (§ Where things are) is kept
+  by hand in the Linear UI, and read back with that call.
