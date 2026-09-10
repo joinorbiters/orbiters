@@ -51,6 +51,12 @@
    a fixed height, which the padding below only ever grows past, so it is untouched. */
 .site [data-slot='input'],
 .site [data-slot='textarea'] {
+  /* The application's Input and Textarea are `bg-transparent`, which was fine while
+     the public frame put a white panel behind them (ORB-74) and is not now that the
+     content sits straight on the grid (ORB-124): the grid ran through every field.
+     The landing's own input on the same grid paints white, orbiters.css:178
+     `.signup input { background-color: #ffffff }`, and so do these. */
+  background-color: var(--card);
   border-width: var(--landing-border-width);
   padding-block: var(--landing-control-padding-block);
   padding-inline: var(--landing-control-padding-inline);
