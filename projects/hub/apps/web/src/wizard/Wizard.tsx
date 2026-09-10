@@ -154,7 +154,7 @@ export function Wizard<T>({
                 </dd>
                 <button
                   type="button"
-                  className="self-start text-xs text-muted-foreground underline-offset-2 hover:underline sm:shrink-0"
+                  className="mt-1 self-start text-xs text-muted-foreground underline-offset-2 hover:underline sm:mt-0 sm:shrink-0"
                   onClick={() => {
                     setError(null)
                     setIndex(at)
