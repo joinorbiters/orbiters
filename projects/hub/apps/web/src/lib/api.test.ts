@@ -76,6 +76,22 @@ describe('the api client', () => {
     expect((body.get('cv') as File).name).toBe('cv.pdf')
   })
 
+  it('lists the admins and creates one as JSON, with the password in the body only', async () => {
+    // ORB-123: the list and the form behind «Amministratori».
+    const spy = vi.spyOn(globalThis, 'fetch')
+    spy.mockResolvedValueOnce(answer(200, [{ id: '1', email: 'ivan@orbiters.it', nome: 'Ivan', attivo: true, created_at: '2026-09-10T10:00:00Z' }]))
+    const listed = await admin.admins()
+    expect(spy.mock.calls[0]![0]).toBe('/api/hub/admins')
+    expect(listed[0]!.email).toBe('ivan@orbiters.it')
+    spy.mockResolvedValueOnce(answer(201, { id: '2', email: 'lorenzo@orbiters.it', nome: 'Lorenzo', attivo: true, created_at: '2026-09-10T10:01:00Z' }))
+    const created = await admin.createAdmin({ email: 'lorenzo@orbiters.it', nome: 'Lorenzo', password: 'una-password-lunga' })
+    const [url, init] = spy.mock.calls[1]!
+    expect(url).toBe('/api/hub/admins')
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(init?.body as string)).toEqual({ email: 'lorenzo@orbiters.it', nome: 'Lorenzo', password: 'una-password-lunga' })
+    expect(created.nome).toBe('Lorenzo')
+  })
+
   it('points the admin at the CV route by id', () => {
     expect(admin.cvUrl('abc')).toBe('/api/hub/freelancers/abc/cv')
   })

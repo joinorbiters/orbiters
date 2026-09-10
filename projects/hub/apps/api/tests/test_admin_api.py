@@ -52,8 +52,14 @@ def test_without_the_cookie_every_admin_route_is_a_401(client: TestClient, admin
         "/api/hub/freelancers",
         "/api/hub/companies",
         "/api/hub/signups",
+        "/api/hub/admins",
     ):
         assert client.get(path).status_code == 401, path
+    refused = client.post(
+        "/api/hub/admins",
+        json={"email": "x@orbiters.it", "nome": "X", "password": "una-password-lunga"},
+    )
+    assert refused.status_code == 401
 
 
 def test_login_sets_a_secure_httponly_cookie_and_the_lists_open(
@@ -203,3 +209,68 @@ def test_a_comment_on_a_missing_row_is_a_404_and_an_empty_one_a_422_naming_the_f
     )
     assert forged.status_code == 422
     assert client.get(f"/api/hub/freelancers/{freelancer_id}/comments").json() == []
+
+
+# ---- admins ----------------------------------------------------------------------------
+#
+# ORB-123: an admin creates the next one from the area, with the CLI's own rules, and the
+# list says who is there. No deactivation and no deletion here, on purpose.
+
+
+def test_an_admin_lists_the_admins_and_creates_one_who_can_then_log_in(
+    client: TestClient, admin: None
+) -> None:
+    _login(client)
+    before = client.get("/api/hub/admins")
+    assert before.status_code == 200
+    assert [row["email"] for row in before.json()] == ["ivan@orbiters.it"]
+    assert before.json()[0]["attivo"] is True and "created_at" in before.json()[0]
+    assert "password_hash" not in before.json()[0]
+
+    created = client.post(
+        "/api/hub/admins",
+        json={
+            "email": "Lorenzo@Orbiters.it",
+            "nome": " Lorenzo ",
+            "password": "una-password-lunga",
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["email"] == "lorenzo@orbiters.it"
+    assert created.json()["nome"] == "Lorenzo"
+    assert "password" not in created.text and "password_hash" not in created.text
+
+    after = client.get("/api/hub/admins").json()
+    assert [row["email"] for row in after] == ["ivan@orbiters.it", "lorenzo@orbiters.it"]
+
+    # The new admin's credentials open a session of their own.
+    assert client.post("/api/hub/auth/logout").status_code == 204
+    login = client.post(
+        "/api/hub/auth/login",
+        json={"email": "lorenzo@orbiters.it", "password": "una-password-lunga"},
+    )
+    assert login.status_code == 200 and login.json()["nome"] == "Lorenzo"
+
+
+def test_creating_an_admin_points_the_form_at_the_field_that_is_wrong(
+    client: TestClient, admin: None
+) -> None:
+    _login(client)
+    duplicate = client.post(
+        "/api/hub/admins",
+        json={"email": "IVAN@orbiters.it", "nome": "Ancora", "password": "una-password-lunga"},
+    )
+    assert duplicate.status_code == 422
+    assert duplicate.json()["detail"][0]["loc"][-1] == "email"
+    short = client.post(
+        "/api/hub/admins", json={"email": "corta@orbiters.it", "nome": "Corta", "password": "breve"}
+    )
+    assert short.status_code == 422
+    assert short.json()["detail"][0]["loc"][-1] == "password"
+    malformed = client.post(
+        "/api/hub/admins",
+        json={"email": "non-una-mail", "nome": "X", "password": "una-password-lunga"},
+    )
+    assert malformed.status_code == 422
+    assert malformed.json()["detail"][0]["loc"][-1] == "email"
+    assert [row["email"] for row in client.get("/api/hub/admins").json()] == ["ivan@orbiters.it"]

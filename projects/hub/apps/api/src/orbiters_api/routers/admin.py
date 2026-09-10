@@ -39,6 +39,16 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class AdminCreate(BaseModel):
+    """The form behind «Amministratori»: the creating admin chooses the password and
+    hands it over out of band, as `orbiters createadmin` does (ORB-123). The length rule
+    lives in `AdminService.create`, once, so the CLI and the form agree."""
+
+    email: EmailStr
+    nome: str
+    password: str
+
+
 @router.post("/auth/login", response_model=AdminRead)
 def login(
     payload: LoginRequest,
@@ -77,6 +87,24 @@ def logout(
 @router.get("/auth/me", response_model=AdminRead)
 def me(admin: AdminDep) -> AdminRead:
     return admin
+
+
+# ---- the admins ------------------------------------------------------------------------
+#
+# Who reads this area, and one more of them. No deactivation and no deletion here, on
+# purpose (ORB-123): the `attivo` flag exists and nothing in the area changes it yet.
+
+
+@router.get("/admins", response_model=list[AdminRead])
+def list_admins(_: AdminDep, session: SessionDep, settings: SettingsDep) -> list[AdminRead]:
+    return AdminService(session, settings).list()
+
+
+@router.post("/admins", response_model=AdminRead, status_code=status.HTTP_201_CREATED)
+def create_admin(
+    _: AdminDep, session: SessionDep, settings: SettingsDep, payload: AdminCreate
+) -> AdminRead:
+    return AdminService(session, settings).create(payload.email, payload.nome, payload.password)
 
 
 # ---- the lists -------------------------------------------------------------------------

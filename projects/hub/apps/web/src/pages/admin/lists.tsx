@@ -36,7 +36,7 @@ function StatePill({ stato }: { stato: string }) {
   )
 }
 
-function Header({ title, count, children }: { title: string; count?: number; children?: React.ReactNode }) {
+export function Header({ title, count, children }: { title: string; count?: number; children?: React.ReactNode }) {
   return (
     <header className="flex flex-wrap items-center justify-between gap-3 border-b px-6 py-5">
       <h1 className="text-2xl font-semibold tracking-tight">
@@ -76,7 +76,7 @@ function StateFilter({
   )
 }
 
-function Empty({ children }: { children: React.ReactNode }) {
+export function Empty({ children }: { children: React.ReactNode }) {
   return <p className="px-6 py-10 text-center text-sm text-muted-foreground">{children}</p>
 }
 

@@ -113,6 +113,15 @@ export interface Admin {
   id: string
   email: string
   nome: string
+  attivo: boolean
+  created_at: string
+}
+
+/** What the «Amministratori» form sends. The password travels here and nowhere else. */
+export interface AdminCreate {
+  email: string
+  nome: string
+  password: string
 }
 
 export interface Freelancer {
@@ -204,6 +213,9 @@ export const admin = {
       body: JSON.stringify({ stato, note }),
     }),
   signups: () => request<{ totale: number; iscrizioni: Signup[] }>('/api/hub/signups?limit=500'),
+  /** Who reads this area, oldest first, and one more of them (ORB-123). */
+  admins: () => request<Admin[]>('/api/hub/admins'),
+  createAdmin: (data: AdminCreate) => request<Admin>('/api/hub/admins', json(data)),
   comments: (kind: CommentKind, id: string) =>
     request<Comment[]>(`/api/hub/${kind}/${id}/comments`),
   /** The author is the session's, so the body is the text alone. */

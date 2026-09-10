@@ -74,3 +74,21 @@ def test_a_session_is_opaque_hashed_sliding_and_closable(
     again = admins.open_session(admin.id)
     admins.close_session(again)
     assert admins.resolve(again) is None
+
+
+def test_list_names_every_admin_oldest_first_and_says_who_is_active(
+    admins: AdminService, hub_session: Session
+) -> None:
+    # ORB-123: the admin area lists who reads it. Oldest first, so the page reads as a
+    # history; `attivo` and `created_at` come along, the hash never does.
+    first = admins.create("ivan@orbiters.it", "Ivan", "una-password-lunga")
+    second = admins.create("lorenzo@orbiters.it", "Lorenzo", "altra-password-lunga")
+    hub_session.execute(
+        text("UPDATE admin_users SET attivo = false WHERE email = 'lorenzo@orbiters.it'")
+    )
+    hub_session.commit()
+    listed = admins.list()
+    assert [row.email for row in listed] == [first.email, second.email]
+    assert [row.attivo for row in listed] == [True, False]
+    assert all(row.created_at is not None for row in listed)
+    assert not any(hasattr(row, "password_hash") for row in listed)
