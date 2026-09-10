@@ -98,6 +98,17 @@
   --shadow-app-sm: calc(var(--landing-step) * 0.75) calc(var(--landing-step) * 0.75) 0 var(--landing-ink);
   --shadow-app-md: var(--landing-step) var(--landing-step) 0 var(--landing-ink);
   --shadow-app-lg: var(--landing-step) var(--landing-step) 0 var(--landing-ink);
+
+  /* ORB-75: the two magnitudes landing.css and orbiters.css spend on a control's own
+     padding, neither of which lands on Tailwind's 0.25rem spacing grid, so a
+     component reaches for these instead of retyping the site's numbers. The CTA
+     scale is landing.css's `.cta` (`landing.css:263`); the control scale is
+     orbiters.css's `.signup input`/`.signup button` (`orbiters.css:174`), which the
+     site's own forms use for every text input it has. */
+  --landing-cta-padding-block: 0.9rem;
+  --landing-cta-padding-inline: 1.5rem;
+  --landing-control-padding-block: 0.85rem;
+  --landing-control-padding-inline: 1rem;
 }
 
 @layer base {

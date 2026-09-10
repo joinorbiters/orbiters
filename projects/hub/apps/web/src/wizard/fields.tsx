@@ -29,7 +29,7 @@ export function TextField({
       ref={ref}
       value={value}
       onChange={(event) => onChange(event.target.value)}
-      className="h-12 text-lg md:text-lg"
+      className="text-lg md:text-lg"
       {...rest}
     />
   )
@@ -75,23 +75,32 @@ export function ChoiceField<V extends string>({
 }) {
   return (
     <div role="radiogroup" className="grid gap-3 sm:grid-cols-3">
-      {options.map((option, index) => (
-        <button
-          key={option.value}
-          type="button"
-          role="radio"
-          aria-checked={value === option.value}
-          onClick={() => onChange(option.value)}
-          className={cn(
-            'flex flex-col items-start gap-1 rounded-2xl border bg-card p-4 text-left transition-colors hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none',
-            value === option.value && 'border-foreground ring-2 ring-foreground/20',
-          )}
-        >
-          <span className="text-xs text-muted-foreground">{index + 1}</span>
-          <span className="font-medium">{option.label}</span>
-          {option.hint && <span className="text-sm text-muted-foreground">{option.hint}</span>}
-        </button>
-      ))}
+      {options.map((option, index) => {
+        const selected = value === option.value
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            onClick={() => onChange(option.value)}
+            className={cn(
+              'flex flex-col items-start gap-1 rounded-2xl border-(length:--landing-border-width) bg-card p-4 text-left transition-colors hover:bg-muted focus-visible:outline-3 focus-visible:outline-(--landing-focus) focus-visible:outline-offset-3',
+              selected && 'bg-(--landing-ink) text-(--landing-cta-ink) hover:bg-(--landing-ink)',
+            )}
+          >
+            <span className={cn('text-xs', selected ? 'text-(--landing-cta-ink)/70' : 'text-muted-foreground')}>
+              {index + 1}
+            </span>
+            <span className="font-medium">{option.label}</span>
+            {option.hint && (
+              <span className={cn('text-sm', selected ? 'text-(--landing-cta-ink)/85' : 'text-muted-foreground')}>
+                {option.hint}
+              </span>
+            )}
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -155,7 +164,7 @@ export function FileField({
       ) : (
         <p className="text-sm text-muted-foreground">Trascina qui il file, oppure</p>
       )}
-      <label className="cursor-pointer text-sm font-medium underline underline-offset-2">
+      <label className="cursor-pointer text-sm font-medium underline underline-offset-2 has-[:focus-visible]:outline-3 has-[:focus-visible]:outline-(--landing-focus) has-[:focus-visible]:outline-offset-3">
         {value ? 'Scegli un altro file' : 'Scegli il file'}
         <input
           ref={inputRef}
