@@ -52,6 +52,33 @@ function renderList(scadute?: boolean): ReactElement {
   return <></>
 }
 
+/** One issued invoice as the API sends it, with whatever a test needs changed. */
+function invoice(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'f1',
+    anno: 2026,
+    numero: 7,
+    riferimento: null,
+    tipo: 'fattura',
+    stato: 'emessa',
+    stato_pagamento: 'da_incassare',
+    data_emissione: '2026-08-20',
+    competenza_da: null,
+    competenza_a: null,
+    totale: '1500.00',
+    customer_ragione_sociale: 'ACME S.r.l.',
+    ...overrides,
+  }
+}
+
+/** Makes the list endpoint answer these rows; every other endpoint stays empty. */
+function mockInvoices(items: Record<string, unknown>[]): void {
+  mockGet.mockImplementation(((path: string) =>
+    path === '/api/invoices'
+      ? ok({ items, next_cursor: null })
+      : ok({ items: [], next_cursor: null })) as never)
+}
+
 /** The `stato` the page last asked the API for, or `undefined` when it asked for none. */
 function lastRequestedStato(): unknown {
   const calls = mockGet.mock.calls.filter((call) => call[0] === '/api/invoices')
@@ -123,29 +150,24 @@ describe('the invoice list', () => {
    *  invoice each row is (ORB-98). The tab inside a customer's page does not: see
    *  `InvoicesTab.test.tsx`. */
   it('says which customer each invoice belongs to', async () => {
-    mockGet.mockImplementation(((path: string) =>
-      path === '/api/invoices'
-        ? ok({
-            items: [
-              {
-                id: 'f1',
-                anno: 2026,
-                numero: 7,
-                riferimento: null,
-                tipo: 'fattura',
-                stato: 'emessa',
-                stato_pagamento: 'da_incassare',
-                data_emissione: '2026-08-20',
-                totale: '1500.00',
-                customer_ragione_sociale: 'ACME S.r.l.',
-              },
-            ],
-            next_cursor: null,
-          })
-        : ok({ items: [], next_cursor: null })) as never)
+    mockInvoices([invoice()])
     renderList()
     expect(await screen.findByRole('columnheader', { name: 'Cliente' })).toBeInTheDocument()
     expect(screen.getByRole('cell', { name: 'ACME S.r.l.' })).toBeInTheDocument()
+  })
+
+  it('says which period each invoice is about, beside its date (ORB-126)', async () => {
+    mockInvoices([
+      invoice({
+        data_emissione: '2026-09-02',
+        competenza_da: '2026-08-01',
+        competenza_a: '2026-08-31',
+      }),
+    ])
+    renderList()
+    const headers = (await screen.findAllByRole('columnheader')).map((h) => h.textContent)
+    expect(headers.indexOf('Competenza')).toBe(headers.indexOf('Data') + 1)
+    expect(screen.getByRole('cell', { name: '01/08/2026 - 31/08/2026' })).toBeInTheDocument()
   })
 
   it('still explains the «scadute» drill-through it arrives with', async () => {

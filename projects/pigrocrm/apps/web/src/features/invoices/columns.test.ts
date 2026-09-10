@@ -28,6 +28,12 @@ const PROFORMA = {
 
 const WITH_CUSTOMER = { ...ISSUED, customer_ragione_sociale: 'ACME S.r.l.' } as Invoice
 
+const WITH_PERIOD = {
+  ...ISSUED,
+  competenza_da: '2026-08-01',
+  competenza_a: '2026-08-31',
+} as Invoice
+
 function accessor(id: string, row: Invoice, options?: InvoiceColumnOptions): unknown {
   const column = buildInvoiceColumns(options).find((candidate) => candidate.id === id)
   if (column === undefined || !('accessorFn' in column) || column.accessorFn === undefined) {
@@ -189,6 +195,41 @@ describe('the customer column', () => {
     expect(screen.getByText('ACME S.r.l.')).toBeInTheDocument()
 
     renderCell('cliente', ISSUED, CLIENTE)
+    expect(screen.getByText('—').className).toContain('text-muted-foreground')
+  })
+})
+
+/**
+ * The «Competenza» column (ORB-126). Invoicing runs late here, August's work issued in
+ * September, so the emission date alone does not say which month a row is about. In the
+ * list and in the tab alike: unlike the customer's name, the period is not what the
+ * page title already says.
+ */
+describe('the accrual period column', () => {
+  it('sits right after the date, with and without the customer column', () => {
+    for (const options of [undefined, { cliente: true }]) {
+      const ids = buildInvoiceColumns(options).map((candidate) => candidate.id ?? '')
+      expect(ids.indexOf('competenza')).toBe(ids.indexOf('data_emissione') + 1)
+    }
+    expect(column('competenza').header).toBe('Competenza')
+  })
+
+  it('reads the period the way the detail page states it', () => {
+    expect(accessor('competenza', WITH_PERIOD)).toBe('01/08/2026 - 31/08/2026')
+  })
+
+  it('shows the em dash when the document declares no period', () => {
+    expect(accessor('competenza', ISSUED)).toBe('—')
+  })
+
+  /** The emission date is the one column with a calendar: a second icon two columns
+   *  over would make the two read as the same kind of value, and they are not. */
+  it('renders as plain text, with no calendar icon, and the dash quietly', () => {
+    const { container } = renderCell('competenza', WITH_PERIOD)
+    expect(screen.getByText('01/08/2026 - 31/08/2026')).toBeInTheDocument()
+    expect(container.querySelector('svg')).toBeNull()
+
+    renderCell('competenza', ISSUED)
     expect(screen.getByText('—').className).toContain('text-muted-foreground')
   })
 })

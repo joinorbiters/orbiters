@@ -3,7 +3,7 @@ import { DateCell, MoneyCell } from '@/components/cells'
 import type { DataTableFeatures } from '@/components/DataTable'
 import { StatusPill } from '@/components/StatusPill'
 import { InvoiceStateBadge } from './InvoiceStateBadge'
-import { formatDate, formatInvoiceNumber, formatMoney } from './format'
+import { formatDate, formatInvoiceNumber, formatMoney, formatPeriod } from './format'
 import {
   INVOICE_TYPE_LABELS,
   PAYMENT_STATE_LABELS,
@@ -37,6 +37,16 @@ export interface InvoiceColumnOptions {
 function customerName(row: Invoice): string {
   const name = row.customer_ragione_sociale
   return name === null || name === undefined || name === '' ? EMPTY : name
+}
+
+/**
+ * The accrual period the document declares (ORB-61), as the detail page states it, or
+ * the dash. One helper for the accessor and the cell, as `customerName` above: the two
+ * halves of a column disagreeing about what nothing looks like is a defect this file
+ * has already shipped once (see the `data_emissione` column).
+ */
+function accrualPeriod(row: Invoice): string {
+  return formatPeriod(row.competenza_da, row.competenza_a)
 }
 
 export function buildInvoiceColumns(
@@ -91,6 +101,20 @@ export function buildInvoiceColumns(
       // identical string this accessor does.
       accessorFn: (row) => formatDate(row.data_emissione),
       cell: ({ row }) => <DateCell value={row.original.data_emissione} />,
+    },
+    {
+      header: 'Competenza',
+      id: 'competenza',
+      // Beside the date the document was issued on (ORB-126): invoicing runs late here,
+      // so the two often name different months, and a list showing only the second does
+      // not say what a row is about. Plain text: the emission date is the one column with
+      // a calendar icon, and a second one two columns over would make two different kinds
+      // of value read as the same.
+      accessorFn: (row) => accrualPeriod(row),
+      cell: ({ row }) => {
+        const period = accrualPeriod(row.original)
+        return period === EMPTY ? <span className="text-muted-foreground">{EMPTY}</span> : period
+      },
     },
     {
       header: 'Totale',
