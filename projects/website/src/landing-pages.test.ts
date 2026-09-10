@@ -186,6 +186,16 @@ describe('index.html', () => {
     expect(page).toMatch(/href="\/termini"/)
   })
 
+  it('opens a door into the hub admin area from its footer, and only there', () => {
+    // Ivan, 2026-09-10 (ORB-105): whoever reviews signups, freelancers and companies
+    // should not have to type `/hub/admin` by hand. One quiet link at the end of the
+    // footer, dressed like its neighbours; the hub's `AdminLayout` sends a visitor
+    // without a session to its login, so the page links the area and not the login.
+    const footer = page.match(/<footer[\s\S]*?<\/footer>/)?.[0] ?? ''
+    expect(footer).toMatch(/<a class="quiet-link" href="\/hub\/admin">Admin<\/a>\s*<\/p>/)
+    expect(page.match(/href="\/hub\/admin"/g)).toHaveLength(1)
+  })
+
   it('mounts the same field as the community page behind the whole page, from the shared script', () => {
     // Ivan, 2026-09-09: `/pigrocrm` has the same background as `/`. One fixed canvas
     // right after <body>, the same id, the same mount options in landing.js.
