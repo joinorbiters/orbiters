@@ -77,4 +77,5 @@ Ports, loopback only, from the table in `docs/adding-a-project.md` §7: producti
 vhost that lives in `projects/website/deploy/joinorbiters.conf`; nothing proxies the
 preview, which is reached on the host only. The member area's mail needs
 `ORBITERS_RESEND_API_KEY` and `ORBITERS_MAIL_FROM` in the host `.env`; without the key
-`/hub/accedi` answers 503 with a sentence.
+`/hub/accedi` answers 503 with a sentence. A preview stack that gets a key must also set
+`ORBITERS_HUB_URL` to its own address, or every link it mints points at production.

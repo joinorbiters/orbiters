@@ -13,6 +13,12 @@ export function MemberGuard() {
   }, [me.isPending, me.data, navigate])
 
   if (me.isPending) return <p className="text-sm text-muted-foreground">Caricamento…</p>
+  if (me.isError)
+    return (
+      <p role="alert" className="text-sm text-destructive">
+        Non riusciamo a leggere la tua area. Riprova tra poco.
+      </p>
+    )
   if (!me.data) return null
   return <Outlet />
 }

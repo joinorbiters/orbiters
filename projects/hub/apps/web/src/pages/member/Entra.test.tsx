@@ -8,6 +8,7 @@ import {
   createRouter,
 } from '@tanstack/react-router'
 import { render, screen } from '@testing-library/react'
+import { StrictMode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Entra } from './Entra'
 
@@ -34,7 +35,7 @@ const PROFILE = {
   updated_at: '2026-09-10T10:00:00Z',
 }
 
-function mount(path: string) {
+function mount(path: string, { strict = false }: { strict?: boolean } = {}) {
   const root = createRootRoute({ component: () => <Outlet /> })
   const entra = createRoute({
     getParentRoute: () => root,
@@ -48,11 +49,12 @@ function mount(path: string) {
     routeTree: root.addChildren([entra, io, accedi]),
     history: createMemoryHistory({ initialEntries: [path] }),
   })
-  render(
+  const tree = (
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
       <RouterProvider router={router} />
-    </QueryClientProvider>,
+    </QueryClientProvider>
   )
+  render(strict ? <StrictMode>{tree}</StrictMode> : tree)
 }
 
 afterEach(() => vi.restoreAllMocks())
@@ -74,5 +76,21 @@ describe('/entra', () => {
     mount('/entra?t=abc-123_XYZ')
     expect(await screen.findByRole('alert')).toHaveTextContent('non è più valido')
     expect(screen.getByRole('link', { name: /Chiedine un altro/ })).toHaveAttribute('href', '/accedi')
+  })
+
+  it('reaches the area under StrictMode, whose double effect breaks the mutation observer', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(answer(200, PROFILE))
+    mount('/entra?t=abc-123_XYZ', { strict: true })
+    await screen.findByRole('heading', { name: 'La tua area' })
+  })
+
+  it('shows the API message and a retry on a 429, not the dead-link sentence', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      answer(429, { detail: 'Troppe richieste da qui. Riprova tra un minuto.' }),
+    )
+    mount('/entra?t=abc-123_XYZ')
+    expect(await screen.findByRole('alert')).toHaveTextContent('Troppe richieste da qui. Riprova tra un minuto.')
+    expect(screen.getByRole('button', { name: 'Riprova' })).toBeInTheDocument()
+    expect(screen.queryByText(/non è più valido/)).not.toBeInTheDocument()
   })
 })

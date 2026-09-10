@@ -1,5 +1,6 @@
 """The member area over HTTP: a link in, a cookie out, and only your own row behind it."""
 
+import logging
 import re
 from collections.abc import Iterator
 
@@ -13,10 +14,17 @@ from orbiters_api.deps import get_sender
 from orbiters_api.ratelimit import reset_rate_limit
 from orbiters_core.admin import AdminService
 from orbiters_core.config import Settings
-from orbiters_core.mail import RecordingSender
+from orbiters_core.mail import Mail, RecordingSender
 
 PDF = b"%PDF-1.7\n1 0 obj<<>>endobj\n%%EOF\n"
 ADMIN = {"email": "ivan@orbiters.it", "password": "una-password-lunga"}
+
+
+class RefusingSender:
+    """A sender the provider always turns away, for the test that a refusal is logged."""
+
+    def send(self, mail: Mail) -> bool:
+        return False
 
 
 @pytest.fixture
@@ -76,6 +84,24 @@ def test_without_a_sender_the_link_request_is_a_503_sentence(
     response = client.post("/api/hub/auth/link", json={"email": "ada@studio.it"})
     assert response.status_code == 503
     assert "non è ancora attivo" in response.json()["detail"]
+
+
+def test_a_refused_mail_is_logged_without_the_address(
+    client: TestClient, clean: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    # `api_engine`'s `upgrade_to_head` runs Alembic's own `env.py`, whose `fileConfig`
+    # disables every logger that already existed and is not in `alembic.ini`'s own
+    # `[loggers]` list -- this module's among them. Undo that here so `caplog` can see
+    # what this test is about; nothing at runtime relies on the logger being disabled.
+    logging.getLogger("orbiters_api.routers.members").disabled = False
+    client.app.dependency_overrides[get_sender] = lambda: RefusingSender()  # type: ignore[attr-defined]
+    _apply(client, "ada@studio.it")
+    with caplog.at_level(logging.WARNING):
+        response = client.post("/api/hub/auth/link", json={"email": "ada@studio.it"})
+    assert response.status_code == 202
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert any("refused by the provider" in record.getMessage() for record in warnings)
+    assert "ada@studio.it" not in caplog.text
 
 
 def test_the_link_request_answers_the_same_whether_the_address_applied_or_not(
@@ -200,7 +226,12 @@ def test_a_member_changes_their_answers_and_the_admin_sees_the_comment(
     # The admin reads the thread the member wrote into.
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
     AdminService(api_session, settings).create(ADMIN["email"], "Ivan", ADMIN["password"])
+    # Log the member out first, so the client below holds only the admin cookie: an
+    # admin session must not open the member routes any more than a member session
+    # opens the admin ones.
+    assert client.post("/api/hub/me/logout").status_code == 204
     assert client.post("/api/hub/auth/login", json=ADMIN).status_code == 200
+    assert client.get("/api/hub/me").status_code == 401
     listed = client.get("/api/hub/freelancers").json()["items"]
     assert len(listed) == 1 and listed[0]["posizione"] == "Staff engineer"
     thread = client.get(f"/api/hub/freelancers/{listed[0]['id']}/comments").json()

@@ -12,6 +12,7 @@ FastAPI reads its multipart body while resolving parameters, before `MemberDep` 
 chance to reject an anonymous caller with a 401.
 """
 
+import logging
 from typing import Annotated
 
 from fastapi import (
@@ -26,12 +27,23 @@ from fastapi import (
 )
 
 from orbiters_api.deps import MEMBER_COOKIE, MemberDep, SenderDep, SessionDep, SettingsDep
+from orbiters_api.downloads import cv_response
 from orbiters_api.ratelimit import spend_one
+from orbiters_core.mail import EmailSender, Mail
 from orbiters_core.members import MemberService
 from orbiters_core.models import CV_MAX_BYTES
 from orbiters_core.schemas import Ack, EnterRequest, LinkRequest, MemberProfile, MemberUpdate
 
 router = APIRouter(prefix="/api/hub", tags=["hub-member"])
+
+_log = logging.getLogger(__name__)
+
+
+def _send(sender: EmailSender, mail: Mail) -> None:
+    """Runs after the response. A refusal is logged without the address or the key: the
+    operator needs to know the provider said no, not to whom."""
+    if not sender.send(mail):
+        _log.warning("the magic link mail was refused by the provider")
 
 
 @router.post("/auth/link", response_model=Ack, status_code=status.HTTP_202_ACCEPTED)
@@ -51,7 +63,7 @@ def request_link(
         )
     mail = MemberService(session, settings).request_link(payload.email)
     if mail is not None:
-        background.add_task(sender.send, mail)
+        background.add_task(_send, sender, mail)
     return Ack()
 
 
@@ -116,12 +128,7 @@ def replace_my_cv(
 @router.get("/me/cv")
 def my_cv(member: MemberDep, session: SessionDep, settings: SettingsDep) -> Response:
     cv = MemberService(session, settings).cv(member.id)
-    safe = "".join(ch if ch.isalnum() or ch in "._- " else "_" for ch in cv.filename) or "cv.pdf"
-    return Response(
-        content=cv.content,
-        media_type=cv.mime,
-        headers={"Content-Disposition": f'attachment; filename="{safe}"'},
-    )
+    return cv_response(cv)
 
 
 @router.post("/me/logout", status_code=status.HTTP_204_NO_CONTENT)

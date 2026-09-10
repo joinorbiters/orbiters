@@ -56,8 +56,9 @@ member_sessions     id, freelancer_id (FK, index), token_hash (64, unique),
 
 A token is single use: `used_at` is set the moment it opens a session, and a used or
 expired token answers like an unknown one. Expired and spent tokens of a person are
-deleted lazily when that person asks for a new link or enters with one; nothing needs
-a cron. `test_migrations.py`'s `compare_metadata` check covers both tables.
+deleted lazily when that person asks for a new link; entering with one does not sweep,
+so the login path stays a single write. Nothing needs a cron. `test_migrations.py`'s
+`compare_metadata` check covers both tables.
 
 ## Core
 
