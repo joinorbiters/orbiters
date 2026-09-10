@@ -24,14 +24,38 @@ products that need to agree on something agree through `shared/`.
 ## Layout
 
 ```
-packages/core/   orbiters_core: models, migrations, services, the ad conversion
+packages/core/   orbiters_core: models, migrations, services, the ad conversion, the perk files
 apps/api/        orbiters_api: FastAPI, one process, its own database
 apps/mcp/        orbiters_mcp: stdio, the same services in process
 apps/web/        pnpm package `hub`: the SPA at joinorbiters.com/hub/ (wizards, the member area, admin)
+content/         the prose a perk is made of, reviewed as prose
+tools/           the one script that turns that prose into a file a member downloads
 ```
 
 `packages/core` may import neither adapter, and neither adapter may import the other:
 each directory's `ruff.toml` says so.
+
+## The guide is a generated file, committed, and easy to leave stale
+
+`content/guida-primi-passi-freelance.md` is typeset by `tools/build_guide_pdf.py`, with
+pandoc and Typst, into `packages/core/src/orbiters_core/perks/`, and the result is
+**committed**. It is the one build output in git here, and the script's docstring says
+why: the alternative puts those two binaries plus fontTools inside `Dockerfile.api` for
+one document.
+
+It is served by `GET /api/hub/me/guida`, which depends on `MemberDep` and nothing else,
+so the perk of being in the community is that the route answers at all. There is no
+public URL for the file, and the website links to the wizard instead (ORB-70).
+
+What that costs is a file that can fall behind its sources, so after editing the
+Markdown, the template, the palette or the typeface run
+`uv run python projects/hub/tools/build_guide_pdf.py` and commit both the PDF and
+`tools/guide-pdf.lock.json`. Forgetting is a failing test rather than a stale download:
+`packages/core/tests/test_guide_pdf.py` compares every source's hash with that lock,
+`apps/web/src/lib/perks.test.ts` compares the page count and size the member area shows,
+and the `guide-pdf` preflight check rebuilds the bytes. Comparing bytes is meaningful
+only because the build is reproducible on purpose: `--creation-timestamp 0` for Typst,
+`recalcTimestamp=False` for the font instances.
 
 ## Running it
 

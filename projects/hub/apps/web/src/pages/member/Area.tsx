@@ -3,13 +3,18 @@ import { ArrowUpRight, Download, LogOut, Pencil } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { member } from '@/lib/api'
 import { formatBytes } from '@/lib/format'
+import { GUIDE } from '@/lib/perks'
 import { toApplication, useMember, useMemberLogout } from '@/lib/member'
 import { FREELANCER_STEPS } from '@/pages/FreelancerWizard'
 
 const PIGROCRM_URL = 'https://pigro.joinorbiters.com/app/registrati'
 
 /** What the person sent, under the wizard's own questions, and the perks. The email is
- *  shown and not editable: it is the address the link proved. */
+ *  shown and not editable: it is the address the link proved.
+ *
+ *  The two perks are PigroCRM and the guide, and the guide is here rather than on the
+ *  public site because it is a perk: `GET /api/hub/me/guida` answers a member and 401s
+ *  everybody else (Lorenzo, ORB-70). */
 export function Area() {
   const me = useMember()
   const logout = useMemberLogout()
@@ -80,10 +85,22 @@ export function Area() {
             </a>
           </Button>
         </div>
-        <div className="flex flex-col gap-3 rounded-2xl border border-dashed bg-muted/40 p-6 text-muted-foreground">
-          <p className="text-xs font-medium tracking-wide uppercase">Prossimamente</p>
-          <h2 className="text-lg font-semibold">Altro in arrivo</h2>
-          <p className="text-sm">Stiamo mettendo insieme altre cose per chi è dentro. Ti scriviamo noi.</p>
+        <div className="flex flex-col gap-3 rounded-2xl border-2 border-foreground bg-card p-6">
+          <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Per chi è dentro</p>
+          <h2 className="text-lg font-semibold">I primi passi da freelance</h2>
+          <p className="text-sm text-muted-foreground">
+            La parte che nessuno ti spiega prima della prima fattura: come dirti in una frase,
+            come arrivare a un numero e difenderlo, cosa scrivere prima di iniziare. Venti minuti.
+          </p>
+          <Button asChild className="mt-auto self-start">
+            <a href={member.guideUrl}>
+              <Download className="mr-2 size-4" />
+              Scarica la guida
+            </a>
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            PDF, {GUIDE.pages} pagine, {GUIDE.kilobytes} KB.
+          </p>
         </div>
       </section>
     </div>

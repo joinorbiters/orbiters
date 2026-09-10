@@ -1,0 +1,135 @@
+// The guide's page, in the site's own visual system. A pandoc Typst template, so a
+// name between dollar signs is a variable `build_guide_pdf.py` passes in and
+// `$$body$$` is the guide's Markdown after pandoc's Typst writer has been over it.
+// (Dollars are doubled in this comment because pandoc substitutes them anywhere in
+// the file, comments included: written once, `$$body$$` here pasted the whole
+// document into a comment and left an unclosed raw span behind it.)
+//
+// Nothing here spells a colour. The five values arrive as variables, read out of
+// `@orbiters/brand/palette.css` at build time by the same rule `palette-plugin.ts`
+// follows for the stylesheets: one source for the palette, and a hex typed into a
+// template is the fork both mechanisms exist to prevent.
+//
+// What the page borrows from `landing.css`, so a reader who has just left
+// joinorbiters.com recognises where the file came from: the paper ground with the
+// grid drawn on it (`body`, 16px cell, the line at 7% ink), the opaque white panel
+// with a 2px edge and a stepped shadow the colour of the ink and no blur (`.box`), the
+// saturated square before a section title (`.kicker::before`), body text at weight 300
+// in the quiet ink and headings at 500 in the full one (`p`, `h2`), and no rounded
+// corner anywhere.
+
+#let ink = rgb("$ink$")
+#let inkquiet = rgb("$inkquiet$")
+#let paper = rgb("$paper$")
+#let cta = rgb("$cta$")
+#let gridline = rgb("$gridline$")
+
+// 16 CSS pixels, the site's cell, is 12pt; the line is 1px. `grid` is a paint, so the
+// page's background is a rectangle filled with it, the same way `body`'s two
+// linear-gradients are a background-image rather than a border. Named gridpaint, not
+// grid: Typst's own  is the function the mark and the footer are built out of.
+#let cell = 12pt
+#let gridpaint = tiling(size: (cell, cell))[
+  #place(line(start: (0pt, 0pt), end: (0pt, cell), stroke: 0.75pt + gridline))
+  #place(line(start: (0pt, 0pt), end: (cell, 0pt), stroke: 0.75pt + gridline))
+]
+#let ground = rect(width: 100%, height: 100%, fill: gridpaint, stroke: none)
+
+// The four tiles of the mark, in the order `shared/brand/mark.ts` fixes: ink and gold
+// on top, the accent and ink underneath.
+#let mark(size: 4pt) = {
+  let tile(c) = rect(width: size, height: size, fill: c, stroke: none)
+  box(baseline: 20%, grid(
+    columns: (size, size),
+    rows: (size, size),
+    column-gutter: 0pt,
+    row-gutter: 0pt,
+    tile(ink), tile(rgb("$gold$")),
+    tile(cta), tile(ink),
+  ))
+}
+
+// A measure, not the page: 130mm is about 70 characters at this size, the same
+// intent as `.measure`'s 62ch on the site. The room left over sits on the right,
+// where a reader's thumb is and where a printed note goes.
+#set page(
+  paper: "a4",
+  margin: (left: 30mm, right: 50mm, top: 24mm, bottom: 22mm),
+  fill: paper,
+  background: ground,
+  footer: context {
+    set text(size: 8pt, weight: 300, fill: inkquiet)
+    grid(
+      columns: (1fr, auto),
+      align: (left + horizon, right + horizon),
+      [Orbiters · $shorttitle$],
+      [#counter(page).display()],
+    )
+  },
+  footer-descent: 10mm,
+)
+
+#set text(font: ("Outfit",), size: 10.5pt, weight: 300, fill: inkquiet, lang: "it")
+// 1.6, the site's body line-height, as the space between lines rather than the whole
+// step: 1.6em of step minus the 1em the line itself occupies.
+#set par(leading: 0.62em, spacing: 1.15em, justify: false)
+#show link: it => text(fill: cta, it)
+#show strong: set text(weight: 500, fill: ink)
+#show emph: set text(style: "italic")
+
+// A section title carries the accent square `.kicker::before` puts before it, at the
+// same 8px, and stays in the full ink at weight 500. The space above it is the band
+// `.section` gives a section on the page.
+#show heading.where(level: 1): it => block(above: 2.4em, below: 1.1em)[
+  #box(rect(width: 6pt, height: 6pt, fill: cta, stroke: none))
+  #h(6pt)
+  #text(size: 15pt, weight: 500, fill: ink, it.body)
+]
+#show heading.where(level: 2): it => block(above: 1.8em, below: 0.8em)[
+  #text(size: 12pt, weight: 500, fill: ink, it.body)
+]
+
+// The cover: one panel on the ground, exactly as every band of the site is one box on
+// the grid. White fill, a 2px edge, and the shadow an 8px offset of the ink with no
+// blur, which is `.box`'s `box-shadow` and nothing else.
+//
+// The shadow has to be drawn at the panel's own size, so the panel is measured first:
+// a `place`d rectangle at `height: 100%` resolves against the page, not against its
+// sibling, and painted the whole sheet ink the first time this was written.
+#let cover(body) = layout(size => context {
+  let step = 6pt
+  let panel = rect(
+    width: size.width,
+    fill: white,
+    stroke: 1.5pt + ink,
+    inset: 18pt,
+    body,
+  )
+  let height = measure(panel).height
+  block(width: 100%, height: height + step)[
+    #place(dx: step, dy: step, rect(width: size.width, height: height, fill: ink, stroke: none))
+    #place(panel)
+  ]
+})
+
+#{
+  // No running footer under the cover: the page number belongs to the pages that have
+  // text on them.
+  set page(footer: none)
+  v(1fr)
+  cover[
+    #text(size: 11pt, weight: 500, fill: ink)[#mark() #h(4pt) Orbiters]
+    #v(14pt)
+    #text(size: 24pt, weight: 500, fill: ink)[
+      #set par(leading: 0.28em)
+      $title$
+    ]
+    #v(10pt)
+    #text(size: 10.5pt, weight: 300, fill: inkquiet)[$standfirst$]
+  ]
+  v(1fr)
+  text(size: 9pt, weight: 300)[#link("$siteurl$")[$sitelabel$]]
+  pagebreak()
+}
+
+$body$

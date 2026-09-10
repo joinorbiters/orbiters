@@ -117,6 +117,18 @@
       "why": "99 assertions on the built and unbuilt text: which tokens each sheet may declare, what each page promises, how the field behaves. No services, about two seconds."
     },
     {
+      "id": "guide-pdf",
+      "run": "uv run python projects/hub/tools/build_guide_pdf.py --check",
+      "when": [
+        "projects/hub/content/**",
+        "projects/hub/tools/**",
+        "projects/hub/packages/core/src/orbiters_core/perks/**",
+        "shared/brand/palette.css",
+        "shared/brand/fonts/**"
+      ],
+      "why": "The other half of packages/core/tests/test_guide_pdf.py. That test compares hashes and needs nothing installed, so it runs in the hub's gate on every pull request; this rebuilds the PDF with pandoc, Typst and fontTools and compares the bytes, which only a machine with all three can do. Two seconds, and it is what makes committing a built artefact safe: a source edited without a regeneration fails here rather than leaving a download that says something the repository no longer does."
+    },
+    {
       "id": "website-build",
       "run": "pnpm --filter website build && pnpm --filter website exec tsc --noEmit",
       "when": [

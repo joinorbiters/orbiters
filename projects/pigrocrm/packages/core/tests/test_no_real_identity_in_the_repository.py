@@ -143,11 +143,37 @@ def tracked_text() -> list[tuple[Path, str]]:
         if name in _PATHS_WHERE_REAL_VALUES_ARE_REQUIRED:
             continue
         path = root / name
-        try:
-            out.append((path, path.read_text(encoding="utf-8", errors="ignore")))
-        except (OSError, UnicodeDecodeError):
-            continue  # a binary asset carries no value to match
+        text = _text_or_none(path)
+        if text is not None:
+            out.append((path, text))
     return out
+
+
+def _text_or_none(path: Path) -> str | None:
+    """The file's text, or None when it is binary.
+
+    Binary here means either a NUL byte anywhere, or bytes that are not valid UTF-8,
+    which is what a compressed stream is. It has to be both tests rather than git's own
+    "NUL in the first 8000 bytes": the first such file to arrive, the guide's PDF
+    (ORB-70), carries its first NUL at offset 10,258 and would have passed that one.
+
+    Reading it anyway with `errors="ignore"`, as this did until 2026-09-10, turned
+    49 KB of deflate into runs of digits and reported three telephone numbers that are
+    in neither that file nor anywhere else. A guard that cries wolf is a guard nobody
+    reads. What defends a generated binary is that its *sources* are tracked text and do
+    pass through here: the guide's Markdown, its Typst template and its lock file are
+    all read below.
+    """
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    if b"\x00" in raw:
+        return None
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
 
 
 _CHECKS = (
@@ -209,6 +235,32 @@ def test_the_scan_actually_reads_the_repository(tracked_text: list[tuple[Path, s
     assert len(tracked_text) > 500, (
         f"only {len(tracked_text)} tracked files were read, so a pass here means nothing"
     )
+
+
+def test_a_generated_binary_is_skipped_and_its_sources_are_not(
+    tracked_text: list[tuple[Path, str]],
+) -> None:
+    """The rule that keeps this guard readable, in both directions.
+
+    Skipping binaries is only safe because what generates them is text that is read.
+    Assert both halves: the PDF is out, the Markdown and the lock file that produce it
+    are in. Written in terms of the tree rather than of `_text_or_none` alone, since
+    what matters is which files the scan above actually walked.
+    """
+    root = _repository_root()
+    hub = root / "projects" / "hub"
+    pdf = hub / "packages/core/src/orbiters_core/perks/orbiters-guida-primi-passi-freelance.pdf"
+    assert pdf.is_file(), "the guide's PDF moved; this test names it on purpose"
+    assert _text_or_none(pdf) is None
+
+    read = {path for path, _ in tracked_text}
+    assert pdf not in read
+    for source in (
+        hub / "content" / "guida-primi-passi-freelance.md",
+        hub / "tools" / "guide.typ.template",
+        hub / "tools" / "guide-pdf.lock.json",
+    ):
+        assert source in read, f"{source.name} is generated-from text and must be scanned"
 
 
 def test_no_unapproved_identifier_appears_anywhere(
@@ -334,9 +386,8 @@ def test_no_fixture_identity_reaches_a_shipped_web_surface() -> None:
 
     offenders: list[str] = []
     for name in shipped:
-        try:
-            text = (root / name).read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        text = _text_or_none(root / name)
+        if text is None:
             continue
         for hit in _FIXTURE_COMPANY.findall(text):
             if (name, hit.upper()) in _ALLOWED_ON_SHIPPED_SURFACES:
