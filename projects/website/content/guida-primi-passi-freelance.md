@@ -1,10 +1,10 @@
 # I primi passi da freelance: la parte che nessuno ti spiega prima della prima fattura
 
-Ho aperto la partita IVA anni fa, e nessuno mi ha insegnato a scrivere la prima fattura.
-Ho imparato quasi tutto da un errore mio o da uno di chi lavorava vicino a me. Questa
-guida è quello che avrei voluto leggere allora: non un manuale, non la teoria di chi
-vende corsi sul freelance, ma le cose che si ripetono davvero, scritte come le direi a
-un developer che sta per fare lo stesso salto.
+Nessuno insegna a scrivere la prima fattura prima che tocchi scriverla davvero. Si
+impara quasi sempre da un errore, il tuo o di chi lavora vicino a te. Questa guida è
+quello che vorresti trovare scritto prima di quell'errore: non un manuale, non la
+teoria di chi vende corsi sul freelance, ma le cose che si ripetono davvero, nel modo
+in cui te le direbbe chi le ha viste ripetersi.
 
 Non è un elenco di regole fisse. È quello che ho visto funzionare abbastanza spesso da
 scriverlo, e ogni volta che un numero compare in questa guida ti dico anche se è
@@ -29,22 +29,21 @@ averti. Se una di queste tre cose manca dopo la prima chiamata, chiedila prima d
 mandare un preventivo. Un preventivo scritto su un progetto non chiaro è un numero
 inventato che poi devi difendere.
 
-Un esempio, senza nomi. Una startup del settore logistico mi ha scritto chiedendo «una
-mano col backend», niente altro. Ho fatto per telefono la domanda che di solito evito
-di fare per email: cosa esiste già, cosa manca davvero, e chi decide se il lavoro va
-bene. È venuto fuori che il problema non era il backend in generale ma
-un'integrazione con un corriere che in azienda non sapeva più leggere nessuno. Il
-preventivo che ho mandato parlava di quella integrazione, non di «una mano col
-backend», ed è stato accettato lo stesso giorno: non perché fossi più bravo di un
-altro, ma perché ero l'unico ad aver capito cosa stavo vendendo prima di scrivere il
-prezzo.
+Il caso tipico: una startup del settore logistico ti scrive chiedendo «una mano col
+backend», e niente altro. La domanda da fare, meglio al telefono che per email, è
+cosa esiste già, cosa manca davvero, e chi decide se il lavoro va bene. Spesso salta
+fuori che il problema non è il backend in generale ma un pezzo preciso, un'integrazione
+con un corriere che in azienda non sa più leggere nessuno, per dire. Un preventivo
+scritto su quel pezzo, e non su «una mano col backend», si accetta più in fretta: non
+perché costi meno, ma perché il cliente vede che hai capito cosa ti sta chiedendo
+prima ancora di scrivere il prezzo.
 
 La tariffa a giornata è una frase, non una scusa. «La mia giornata costa X» si dice
 con lo stesso tono con cui dici il tuo nome. Se la dici con un tono da scusa, chi ti
 ascolta se ne accorge prima di sentire il numero, e negozia sul tono, non sul numero.
-L'ho imparato dopo aver visto la differenza tra due mie stesse telefonate, stessa
-tariffa, tono diverso: una è finita con un sì immediato, l'altra con tre giorni di
-silenzio e una controproposta.
+La differenza si sente: la stessa tariffa, detta con un tono diverso in due
+telefonate diverse, può finire con un sì immediato o con tre giorni di silenzio e
+una controproposta.
 
 ## Farsi pagare il giusto
 
@@ -70,11 +69,13 @@ prima la abbassa per sempre, perché la voce corre. «Posso fare la prima metà 
 quella cifra, la seconda la vediamo dopo» costa allo stesso modo di uno sconto sul
 foglio, ma non lo è.
 
-Un'azienda del settore sanitario, una volta, ha accettato il mio primo numero senza
-controproposte. Ho capito dopo perché: aveva già chiesto due preventivi ad altri, ed
-ero l'unico ad aver chiesto quanto tempo avessero per decidere prima di scrivere la
-cifra. Il numero non era più basso degli altri due, era solo il primo scritto su un
-progetto che, a forza di domande, capivo meglio degli altri due preventivatori.
+Capita, in un'azienda del settore sanitario come altrove, che il primo numero
+proposto venga accettato senza controproposte. Il motivo di solito non è il numero
+in sé: è che il cliente ha già chiesto due preventivi ad altri, e chi fa la domanda su
+quanto tempo hanno per decidere, prima di scrivere la cifra, è quello che si nota. Il
+numero non deve essere più basso degli altri due: deve essere il primo scritto su un
+progetto che, a forza di domande, si capisce meglio di chi ha preventivato senza
+farle.
 
 Il preventivo più basso non è quello che vinci più facilmente. È quello che, tre
 settimane dentro il progetto, il cliente prova a rinegoziare al ribasso, perché ha
@@ -90,12 +91,12 @@ in un'email che il cliente conferma con un «ok, confermo» o un preventivo firm
 Quella email è quello a cui torni tra due mesi quando qualcuno dice «ma io pensavo
 che...».
 
-L'ho visto non fatto, una volta, in un progetto del settore ecommerce dove lo scope
-era tutto in una chiamata mai ripresa per iscritto. A metà lavoro il cliente
-ricordava una versione diversa da quella che ricordavo io, in buona fede da
-entrambe le parti: nessuno mentiva, semplicemente nessuno aveva scritto niente. Da
-allora le tre righe le mando sempre, anche quando sembrano talmente ovvie che
-scriverle pare tempo perso.
+È il modo in cui va storto un progetto del settore ecommerce con lo scope tutto detto
+a voce, in una chiamata mai ripresa per iscritto: a metà lavoro il cliente ricorda
+una versione diversa da quella che ricordi tu, in buona fede da entrambe le parti.
+Nessuno mente, semplicemente nessuno ha scritto niente. Le tre righe si mandano
+sempre, anche quando sembrano talmente ovvie che scriverle pare tempo perso: è
+proprio lì che servono di più.
 
 Dire no a qualcosa fuori scope non deve suonare come un rifiuto. «Questo non era nel
 preventivo, lo aggiungo volentieri come attività separata» tiene la porta aperta e
@@ -115,9 +116,9 @@ Chiudere bene un incarico conta più di quanto sembri quando lo stai chiudendo. 
 breve riassunto di cosa è stato consegnato, cosa resta aperto, e a chi passare le
 credenziali, mandato anche quando il rapporto è finito bene, è quello che fa dire al
 cliente «con questa persona rifarei un progetto» quando qualcuno gli chiede un
-riferimento. L'ho visto succedere al contrario: un progetto finito bene ma chiuso di
-fretta, senza un passaggio di consegne, diventato nella memoria del cliente «quello
-che è sparito».
+riferimento. Succede anche al contrario: un progetto finito bene ma chiuso di fretta,
+senza un passaggio di consegne, resta nella memoria del cliente come «quello che è
+sparito».
 
 ## Le richieste tipiche
 
@@ -200,12 +201,12 @@ davanti a cui pensare ad alta voce quando un progetto va storto, e la tentazione
 risolvere tutto in testa, da solo, anche quando la soluzione più veloce è chiedere a
 qualcuno che ha già visto lo stesso problema.
 
-Mi è capitato con un contratto che non capivo, una clausola di esclusiva scritta in
-un modo che sembrava vietarmi di lavorare per chiunque altro nello stesso settore per
-un anno intero. Da solo ci avrei messo un pomeriggio a decidere se firmarla o
-discuterla. Chiesto a chi ne aveva già vista una simile, la risposta è arrivata in
-dieci minuti: clausola normale in quel tipo di contratto, ma il periodo si negozia
-quasi sempre a tre mesi, e infatti a tre mesi è finita.
+Succede con un contratto che non si capisce fino in fondo: una clausola di esclusiva
+scritta in un modo che sembra vietare di lavorare per chiunque altro nello stesso
+settore per un anno intero. Da soli, decidere se firmarla o discuterla può costare un
+pomeriggio intero. Chiesto a chi ne ha già vista una simile, la risposta arriva in
+dieci minuti: è una clausola normale in quel tipo di contratto, ma il periodo si
+negozia quasi sempre a tre mesi, non ai dodici della prima bozza.
 
 Chiedere a chi c'è già passato non è ammettere di non farcela, è la scorciatoia che
 chi lavora in un'azienda ha gratis e tu no: un collega che ti dice in due minuti
