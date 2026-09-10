@@ -8,7 +8,7 @@ from uuid import UUID
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from orbiters_core.config import Settings
@@ -68,20 +68,32 @@ class AdminService:
         nome: str | None = None,
         email: str | None = None,
         password: str | None = None,
+        keep_session: str | None = None,
     ) -> AdminRead:
         """The pencil on a row (ORB-129): a new name, a new address, a new password, any
-        of them, under the same rules as `create`. `None` means «keep it». The row's own
-        address is no duplicate of itself; open sessions hang on the id and survive."""
+        of them, under the same rules as `create`. `None` means «keep it». Every field is
+        checked before any is written, so a refused body leaves the row as it was. A new
+        password ends the admin's open sessions, because a reset is also what you do after
+        a leak; `keep_session` is the raw cookie of whoever is editing, spared so an admin
+        changing their own password stays logged in. A new address touches no session:
+        they hang on the id."""
         row = self.session.get(AdminUser, admin_id)
         if row is None:
             raise NotFound(ENTITY, admin_id)
-        if email is not None:
-            row.email = self._checked_email(email, except_id=row.id)
-        if nome is not None:
-            row.nome = self._checked_nome(nome)
+        new_email = self._checked_email(email, except_id=row.id) if email is not None else None
+        new_nome = self._checked_nome(nome) if nome is not None else None
         if password is not None:
             self._check_password(password)
+        if new_email is not None:
+            row.email = new_email
+        if new_nome is not None:
+            row.nome = new_nome
+        if password is not None:
             row.password_hash = _hasher.hash(password)
+            revoke = delete(AdminSession).where(AdminSession.user_id == row.id)
+            if keep_session:
+                revoke = revoke.where(AdminSession.token_hash != _hash_token(keep_session))
+            self.session.execute(revoke)
         self.session.commit()
         return AdminRead.model_validate(row)
 
@@ -103,6 +115,8 @@ class AdminService:
 
     @staticmethod
     def _check_password(password: str) -> None:
+        if not password.strip():
+            raise ValidationFailed(ENTITY, "password", "serve una password")
         if len(password) < PASSWORD_MIN_LENGTH:
             raise ValidationFailed(ENTITY, "password", f"almeno {PASSWORD_MIN_LENGTH} caratteri")
 

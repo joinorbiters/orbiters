@@ -131,13 +131,21 @@ def create_admin(
 
 @router.patch("/admins/{admin_id}", response_model=AdminRead)
 def update_admin(
-    _: AdminDep, session: SessionDep, settings: SettingsDep, admin_id: UUID, payload: AdminUpdate
+    _: AdminDep,
+    request: Request,
+    session: SessionDep,
+    settings: SettingsDep,
+    admin_id: UUID,
+    payload: AdminUpdate,
 ) -> AdminRead:
+    # The caller's own cookie is spared when a new password revokes the row's sessions,
+    # so an admin resetting their own password is not logged out by it.
     return AdminService(session, settings).update(
         admin_id,
         nome=payload.nome,
         email=payload.email,
         password=payload.password or None,
+        keep_session=request.cookies.get(ADMIN_COOKIE),
     )
 
 

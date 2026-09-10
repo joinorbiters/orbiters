@@ -61,10 +61,11 @@ export function AdminAdmins() {
    *  the last attempt. While a request is out the dialog stays: closing it would swallow a
    *  late refusal, and a late success would close whatever dialog had been reopened in the
    *  meantime, since the mutation's `onSuccess` outlives `reset()`. */
-  function open(next: Mode) {
+  function open(next: Mode, from: HTMLElement | null = null) {
     if (next.kind === 'closed' && save.isPending) return
     if (next.kind !== 'closed') {
-      opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+      // From the event, not `document.activeElement`: Safari does not focus a clicked button.
+      opener.current = from
       setDraft(next.kind === 'edit' ? { nome: next.admin.nome, email: next.admin.email, password: '' } : EMPTY)
       save.reset()
     }
@@ -91,9 +92,9 @@ export function AdminAdmins() {
   }
 
   return (
-    <Dialog open={mode.kind !== 'closed'} onOpenChange={(isOpen) => open(isOpen ? { kind: 'create' } : { kind: 'closed' })}>
+    <Dialog open={mode.kind !== 'closed'} onOpenChange={(isOpen) => !isOpen && open({ kind: 'closed' })}>
       <Header title="Amministratori" count={list.data?.length}>
-        <Button type="button" size="sm" onClick={() => open({ kind: 'create' })}>
+        <Button type="button" size="sm" onClick={(event) => open({ kind: 'create' }, event.currentTarget)}>
           <Plus data-icon="inline-start" />
           Nuovo amministratore
         </Button>
@@ -142,9 +143,16 @@ export function AdminAdmins() {
                 </td>
                 <td className="px-3 py-2.5 text-right text-muted-foreground">{formatDate(row.created_at)}</td>
                 <td className="px-6 py-1.5 text-right">
-                  <Button type="button" variant="ghost" size="icon-sm" onClick={() => open({ kind: 'edit', admin: row })}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={(event) => open({ kind: 'edit', admin: row }, event.currentTarget)}
+                  >
                     <Pencil />
-                    <span className="sr-only">Modifica {row.nome}</span>
+                    <span className="sr-only">
+                      Modifica {row.nome} ({row.email})
+                    </span>
                   </Button>
                 </td>
               </tr>
@@ -164,7 +172,7 @@ export function AdminAdmins() {
             <DialogTitle>{editing ? 'Modifica amministratore' : 'Nuovo amministratore'}</DialogTitle>
             <DialogDescription>
               {editing
-                ? `Lascia la password vuota per non cambiarla. Una nuova password vale da subito, almeno ${PASSWORD_MIN_LENGTH} caratteri, e la comunichi tu a voce o su un canale sicuro.`
+                ? `Lascia la password vuota per non cambiarla. Una nuova password vale da subito, almeno ${PASSWORD_MIN_LENGTH} caratteri, chiude le sue sessioni aperte, e la comunichi tu a voce o su un canale sicuro.`
                 : `Scegli tu la password, almeno ${PASSWORD_MIN_LENGTH} caratteri, e comunicala a voce o su un canale sicuro: qui non viene inviata nessuna email.`}
             </DialogDescription>
           </DialogHeader>

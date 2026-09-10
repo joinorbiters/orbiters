@@ -367,3 +367,37 @@ def test_changing_an_admin_points_the_form_at_the_field_that_is_wrong(
     assert own.status_code == 200 and own.json()["nome"] == "Ivan S."
     assert client.get("/api/hub/auth/me").json()["nome"] == "Ivan S."
     assert client.patch(f"/api/hub/admins/{MISSING}", json={"nome": "Nessuno"}).status_code == 404
+
+
+def test_a_new_password_logs_the_other_admin_out_and_keeps_me_in(
+    client: TestClient, admin: None
+) -> None:
+    _login(client)
+    other = client.post(
+        "/api/hub/admins",
+        json={"email": "lorenzo@orbiters.it", "nome": "Lorenzo", "password": "una-password-lunga"},
+    ).json()
+    # Lorenzo logs in from his own browser.
+    lorenzo = TestClient(client.app, base_url="https://testserver")
+    assert (
+        lorenzo.post(
+            "/api/hub/auth/login",
+            json={"email": "lorenzo@orbiters.it", "password": "una-password-lunga"},
+        ).status_code
+        == 200
+    )
+    assert lorenzo.get("/api/hub/auth/me").status_code == 200
+
+    # I change his password: his session is gone, mine is untouched.
+    changed = client.patch(
+        f"/api/hub/admins/{other['id']}", json={"password": "nuova-password-lunga"}
+    )
+    assert changed.status_code == 200
+    assert lorenzo.get("/api/hub/auth/me").status_code == 401
+    assert client.get("/api/hub/auth/me").status_code == 200
+
+    # I change my own: I am still in.
+    me = client.get("/api/hub/auth/me").json()
+    own = client.patch(f"/api/hub/admins/{me['id']}", json={"password": "anche-la-mia-nuova"})
+    assert own.status_code == 200
+    assert client.get("/api/hub/auth/me").status_code == 200

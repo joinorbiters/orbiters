@@ -142,7 +142,7 @@ describe('the Amministratori page', () => {
     await screen.findByText('ada@orbiters.it')
     expect(screen.queryByRole('dialog')).toBeNull()
     const user = userEvent.setup()
-    await user.click(screen.getByRole('button', { name: 'Modifica Ada' }))
+    await user.click(screen.getByRole('button', { name: 'Modifica Ada (ada@orbiters.it)' }))
     const dialog = await screen.findByRole('dialog', { name: 'Modifica amministratore' })
     expect(within(dialog).getByLabelText('Nome')).toHaveValue('Ada')
     expect(within(dialog).getByLabelText('Email')).toHaveValue('ada@orbiters.it')
@@ -151,8 +151,8 @@ describe('the Amministratori page', () => {
 
     // Escape brings focus back to the pencil that opened it, then the edit goes through.
     await user.keyboard('{Escape}')
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Modifica Ada' })).toHaveFocus())
-    await user.click(screen.getByRole('button', { name: 'Modifica Ada' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Modifica Ada (ada@orbiters.it)' })).toHaveFocus())
+    await user.click(screen.getByRole('button', { name: 'Modifica Ada (ada@orbiters.it)' }))
     await screen.findByRole('dialog', { name: 'Modifica amministratore' })
 
     const reopened = screen.getByRole('dialog')
@@ -183,7 +183,7 @@ describe('the Amministratori page', () => {
     mount()
     await screen.findByText('ada@orbiters.it')
     const user = userEvent.setup()
-    await user.click(screen.getByRole('button', { name: 'Modifica Ada' }))
+    await user.click(screen.getByRole('button', { name: 'Modifica Ada (ada@orbiters.it)' }))
     const dialog = await screen.findByRole('dialog')
     const password = within(dialog).getByLabelText('Nuova password')
     // Ten characters typed, so the browser lets it through and the server has its say.
