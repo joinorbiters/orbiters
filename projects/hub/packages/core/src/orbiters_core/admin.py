@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from orbiters_core.config import Settings
 from orbiters_core.errors import ValidationFailed
-from orbiters_core.models import AdminSession, AdminUser
+from orbiters_core.models import NAME_MAX_LENGTH, AdminSession, AdminUser
 
 ENTITY = "admin"
 PASSWORD_MIN_LENGTH = 10
@@ -21,11 +21,16 @@ _hasher = PasswordHasher()
 
 
 class AdminRead(BaseModel):
+    """An admin as the area shows them: never the hash. `attivo` and `created_at` are
+    here for the list of admins (ORB-123); `/auth/me` carries them too, harmlessly."""
+
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
     email: str
     nome: str
+    attivo: bool
+    created_at: datetime
 
 
 def _hash_token(raw: str) -> str:
@@ -37,15 +42,28 @@ class AdminService:
         self.session = session
         self.settings = settings
 
+    def list(self) -> list[AdminRead]:
+        """Every admin, oldest first, so the page reads as a history (ORB-123)."""
+        rows = self.session.scalars(
+            select(AdminUser).order_by(AdminUser.created_at, AdminUser.id)
+        ).all()
+        return [AdminRead.model_validate(row) for row in rows]
+
     def create(self, email: str, nome: str, password: str) -> AdminRead:
-        """`orbiters createadmin`. Refuses a second admin with the same address and a
-        password shorter than ten characters; hashes with argon2, never stores it."""
+        """`orbiters createadmin`, and since ORB-123 the form in the admin area. Refuses
+        a second admin with the same address, a blank or over-long name and a password
+        shorter than ten characters; hashes with argon2, never stores it."""
         email = email.strip().lower()
+        nome = nome.strip()
+        if not nome:
+            raise ValidationFailed(ENTITY, "nome", "serve un nome")
+        if len(nome) > NAME_MAX_LENGTH:
+            raise ValidationFailed(ENTITY, "nome", f"al massimo {NAME_MAX_LENGTH} caratteri")
         if len(password) < PASSWORD_MIN_LENGTH:
             raise ValidationFailed(ENTITY, "password", f"almeno {PASSWORD_MIN_LENGTH} caratteri")
         if self._by_email(email) is not None:
             raise ValidationFailed(ENTITY, "email", "esiste già un amministratore con questa email")
-        row = AdminUser(email=email, nome=nome.strip(), password_hash=_hasher.hash(password))
+        row = AdminUser(email=email, nome=nome, password_hash=_hasher.hash(password))
         self.session.add(row)
         self.session.commit()
         return AdminRead.model_validate(row)

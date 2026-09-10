@@ -189,8 +189,9 @@ ADMIN_SESSION_TOKEN_HASH_LENGTH = 64  # sha256, hex
 
 
 class AdminUser(Base, PrimaryKeyMixin, TimestampMixin):
-    """Whoever reads the hub's admin area. Created by `orbiters createadmin`, never by a
-    form: the hub has no public account, only applicants and the people who read them."""
+    """Whoever reads the hub's admin area. Created by `orbiters createadmin` or, since
+    ORB-123, by another admin from «Amministratori»; never by a public form: the hub has
+    no public account, only applicants and the people who read them."""
 
     __tablename__ = "admin_users"
 

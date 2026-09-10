@@ -10,6 +10,7 @@ import { CompanyWizard } from '@/pages/CompanyWizard'
 import { FreelancerWizard } from '@/pages/FreelancerWizard'
 import { Thanks } from '@/pages/Thanks'
 import { AdminLayout } from '@/pages/admin/AdminLayout'
+import { AdminAdmins } from '@/pages/admin/Admins'
 import { AdminLogin } from '@/pages/admin/Login'
 import {
   AdminCompanies,
@@ -97,6 +98,11 @@ const adminIscrizioni = createRoute({
   path: '/iscrizioni',
   component: AdminSignups,
 })
+const adminAmministratori = createRoute({
+  getParentRoute: () => adminArea,
+  path: '/amministratori',
+  component: AdminAdmins,
+})
 
 const routeTree = root.addChildren([
   publicLayout.addChildren([
@@ -109,7 +115,14 @@ const routeTree = root.addChildren([
     io.addChildren([ioIndex, ioModifica]),
   ]),
   adminLogin,
-  adminArea.addChildren([adminFreelance, adminFreelanceDetail, adminAziende, adminAziendeDetail, adminIscrizioni]),
+  adminArea.addChildren([
+    adminFreelance,
+    adminFreelanceDetail,
+    adminAziende,
+    adminAziendeDetail,
+    adminIscrizioni,
+    adminAmministratori,
+  ]),
 ])
 
 export const router = createRouter({ routeTree, basepath: '/hub' })
