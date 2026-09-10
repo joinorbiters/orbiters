@@ -1,7 +1,7 @@
-import { ArrowLeft, ArrowRight, Check } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import './site-controls.css'
 
 /**
  * One question per screen, the shape Typeform and Tally made familiar: a progress bar,
@@ -117,10 +117,11 @@ export function Wizard<T>({
           aria-valuenow={progress}
           aria-valuemin={0}
           aria-valuemax={100}
-          className="h-1.5 w-full overflow-hidden rounded-full bg-border"
+          aria-label="Avanzamento"
+          className="h-2 w-full overflow-hidden border-(length:--landing-border-width)"
         >
           <div
-            className="h-full rounded-full bg-primary transition-[width] duration-300"
+            className="h-full bg-(--landing-ink) transition-[width] duration-300"
             style={{ width: `${review ? 100 : progress}%` }}
           />
         </div>
@@ -160,12 +161,10 @@ export function Wizard<T>({
             </p>
           )}
           <div className="flex items-center justify-between">
-            <Button type="button" variant="ghost" onClick={back} disabled={submitting}>
-              <ArrowLeft className="mr-2 size-4" />
+            <Button type="button" variant="outline" onClick={back} disabled={submitting}>
               Indietro
             </Button>
             <Button type="button" onClick={onSubmit} disabled={submitting}>
-              <Check className="mr-2 size-4" />
               {submitting ? 'Invio…' : submitLabel}
             </Button>
           </div>
@@ -192,11 +191,10 @@ export function Wizard<T>({
           <div className="flex items-center justify-between">
             <Button
               type="button"
-              variant="ghost"
+              variant="outline"
               onClick={back}
               className={cn(index === 0 && 'invisible')}
             >
-              <ArrowLeft className="mr-2 size-4" />
               Indietro
             </Button>
             <div className="flex items-center gap-3">
@@ -205,7 +203,6 @@ export function Wizard<T>({
               </span>
               <Button type="button" onClick={next}>
                 {index === steps.length - 1 ? 'Rivedi' : 'Avanti'}
-                <ArrowRight className="ml-2 size-4" />
               </Button>
             </div>
           </div>

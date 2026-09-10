@@ -1,0 +1,67 @@
+/* ORB-75: a descendant of `.site` (the chooser, the two wizards and the thanks page,
+   ORB-73's decision) draws the shared `ui/*` primitives -- Button, Input, Textarea --
+   in the landing's own vocabulary instead of the application's. tokens.css's `.site`
+   scope already repoints `--radius`, `--border`, `--input` and the shadow scale for
+   any descendant, which is enough for every utility class that already reads one of
+   those custom properties (`rounded-lg`, `border-input`, `shadow-xs`...). What that
+   cascade does not reach, because the shadcn primitives spend it as their own
+   utilities rather than as a token: the fixed heights, Tailwind's default 1px border
+   width, the application's tighter padding, and the blurred `ring-*` focus treatment
+   `landing.css`'s own header comment (`landing.css:9`) rules out ("no radius, blur or
+   soft shadow anywhere"). Every rule below sits outside any `@layer`, so it wins over
+   Tailwind's own utilities (emitted inside `@layer utilities`) regardless of source
+   order or selector specificity -- confirmed against the compiled CSS in `dist`,
+   never against this source alone (`ui-design-tokens`, the Tailwind v4 shadow trap
+   ORB-73 already paid for). */
+
+.site [data-slot='button'] {
+  border-width: var(--landing-border-width);
+}
+
+/* The two navigation buttons in `Wizard.tsx` are always `data-size="default"`; the
+   site's CTA is not a fixed-height pill, it is padding around the label
+   (`landing.css:263`), so the box grows with its own text instead of clipping it. */
+.site [data-slot='button'][data-size='default'] {
+  height: auto;
+  padding-block: var(--landing-cta-padding-block);
+  padding-inline: var(--landing-cta-padding-inline);
+}
+
+/* `.cta:hover` turns solid ink, never a faded tint of itself (landing.css:268-271);
+   `.cta.secondary:hover` swaps to the same ink fill with the CTA's own ink text
+   (landing.css:303-306) -- the "outline" variant is what `Wizard.tsx` uses for
+   Indietro, so it is what carries the secondary door's shape here. */
+.site [data-slot='button'][data-variant='default']:hover {
+  background-color: var(--landing-ink);
+  border-color: var(--landing-ink);
+}
+.site [data-slot='button'][data-variant='outline']:hover {
+  background-color: var(--landing-ink);
+  border-color: var(--landing-ink);
+  color: var(--landing-cta-ink);
+}
+
+.site [data-slot='input'],
+.site [data-slot='textarea'] {
+  padding-block: var(--landing-control-padding-block);
+  padding-inline: var(--landing-control-padding-inline);
+}
+
+/* aria-invalid keeps the destructive border orbiters.css's own `.signup
+   input[aria-invalid='true']` already draws (orbiters.css:185-187); the soft
+   translucent ring the application adds on top of it is the one thing that has to
+   go, since it is exactly the blurred halo the site's stylesheet never draws. */
+.site [data-slot='input'][aria-invalid='true'],
+.site [data-slot='textarea'][aria-invalid='true'] {
+  box-shadow: none;
+}
+
+/* The application's focus state is a blurred, semi-transparent ring; the site's is a
+   solid offset outline in the same Watermelon (landing.css:283-286). A control this
+   rule reaches keeps whatever border it already has -- the outline is drawn outside
+   it, never replacing it. */
+.site :where([data-slot='button'], [data-slot='input'], [data-slot='textarea']):focus-visible {
+  outline: 3px solid var(--landing-focus);
+  outline-offset: 3px;
+  box-shadow: none;
+}
