@@ -89,13 +89,12 @@ listening only on `127.0.0.1:8080` — not yet reachable from the internet).
 ### 3. Configure nginx on the host
 
 ```
-sudo bash deploy/setup-server.sh
+sudo PIGROCRM_DOMAIN=tuodominio.it bash deploy/setup-server.sh
 ```
 
-Writes a vhost that acts as a reverse proxy to `127.0.0.1:8080`, for now only over HTTP. Uses the
-default domain (`pigrocrm.example.com`) unless `PIGROCRM_DOMAIN` is set:
-`sudo PIGROCRM_DOMAIN=tuodominio.it bash deploy/setup-server.sh`, and it has to be passed, because the
-default is not this server's domain.
+Writes a vhost that acts as a reverse proxy to `127.0.0.1:8080`, for now only over HTTP.
+`PIGROCRM_DOMAIN` is required: the script refuses to run without it, because a public
+repository's setup script defaulting to somebody's domain is worse than asking.
 
 **One-time step: the automatic deploy does not run it.** Re-running it on every push
 would rewrite the reverse proxy on every commit, and the guard that's meant to protect the
