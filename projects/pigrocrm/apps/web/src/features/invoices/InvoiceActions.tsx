@@ -26,6 +26,7 @@ import { QueryErrorBanner } from '@/components/QueryErrorBanner'
 import { toProblem, type ProblemDetail } from '@/lib/api'
 import { useIsAdmin } from '@/lib/auth'
 import { toIsoDate } from '@/lib/dates'
+import { formatInvoiceNumber } from './format'
 import {
   downloadInvoiceArtifact,
   useAnnulInvoice,
@@ -41,11 +42,17 @@ import {
 export function InvoiceActions({
   invoice,
   onDeleted,
+  onIssued,
 }: {
   invoice: Invoice
   /** Called once the server has accepted the delete: the page this bar sits on no
    *  longer exists, so the caller decides where to go (the list, in practice). */
   onDeleted?: () => void
+  /** Called with the row that now carries the number. For a draft fattura it is this
+   *  same row; for a proforma it is a *new* row (spec 5), and the page this bar sits on
+   *  has become a consumed proforma with nothing left to do on it, so the caller goes
+   *  to the fattura, where «XML FatturaPA» is (ORB-134). */
+  onIssued?: (issued: Invoice) => void
 }) {
   const [problem, setProblem] = useState<ProblemDetail | null>(null)
   const [annulOpen, setAnnulOpen] = useState(false)
@@ -122,6 +129,11 @@ export function InvoiceActions({
    * regenerates deterministically from the frozen snapshot whenever it is called again.
    * Saying "emission failed" here would be the more dangerous lie, so the message says
    * exactly what happened and what to press.
+   *
+   * The render targets `issued.id`, not `invoice.id`: from a proforma the two differ,
+   * and rendering the proforma would print the wrong document (ORB-134). The toast
+   * names the number, since it is the one fact the person cannot see on the page they
+   * pressed the button on.
    */
   function onIssue() {
     if (!window.confirm(`Emettere questo documento? Il numero assegnato non è più modificabile.`))
@@ -131,15 +143,15 @@ export function InvoiceActions({
       {},
       {
         onSuccess: (issued) => {
-          toast.success('Documento emesso')
-          artifacts.mutate(undefined, {
+          toast.success(`Fattura ${formatInvoiceNumber(issued)} emessa`)
+          artifacts.mutate(issued.id, {
             onError: () =>
               toast.warning(
                 'Documento emesso correttamente, ma PDF e XML non sono stati generati. ' +
                   'Riprova con «Rigenera documenti»: il numero resta quello.',
               ),
           })
-          void issued
+          onIssued?.(issued)
         },
         onError: (error) => setProblem(toProblem(error)),
       },

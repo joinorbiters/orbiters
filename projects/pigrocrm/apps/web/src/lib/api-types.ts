@@ -16196,6 +16196,7 @@ export interface operations {
                 anno?: number | null;
                 stato_pagamento?: ("da_incassare" | "incassato") | null;
                 scadute?: boolean;
+                origine_proforma_id?: string | null;
                 limit?: number;
                 cursor?: string | null;
             };

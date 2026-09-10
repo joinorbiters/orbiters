@@ -361,6 +361,33 @@ def test_the_list_filters_and_paginates(
     assert filtered["items"] == []
 
 
+def test_the_list_answers_the_fattura_a_consumed_proforma_became(
+    logged_in: TestClient,
+    customer: dict[str, Any],
+    fiscal_profile: dict[str, Any],
+    emitter: dict[str, Any],
+) -> None:
+    """After «Emetti» on a proforma the numbered row is a different one (spec 5), and the
+    consumed proforma's page needs a way to it: `?origine_proforma_id=` answers exactly
+    that row (ORB-134)."""
+    proforma = logged_in.post(
+        "/api/invoices",
+        json={
+            "customer_id": customer["id"],
+            "tipo": "proforma",
+            "righe": [{"descrizione": "Consulenza", "prezzo_unitario": "100.00"}],
+        },
+    ).json()
+    assert logged_in.post(f"/api/invoices/{proforma['id']}/confirm").status_code == 200
+    issued = logged_in.post(f"/api/invoices/{proforma['id']}/issue", json={}).json()
+    assert issued["id"] != proforma["id"]
+    assert issued["origine_proforma_id"] == proforma["id"]
+
+    page = logged_in.get("/api/invoices", params={"origine_proforma_id": proforma["id"]}).json()
+    assert [row["id"] for row in page["items"]] == [issued["id"]]
+    assert logged_in.get("/api/invoices", params={"origine_proforma_id": "x"}).status_code == 422
+
+
 def test_the_list_limit_is_bounded_at_the_http_layer(logged_in: TestClient) -> None:
     assert logged_in.get("/api/invoices", params={"limit": 201}).status_code == 422
 

@@ -71,6 +71,9 @@ def list_invoices(
     # (§6.2). The card links here and nowhere else, and the rows returned are counted by
     # the same predicate function the card's `COUNT` uses.
     scadute: Annotated[bool, Query()] = False,
+    # The fattura a consumed proforma was issued as: the proforma's page asks for the
+    # one row whose `origine_proforma_id` is its own id (ORB-134).
+    origine_proforma_id: Annotated[UUID | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     cursor: Annotated[UUID | None, Query()] = None,
 ) -> InvoicePage:
@@ -82,6 +85,7 @@ def list_invoices(
         anno=anno,
         stato_pagamento=stato_pagamento,
         scadute=scadute,
+        origine_proforma_id=origine_proforma_id,
         limit=limit,
         cursor=cursor,
     )
