@@ -80,7 +80,8 @@ describe('InvoiceActions', () => {
 
   it('renders the artefacts after issuing, as a second call', async () => {
     vi.mocked(api.POST).mockResolvedValue(ok(ISSUED))
-    wrap(<InvoiceActions invoice={DRAFT} />)
+    const onIssued = vi.fn()
+    wrap(<InvoiceActions invoice={DRAFT} onIssued={onIssued} />)
 
     await userEvent.click(screen.getByRole('button', { name: /emetti/i }))
     await waitFor(() => expect(vi.mocked(api.POST).mock.calls.length).toBe(2))
@@ -91,6 +92,30 @@ describe('InvoiceActions', () => {
       .mock.calls.map((call) => String((call as unknown as unknown[])[0]))
     expect(paths[0]).toContain('/issue')
     expect(paths[1]).toContain('/artifacts')
+    // A draft fattura is issued in place: the caller gets the same id back and has
+    // nothing to navigate to. The route relies on this to stay put (ORB-134).
+    expect(onIssued).toHaveBeenCalledWith(ISSUED)
+    expect(onIssued.mock.calls[0]?.[0]?.id).toBe(DRAFT.id)
+  })
+
+  /**
+   * The route navigates away in `onIssued`, so this bar unmounts while the render is
+   * still in flight. TanStack Query drops the callbacks passed to `mutate()` once the
+   * observer has no listeners, which silently lost the warning on exactly the flow
+   * ORB-134 introduces; the promise form does not. Pinned by unmounting from the
+   * callback, as the route does.
+   */
+  it('still warns about a failed render after the caller has navigated away', async () => {
+    vi.mocked(api.POST)
+      .mockResolvedValueOnce(ok({ ...ISSUED, id: 'inv-18' }))
+      .mockResolvedValueOnce(failed({ detail: 'typst non disponibile' }, 500))
+    const view = wrap(<InvoiceActions invoice={PROFORMA} onIssued={() => view.unmount()} />)
+
+    await userEvent.click(screen.getByRole('button', { name: /emetti/i }))
+
+    await waitFor(() => expect(toast.warning).toHaveBeenCalled())
+    expect(String(vi.mocked(toast.warning).mock.calls[0]?.[0])).toContain('Rigenera documenti')
+    expect(vi.mocked(toast.error)).not.toHaveBeenCalled()
   })
 
   /**

@@ -31,10 +31,11 @@ export function ConsumedProformaNotice({ proforma }: { proforma: Invoice }) {
           : PDF e XML FatturaPA sono lì.
         </>
       ) : (
-        // A consumed proforma always has its fattura; the list not answering one is a
-        // network error or a race with the emission that has just happened, and the
-        // sentence still says where to look.
-        'Questa proforma è stata emessa: la fattura con il numero e l\u2019XML è nell\u2019elenco delle fatture.'
+        // A consumed proforma always has its fattura, written in the same transaction
+        // that consumed it, so an empty answer is the request failing after the client
+        // gave up retrying. The sentence stays true either way and says where to look;
+        // an error banner for a one-line notice would be louder than the page it sits on.
+        'Questa proforma è stata emessa: la fattura con il numero e l’XML è nell’elenco delle fatture.'
       )}
     </p>
   )

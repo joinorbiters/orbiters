@@ -134,6 +134,12 @@ export function InvoiceActions({
    * and rendering the proforma would print the wrong document (ORB-134). The toast
    * names the number, since it is the one fact the person cannot see on the page they
    * pressed the button on.
+   *
+   * `mutateAsync` and not `mutate` with callbacks: `onIssued` navigates away, this bar
+   * unmounts, and TanStack Query drops the callbacks handed to `mutate()` once the
+   * observer has no listeners. The warning would be lost on exactly the flow this
+   * exists for. A promise's `catch` does not care whether anything is still mounted,
+   * and the toast is global.
    */
   function onIssue() {
     if (!window.confirm(`Emettere questo documento? Il numero assegnato non è più modificabile.`))
@@ -144,13 +150,12 @@ export function InvoiceActions({
       {
         onSuccess: (issued) => {
           toast.success(`Fattura ${formatInvoiceNumber(issued)} emessa`)
-          artifacts.mutate(issued.id, {
-            onError: () =>
-              toast.warning(
-                'Documento emesso correttamente, ma PDF e XML non sono stati generati. ' +
-                  'Riprova con «Rigenera documenti»: il numero resta quello.',
-              ),
-          })
+          void artifacts.mutateAsync(issued.id).catch(() =>
+            toast.warning(
+              'Documento emesso correttamente, ma PDF e XML non sono stati generati. ' +
+                'Riprova con «Rigenera documenti»: il numero resta quello.',
+            ),
+          )
           onIssued?.(issued)
         },
         onError: (error) => setProblem(toProblem(error)),
