@@ -259,23 +259,28 @@ rows.
 | hub (`orbiters`, `orbiters-preview`) | api 8084, web 8085, Postgres 55435 | api 8086, web 8087, Postgres 55436 |
 
 Since 2026-09-10 preview has public names too: `preview.joinorbiters.com` mirrors the
-website plus hub map, `preview.pigro.joinorbiters.com` mirrors the CRM's, and both are
-behind HTTP basic auth against `/etc/nginx/.htpasswd-preview` with
-`X-Robots-Tag: noindex` on every answer. So a new project's preview gets a vhost as
-well as a production one, the two files stay the same shape, and only the ports differ.
-Three rules that are the reason it is safe: the password file lives on the server and
-never in the repository, the credential itself is in the password manager and not in an
-issue or a commit, and a preview name only ever proxies preview containers, so a click
-inside preview cannot walk out into production data.
+website plus hub map, `preview.pigro.joinorbiters.com` mirrors the CRM's. So a new
+project's preview gets a vhost as well as a production one, the two files stay the same
+shape, and only the ports differ.
+
+**A preview name is open, and nothing on it may be a secret.** It was briefly behind
+HTTP basic auth on 2026-09-10; Lorenzo's call the same day removed it, because a
+password nobody asked for is one more credential to hand around for a surface whose
+whole purpose is being easy to look at. What keeps it safe is narrower and does not
+depend on anyone remembering a password: `X-Robots-Tag: noindex, nofollow, noarchive`
+on every answer, so the copy of a public site does not become duplicate content in
+search; a preview name only ever proxies preview containers, so a click inside preview
+cannot walk out into production data; and preview's own database and secrets are its
+own. The consequence for a new project: if its preview would expose something that must
+not be read by whoever finds the URL, that is a reason to keep the surface off preview,
+not a reason to put a password back.
 
 TLS on the preview names is a **certificate of their own**, `preview.joinorbiters.com`,
 covering both of them, rather than two more names on the production certificate. The
 reason is blast radius: `certbot --nginx --expand` reinstalls the certificate into every
 vhost whose `server_name` it matches, which means it rewrites the two production files
 to add a preview name, and those are the files that are edited in place. A separate
-certificate touches only the two preview vhosts and renews on its own. Renewal was
-dry-run through the basic auth on 2026-09-10 and passes, because the challenge path is
-`auth_basic off`.
+certificate touches only the two preview vhosts and renews on its own.
 
 The copy in the repository is plain HTTP and is the source of truth for what the rules
 are. The copy in `/etc/nginx/sites-available/` has certbot's port-443 block on top of
