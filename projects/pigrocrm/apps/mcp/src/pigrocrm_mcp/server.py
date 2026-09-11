@@ -1,11 +1,12 @@
 import functools
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from typing import Any, cast
 from uuid import UUID
 
 from mcp.server import MCPServer
+from mcp.server.context import ServerMiddleware
 from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ResourceError, ResourceNotFoundError
 
@@ -56,6 +57,8 @@ def build_server(
     actor_provider: ActorProvider,
     storage: DocumentStorage | None = None,
     settings: Settings | None = None,
+    *,
+    middleware: Sequence[ServerMiddleware[Any]] | None = None,
 ) -> MCPServer:
     # One session per logical call (Task 4A-1, residual R1). `_guard` opens the
     # scope via `session_provider.scope()` when the provider exposes one --
@@ -100,6 +103,9 @@ def build_server(
     # (see `ScopedSessionProvider.new_session`); a plain callable provider does not have
     # it, and `storage_from_settings` then refuses that configuration by name rather
     # than closing the session a tool call is running in.
+    #
+    # `middleware` is the SDK's context-tier hook, used by the HTTP transport to bind
+    # the request's actor (`actor_scope.py`); stdio passes none.
     context = McpContext(
         session_provider,
         actor_provider,
@@ -108,7 +114,7 @@ def build_server(
             resolved_settings, session_factory=getattr(session_provider, "new_session", None)
         ),
     )
-    mcp = MCPServer("PigroCRM", instructions=INSTRUCTIONS)
+    mcp = MCPServer("PigroCRM", instructions=INSTRUCTIONS, middleware=middleware)
 
     # Resolved once, here, rather than per call (Task 4A-1). `ScopedSessionProvider`
     # (production, via `__main__.py`) exposes `.scope()`; a plain callable provider
