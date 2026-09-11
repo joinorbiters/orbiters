@@ -168,6 +168,16 @@ class Settings(BaseSettings):
     # consent -- so `consent_expires_at` gets set and the UI warns 48 hours ahead.
     google_app_unverified: bool = False
 
+    # --- Outbound mail (spec 2026-09-12 §6.1). Resend sends the login link and the
+    # welcome mail. Empty key: no sender, and the endpoints that would mail answer 503
+    # with a sentence rather than pretend. `repr=False` for the same reason as the Google
+    # secret above: a Settings object reaches logs and tracebacks.
+    resend_api_key: str = Field(default="", repr=False)
+    # joinorbiters.com already carries SPF and DKIM for Resend (the hub sends from it).
+    mail_from: str = "PigroCRM <ciao@joinorbiters.com>"
+    # How long a link by mail is good for. Fifteen, like the hub's.
+    magic_link_minutes: int = Field(default=15, ge=1, le=120)
+
     gmail_sync_address_batch_size: int = 20
     gmail_backfill_days: int = 90
     gmail_watermark_overlap_hours: int = 24
