@@ -2,8 +2,10 @@
 .claude/worktrees/
 .reference-*/
 .superpowers/
-# direnv's per-checkout cache of the flake's shell
+# direnv's per-checkout cache of the flake's shell, and `nix build`'s result links
 .direnv/
+result
+result-*
 
 # Python
 .venv/
