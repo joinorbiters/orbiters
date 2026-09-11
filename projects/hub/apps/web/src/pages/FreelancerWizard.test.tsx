@@ -9,7 +9,7 @@ import {
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { FREELANCER_STEPS, FreelancerWizard } from './FreelancerWizard'
+import { FREELANCER_STEPS, FreelancerWizard, readPerk } from './FreelancerWizard'
 
 /** The wizard mounted on its own little router, so `navigate` has somewhere to go. */
 function mount(path = '/freelance?utm_source=linkedin') {
@@ -61,7 +61,31 @@ describe('the freelancer steps', () => {
   })
 })
 
+describe('readPerk', () => {
+  it('reads the guide off the URL the landing\'s button carries, and nothing else', () => {
+    expect(readPerk('?perk=guida')).toBe('guida')
+    expect(readPerk('?utm_source=linkedin&perk=guida')).toBe('guida')
+    expect(readPerk('?perk=crm')).toBeNull()
+    expect(readPerk('')).toBeNull()
+  })
+})
+
 describe('FreelancerWizard', () => {
+  it('says why to finish when the URL says the person came for the guide (ORB-154)', async () => {
+    mount('/freelance?perk=guida')
+    const note = await screen.findByRole('note', { name: 'Perché completare l’iscrizione' })
+    expect(note).toHaveTextContent('Completa l’iscrizione per scaricare la guida per diventare un freelance tech.')
+    expect(note).toHaveTextContent('lo trovi nella tua area appena sei dentro')
+    // The wizard itself is untouched: same heading, same first question.
+    expect(screen.getByRole('heading', { level: 1, name: 'Entra in Orbiters' })).toBeInTheDocument()
+  })
+
+  it('shows no such note to whoever arrives without the key', async () => {
+    mount()
+    await screen.findByRole('heading', { level: 1, name: 'Entra in Orbiters' })
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  })
+
   it('walks the eight questions, posts the multipart body with the UTM and lands on grazie', async () => {
     const user = userEvent.setup({ applyAccept: false })
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
