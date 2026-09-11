@@ -44,6 +44,7 @@ row here, in the PR that ships the release or in one of its own.
 | Initiative | Project | Lead | State on 2026-09-10 |
 |---|---|---|---|
 | `PigroCRM` | `PigroCRM v1 - first deploy from CI, with green gates` | Ivan | In Progress |
+| `PigroCRM` | `PigroCRM v2 - a space is born ready, and you enter with your email` | Ivan | In Progress, opened 2026-09-12 |
 | `Hub` | `Hub v0 - signups and the company flow, deployed` | Ivan | In Progress |
 | `Hub` | `Hub v1 - the wizards look like the site` | Lorenzo | In Progress |
 | `Website` | `Website v1 - the public site, live and correct on a phone` | Lorenzo | In Progress |
