@@ -27,7 +27,7 @@ pnpm --filter website lint
 | Page | Served at | What it is |
 |---|---|---|
 | `src/index.html` | `joinorbiters.com/` | The Orbiters landing: two doors into the hub, how it works, the four voices, the perks. Since 2026-09-11 (ORB-145) |
-| `src/pigrocrm.html` | `/pigrocrm` | PigroCRM's own page (ORB-159): the CRM's call to action with a drawn Claude conversation, what is inside, the guide, the closing box. Its own `pigrocrm.css` on top of `landing.css` |
+| `src/pigrocrm.html` | `/pigrocrm` | PigroCRM's own page (ORB-159): one door into Orbiters beside a drawn Claude conversation, the four things inside, the guide, the closing box. Its own `pigrocrm.css` on top of `landing.css` |
 | `src/orbiters.html` | `/orbiters` | The community page and its signup form, the front door until 2026-09-11 |
 | `src/privacy.html` | `/privacy` | Privacy notice |
 | `src/termini.html` | `/termini` | Terms |
