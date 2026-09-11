@@ -206,9 +206,15 @@
   padding-top: 1rem;
 }
 
-/* Three columns, two rows: six things read as a set, not as four and two. */
+/* Four things: two by two on a tablet, four across on a wide screen (ORB-160). */
 @media (min-width: 48rem) {
   .inside {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 72rem) {
+  .inside {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
