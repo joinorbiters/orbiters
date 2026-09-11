@@ -113,9 +113,10 @@ describe('index.html', () => {
     const perk = page.indexOf('PigroCRM, il perk')
     expect(claim).toBeGreaterThan(0)
     expect(perk).toBeGreaterThan(claim)
-    // The lead names the reader in the words of docs/design/positioning.md (ORB-24).
+    // The hero lead is the one line the pitch deck's cover uses (Ivan, ORB-150); the
+    // roles by name moved to the description and the steps, checked further down.
     expect(page.replace(/\s+/g, ' ')).toContain(
-      'La community di chi fa software in proprio: developer, AI engineer, CTO e fractional CTO.',
+      '<p class="lead measure">La community di chi fa software in proprio in Italia.</p>',
     )
     expect(page).toContain('Gratis per chi è in community.')
   })
