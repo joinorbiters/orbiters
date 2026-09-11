@@ -36,6 +36,19 @@ function StatePill({ stato }: { stato: string }) {
   )
 }
 
+/** Beside the state pill on a card an admin wrote from a signup and the person has not
+ *  finished yet (ORB-155): the CV, the rate, the position or the remote preference is
+ *  still missing. */
+function IncompletePill() {
+  return <Badge variant="pill">Da completare</Badge>
+}
+
+/** Who the answers on a card come from, as the detail's «Scheda» row says it. */
+function ownership(f: Freelancer): string {
+  if (f.compilata_da === 'persona') return 'compilata dalla persona'
+  return f.completa ? 'scritta dall’admin' : 'scritta dall’admin, da completare'
+}
+
 export function Header({ title, count, children }: { title: string; count?: number; children?: React.ReactNode }) {
   return (
     <header className="flex flex-wrap items-center justify-between gap-3 border-b px-6 py-5">
@@ -117,10 +130,17 @@ export function AdminFreelancers() {
                   </Link>
                   <p className="text-xs text-muted-foreground">{item.email}</p>
                 </td>
-                <td className="px-3 py-2.5">{item.posizione}</td>
-                <td className="px-3 py-2.5 text-right tabular-nums">{formatEuro(item.tariffa_giornaliera)}</td>
-                <td className="px-3 py-2.5">{REMOTO_LABELS[item.remoto]}</td>
-                <td className="px-3 py-2.5"><StatePill stato={item.stato} /></td>
+                <td className="px-3 py-2.5">{item.posizione ?? '—'}</td>
+                <td className="px-3 py-2.5 text-right tabular-nums">
+                  {item.tariffa_giornaliera === null ? '—' : formatEuro(item.tariffa_giornaliera)}
+                </td>
+                <td className="px-3 py-2.5">{item.remoto ? REMOTO_LABELS[item.remoto] : '—'}</td>
+                <td className="px-3 py-2.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <StatePill stato={item.stato} />
+                    {!item.completa && <IncompletePill />}
+                  </div>
+                </td>
                 <td className="px-6 py-2.5 text-right text-muted-foreground">{formatDate(item.created_at)}</td>
               </tr>
             ))}
@@ -188,22 +208,27 @@ export function AdminFreelancerDetail() {
   return (
     <>
       <Header title={`${f.nome} ${f.cognome}`}>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <StatePill stato={f.stato} />
-          <Button asChild variant="outline" size="sm">
-            <a href={admin.cvUrl(f.id)}>
-              <Download className="mr-2 size-4" />
-              CV · {formatBytes(f.cv_size)}
-            </a>
-          </Button>
+          {!f.completa && <IncompletePill />}
+          {f.cv_filename !== null && f.cv_size !== null && (
+            <Button asChild variant="outline" size="sm">
+              <a href={admin.cvUrl(f.id)}>
+                <Download className="mr-2 size-4" />
+                CV · {formatBytes(f.cv_size)}
+              </a>
+            </Button>
+          )}
         </div>
       </Header>
       <div className="grid gap-6 p-6 lg:grid-cols-3">
         <dl className="space-y-3 text-sm lg:col-span-2">
           <Row label="Email"><a className="underline underline-offset-2" href={`mailto:${f.email}`}>{f.email}</a></Row>
-          <Row label="Posizione">{f.posizione}</Row>
-          <Row label="Tariffa a giornata">{formatEuro(f.tariffa_giornaliera)}</Row>
-          <Row label="Modalità">{REMOTO_LABELS[f.remoto]}</Row>
+          <Row label="Posizione">{f.posizione ?? '—'}</Row>
+          <Row label="Tariffa a giornata">
+            {f.tariffa_giornaliera === null ? '—' : formatEuro(f.tariffa_giornaliera)}
+          </Row>
+          <Row label="Modalità">{f.remoto ? REMOTO_LABELS[f.remoto] : '—'}</Row>
           <Row label="LinkedIn">
             {f.linkedin_url ? <a className="underline underline-offset-2" href={f.linkedin_url} target="_blank" rel="noreferrer">{f.linkedin_url}</a> : '—'}
           </Row>
@@ -217,6 +242,7 @@ export function AdminFreelancerDetail() {
             ) : '—'}
           </Row>
           <Row label="Arrivato">{formatDate(f.created_at)}{f.utm_source ? ` · da ${f.utm_source}` : ''}</Row>
+          <Row label="Scheda">{ownership(f)}</Row>
         </dl>
         <StatusEditor
           states={FREELANCER_STATES}
@@ -361,6 +387,7 @@ export function AdminSignups() {
             <tr className="border-b">
               <th className="px-6 py-2 font-medium">Chi</th>
               <th className="px-3 py-2 font-medium">LinkedIn</th>
+              <th className="px-3 py-2 font-medium">Scheda</th>
               <th className="px-3 py-2 font-medium">Da</th>
               <th className="px-6 py-2 text-right font-medium">Quando</th>
             </tr>
@@ -374,6 +401,13 @@ export function AdminSignups() {
                 </td>
                 <td className="px-3 py-2.5">
                   {item.linkedin_url ? <a className="underline underline-offset-2" href={item.linkedin_url} target="_blank" rel="noreferrer">profilo</a> : '—'}
+                </td>
+                <td className="px-3 py-2.5">
+                  {item.freelancer_id ? (
+                    <Link to="/admin/freelance/$id" params={{ id: item.freelancer_id }} className="underline underline-offset-2">
+                      apri
+                    </Link>
+                  ) : '—'}
                 </td>
                 <td className="px-3 py-2.5 text-muted-foreground">{item.utm_source ?? '—'}</td>
                 <td className="px-6 py-2.5 text-right text-muted-foreground">{formatDate(item.created_at)}</td>

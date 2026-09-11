@@ -66,16 +66,18 @@ export function useMemberLogout() {
 }
 
 /** The profile in the wizard's own shape, so its steps can render and validate it.
- *  `cv` is `null`: the file we hold is not a `File` in the browser. */
+ *  `cv` is `null`: the file we hold is not a `File` in the browser. The answers an
+ *  incomplete card lacks (ORB-155) become `''`, which is what the wizard's fields
+ *  show as empty and its rules refuse. */
 export function toApplication(profile: MemberProfile): FreelancerApplication {
   return {
     nome: profile.nome,
     cognome: profile.cognome,
     email: profile.email,
     linkedin_url: profile.linkedin_url ?? '',
-    tariffa_giornaliera: profile.tariffa_giornaliera,
-    posizione: profile.posizione,
-    remoto: profile.remoto,
+    tariffa_giornaliera: profile.tariffa_giornaliera ?? '',
+    posizione: profile.posizione ?? '',
+    remoto: profile.remoto ?? '',
     links: profile.links,
     cv: null,
   }
