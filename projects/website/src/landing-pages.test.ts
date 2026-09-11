@@ -149,11 +149,12 @@ describe('index.html', () => {
     const tiles = page.match(/<figure class="testimonial"[^>]*>/g) ?? []
     expect(tiles).toHaveLength(4)
     expect(page).not.toContain('data-placeholder')
+    // Two talents and two companies, the role line saying which (ORB-146).
     for (const [name, role] of [
-      ['Ivan Sala', 'Fractional CTO'],
-      ['Lorenzo Fiore', 'Fractional CTO'],
-      ['Luca Franzesi', 'Head of Software Solution'],
-      ['Andrea Ciceri', 'Lead Infrastructure Engineer'],
+      ['Ivan Sala', 'Fractional CTO · talento'],
+      ['Lorenzo Fiore', 'Fractional CTO · talento'],
+      ['Luca Franzesi', 'Head of Software Solution · azienda'],
+      ['Andrea Ciceri', 'Lead Infrastructure Engineer · azienda'],
     ]) {
       expect(page).toMatch(new RegExp(`<strong>${name}</strong><br /><span class="role">${role}</span>`))
     }
