@@ -1,7 +1,7 @@
 import { useLocation, useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import { ApiError, applyAsFreelancer, type FreelancerApplication } from '@/lib/api'
-import { readUtm } from '@/lib/utm'
+import { resolveUtm } from '@/lib/utm'
 import { ChoiceField, FileField, LinksField, TextField } from '@/wizard/fields'
 import { Wizard, type Step } from '@/wizard/Wizard'
 
@@ -224,7 +224,7 @@ export function FreelancerWizard() {
     setSubmitting(true)
     setSubmitError(null)
     try {
-      await applyAsFreelancer(value, readUtm(searchStr))
+      await applyAsFreelancer(value, resolveUtm(searchStr))
       void navigate({ to: '/grazie', search: { chi: 'freelance' } })
     } catch (error) {
       const failure = error instanceof ApiError ? error : null
