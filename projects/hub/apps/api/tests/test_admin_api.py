@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Iterator
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 from orbiters_api.deps import get_http_call
 from orbiters_core.admin import AdminService
 from orbiters_core.config import Settings, get_settings
+from orbiters_core.perks import PerkService
 
 PDF = b"%PDF-1.7\n1 0 obj<<>>endobj\n%%EOF\n"
 CREDENTIALS = {"email": "ivan@orbiters.it", "password": "una-password-lunga"}
@@ -27,7 +29,14 @@ def admin(api_engine: Engine, api_session: Session) -> Iterator[None]:
     )
     yield
     api_session.rollback()
-    for table in ("comments", "admin_sessions", "admin_users", "freelancers", "companies"):
+    for table in (
+        "guide_downloads",
+        "comments",
+        "admin_sessions",
+        "admin_users",
+        "freelancers",
+        "companies",
+    ):
         api_session.execute(text(f"DELETE FROM {table}"))
     api_session.commit()
 
@@ -56,6 +65,7 @@ def test_without_the_cookie_every_admin_route_is_a_401(client: TestClient, admin
         "/api/hub/signups",
         "/api/hub/admins",
         "/api/hub/pigro/istanze",
+        "/api/hub/perks/guida",
     ):
         assert client.get(path).status_code == 401, path
     refused = client.post(
@@ -64,6 +74,43 @@ def test_without_the_cookie_every_admin_route_is_a_401(client: TestClient, admin
     )
     assert refused.status_code == 401
     assert client.patch(f"/api/hub/admins/{MISSING}", json={"nome": "X"}).status_code == 401
+
+
+def test_the_guide_page_counts_downloads_and_names_who_took_it(
+    client: TestClient, admin: None, api_session: Session
+) -> None:
+    """ORB-156: zero of everything on an empty hub, then the numbers follow the rows.
+    Two people on file, three downloads by one of them: totale 3, membri 1 of 2, all
+    three in the last week, the latest first, each with the member's name."""
+    assert client.post("/api/hub/auth/login", json=CREDENTIALS).status_code == 200
+    empty = client.get("/api/hub/perks/guida")
+    assert empty.status_code == 200
+    assert empty.json() == {
+        "totale": 0,
+        "membri": 0,
+        "membri_totali": 0,
+        "ultimi_7_giorni": 0,
+        "recenti": [],
+    }
+
+    _apply(client, "ada@studio.it")
+    _apply(client, "bob@studio.it")
+    listed = client.get("/api/hub/freelancers").json()["items"]
+    people = {item["email"]: item["id"] for item in listed}
+    perks = PerkService(api_session)
+    for _ in range(3):
+        perks.record_guide_download(UUID(people["ada@studio.it"]))
+
+    stats = client.get("/api/hub/perks/guida").json()
+    assert (stats["totale"], stats["membri"], stats["membri_totali"]) == (3, 1, 2)
+    assert stats["ultimi_7_giorni"] == 3
+    assert len(stats["recenti"]) == 3
+    latest = stats["recenti"][0]
+    assert (latest["nome"], latest["cognome"]) == ("Ada", "Lovelace")
+    assert latest["email"] == "ada@studio.it"
+    assert latest["freelancer_id"] == people["ada@studio.it"]
+    moments = [item["downloaded_at"] for item in stats["recenti"]]
+    assert moments == sorted(moments, reverse=True)
 
 
 def test_login_sets_a_secure_httponly_cookie_and_the_lists_open(

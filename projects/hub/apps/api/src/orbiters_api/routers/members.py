@@ -32,7 +32,7 @@ from orbiters_api.ratelimit import spend_one
 from orbiters_core.mail import EmailSender, Mail
 from orbiters_core.members import MemberService
 from orbiters_core.models import CV_MAX_BYTES
-from orbiters_core.perks import GUIDE_FILENAME, guide_bytes
+from orbiters_core.perks import GUIDE_FILENAME, PerkService, guide_bytes
 from orbiters_core.schemas import Ack, EnterRequest, LinkRequest, MemberProfile, MemberUpdate
 
 router = APIRouter(prefix="/api/hub", tags=["hub-member"])
@@ -133,14 +133,16 @@ def my_cv(member: MemberDep, session: SessionDep, settings: SettingsDep) -> Resp
 
 
 @router.get("/me/guida")
-def my_guide(member: MemberDep) -> Response:
+def my_guide(member: MemberDep, session: SessionDep) -> Response:
     """The guide, to a member and to nobody else.
 
     `MemberDep` is the whole access rule: the perk of being in the community is that
     this answers at all, so an anonymous caller gets the same 401 as `/me` rather than
     a redirect or a teaser. The file is `orbiters_core`'s own package data, and the
-    member row is not read for anything beyond having resolved.
+    member row is not read for anything beyond having resolved. Since ORB-156 the
+    download is written down first, who and when, for the admin area's counter.
     """
+    PerkService(session).record_guide_download(member.id)
     return perk_response(guide_bytes(), GUIDE_FILENAME)
 
 
