@@ -130,6 +130,25 @@ def test_provisioning_creates_a_migrated_database_with_one_admin(
                 users = connection.execute(text("select email, ruolo, attivo from users")).all()
                 assert users == [("ada@studio.it", "admin", True)]
                 assert connection.execute(text("select count(*) from customers")).scalar() == 0
+                # Born ready (spec 2026-09-12 §6.5): the first deal, the first offer and
+                # the first cost need nothing from Impostazioni.
+                assert (
+                    connection.execute(text("select count(*) from pipeline_stages")).scalar() == 6
+                )
+                names = (
+                    connection.execute(text("select nome from templates order by nome"))
+                    .scalars()
+                    .all()
+                )
+                assert "Offerta" in names and len(names) == 3
+                assert (
+                    connection.execute(text("select count(*) from cost_categories")).scalar() == 5
+                )
+                # The emitter carries the name and nothing fiscal: that is the person's.
+                emitter = connection.execute(
+                    text("select ragione_sociale, partita_iva, codice_fiscale from emitter_profile")
+                ).all()
+                assert emitter == [("Ada Lovelace", None, None)]
         finally:
             space.dispose()
     finally:
@@ -188,3 +207,49 @@ def test_a_short_password_provisions_nothing_and_frees_the_name(
             text("select 1 from pg_database where datname = :n"), {"n": tenant_database_name(slug)}
         ).scalar()
     assert exists is None
+
+
+def test_the_cli_furnishes_an_existing_space_that_has_nothing(
+    settings: Settings,
+    registry_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from pigrocrm.core import cli
+
+    service = TenantService(registry_session, settings)
+    slug = "prova-arredo"
+    try:
+        service.provision(
+            TenantSignup(slug=slug, nome="Ada", email="ada@studio.it", password="lunghissima1")
+        )
+        space = create_engine(
+            tenant_database_url(settings, tenant_database_name(slug)), future=True
+        )
+        try:
+            # The state the eight production spaces are in: born before the seeds.
+            with space.begin() as connection:
+                connection.execute(text("delete from pipeline_stages"))
+                connection.execute(text("delete from cost_categories"))
+            monkeypatch.setattr(cli, "get_settings", lambda: settings)
+            assert cli.main(["ensure-space-defaults"]) == 0
+            out = capsys.readouterr().out
+            assert slug in out and "stati 6" in out and "categorie 5" in out
+            with space.connect() as connection:
+                assert (
+                    connection.execute(text("select count(*) from pipeline_stages")).scalar() == 6
+                )
+                assert (
+                    connection.execute(text("select count(*) from cost_categories")).scalar() == 5
+                )
+                # Templates were not empty and are untouched: still the three seeds.
+                assert connection.execute(text("select count(*) from templates")).scalar() == 3
+            # A second run has nothing to do and says so.
+            assert cli.main(["ensure-space-defaults"]) == 0
+            assert "già a posto" in capsys.readouterr().out
+        finally:
+            space.dispose()
+    finally:
+        _drop(settings, slug)
+        registry_session.execute(text("delete from tenants where slug = :s"), {"s": slug})
+        registry_session.commit()
