@@ -497,6 +497,13 @@ li {
   justify-content: center;
 }
 
+/* Inside a box the grid gap spaces the blocks; in a band the actions paragraph is a
+   child of the section and nothing gives it room, so the button sat against the lead
+   above and the fine print below (ORB-148). A beat above, half a beat below. */
+.band .section > .actions {
+  margin-block: 2.25rem 1.25rem;
+}
+
 /* The deck's kicker: capitals, tracked, in the accent; gold on the ink. */
 .deck .kicker {
   font-size: 0.9375rem;
