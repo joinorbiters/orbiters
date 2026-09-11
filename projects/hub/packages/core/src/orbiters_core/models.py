@@ -75,6 +75,10 @@ class Signup(Base, PrimaryKeyMixin):
 # ---- the hub proper: who wants to work, and who needs people --------------------------
 
 FREELANCER_STATES = ("nuovo", "contattato", "attivo", "scartato")
+# Who wrote the seven answers last (ORB-155): the person, through the wizard or the
+# member area, or an admin, from what the public web says about a signup. Research never
+# overwrites `persona`; the person's own words win.
+COMPILATA_DA = ("persona", "admin")
 COMPANY_STATES = ("nuovo", "contattato", "in_corso", "chiuso")
 REMOTE_OPTIONS = ("remoto", "ibrido", "in_sede")
 POSIZIONE_MAX_LENGTH = 160
@@ -107,7 +111,14 @@ class Freelancer(Base, PrimaryKeyMixin, TimestampMixin, UtmMixin):
 
     One row per address (`uq_freelancers_email_lower`): a person who submits twice has
     corrected their application, and the second submission updates the first. `stato`
-    and `note` are the admin's, never the applicant's."""
+    and `note` are the admin's, never the applicant's.
+
+    Since ORB-155 a card can also be born from a signup, with what an admin found on
+    the public web: a name, a LinkedIn profile, a position, some links. The CV, the rate,
+    the position and the remote option are therefore nullable -- nothing public states
+    them -- and the person completes the card from the member area. `compilata_da` says
+    who wrote the answers last, so research can tell a card it may replace from one it
+    may not. Migration 0006 loosened the columns; the wizard still requires all of them."""
 
     __tablename__ = "freelancers"
 
@@ -115,16 +126,17 @@ class Freelancer(Base, PrimaryKeyMixin, TimestampMixin, UtmMixin):
     cognome: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
     email: Mapped[str] = mapped_column(String(320), nullable=False)
     linkedin_url: Mapped[str | None] = mapped_column(String(LINKEDIN_URL_MAX_LENGTH), default=None)
-    cv_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    cv_filename: Mapped[str] = mapped_column(String(CV_FILENAME_MAX_LENGTH), nullable=False)
-    cv_mime: Mapped[str] = mapped_column(String(CV_MIME_MAX_LENGTH), nullable=False)
-    cv_size: Mapped[int] = mapped_column(Integer, nullable=False)
-    tariffa_giornaliera: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
-    posizione: Mapped[str] = mapped_column(String(POSIZIONE_MAX_LENGTH), nullable=False)
-    remoto: Mapped[str] = mapped_column(String(10), nullable=False)
+    cv_bytes: Mapped[bytes | None] = mapped_column(LargeBinary, default=None)
+    cv_filename: Mapped[str | None] = mapped_column(String(CV_FILENAME_MAX_LENGTH), default=None)
+    cv_mime: Mapped[str | None] = mapped_column(String(CV_MIME_MAX_LENGTH), default=None)
+    cv_size: Mapped[int | None] = mapped_column(Integer, default=None)
+    tariffa_giornaliera: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), default=None)
+    posizione: Mapped[str | None] = mapped_column(String(POSIZIONE_MAX_LENGTH), default=None)
+    remoto: Mapped[str | None] = mapped_column(String(10), default=None)
     links: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     stato: Mapped[str] = mapped_column(String(20), nullable=False, default="nuovo")
     note: Mapped[str | None] = mapped_column(Text, default=None)
+    compilata_da: Mapped[str] = mapped_column(String(10), nullable=False, default="persona")
 
     __table_args__ = (
         Index("uq_freelancers_email_lower", func.lower(email), unique=True),
