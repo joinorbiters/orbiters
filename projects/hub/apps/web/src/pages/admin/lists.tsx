@@ -301,7 +301,7 @@ export function AdminFreelancerDetail() {
               </ul>
             ) : '—'}
           </Row>
-          <Row label="Arrivato">{formatDate(f.created_at)}{f.utm_source ? ` · da ${f.utm_source}` : ''}</Row>
+          <Row label="Arrivato">{formatDate(f.created_at)}{f.utm_source ? ` · da ${f.utm_source}` : ''}{f.origine ? ` · pagina ${f.origine}` : ''}</Row>
           <Row label="Provenienza">{f.provenienza}</Row>
           <Row label="Accessi">
             {f.accessi === 0 || f.ultimo_accesso === null
@@ -416,7 +416,7 @@ export function AdminCompanyDetail() {
           <Row label="Progetto"><p className="whitespace-pre-wrap">{c.progetto}</p></Row>
           <Row label="Periodo">dal {formatDate(c.periodo_da)}, {c.durata}</Row>
           <Row label="Budget a giornata">{formatEuro(c.budget_giornaliero)}</Row>
-          <Row label="Arrivata">{formatDate(c.created_at)}{c.utm_source ? ` · da ${c.utm_source}` : ''}</Row>
+          <Row label="Arrivata">{formatDate(c.created_at)}{c.utm_source ? ` · da ${c.utm_source}` : ''}{c.origine ? ` · pagina ${c.origine}` : ''}</Row>
         </dl>
         <StatusEditor
           states={COMPANY_STATES}

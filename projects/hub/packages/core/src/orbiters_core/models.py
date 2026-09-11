@@ -92,8 +92,16 @@ CV_MIME_MAX_LENGTH = 100
 CV_MAX_BYTES = 5 * 1024 * 1024
 
 
+ORIGINE_MAX_LENGTH = 40
+
+
 class UtmMixin:
-    """Where a submission came from, as the page's URL said it. Optional, written once."""
+    """Where a submission came from, as the page's URL said it. Optional, written once.
+    `origine` is the page of the site the person started from (`home`, `pigrocrm`), which
+    the landing's script puts on every door into the hub as `da=` (ORB-167): the campaign
+    says which ad, this says which page."""
+
+    origine: Mapped[str | None] = mapped_column(String(ORIGINE_MAX_LENGTH), default=None)
 
     utm_source: Mapped[str | None] = mapped_column(String(UTM_MAX_LENGTH), default=None)
     utm_medium: Mapped[str | None] = mapped_column(String(UTM_MAX_LENGTH), default=None)

@@ -142,6 +142,8 @@ export interface Freelancer {
   links: string[]
   stato: 'nuovo' | 'contattato' | 'attivo' | 'scartato'
   note: string | null
+  /** The page of the site the person started from, `home` or `pigrocrm` (ORB-167). */
+  origine: string | null
   utm_source: string | null
   utm_campaign: string | null
   created_at: string
@@ -172,6 +174,8 @@ export interface Company {
   budget_giornaliero: string
   stato: 'nuovo' | 'contattato' | 'in_corso' | 'chiuso'
   note: string | null
+  /** The page of the site the person started from, `home` or `pigrocrm` (ORB-167). */
+  origine: string | null
   utm_source: string | null
   created_at: string
   commenti: Comment[]

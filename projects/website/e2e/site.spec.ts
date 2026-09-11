@@ -439,19 +439,24 @@ test.describe('a visitor from a campaign', () => {
         expect(url.searchParams.get('utm_id'), href!).toBe('42')
         expect(url.searchParams.has('gclid'), href!).toBe(false)
       }
-      // The guide's door keeps its own key beside the campaign's.
+      // The guide's door keeps its own key beside the campaign's, and every door says
+      // which page it is on (ORB-167).
       expect(doors.some((href) => href!.startsWith('/hub/freelance?perk=guida&utm_source=linkedin'))).toBe(true)
+      for (const href of doors) expect(new URL(href!, 'https://joinorbiters.com').searchParams.get('da'), href!).toBe(path === '/' ? 'home' : 'pigrocrm')
+      expect(await page.evaluate(() => sessionStorage.getItem('orbiters.da'))).toBe(path === '/' ? 'home' : 'pigrocrm')
       // The rest of the page's links are what the markup says.
       expect(await page.locator('a[href="/privacy"]').count()).toBeGreaterThan(0)
       expect(await page.evaluate(() => sessionStorage.getItem('orbiters.utm'))).toBe('utm_source=linkedin&utm_campaign=orbita&utm_id=42')
     })
   }
 
-  test('/ without a campaign leaves the doors as the markup wrote them', async ({ page }) => {
+  test('/ without a campaign carries no UTM, only the page', async ({ page }) => {
     await page.goto('/', { waitUntil: 'networkidle' })
     const doors = await page.locator('a[href^="/hub/"]').evaluateAll((links) => links.map((a) => a.getAttribute('href')))
     expect(doors.filter((href) => href!.includes('utm_'))).toEqual([])
+    for (const href of doors) expect(new URL(href!, 'https://joinorbiters.com').searchParams.get('da'), href!).toBe('home')
     expect(await page.evaluate(() => sessionStorage.getItem('orbiters.utm'))).toBeNull()
+    expect(await page.evaluate(() => sessionStorage.getItem('orbiters.da'))).toBe('home')
   })
 })
 

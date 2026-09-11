@@ -27,7 +27,13 @@ class SignupService:
 
         # The first attribution of an address is the one that stays: a person who comes
         # back through another ad and types the same email is the same person.
-        utm = data.utm.model_dump() if data.utm is not None and not data.utm.is_empty() else {}
+        # The signups table predates `origine` and the community page has no door to name,
+        # so the page slug stays out of this row (ORB-167).
+        utm = (
+            data.utm.model_dump(exclude={"origine"})
+            if data.utm is not None and not data.utm.is_empty()
+            else {}
+        )
         row = Signup(
             email=email,
             nome=data.nome,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { afterEach, beforeEach } from 'vitest'
-import { UTM_STORAGE_KEY, readUtm, recallUtm, rememberUtm, resolveUtm } from './utm'
+import { ORIGIN_STORAGE_KEY, UTM_STORAGE_KEY, readOrigin, readUtm, recallUtm, rememberUtm, resolveAttribution, resolveOrigin, resolveUtm } from './utm'
 
 describe('readUtm', () => {
   it('keeps the six UTM keys and nothing else', () => {
@@ -41,5 +41,32 @@ describe('resolveUtm, with what the tab remembers (ORB-166)', () => {
   it('remembers nothing for an empty attribution', () => {
     rememberUtm({})
     expect(window.sessionStorage.getItem(UTM_STORAGE_KEY)).toBeNull()
+  })
+})
+
+describe('the page the person started from (ORB-167)', () => {
+  beforeEach(() => window.sessionStorage.clear())
+  afterEach(() => window.sessionStorage.clear())
+
+  it('reads `da=` when it is a slug, and nothing else', () => {
+    expect(readOrigin('?da=pigrocrm&utm_source=linkedin')).toBe('pigrocrm')
+    expect(readOrigin('?da=home')).toBe('home')
+    expect(readOrigin('?da=%3Cscript%3E')).toBeNull()
+    expect(readOrigin('?da=')).toBeNull()
+    expect(readOrigin('')).toBeNull()
+  })
+
+  it('prefers the URL, remembers it for the tab, and falls back to the tab', () => {
+    expect(resolveOrigin('?da=pigrocrm')).toBe('pigrocrm')
+    expect(window.sessionStorage.getItem(ORIGIN_STORAGE_KEY)).toBe('pigrocrm')
+    expect(resolveOrigin('?perk=guida')).toBe('pigrocrm')
+    window.sessionStorage.setItem(ORIGIN_STORAGE_KEY, 'not a slug!')
+    expect(resolveOrigin('')).toBeNull()
+  })
+
+  it('folds the page into the attribution an application sends', () => {
+    expect(resolveAttribution('?utm_source=linkedin&da=home')).toEqual({ utm_source: 'linkedin', origine: 'home' })
+    window.sessionStorage.clear()
+    expect(resolveAttribution('')).toEqual({})
   })
 })
