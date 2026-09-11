@@ -6,9 +6,12 @@ the JSON and the failure classification run for real.
 
 import json
 
+import pytest
+
 from orbiters_core.config import Settings
 from orbiters_core.mail import (
     RESEND_URL,
+    CardSummary,
     Mail,
     RecordingSender,
     ResendSender,
@@ -119,39 +122,80 @@ def test_the_magic_link_mail_has_an_html_version_in_the_landings_system() -> Non
 # ---- the welcome mail (ORB-157) ---------------------------------------------------------
 
 ACCEDI = "https://joinorbiters.com/hub/accedi"
+WIZARD = "https://joinorbiters.com/hub/freelance"
 
 
-def test_the_welcome_mail_says_how_to_enter_what_waits_inside_and_where_the_jobs_are() -> None:
-    mail = welcome_mail(
-        "ada@studio.it", "Ada", ACCEDI, completa=True, posizione="Backend developer"
-    )
+def _common(mail: Mail) -> None:
     assert mail.subject == "La tua area su Orbiters è aperta"
-    assert mail.text.startswith("Ciao Ada,")
-    assert ACCEDI in mail.text and "senza password" in mail.text
-    assert "sei Backend developer" in mail.text and "scheda è completa" in mail.text
     assert "PigroCRM, gratis" in mail.text and "I primi passi da freelance" in mail.text
     assert "disponibili dopo il login" in mail.text
     assert "https://www.linkedin.com/company/joinorbiters" in mail.text
     assert "Forward Deployed Engineer" in mail.text
-
-
-def test_the_welcome_mail_asks_an_incomplete_card_for_the_persons_part() -> None:
-    mail = welcome_mail("ada@studio.it", "Ada", ACCEDI, completa=False, posizione="AI Architect")
-    assert "quello che si trova in pubblico" in mail.text
-    assert "Ti abbiamo segnato come AI Architect." in mail.text
-    assert "il CV, la tariffa a giornata" in mail.text
-    bare = welcome_mail("ada@studio.it", "Ada", ACCEDI, completa=False, posizione=None)
-    assert "segnato come" not in bare.text and "Manca la tua parte" in bare.text
-
-
-def test_the_welcome_mail_has_the_landings_box_and_escapes_the_persons_words() -> None:
-    mail = welcome_mail("ada@studio.it", "<Ada>", ACCEDI, completa=False, posizione="<b>x</b>")
-    assert mail.html is not None
-    html = mail.html
-    assert html.count(ACCEDI) == 3 and "Entra nella tua area" in html
-    assert "<Ada>" not in html and "&lt;Ada&gt;" in html
-    assert "<b>x</b>" not in html and "&lt;b&gt;x&lt;/b&gt;" in html
-    assert 'href="https://www.linkedin.com/company/joinorbiters"' in html
+    assert mail.html is not None and "Privacy" in mail.html and "border-radius" not in mail.html
     for colour in ("#f1f2f3", "#011936", "#ed254e", "#e5133e"):
-        assert colour in html, colour
-    assert "border-radius" not in html and "Privacy" in html
+        assert colour in mail.html, colour
+
+
+def test_a_person_who_filled_their_card_is_told_it_is_complete() -> None:
+    mail = welcome_mail(
+        "ada@studio.it", "Ada", ACCEDI, kind="persona", posizione="Backend developer"
+    )
+    _common(mail)
+    assert mail.text.startswith("Ciao Ada,")
+    assert ACCEDI in mail.text and "senza password" in mail.text
+    assert "sei Backend developer" in mail.text and "scheda è completa" in mail.text
+    assert mail.html is not None and mail.html.count(ACCEDI) == 3
+    assert "Entra nella tua area" in mail.html
+
+
+def test_a_card_we_drafted_gets_a_recap_the_ask_to_complete_and_the_offer() -> None:
+    summary = CardSummary(
+        nome="Bruna",
+        cognome="Esposito",
+        posizione="Senior Frontend Developer",
+        linkedin_url="https://www.linkedin.com/in/bruna-esposito/",
+        links=("https://github.com/brunaesposito",),
+    )
+    mail = welcome_mail("bruna@studio.it", "Bruna", ACCEDI, kind="admin", summary=summary)
+    _common(mail)
+    assert "quello che si trova in pubblico" in mail.text
+    for line in (
+        "- Nome: Bruna Esposito",
+        "- Posizione: Senior Frontend Developer",
+        "- LinkedIn: https://www.linkedin.com/in/bruna-esposito/",
+        "- Link: https://github.com/brunaesposito",
+    ):
+        assert line in mail.text, line
+    assert "il CV, la tariffa a giornata" in mail.text and "entra e completala" in mail.text
+    assert "già un'offerta in linea con il tuo profilo" in mail.text
+    assert "rispondi a questa mail" in mail.text
+    # A recap with nothing but the name lists only the name.
+    bare = welcome_mail(
+        "bruna@studio.it",
+        "Bruna",
+        ACCEDI,
+        kind="admin",
+        summary=CardSummary("Bruna", "Esposito", None, None, ()),
+    )
+    assert "- Nome: Bruna Esposito" in bare.text and "- Posizione" not in bare.text
+
+
+def test_an_address_without_a_card_is_sent_to_the_wizard() -> None:
+    mail = welcome_mail("x@studio.it", None, ACCEDI, kind="nessuna", wizard_link=WIZARD)
+    _common(mail)
+    assert mail.text.startswith("Ciao,\n")
+    assert "non siamo riusciti a prepararla noi" in mail.text
+    assert WIZARD in mail.text and ACCEDI in mail.text
+    assert mail.html is not None and "Compila il tuo profilo" in mail.html
+    named = welcome_mail("x@studio.it", "Marco", ACCEDI, kind="nessuna", wizard_link=WIZARD)
+    assert named.text.startswith("Ciao Marco,")
+
+
+def test_the_welcome_mail_escapes_the_persons_words_and_refuses_an_unknown_kind() -> None:
+    summary = CardSummary("<Ada>", "L", "<b>x</b>", None, ())
+    mail = welcome_mail("ada@studio.it", "<Ada>", ACCEDI, kind="admin", summary=summary)
+    assert mail.html is not None
+    assert "<Ada>" not in mail.html and "&lt;Ada&gt;" in mail.html
+    assert "<b>x</b>" not in mail.html and "&lt;b&gt;x&lt;/b&gt;" in mail.html
+    with pytest.raises(ValueError):
+        welcome_mail("ada@studio.it", "Ada", ACCEDI, kind="boh")

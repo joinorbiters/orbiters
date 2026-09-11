@@ -317,24 +317,40 @@ def test_entering_is_recorded_and_the_card_and_the_stats_read_it_back(
 # ---- the welcome mailing (ORB-157) ------------------------------------------------------
 
 
-def test_the_welcome_mailing_reaches_every_card_or_the_addresses_named(
+def test_the_welcome_mailing_speaks_to_every_address_the_hub_knows(
     members: MemberService, hub_session: Session
 ) -> None:
     from orbiters_core.cli import send_welcome
     from orbiters_core.mail import RecordingSender
+    from orbiters_core.schemas import SignupCreate
+    from orbiters_core.service import SignupService
 
-    _apply(hub_session, "ada@studio.it")
-    drafted = _draft_card(hub_session, "bruna@studio.it")
+    _apply(hub_session, "ada@studio.it")  # a card the person filled, no signup
+    _draft_card(hub_session, "bruna@studio.it")  # a signup and a card we drafted
+    SignupService(hub_session).subscribe(
+        SignupCreate(email="carlo@studio.it", nome="Carlo", cognome="Verdi")
+    )  # a signup and nothing else
     sender = RecordingSender()
     outcomes = send_welcome(hub_session, members.settings, sender, None)
-    assert outcomes == [("ada@studio.it", "inviata"), ("bruna@studio.it", "inviata")]
-    assert [mail.to for mail in sender.sent] == ["ada@studio.it", "bruna@studio.it"]
-    assert "http://localhost:5180/hub/accedi" in sender.sent[0].text
-    assert "scheda è completa" in sender.sent[0].text
-    assert "Manca la tua parte" in sender.sent[1].text
-    assert drafted is not None
+    assert outcomes == [
+        ("bruna@studio.it", "inviata (admin)"),
+        ("carlo@studio.it", "inviata (nessuna)"),
+        ("ada@studio.it", "inviata (persona)"),
+    ]
+    by_to = {mail.to: mail for mail in sender.sent}
+    assert "http://localhost:5180/hub/accedi" in by_to["ada@studio.it"].text
+    assert "scheda è completa" in by_to["ada@studio.it"].text
+    assert "- Posizione: Backend developer" in by_to["bruna@studio.it"].text
+    assert "offerta in linea" in by_to["bruna@studio.it"].text
+    assert "http://localhost:5180/hub/freelance" in by_to["carlo@studio.it"].text
+    assert by_to["carlo@studio.it"].text.startswith("Ciao Carlo,")
 
     named = send_welcome(
         hub_session, members.settings, RecordingSender(), ["ADA@studio.it", "nessuno@studio.it"]
     )
-    assert named == [("ada@studio.it", "inviata"), ("nessuno@studio.it", "nessuna scheda")]
+    assert named == [
+        ("ada@studio.it", "inviata (persona)"),
+        ("nessuno@studio.it", "indirizzo sconosciuto"),
+    ]
+    hub_session.execute(text("DELETE FROM signups"))
+    hub_session.commit()

@@ -115,8 +115,13 @@ docker compose -p orbiters exec api uv run --no-sync orbiters welcome --email yo
 docker compose -p orbiters exec api uv run --no-sync orbiters welcome --all
 ```
 
-One line per address with the outcome; that output is the record of the mailing. Needs
-`ORBITERS_RESEND_API_KEY` in the host `.env`, like the magic link.
+`--all` covers every address the hub knows, signups and cards alike, and the mail speaks
+in one of three voices: a card the person filled (it is complete, enter), a card we drafted
+from public sources (a recap, the ask to enter and complete it, and that an offer in line
+with the profile is already there), or no card at all (the wizard first, then the address
+is the way in). One line per address with the outcome and the voice; that output is the
+record of the mailing. Needs `ORBITERS_RESEND_API_KEY` in the host `.env`, like the magic
+link.
 
 ## Deploy
 
