@@ -163,10 +163,11 @@ footer .quiet-link:hover {
 }
 
 /* --- Hero: the field behind, one box in front. A short step down from the header,
-   and no padding of its own below: the first `.section`'s padding is the gap to
-   "Come funziona", the same beat as between every other pair of sections. */
+   and a full beat below: since ORB-145 the next section is an opaque band, so this
+   padding is the only room between the box and it, and the field shows through there
+   (ORB-146; ORB-144 had set it to 0 when the section below still carried the gap). */
 .hero {
-  padding-block: clamp(1rem, 2.5vw, 2rem) 0;
+  padding-block: clamp(1rem, 2.5vw, 2rem) clamp(3rem, 6vw, 5rem);
 }
 
 /* --- The field: the same one the community page on `/` has. Fixed, behind everything
@@ -208,20 +209,20 @@ footer .quiet-link:hover {
 
 /* --- Type: fluid, one family. */
 h1 {
-  font-size: clamp(2.2rem, 2.6vw + 1.5rem, 3.5rem);
+  font-size: clamp(2.2rem, 3vw + 1.4rem, 4.4rem);
   font-weight: 500;
   line-height: 1.08;
   letter-spacing: -0.02em;
 }
 
 h2 {
-  font-size: clamp(1.5rem, 1.3vw + 1.05rem, 2.1rem);
+  font-size: clamp(1.75rem, 1.5vw + 1.2rem, 2.6rem);
   font-weight: 500;
   line-height: 1.2;
 }
 
 h3 {
-  font-size: 1.125rem;
+  font-size: 1.375rem;
   font-weight: 500;
   line-height: 1.3;
   margin-bottom: 0.5rem;
@@ -229,17 +230,17 @@ h3 {
 
 p,
 li {
-  font-size: clamp(1rem, 0.3vw + 0.95rem, 1.125rem);
+  font-size: clamp(1.0625rem, 0.35vw + 1rem, 1.25rem);
   color: var(--landing-ink-quiet);
 }
 
 .lead {
-  font-size: clamp(1.1rem, 0.5vw + 1rem, 1.3rem);
+  font-size: clamp(1.2rem, 0.6vw + 1.05rem, 1.5rem);
   color: var(--landing-ink);
 }
 
 .fine {
-  font-size: 0.9375rem;
+  font-size: 1.0625rem;
 }
 
 /* A sentence, not a label: one tile and a few words in sentence case, where the
@@ -304,10 +305,10 @@ li {
   gap: 0.5rem;
   background-color: var(--landing-cta);
   color: var(--landing-cta-ink);
-  font-size: 1.0625rem;
+  font-size: 1.2rem;
   font-weight: 500;
   text-decoration: none;
-  padding: 0.9rem 1.5rem;
+  padding: 1rem 1.75rem;
   border-width: 2px;
   border-color: var(--landing-cta);
 }
@@ -396,7 +397,7 @@ li {
 }
 
 .testimonial blockquote p {
-  font-size: clamp(1.05rem, 0.4vw + 0.95rem, 1.2rem);
+  font-size: clamp(1.2rem, 0.5vw + 1.05rem, 1.45rem);
   color: var(--landing-ink);
 }
 
@@ -404,7 +405,7 @@ li {
   display: flex;
   align-items: center;
   gap: 0.8rem;
-  font-size: 0.9375rem;
+  font-size: 1.0625rem;
   color: var(--landing-ink-quiet);
 }
 
@@ -414,7 +415,7 @@ li {
 }
 
 .who .role {
-  font-size: 0.875rem;
+  font-size: 1rem;
 }
 
 /* The initial, on a tile the colour of the accent: the one saturated thing a card
@@ -424,8 +425,8 @@ li {
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 2.5rem;
-  height: 2.5rem;
+  width: 3rem;
+  height: 3rem;
   background-color: var(--landing-cta);
   color: var(--landing-cta-ink);
   font-weight: 500;
@@ -475,7 +476,7 @@ li {
 
 /* The deck's kicker: capitals, tracked, in the accent; gold on the ink. */
 .deck .kicker {
-  font-size: 0.8125rem;
+  font-size: 0.9375rem;
   font-weight: 600;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -494,7 +495,7 @@ li {
 
 /* The statement under the kicker: the deck's `.statement`, at the page's scale. */
 .statement {
-  font-size: clamp(1.9rem, 2vw + 1.2rem, 3rem);
+  font-size: clamp(2.1rem, 2.4vw + 1.3rem, 3.75rem);
   font-weight: 500;
   line-height: 1.1;
   letter-spacing: -0.02em;
@@ -519,7 +520,7 @@ li {
   height: auto;
   background-color: transparent;
   color: var(--landing-gold);
-  font-size: clamp(2.6rem, 3vw + 1.5rem, 4.5rem);
+  font-size: clamp(3rem, 3.5vw + 1.6rem, 5.25rem);
   font-weight: 500;
   letter-spacing: -0.03em;
   line-height: 1;

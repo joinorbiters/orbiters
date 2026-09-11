@@ -141,7 +141,7 @@ describe('the landing shares the product system', () => {
     it('does not let the testimonial\'s role size reach the title', () => {
       // `.role` was the testimonial caption's class before it was the title's word;
       // the small size stays on the caption.
-      expect(rule('.who .role')).toMatch(/font-size:\s*0\.875rem/)
+      expect(rule('.who .role')).toMatch(/font-size:\s*1rem/)
       expect(css).not.toMatch(/\n\.role\s*\{/)
     })
   })
