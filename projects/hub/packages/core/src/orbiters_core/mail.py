@@ -1,4 +1,4 @@
-"""Outbound mail: a seam, one provider, and the one mail the hub sends today.
+"""Outbound mail: a seam, one provider, and the two mails the hub sends today.
 
 The seam exists so tests never send and production never guesses: `sender_from_settings`
 answers `None` without a key, and the API turns that into a 503 sentence rather than a
@@ -233,4 +233,89 @@ def magic_link_mail(to: str, link: str, minutes: int) -> Mail:
         subject="Il tuo accesso a Orbiters",
         text=text,
         html=_frame("Il tuo accesso a Orbiters", body),
+    )
+
+
+LINKEDIN_PAGE = "https://www.linkedin.com/company/joinorbiters"
+PIGROCRM_LINE = (
+    "PigroCRM, gratis: preventivo, contratto, fattura, ore, con i dati fiscali già giusti."
+)
+GUIDE_LINE = (
+    "La guida «I primi passi da freelance»: venti minuti sulla parte che nessuno spiega "
+    "prima della prima fattura."
+)
+
+
+def welcome_mail(
+    to: str, nome: str, accedi_link: str, *, completa: bool, posizione: str | None
+) -> Mail:
+    """The one-off mail that tells a person their area is open (ORB-157): how to get in
+    (the address, no password), what their card looks like from our side, the two perks
+    that wait behind the login, and the LinkedIn page where the first job posts appear.
+    Same voice and same box as the magic link; `nome` and `posizione` are the person's
+    own words and are escaped wherever they land in the HTML."""
+    if completa:
+        card = (
+            f"La tua scheda è completa: sei {posizione}, e le aziende possono trovarti."
+            if posizione
+            else "La tua scheda è completa: le aziende possono trovarti."
+        )
+    else:
+        found = f" Ti abbiamo segnato come {posizione}." if posizione else ""
+        card = (
+            "Abbiamo preparato la tua scheda con quello che si trova in pubblico su di "
+            f"te.{found} Manca la tua parte: il CV, la tariffa a giornata, come preferisci "
+            "lavorare. Sono le cose che le aziende cercano."
+        )
+    text = (
+        f"Ciao {nome},\n"
+        "\n"
+        "la tua area su Orbiters è aperta. Si entra con la tua email, senza password: ti "
+        "mandiamo un link e sei dentro.\n"
+        "\n"
+        f"{accedi_link}\n"
+        "\n"
+        f"{card}\n"
+        "\n"
+        "Dentro trovi i vantaggi della community, disponibili dopo il login:\n"
+        f"- {PIGROCRM_LINE}\n"
+        f"- {GUIDE_LINE}\n"
+        "\n"
+        "Un'altra cosa: segui la pagina LinkedIn di Orbiters, "
+        f"{LINKEDIN_PAGE}. Oggi pomeriggio esce il post con le prime job post per "
+        "Forward Deployed Engineer.\n"
+        "\n"
+        "Noi di Orbiters\n"
+    )
+    e = html_escape.escape
+    safe_link = e(accedi_link, quote=True)
+    paragraph = 'style="margin:24px 0 0 0;"'
+    small = f'style="margin:24px 0 0 0;font-size:13px;line-height:1.5;color:{INK_QUIET};'
+    body = "\n".join(
+        (
+            f'<p style="margin:0 0 20px 0;">Ciao {e(nome)},</p>',
+            '<p style="margin:0 0 24px 0;">la tua area su Orbiters è aperta. Si entra con la '
+            "tua email, senza password: ti mandiamo un link e sei dentro.</p>",
+            _button(safe_link, "Entra nella tua area"),
+            f'<p {small}word-break:break-all;">'
+            "Se il bottone non si apre, copia questo indirizzo nel browser:<br>"
+            f"{_quiet_link(safe_link, safe_link)}</p>",
+            f"<p {paragraph}>{e(card)}</p>",
+            f"<p {paragraph}>Dentro trovi i vantaggi della community, disponibili dopo il "
+            "login:</p>",
+            '<ul style="margin:8px 0 0 0;padding:0 0 0 22px;">'
+            f'<li style="margin:0 0 8px 0;">{e(PIGROCRM_LINE)}</li>'
+            f"<li>{e(GUIDE_LINE)}</li></ul>",
+            f"<p {paragraph}>Un'altra cosa: segui "
+            f"{_quiet_link(LINKEDIN_PAGE, 'la pagina LinkedIn di Orbiters')}. Oggi "
+            "pomeriggio esce il post con le prime job post per Forward Deployed "
+            "Engineer.</p>",
+            f"<p {paragraph}>Noi di Orbiters</p>",
+        )
+    )
+    return Mail(
+        to=to,
+        subject="La tua area su Orbiters è aperta",
+        text=text,
+        html=_frame("La tua area su Orbiters è aperta", body),
     )

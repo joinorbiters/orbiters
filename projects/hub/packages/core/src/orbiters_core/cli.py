@@ -6,11 +6,17 @@ import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
 from orbiters_core.admin import AdminService
-from orbiters_core.config import get_settings
+from orbiters_core.config import Settings, get_settings
 from orbiters_core.conversions import pixel_from_settings
 from orbiters_core.db import create_engine_from_settings, session_factory
 from orbiters_core.errors import DomainError
+from orbiters_core.mail import EmailSender, sender_from_settings, welcome_mail
+from orbiters_core.models import Freelancer
+from orbiters_core.schemas import FreelancerRead
 
 
 def createadmin(email: str | None, nome: str | None) -> int:
@@ -73,6 +79,53 @@ def conversions_check() -> int:
     return 1
 
 
+def send_welcome(
+    session: Session, settings: Settings, sender: EmailSender, emails: Sequence[str] | None
+) -> list[tuple[str, str]]:
+    """One welcome mail per freelancer card (ORB-157): the addresses given, or every card
+    when `emails` is `None`. Answers one line per address -- `inviata`, `rifiutata dal
+    provider`, or `nessuna scheda` -- which is the whole record of the mailing."""
+    stmt = select(Freelancer).order_by(Freelancer.created_at, Freelancer.id)
+    if emails is not None:
+        wanted = [email.strip().lower() for email in emails]
+        stmt = stmt.where(func.lower(Freelancer.email).in_(wanted))
+    rows = {row.email.lower(): row for row in session.scalars(stmt).all()}
+    targets = [email.strip().lower() for email in emails] if emails is not None else list(rows)
+    link = f"{settings.hub_url.rstrip('/')}/accedi"
+    outcomes: list[tuple[str, str]] = []
+    for email in targets:
+        row = rows.get(email)
+        if row is None:
+            outcomes.append((email, "nessuna scheda"))
+            continue
+        card = FreelancerRead.model_validate(row)
+        mail = welcome_mail(
+            row.email, row.nome, link, completa=card.completa, posizione=row.posizione
+        )
+        outcomes.append((email, "inviata" if sender.send(mail) else "rifiutata dal provider"))
+    return outcomes
+
+
+def welcome(emails: Sequence[str], everyone: bool) -> int:
+    """`orbiters welcome --email a@b.it [--email ...]` or `orbiters welcome --all`."""
+    if everyone == bool(emails):
+        print("Serve --all oppure almeno un --email, non entrambi.", file=sys.stderr)
+        return 2
+    settings = get_settings()
+    sender = sender_from_settings(settings)
+    if sender is None:
+        print("Nessuna chiave per la posta: serve ORBITERS_RESEND_API_KEY.", file=sys.stderr)
+        return 1
+    session = session_factory(create_engine_from_settings(settings))()
+    try:
+        outcomes = send_welcome(session, settings, sender, None if everyone else emails)
+    finally:
+        session.close()
+    for email, outcome in outcomes:
+        print(f"{email}: {outcome}")
+    return 0 if all(outcome == "inviata" for _, outcome in outcomes) else 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="orbiters")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -83,11 +136,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     admin = sub.add_parser("createadmin", help="Crea un amministratore dell'area admin")
     admin.add_argument("--email")
     admin.add_argument("--nome")
+    welcome_parser = sub.add_parser(
+        "welcome", help="Manda la mail «la tua area è aperta» a una scheda o a tutte"
+    )
+    welcome_parser.add_argument("--email", action="append", default=[])
+    welcome_parser.add_argument("--all", action="store_true")
     args = parser.parse_args(argv)
     if args.command == "conversions-check":
         return conversions_check()
     if args.command == "createadmin":
         return createadmin(args.email, args.nome)
+    if args.command == "welcome":
+        return welcome(args.email, args.all)
     parser.error(f"comando sconosciuto: {args.command}")
     return 2
 

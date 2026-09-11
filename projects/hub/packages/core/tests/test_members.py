@@ -312,3 +312,29 @@ def test_entering_is_recorded_and_the_card_and_the_stats_read_it_back(
     assert [login.email for login in stats.recenti] == ["ada@studio.it", "ada@studio.it"]
     assert stats.recenti[0].logged_at >= stats.recenti[1].logged_at
     assert stats.recenti[0].freelancer_id == ada
+
+
+# ---- the welcome mailing (ORB-157) ------------------------------------------------------
+
+
+def test_the_welcome_mailing_reaches_every_card_or_the_addresses_named(
+    members: MemberService, hub_session: Session
+) -> None:
+    from orbiters_core.cli import send_welcome
+    from orbiters_core.mail import RecordingSender
+
+    _apply(hub_session, "ada@studio.it")
+    drafted = _draft_card(hub_session, "bruna@studio.it")
+    sender = RecordingSender()
+    outcomes = send_welcome(hub_session, members.settings, sender, None)
+    assert outcomes == [("ada@studio.it", "inviata"), ("bruna@studio.it", "inviata")]
+    assert [mail.to for mail in sender.sent] == ["ada@studio.it", "bruna@studio.it"]
+    assert "http://localhost:5180/hub/accedi" in sender.sent[0].text
+    assert "scheda è completa" in sender.sent[0].text
+    assert "Manca la tua parte" in sender.sent[1].text
+    assert drafted is not None
+
+    named = send_welcome(
+        hub_session, members.settings, RecordingSender(), ["ADA@studio.it", "nessuno@studio.it"]
+    )
+    assert named == [("ada@studio.it", "inviata"), ("nessuno@studio.it", "nessuna scheda")]
