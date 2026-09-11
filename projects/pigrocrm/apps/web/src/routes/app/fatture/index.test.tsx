@@ -79,13 +79,18 @@ function mockInvoices(items: Record<string, unknown>[]): void {
       : ok({ items: [], next_cursor: null })) as never)
 }
 
-/** The `stato` the page last asked the API for, or `undefined` when it asked for none. */
-function lastRequestedStato(): unknown {
+/** The query the page last sent to the list endpoint. */
+function lastRequestedQuery(): Record<string, unknown> {
   const calls = mockGet.mock.calls.filter((call) => call[0] === '/api/invoices')
   const last = calls[calls.length - 1]?.[1] as
     | { params?: { query?: Record<string, unknown> } }
     | undefined
-  return last?.params?.query?.stato
+  return last?.params?.query ?? {}
+}
+
+/** The `stato` the page last asked the API for, or `undefined` when it asked for none. */
+function lastRequestedStato(): unknown {
+  return lastRequestedQuery().stato
 }
 
 describe('the invoice list', () => {
@@ -138,6 +143,29 @@ describe('the invoice list', () => {
       'aria-pressed',
       'true',
     )
+  })
+
+  /**
+   * Under «Tutte» the list showed 2026/18 and the proforma it came from as two rows with
+   * the same customer, period and total (ORB-169). The page now asks the server to leave
+   * the consumed ones out whenever no state is chosen; the «Consumata» chip asks for
+   * exactly them, so nothing is unreachable.
+   */
+  it('leaves consumed proformas out under «Tutte» and lists them under «Consumata»', async () => {
+    renderList()
+    const filters = await screen.findByRole('search')
+    expect(lastRequestedQuery()).toMatchObject({ escludi_consumate: true })
+    expect(lastRequestedStato()).toBeUndefined()
+
+    await userEvent.click(within(filters).getByRole('button', { name: 'Consumata' }))
+    expect(lastRequestedStato()).toBe('consumata')
+    expect(lastRequestedQuery().escludi_consumate).toBeUndefined()
+
+    await userEvent.click(within(filters).getByRole('button', { name: 'Emessa' }))
+    expect(lastRequestedQuery().escludi_consumate).toBeUndefined()
+
+    await userEvent.click(within(filters).getByRole('button', { name: 'Emessa' }))
+    expect(lastRequestedQuery()).toMatchObject({ escludi_consumate: true })
   })
 
   it('keeps the type filter as a select in the same row', async () => {

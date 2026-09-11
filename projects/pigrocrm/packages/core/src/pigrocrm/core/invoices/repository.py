@@ -431,6 +431,8 @@ class InvoiceRepository:
             stmt = stmt.where(Invoice.stato_pagamento == query.stato_pagamento)
         if query.origine_proforma_id:
             stmt = stmt.where(Invoice.origine_proforma_id == query.origine_proforma_id)
+        if query.escludi_consumate:
+            stmt = stmt.where(Invoice.stato != "consumata")
         if query.scadute:
             # The drill-through of §6.2's "scaduto e non incassato" card, sharing its
             # predicate literally rather than restating it -- see `_overdue_predicate`,

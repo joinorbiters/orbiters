@@ -2394,6 +2394,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tenants/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Spaces
+         * @description Every space in the registry, newest first, for the one caller that holds
+         *     `PIGROCRM_REGISTRY_TOKEN`: the Orbiters hub, whose admin area shows which spaces
+         *     exist and whose they are (ORB-142). Without the token configured the route does not
+         *     exist (404), so nothing says there is a door; with it, a missing or wrong bearer is a
+         *     401. What comes back is the registry row and nothing about the database behind it.
+         */
+        get: operations["list_spaces_api_tenants__get"];
+        put?: never;
+        /**
+         * Signup
+         * @description Creates the space: a registry row, a migrated database, its first admin. 409 when
+         *     the name is taken, 422 when it is malformed or reserved or the password too short.
+         *     The `Location` header is where the person logs in next.
+         */
+        post: operations["signup_api_tenants__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tenants/{slug}/disponibile": {
         parameters: {
             query?: never;
@@ -2409,28 +2439,6 @@ export interface paths {
         get: operations["availability_api_tenants__slug__disponibile_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenants/": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Signup
-         * @description Creates the space: a registry row, a migrated database, its first admin. 409 when
-         *     the name is taken, 422 when it is malformed or reserved or the password too short.
-         *     The `Location` header is where the person logs in next.
-         */
-        post: operations["signup_api_tenants__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -16197,6 +16205,7 @@ export interface operations {
                 stato_pagamento?: ("da_incassare" | "incassato") | null;
                 scadute?: boolean;
                 origine_proforma_id?: string | null;
+                escludi_consumate?: boolean;
                 limit?: number;
                 cursor?: string | null;
             };
@@ -26030,13 +26039,13 @@ export interface operations {
             };
         };
     };
-    availability_api_tenants__slug__disponibile_get: {
+    list_spaces_api_tenants__get: {
         parameters: {
             query?: never;
-            header?: never;
-            path: {
-                slug: string;
+            header?: {
+                authorization?: string | null;
             };
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
@@ -26047,7 +26056,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TenantAvailability"];
+                    "application/json": components["schemas"]["TenantRead"][];
                 };
             };
             /** @description Permesso negato: l'actor non ha il ruolo richiesto. */
@@ -26169,6 +26178,125 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TenantRead"];
+                };
+            };
+            /** @description Permesso negato: l'actor non ha il ruolo richiesto. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La risorsa richiesta non esiste o è stata rimossa. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La richiesta è in conflitto con lo stato attuale della risorsa. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Una regola di dominio non è stata rispettata (application/problem+json), oppure il corpo, i parametri o il path della richiesta non hanno la forma attesa e non hanno mai raggiunto l'endpoint (application/json). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    availability_api_tenants__slug__disponibile_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenantAvailability"];
                 };
             };
             /** @description Permesso negato: l'actor non ha il ruolo richiesto. */

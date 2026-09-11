@@ -388,6 +388,35 @@ def test_the_list_answers_the_fattura_a_consumed_proforma_became(
     assert logged_in.get("/api/invoices", params={"origine_proforma_id": "x"}).status_code == 422
 
 
+def test_the_list_leaves_out_consumed_proformas_when_asked(
+    logged_in: TestClient,
+    customer: dict[str, Any],
+    fiscal_profile: dict[str, Any],
+    emitter: dict[str, Any],
+) -> None:
+    """The web's «Tutte» sends `escludi_consumate=true` so an issued proforma is one row,
+    its fattura, and not two (ORB-169). Without the flag, and under `stato=consumata`,
+    the proforma still answers."""
+    proforma = logged_in.post(
+        "/api/invoices",
+        json={
+            "customer_id": customer["id"],
+            "tipo": "proforma",
+            "righe": [{"descrizione": "Consulenza", "prezzo_unitario": "100.00"}],
+        },
+    ).json()
+    assert logged_in.post(f"/api/invoices/{proforma['id']}/confirm").status_code == 200
+    issued = logged_in.post(f"/api/invoices/{proforma['id']}/issue", json={}).json()
+
+    ids = lambda response: {row["id"] for row in response.json()["items"]}  # noqa: E731
+    everything = ids(logged_in.get("/api/invoices"))
+    assert {proforma["id"], issued["id"]} <= everything
+    trimmed = ids(logged_in.get("/api/invoices", params={"escludi_consumate": "true"}))
+    assert trimmed == everything - {proforma["id"]}
+    consumed = ids(logged_in.get("/api/invoices", params={"stato": "consumata"}))
+    assert consumed == {proforma["id"]}
+
+
 def test_the_list_limit_is_bounded_at_the_http_layer(logged_in: TestClient) -> None:
     assert logged_in.get("/api/invoices", params={"limit": 201}).status_code == 422
 

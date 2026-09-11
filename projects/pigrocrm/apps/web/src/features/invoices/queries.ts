@@ -45,6 +45,14 @@ export interface InvoiceFilters {
    * the list for the one row that points at it (ORB-134).
    */
   origine_proforma_id?: string
+  /**
+   * Leave out the proformas that became a fattura. Under «Tutte» the list otherwise
+   * shows each issued proforma twice, once as itself pilled «Consumata» and once as its
+   * number (ORB-169). Sent whenever no `stato` is chosen; the «Consumata» chip asks by
+   * state and gets them. Server-side, like `scadute`, so the page and its cursor are
+   * the API's and not a filtered copy.
+   */
+  escludi_consumate?: boolean
   limit?: number
   cursor?: string
 }
@@ -135,7 +143,9 @@ export function useInvoices(filters: InvoiceFilters = {}) {
  * the same query key shape and cache entry as the plain list page.
  */
 export function useInvoicesForOwner(owner: InvoiceOwner) {
-  return useInvoices(ownerQuery(owner))
+  // The tab has no state chips, so it never asks for the consumed ones by state: the
+  // fattura stands for its proforma here as it does on the list page (ORB-169).
+  return useInvoices({ ...ownerQuery(owner), escludi_consumate: true })
 }
 
 export function useInvoice(invoiceId: string) {

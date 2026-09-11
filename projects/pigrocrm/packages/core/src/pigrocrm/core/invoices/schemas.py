@@ -492,6 +492,12 @@ class InvoiceListQuery(BaseModel):
     # once at emission and the proforma is frozen at the same moment), so the page of a
     # consumed proforma asks the list for the row that points at it (ORB-134).
     origine_proforma_id: UUID | None = None
+    # A consumed proforma is the antecedent of the fattura that carries its number, not
+    # a document of its own, and a list that shows both doubles every issued proforma
+    # (ORB-169). The web sends this whenever no `stato` is chosen; asked by state, the
+    # consumed ones still answer. A predicate here and not in the browser, so the
+    # keyset pagination and the page the API answers stay one thing.
+    escludi_consumate: bool = False
     # Bounded here, not only on the router: an MCP tool builds this object directly,
     # with no `Query(...)` bound sitting between it and this schema.
     limit: int = Field(default=50, ge=1, le=200)

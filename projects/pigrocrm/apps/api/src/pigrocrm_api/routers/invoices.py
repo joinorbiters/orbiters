@@ -74,6 +74,9 @@ def list_invoices(
     # The fattura a consumed proforma was issued as: the proforma's page asks for the
     # one row whose `origine_proforma_id` is its own id (ORB-134).
     origine_proforma_id: Annotated[UUID | None, Query()] = None,
+    # Leave out the proformas that became a fattura: the list under «Tutte» otherwise
+    # shows each issued proforma twice, once as itself and once as its number (ORB-169).
+    escludi_consumate: Annotated[bool, Query()] = False,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     cursor: Annotated[UUID | None, Query()] = None,
 ) -> InvoicePage:
@@ -86,6 +89,7 @@ def list_invoices(
         stato_pagamento=stato_pagamento,
         scadute=scadute,
         origine_proforma_id=origine_proforma_id,
+        escludi_consumate=escludi_consumate,
         limit=limit,
         cursor=cursor,
     )

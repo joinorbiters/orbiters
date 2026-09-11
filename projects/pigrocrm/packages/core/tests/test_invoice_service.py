@@ -631,6 +631,26 @@ def test_the_list_finds_the_fattura_a_consumed_proforma_was_issued_as(
     assert service.list(InvoiceListQuery(origine_proforma_id=uuid4()), ADMIN).items == []
 
 
+def test_the_list_can_leave_out_the_proformas_that_became_a_fattura(
+    service: InvoiceService, db_session: Session, customer_id: UUID
+) -> None:
+    """Under «Tutte» the web showed 2026/18 and the proforma it came from as two rows
+    with the same customer, period and total (ORB-169). `escludi_consumate` drops the
+    consumed ones and nothing else; asked by `stato`, they still answer."""
+    draft = service.create(InvoiceCreate(customer_id=customer_id, tipo="proforma"), ADMIN)
+    consumed = service.create(InvoiceCreate(customer_id=customer_id, tipo="proforma"), ADMIN)
+    db_session.get(Invoice, consumed.id).stato = "consumata"  # type: ignore[union-attr]
+    fattura = _issued_row(db_session, customer_id, origine_proforma_id=consumed.id)
+    db_session.flush()
+
+    everything = {i.id for i in service.list(InvoiceListQuery(), ADMIN).items}
+    assert {draft.id, consumed.id, fattura.id} <= everything
+    trimmed = {i.id for i in service.list(InvoiceListQuery(escludi_consumate=True), ADMIN).items}
+    assert trimmed == everything - {consumed.id}
+    by_state = service.list(InvoiceListQuery(stato="consumata"), ADMIN).items
+    assert [i.id for i in by_state] == [consumed.id]
+
+
 def test_the_list_filters_by_tipo_stato_year_and_payment(
     service: InvoiceService, db_session: Session, customer_id: UUID
 ) -> None:
