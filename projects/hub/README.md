@@ -23,6 +23,9 @@ Three public flows and the admin area behind them:
 - `/hub/admin/login` and the freelancer, company and signup lists behind it — a cookie
   session. The first admin is created with `orbiters createadmin` (below); the next ones
   from «Amministratori» inside the area, where they are also edited.
+- Every login through the magic link is recorded in `member_logins` (ORB-158): the
+  admin area shows who entered and when under «Accessi», and each card carries its
+  count and its last login. The link request itself is not counted.
 - A freelancer card can also be born from a signup (ORB-155): an admin writes what the
   public web says about the person through `POST /api/hub/signups/{id}/scheda` or the
   MCP tool `create_freelancer_from_signup`, «Iscrizioni» links to it, and the card stays

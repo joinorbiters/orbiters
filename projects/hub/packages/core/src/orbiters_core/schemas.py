@@ -480,6 +480,10 @@ class FreelancerRead(BaseModel):
     note: str | None
     # Who wrote the seven answers last: `persona` or `admin` (`COMPILATA_DA`).
     compilata_da: str
+    # How many times the person entered through a magic link, and the last time (ORB-158).
+    # Filled by the service with one grouped join; `0` and `None` for a card never opened.
+    accessi: int = 0
+    ultimo_accesso: datetime | None = None
     utm_source: str | None = None
     utm_medium: str | None = None
     utm_campaign: str | None = None
@@ -547,6 +551,30 @@ class GuideDownloadRead(BaseModel):
     cognome: str
     email: str
     downloaded_at: datetime
+
+
+class LoginRead(BaseModel):
+    """One login, with the member's name for the admin's list (ORB-158)."""
+
+    id: UUID
+    freelancer_id: UUID
+    nome: str
+    cognome: str
+    email: str
+    logged_at: datetime
+
+
+class LoginStats(BaseModel):
+    """The logins as the admin area reads them (ORB-158), the shape of `GuideStats`:
+    `totale` every login, `membri` the distinct people behind them, `membri_totali`
+    everybody on file, `ultimi_7_giorni` the last week, `recenti` the latest, newest
+    first, with a name each."""
+
+    totale: int
+    membri: int
+    membri_totali: int
+    ultimi_7_giorni: int
+    recenti: list[LoginRead]
 
 
 class GuideStats(BaseModel):

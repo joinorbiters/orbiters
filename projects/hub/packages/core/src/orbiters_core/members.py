@@ -23,7 +23,13 @@ from orbiters_core.config import Settings
 from orbiters_core.errors import NotFound
 from orbiters_core.freelancers import check_cv, cv_of
 from orbiters_core.mail import Mail, magic_link_mail
-from orbiters_core.models import AUTORE_MAX_LENGTH, Freelancer, MagicLinkToken, MemberSession
+from orbiters_core.models import (
+    AUTORE_MAX_LENGTH,
+    Freelancer,
+    MagicLinkToken,
+    MemberLogin,
+    MemberSession,
+)
 from orbiters_core.schemas import CvFile, MemberProfile, MemberUpdate
 
 ENTITY = "freelancer"
@@ -110,6 +116,9 @@ class MemberService:
                 freelancer_id=row.id, token_hash=_hash(raw_session), expires_at=self._deadline(now)
             )
         )
+        # The login itself, kept after the session is gone (ORB-158): same commit, so a
+        # session never exists without its login and a login never without its session.
+        self.session.add(MemberLogin(freelancer_id=row.id, logged_at=now))
         self.session.commit()
         return MemberProfile.model_validate(row), raw_session
 
