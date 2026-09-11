@@ -22,6 +22,13 @@ uv sync --frozen            # every Python package, one virtualenv
 pnpm install --frozen-lockfile
 ```
 
+On Nix, `nix develop` (or `direnv allow`, the `.envrc` is committed) gives a shell
+with all of that except Docker, which stays the host's: Python 3.13 and Node 22 as
+the repository declares them, and Pandoc and Typst at the exact versions
+`projects/pigrocrm/Dockerfile.api` pins, since the document renderer is verified
+against those and no other. Playwright's browsers are not in the shell, so the two
+e2e checks in `preflight.json` need the host's own browsers or a `nix-ld` setup.
+
 Then follow the project you want to work on: for PigroCRM, its
 [README](projects/pigrocrm/README.md) covers running it and deploying it.
 
@@ -39,6 +46,36 @@ that two projects cannot resolve the same library at two versions.
 [`docs/architecture.md`](docs/architecture.md) explains the layout and the tradeoffs
 it makes; [`docs/adding-a-project.md`](docs/adding-a-project.md) is the runbook for
 adding the next one.
+
+## Self-hosting on NixOS
+
+`flake.nix` also builds every deployable as a package from the same two locks
+(`pigrocrm-api`, `pigrocrm-web`, `hub-api`, `hub-web`, `website`) and ships one NixOS
+module per product: `services.pigrocrm`, `services.orbiters-hub`,
+`services.orbiters-website`. Each restates its compose file and its `deploy/` nginx
+configuration in NixOS terms: a local PostgreSQL reached over the socket, the
+migration before the API starts, nginx serving the SPA and proxying the API. Secrets
+never go in the store: `services.pigrocrm.environmentFile` is a file of
+`PIGROCRM_*=value` lines and must define `PIGROCRM_JWT_SECRET`.
+
+```nix
+{
+  inputs.orbiters.url = "github:joinorbiters/orbiters";
+  # ...
+  imports = [ orbiters.nixosModules.pigrocrm ];
+  services.pigrocrm = {
+    enable = true;
+    domain = "crm.example.com";
+    environmentFile = "/run/secrets/pigrocrm.env";
+    settings.timezone = "Europe/Rome";
+  };
+}
+```
+
+Each module is booted in a VM by `nix flake check` and probed through nginx, which is
+the evidence the copy has not drifted from the compose stack. These modules are how a
+third party runs the software; Orbiters' own environments are deployed by CI from the
+compose files and never from here (`docs/design/DECISIONS.md`, 2026-09-09).
 
 ## Contributing
 
