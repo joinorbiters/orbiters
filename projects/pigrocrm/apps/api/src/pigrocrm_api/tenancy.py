@@ -6,45 +6,25 @@ tenants -- and records the slug on the request. `deps.get_session` then opens th
 space's database, and `routers/auth.py` scopes the cookies to `/<slug>/`. A path with
 no such prefix is the root installation, exactly as before this module existed.
 
+The prefix rule itself lives in `pigrocrm.core.tenants.prefix`, shared with the MCP
+server so the two adapters cannot drift.
+
 Pure ASGI rather than `BaseHTTPMiddleware`: the path has to change *before* routing,
 and the slug must travel on `scope["state"]`, which is what `Request.state` reads.
 """
 
-import re
 from collections.abc import Awaitable, Callable, MutableMapping
 from typing import Any
 
 from fastapi import Request
 
 from pigrocrm.core.config import get_settings
-from pigrocrm.core.tenants import RESERVED_SLUGS, SLUG_PATTERN
+from pigrocrm.core.tenants.prefix import split_tenant_prefix as split_tenant_prefix
 
 Scope = MutableMapping[str, Any]
 Receive = Callable[[], Awaitable[MutableMapping[str, Any]]]
 Send = Callable[[MutableMapping[str, Any]], Awaitable[None]]
 ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
-
-# The slug's own grammar, then the two path families the API answers on.
-_PREFIXED = re.compile(r"^/([a-z0-9][a-z0-9-]{1,30}[a-z0-9])(/(?:api|health)(?:/.*)?)$")
-
-
-def split_tenant_prefix(path: str, root_slug: str = "") -> tuple[str | None, str]:
-    """`("studio", "/api/customers")` for `/studio/api/customers`; `(None, path)` when
-    there is no prefix, or when the would-be slug is a reserved word -- `/api/...` is
-    never anybody's space, and `/app/...` never reaches the API at all.
-
-    `root_slug` is the root installation's own name (`PIGROCRM_ROOT_SLUG`): its prefix
-    is stripped like a space's, but the request stays the root's -- `(None, rest)` --
-    so it opens the root database with the root's settings, Gmail and Drive included."""
-    match = _PREFIXED.match(path)
-    if not match:
-        return None, path
-    slug, rest = match.group(1), match.group(2)
-    if root_slug and slug == root_slug:
-        return None, rest
-    if slug in RESERVED_SLUGS or not SLUG_PATTERN.match(slug):
-        return None, path
-    return slug, rest
 
 
 class TenantPrefixMiddleware:

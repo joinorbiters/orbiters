@@ -14,6 +14,7 @@ describe('the space prefix', () => {
     expect(tenantPrefixFrom('/app/app/login')).toBe('')
     expect(tenantPrefixFrom('/Studio/app/login')).toBe('')
     expect(tenantPrefixFrom('/-x-/app/login')).toBe('')
+    expect(tenantPrefixFrom('/mcp/app/login')).toBe('')
   })
 })
 
@@ -35,5 +36,6 @@ describe('slugProblem', () => {
     expect(slugProblem('ab')).toMatch(/almeno 3/)
     expect(slugProblem('Studio')).toMatch(/minuscole/)
     expect(slugProblem('app')).toMatch(/riservato/)
+    expect(slugProblem('mcp')).toMatch(/riservato/)
   })
 })

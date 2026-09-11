@@ -31,6 +31,7 @@ RESERVED_SLUGS = frozenset(
         "admin",
         "static",
         "registrati",
+        "mcp",
     }
 )
 
