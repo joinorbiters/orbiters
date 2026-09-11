@@ -128,6 +128,7 @@ export function AdminFreelancers() {
           <thead className="text-left text-xs text-muted-foreground">
             <tr className="border-b">
               <th className="px-6 py-2 font-medium">Chi</th>
+              <th className="px-3 py-2 font-medium">Provenienza</th>
               <th className="px-3 py-2 font-medium">Posizione</th>
               <th className="px-3 py-2 text-right font-medium">Tariffa</th>
               <th className="px-3 py-2 font-medium">Dove</th>
@@ -145,6 +146,7 @@ export function AdminFreelancers() {
                   </Link>
                   <p className="text-xs text-muted-foreground">{item.email}</p>
                 </td>
+                <td className="px-3 py-2.5 text-muted-foreground">{item.provenienza}</td>
                 <td className="px-3 py-2.5">{item.posizione ?? '—'}</td>
                 <td className="px-3 py-2.5 text-right tabular-nums">
                   {item.tariffa_giornaliera === null ? '—' : formatEuro(item.tariffa_giornaliera)}
@@ -260,6 +262,7 @@ export function AdminFreelancerDetail() {
             ) : '—'}
           </Row>
           <Row label="Arrivato">{formatDate(f.created_at)}{f.utm_source ? ` · da ${f.utm_source}` : ''}</Row>
+          <Row label="Provenienza">{f.provenienza}</Row>
           <Row label="Accessi">
             {f.accessi === 0 || f.ultimo_accesso === null
               ? 'Mai entrato'

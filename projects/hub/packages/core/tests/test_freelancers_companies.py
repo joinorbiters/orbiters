@@ -315,3 +315,14 @@ def test_a_card_without_a_cv_has_none_to_download(clean: Session) -> None:
     with pytest.raises(NotFound) as missing:
         service.cv(drafted.id)
     assert missing.value.details["entity"] == "cv"
+
+
+def test_a_card_says_whether_its_address_also_signed_up_on_the_landing(clean: Session) -> None:
+    service = FreelancerService(clean)
+    wizard_only = service.apply(_application("solo@studio.it"), PDF, "cv.pdf", "application/pdf")
+    _signup(clean, "Ada@studio.it")
+    both = service.apply(_application("ada@studio.it"), PDF, "cv.pdf", "application/pdf")
+    listed = {item.email: item.provenienza for item in service.list_recent().items}
+    assert listed == {"solo@studio.it": "landing", "ada@studio.it": "form"}
+    assert service.get(wizard_only.id).provenienza == "landing"
+    assert service.get(both.id).provenienza == "form"

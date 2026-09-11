@@ -484,6 +484,10 @@ class FreelancerRead(BaseModel):
     # Filled by the service with one grouped join; `0` and `None` for a card never opened.
     accessi: int = 0
     ultimo_accesso: datetime | None = None
+    # Where the lead came from, in Ivan's words (ORB-161): «form» when the address also
+    # left its email on the landing («Iscrizioni»), «landing» otherwise. Derived by the
+    # service from the two tables, never stored, so it cannot drift.
+    provenienza: str = "landing"
     utm_source: str | None = None
     utm_medium: str | None = None
     utm_campaign: str | None = None

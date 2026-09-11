@@ -78,12 +78,19 @@ def _logins_per_card() -> Subquery:
     )
 
 
+def _signed_up() -> Subquery:
+    """Which addresses are also on the landing's list (ORB-161), lowercased once so the
+    join lands on `uq_orbiters_signups_email_lower` rather than on a function per row."""
+    return select(func.lower(Signup.email).label("email")).subquery()
+
+
 def _read_with_logins(
-    row: Freelancer, accessi: int | None, ultimo: datetime | None
+    row: Freelancer, accessi: int | None, ultimo: datetime | None, signed_up: object
 ) -> FreelancerRead:
     read = FreelancerRead.model_validate(row)
     read.accessi = accessi or 0
     read.ultimo_accesso = ultimo
+    read.provenienza = "form" if signed_up is not None else "landing"
     return read
 
 
@@ -179,9 +186,11 @@ class FreelancerService:
         self, limit: int = LIST_LIMIT_DEFAULT, stato: str | None = None
     ) -> FreelancerList:
         limit = max(1, min(limit, LIST_LIMIT_MAX))
-        logins = _logins_per_card()
-        stmt = select(Freelancer, logins.c.accessi, logins.c.ultimo_accesso).outerjoin(
-            logins, logins.c.freelancer_id == Freelancer.id
+        logins, signed = _logins_per_card(), _signed_up()
+        stmt = (
+            select(Freelancer, logins.c.accessi, logins.c.ultimo_accesso, signed.c.email)
+            .outerjoin(logins, logins.c.freelancer_id == Freelancer.id)
+            .outerjoin(signed, signed.c.email == func.lower(Freelancer.email))
         )
         count = select(func.count()).select_from(Freelancer)
         if stato is not None:
@@ -193,7 +202,10 @@ class FreelancerService:
         totale = self.session.scalar(count) or 0
         return FreelancerList(
             totale=totale,
-            items=[_read_with_logins(row, accessi, ultimo) for row, accessi, ultimo in rows],
+            items=[
+                _read_with_logins(row, accessi, ultimo, signed_up)
+                for row, accessi, ultimo, signed_up in rows
+            ],
         )
 
     def get(self, freelancer_id: UUID) -> FreelancerRead:
@@ -206,7 +218,11 @@ class FreelancerService:
                 logins.c.freelancer_id == row.id
             )
         ).first()
-        read = _read_with_logins(row, *(counted or (None, None)))
+        signed_up = self.session.scalar(
+            select(Signup.id).where(func.lower(Signup.email) == row.email.lower())
+        )
+        accessi, ultimo = counted if counted is not None else (None, None)
+        read = _read_with_logins(row, accessi, ultimo, signed_up)
         read.commenti = CommentService(self.session).list(ENTITY, freelancer_id)
         return read
 

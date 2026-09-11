@@ -632,6 +632,9 @@ def test_an_admin_writes_an_incomplete_card_from_a_signup_and_the_list_points_at
     assert client.get(f"/api/hub/freelancers/{card['id']}/cv").status_code == 404
     listed = client.get("/api/hub/freelancers").json()["items"]
     assert listed[0]["id"] == card["id"] and listed[0]["completa"] is False
+    # Born from a signup, so it also signed up on the landing: «form» (ORB-161).
+    assert listed[0]["provenienza"] == "form"
+    assert client.get(f"/api/hub/freelancers/{card['id']}").json()["provenienza"] == "form"
 
     # A wrong id is a 404, a bad body a 422 naming the field, as everywhere else.
     assert client.post(f"/api/hub/signups/{MISSING}/scheda", json=DRAFT).status_code == 404

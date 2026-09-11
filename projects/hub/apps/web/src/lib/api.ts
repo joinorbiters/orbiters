@@ -154,6 +154,9 @@ export interface Freelancer {
   commenti: Comment[]
   /** How many times the person came in through the magic link (ORB-158). */
   accessi: number
+  /** Where the lead came from (ORB-161): «form» when the address is also among the
+   *  signups («Iscrizioni»), «landing» otherwise. */
+  provenienza: 'form' | 'landing'
   /** When they last did, null if never. */
   ultimo_accesso: string | null
 }
