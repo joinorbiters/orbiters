@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from orbiters_api.deps import get_sender
 from orbiters_api.ratelimit import reset_rate_limit
 from orbiters_core.admin import AdminService
-from orbiters_core.config import Settings
+from orbiters_core.config import Settings, get_settings
 from orbiters_core.mail import Mail, RecordingSender
 from orbiters_core.models import GuideDownload
 from orbiters_core.perks import GUIDE_PATH
@@ -371,3 +371,73 @@ def test_a_login_shows_up_on_the_admin_side(
     assert card["accessi"] == 1 and card["ultimo_accesso"] is not None
     detail = client.get(f"/api/hub/freelancers/{card['id']}").json()
     assert detail["accessi"] == 1
+
+
+# --- what PigroCRM may ask (ORB-173) -------------------------------------------------
+
+PIGRO_TOKEN = "un-token-lungo-condiviso-con-il-crm"
+LOOKUP = "/api/hub/members/lookup"
+
+
+@pytest.fixture
+def registry_token(client: TestClient) -> None:
+    """The installation with `ORBITERS_PIGRO_REGISTRY_TOKEN` set: the one the CRM's
+    signup may ask. Declared, never inherited from a developer's `.env`."""
+    client.app.dependency_overrides[get_settings] = lambda: Settings(  # type: ignore[attr-defined]
+        pigro_registry_token=PIGRO_TOKEN,
+        _env_file=None,  # type: ignore[call-arg]
+    )
+
+
+def test_without_a_registry_token_the_member_lookup_does_not_exist(client: TestClient) -> None:
+    """The route is a 404 whatever the caller presents, not a 401 that says «there is a
+    door»: the same rule as the CRM's `GET /api/tenants/` (ORB-142)."""
+    assert client.get(LOOKUP, params={"email": "ada@studio.it"}).status_code == 404
+    assert (
+        client.get(
+            LOOKUP,
+            params={"email": "ada@studio.it"},
+            headers={"Authorization": f"Bearer {PIGRO_TOKEN}"},
+        ).status_code
+        == 404
+    )
+
+
+def test_the_member_lookup_answers_only_to_the_registry_token(
+    client: TestClient, registry_token: None
+) -> None:
+    assert client.get(LOOKUP, params={"email": "ada@studio.it"}).status_code == 401
+    wrong = client.get(
+        LOOKUP, params={"email": "ada@studio.it"}, headers={"Authorization": "Bearer sbagliato"}
+    )
+    assert wrong.status_code == 401
+    # Starlette decodes headers as latin-1, and `secrets.compare_digest` refuses a `str`
+    # with a non-ASCII character: a stray byte must be a 401 like any wrong token, never a 500.
+    odd = client.get(
+        LOOKUP, params={"email": "ada@studio.it"}, headers={"Authorization": b"Bearer t\xe9ken"}
+    )
+    assert odd.status_code == 401, odd.text
+
+
+def test_the_member_lookup_names_a_member_and_says_no_to_anyone_else(
+    client: TestClient, registry_token: None, clean: None
+) -> None:
+    """Case-insensitive, like `uq_freelancers_email_lower`; an unknown address is a plain
+    `membro: false` and never an error, and nothing beyond the two names leaves."""
+    _apply(client, "Ada@Studio.it")
+    bearer = {"Authorization": f"Bearer {PIGRO_TOKEN}"}
+
+    member = client.get(LOOKUP, params={"email": "  ada@studio.IT "}, headers=bearer)
+    assert member.status_code == 200, member.text
+    assert member.json() == {"membro": True, "nome": "Ada", "cognome": "Lovelace"}
+
+    unknown = client.get(LOOKUP, params={"email": "nessuno@example.org"}, headers=bearer)
+    assert unknown.status_code == 200, unknown.text
+    assert unknown.json() == {"membro": False, "nome": None, "cognome": None}
+
+    # Not an address at all: still a `false`, the CRM decides what to make of the input.
+    assert client.get(LOOKUP, params={"email": "non-una-mail"}, headers=bearer).json() == {
+        "membro": False,
+        "nome": None,
+        "cognome": None,
+    }

@@ -10,16 +10,23 @@ never from the URL: there is no `/me/{id}`.
 limit: the first two because they are unauthenticated by design, `PUT /me/cv` because
 FastAPI reads its multipart body while resolving parameters, before `MemberDep` gets a
 chance to reject an anonymous caller with a 401.
+
+`GET /members/lookup` is the one route here for another product rather than for a
+person: PigroCRM's signup asks whether an address belongs to a member (ORB-173), under
+the token the two hosts already share for the registry of spaces (ORB-142).
 """
 
 import logging
+import secrets
 from typing import Annotated
 
 from fastapi import (
     APIRouter,
     BackgroundTasks,
     File,
+    Header,
     HTTPException,
+    Query,
     Request,
     Response,
     UploadFile,
@@ -33,7 +40,14 @@ from orbiters_core.mail import EmailSender, Mail
 from orbiters_core.members import MemberService
 from orbiters_core.models import CV_MAX_BYTES
 from orbiters_core.perks import GUIDE_FILENAME, PerkService, guide_bytes
-from orbiters_core.schemas import Ack, EnterRequest, LinkRequest, MemberProfile, MemberUpdate
+from orbiters_core.schemas import (
+    Ack,
+    EnterRequest,
+    LinkRequest,
+    MemberLookup,
+    MemberProfile,
+    MemberUpdate,
+)
 
 router = APIRouter(prefix="/api/hub", tags=["hub-member"])
 
@@ -144,6 +158,32 @@ def my_guide(member: MemberDep, session: SessionDep) -> Response:
     """
     PerkService(session).record_guide_download(member.id)
     return perk_response(guide_bytes(), GUIDE_FILENAME)
+
+
+@router.get("/members/lookup", response_model=MemberLookup)
+def lookup_member(
+    email: Annotated[str, Query(min_length=1, max_length=320)],
+    session: SessionDep,
+    settings: SettingsDep,
+    authorization: Annotated[str | None, Header()] = None,
+) -> MemberLookup:
+    """Whether an address belongs to a freelancer in the community, and their names, for
+    the one caller that holds `ORBITERS_PIGRO_REGISTRY_TOKEN`: PigroCRM's signup, which
+    greets a member by name instead of asking for it (ORB-173). The same shape as the
+    CRM's `GET /api/tenants/` in the other direction (ORB-142): without the token
+    configured the route does not exist (404), so nothing says there is a door; with it,
+    a missing or wrong bearer is a 401. An unknown address is `membro: false`, never an
+    error: the hub says who is a member, not who is at the keyboard."""
+    if not settings.pigro_registry_token:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not Found")
+    presented = authorization.removeprefix("Bearer ").strip() if authorization else ""
+    # Bytes, not str: Starlette decodes headers as latin-1 and `compare_digest` refuses a
+    # `str` with a non-ASCII character, which would turn a stray byte into a 500.
+    if not presented or not secrets.compare_digest(
+        presented.encode("utf-8"), settings.pigro_registry_token.encode("utf-8")
+    ):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "token non valido")
+    return MemberService(session, settings).lookup(email)
 
 
 @router.post("/me/logout", status_code=status.HTTP_204_NO_CONTENT)

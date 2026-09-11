@@ -445,6 +445,17 @@ class MemberProfile(BaseModel):
         return _is_complete(self)
 
 
+class MemberLookup(BaseModel):
+    """What the hub tells PigroCRM about an address (ORB-173): whether a freelancer with
+    it exists, and if so the two names the CRM's signup would otherwise ask for again.
+    Never the id, never the rest of the card: the CRM learns that the person is a
+    member and how to greet them, nothing about who is at the keyboard."""
+
+    membro: bool
+    nome: str | None = None
+    cognome: str | None = None
+
+
 class LinkRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
