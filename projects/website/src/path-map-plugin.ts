@@ -20,6 +20,7 @@ import type { Plugin } from 'vite'
 export const PAGES: Readonly<Record<string, string>> = {
   '/': '/index.html',
   '/orbiters': '/orbiters.html',
+  '/pitch': '/pitch.html',
   '/privacy': '/privacy.html',
   '/termini': '/termini.html',
 }

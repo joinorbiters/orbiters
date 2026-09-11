@@ -1,0 +1,215 @@
+/* The pitch deck as a page of the site (ORB-153). The same file the deck on Ivan's
+   desk renders from, with two changes for the web: the styles live here so Vite hashes
+   the font and the pictures, and the font is the shared one from `shared/brand`, the
+   woff2 the landing already serves, so the two sheets point at one asset. The colours
+   are the palette's five, restated as this sheet's own variables below because the
+   palette plugin feeds only landing.css and orbiters.css; a colour changed in the
+   palette and not here is a deck that drifts, which is the price of a self-contained
+   page. No consent notice and no pixel: the page measures nothing. */
+@font-face {
+  font-family: 'Outfit';
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url('../../../shared/brand/fonts/outfit-variable-latin.woff2') format('woff2');
+}
+:root {
+  --ink: #011936;
+  --quiet: #465362;
+  --paper: #f1f2f3;
+  --gold: #f9dc5c;
+  --melon: #ed254e;
+  --melon-strong: #e5133e;
+  --grid: rgba(1, 25, 54, 0.07);
+  --cell: 24px;
+  --step: 16px;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+* { box-sizing: border-box; margin: 0; }
+html, body { height: 100%; background: var(--paper); }
+body {
+  font-family: 'Outfit', ui-sans-serif, system-ui, sans-serif;
+  color: var(--ink);
+  font-weight: 300;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* --- The stage: a fixed 1920×1080 canvas, scaled to the viewport. */
+.stage {
+  position: fixed; left: 50%; top: 50%;
+  width: 1920px; height: 1080px;
+  transform: translate(-50%, -50%) scale(var(--s, 1));
+  transform-origin: center;
+}
+.slide {
+  position: absolute; inset: 0;
+  width: 1920px; height: 1080px;
+  overflow: hidden;
+  background-color: var(--paper);
+  background-image:
+    linear-gradient(to right, var(--grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
+  background-size: var(--cell) var(--cell);
+  opacity: 0; visibility: hidden;
+  transition: opacity 0.55s var(--ease), visibility 0s linear 0.55s;
+}
+.slide.active { opacity: 1; visibility: visible; transition: opacity 0.55s var(--ease); z-index: 1; }
+.slide canvas { position: absolute; inset: 0; width: 1920px; height: 1080px; }
+.slide.dark { background-color: var(--ink); background-image:
+    linear-gradient(to right, rgba(255,255,255,0.06) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255,255,255,0.06) 1px, transparent 1px); color: #fff; }
+.slide.dark canvas { opacity: 0.22; }
+
+/* --- Reveal: each marked element rises in when its slide becomes active. */
+[data-reveal] { opacity: 0; transform: translateY(28px); transition: opacity 0.7s var(--ease), transform 0.7s var(--ease); transition-delay: var(--d, 0s); }
+.active [data-reveal] { opacity: 1; transform: none; }
+.active .mark-in { animation: pop 0.5s var(--ease) both; animation-delay: var(--d, 0s); }
+@keyframes pop { from { transform: scale(0.4); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* --- Chrome. */
+.brand { position: absolute; left: 120px; top: 64px; display: flex; align-items: center; gap: 22px; font-size: 28px; font-weight: 500; }
+.glyph { width: 14px; height: 14px; background: var(--ink); flex: none; margin: 0 14px 14px 0;
+  box-shadow: 14px 0 0 var(--gold), 0 14px 0 var(--melon), 14px 14px 0 var(--ink); }
+.dark .glyph { background: #fff; box-shadow: 14px 0 0 var(--gold), 0 14px 0 var(--melon), 14px 14px 0 #fff; }
+.foot { position: absolute; left: 120px; right: 120px; bottom: 52px; display: flex; justify-content: space-between; font-size: 24px; color: var(--quiet); font-weight: 400; }
+.foot span { background: var(--paper); padding: 4px 10px; }
+.dark .foot { color: rgba(255,255,255,0.7); } .dark .foot span { background: transparent; }
+.kicker { color: var(--melon); font-weight: 600; font-size: 38px; letter-spacing: 0.12em; text-transform: uppercase; }
+.dark .kicker { color: var(--gold); }
+.accent { color: var(--melon); }
+.dark .accent { color: var(--gold); }
+
+/* --- Layout primitives. */
+.pad { position: absolute; left: 120px; right: 120px; top: 160px; bottom: 140px; }
+.box { position: absolute; background: #fff; border: 3px solid var(--ink); box-shadow: var(--step) var(--step) 0 var(--ink); }
+.center { display: flex; flex-direction: column; justify-content: center; }
+h1, .h1 { font-size: 168px; font-weight: 600; line-height: 0.96; letter-spacing: -0.035em; }
+.statement { font-size: 108px; font-weight: 600; line-height: 1.04; letter-spacing: -0.03em; max-width: 15.5em; }
+.statement.small { font-size: 88px; }
+.lead { font-size: 36px; line-height: 1.35; color: var(--quiet); font-weight: 400; max-width: 30em; }
+.dark .lead { color: rgba(255,255,255,0.78); }
+.big { font-size: 300px; font-weight: 600; letter-spacing: -0.05em; line-height: 0.9; }
+.big small { font-size: 0.45em; letter-spacing: -0.02em; }
+.label { font-size: 34px; color: var(--quiet); font-weight: 400; line-height: 1.3; }
+.dark .label { color: rgba(255,255,255,0.75); }
+
+/* Numbered agenda. */
+.agenda { display: grid; grid-template-columns: repeat(4, 1fr); gap: 48px; }
+.agenda .n { font-size: 120px; font-weight: 600; letter-spacing: -0.04em; line-height: 1; color: var(--melon); }
+.agenda .bar { width: 3px; height: 90px; background: var(--ink); margin: 24px 0 22px; opacity: 0.25; }
+.agenda h3 { font-size: 44px; font-weight: 600; line-height: 1.1; letter-spacing: -0.01em; }
+.agenda .n-row { display: flex; align-items: center; gap: 28px; }
+.agenda .tick { display: inline-grid; place-items: center; width: 64px; height: 64px; background: var(--ink); color: var(--gold); font-size: 36px; font-weight: 700; }
+
+/* Stat tiles. */
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 36px 48px; }
+.stats .n { font-size: 150px; font-weight: 600; letter-spacing: -0.045em; line-height: 1; }
+.stats .n small { font-size: 0.5em; letter-spacing: -0.02em; }
+.stats .l { font-size: 32px; color: var(--quiet); font-weight: 400; margin-top: 8px; }
+.dark .stats .l { color: rgba(255,255,255,0.75); }
+
+/* Stat tiles whose title is a word, not a number: one fixed title row so the labels line up. */
+.stats.aligned > div { display: flex; flex-direction: column; }
+.stats.aligned .n { height: 150px; display: flex; align-items: flex-end; }
+.stats .l.logo { display: flex; align-items: center; gap: 16px; }
+.stats.split > div:nth-child(n+3) { text-align: right; }
+.stats.split > div:nth-child(n+3) .n { justify-content: flex-end; }
+.stats.split > div:nth-child(n+3) .l.logo { justify-content: flex-end; }
+.stats .l.logo svg { width: 40px; height: 40px; flex: none; }
+
+/* A macOS window around a screenshot, the carbon.now.sh way. */
+.mac { position: absolute; background: #fff; border-radius: 14px; box-shadow: 0 30px 80px rgba(1,25,54,0.35), 0 0 0 1px rgba(1,25,54,0.18); overflow: hidden; display: flex; flex-direction: column; }
+.mac .bar { height: 52px; flex: none; background: #e9eaec; border-bottom: 1px solid rgba(1,25,54,0.12); display: flex; align-items: center; padding-left: 22px; gap: 12px; position: relative; }
+.mac .bar i { width: 16px; height: 16px; border-radius: 50%; display: block; }
+.mac .bar i:nth-child(1) { background: #ff5f57; } .mac .bar i:nth-child(2) { background: #febc2e; } .mac .bar i:nth-child(3) { background: #28c840; }
+.mac .bar span { position: absolute; left: 50%; transform: translateX(-50%); font-size: 20px; color: var(--quiet); font-weight: 500; }
+.mac img { display: block; width: 100%; flex: 1; min-height: 0; object-fit: cover; object-position: top left; }
+
+/* The PDF viewer: the same window, a grey sheet behind the pages, a badge in the bar. */
+.mac .bar b { display: inline-block; background: var(--melon); color: #fff; font-size: 14px; letter-spacing: 0.08em; padding: 3px 7px; margin-right: 10px; vertical-align: 2px; }
+.mac .bar em { position: absolute; right: 22px; font-style: normal; font-size: 18px; color: var(--quiet); }
+.mac .sheet { flex: 1; min-height: 0; background: #d9dbdf; display: flex; gap: 36px; justify-content: center; align-items: center; padding: 36px; }
+.mac .sheet img { display: block; max-height: 100%; max-width: 46%; width: auto; height: auto; box-shadow: 0 12px 30px rgba(1,25,54,0.28); background: #fff; }
+
+/* Team: a photo instead of initials, and a row of logos for the agents. */
+.person .photo { width: 140px; height: 140px; border-radius: 50%; display: block; margin-bottom: 22px; border: 3px solid var(--ink); box-shadow: var(--step) var(--step) 0 var(--ink); object-fit: cover; }
+.person .logos { display: flex; align-items: center; gap: 22px; height: 140px; margin-bottom: 22px; }
+.person .logos > * { width: 96px; height: 96px; display: grid; place-items: center; background: var(--ink); border: 3px solid var(--ink); box-shadow: 12px 12px 0 var(--ink); }
+.person .logos svg { width: 56px; height: 56px; }
+.person .logos img { width: 96px; height: 96px; display: block; object-fit: cover; }
+
+/* Simple numbered list. */
+.list { display: grid; gap: 22px; }
+.list .row { display: grid; grid-template-columns: 110px 1fr; align-items: baseline; gap: 20px; border-bottom: 2px solid rgba(1,25,54,0.15); padding-bottom: 20px; }
+.list .row .n { font-size: 44px; font-weight: 600; color: var(--melon); }
+.list .row .t { font-size: 60px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.05; }
+.list .row .t small { display: block; font-size: 30px; font-weight: 400; color: var(--quiet); letter-spacing: 0; margin-top: 6px; }
+
+/* Three columns of one word. */
+.cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 48px; }
+.cols .sw { width: 56px; height: 56px; margin-bottom: 30px; }
+.cols h3 { font-size: 84px; font-weight: 600; letter-spacing: -0.03em; line-height: 1; margin-bottom: 22px; }
+.cols p { font-size: 32px; line-height: 1.35; color: var(--quiet); font-weight: 400; }
+.dark .cols p { color: rgba(255,255,255,0.78); }
+
+/* Flow with arrows. */
+.flow { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 40px; align-items: start; }
+.flow .step .t { display: flex; align-items: flex-end; justify-content: center; min-height: 2.16em; }
+.flow .arrow { margin-top: 40px; }
+.flow .step { font-size: 60px; font-weight: 600; line-height: 1.08; letter-spacing: -0.02em; text-align: center; }
+.flow .step small { display: block; font-size: 28px; font-weight: 400; margin-top: 14px; color: rgba(255,255,255,0.72); letter-spacing: 0; }
+.flow .arrow { display: block; width: 40px; height: 80px; }
+
+/* Screenshot frames. */
+.frame { position: absolute; border: 3px solid var(--ink); box-shadow: var(--step) var(--step) 0 var(--ink); background: #fff; overflow: hidden; }
+.frame img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top left; }
+.pages { position: absolute; display: flex; gap: 40px; }
+.pages img { display: block; height: 100%; width: auto; border: 3px solid var(--ink); box-shadow: 12px 12px 0 var(--ink); background: #fff; }
+
+/* Competitor tiles. */
+.tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 32px; }
+.tile { border: 3px solid var(--ink); box-shadow: 12px 12px 0 var(--ink); background: #fff; padding: 36px 34px; min-height: 300px; display: flex; flex-direction: column; justify-content: space-between; }
+.tile h3 { font-size: 46px; font-weight: 600; letter-spacing: -0.02em; }
+.tile p { font-size: 27px; line-height: 1.32; color: var(--quiet); font-weight: 400; }
+.tile .meta { font-size: 24px; font-weight: 600; color: var(--melon); margin-top: 10px; }
+
+/* Roadmap. */
+.road { display: grid; grid-template-columns: repeat(3, 1fr); gap: 44px; }
+.road h3 { font-size: 30px; font-weight: 600; padding: 12px 20px; color: #fff; background: var(--ink); display: inline-block; margin-bottom: 30px; }
+.road .now h3 { background: var(--melon); } .road .later h3 { background: var(--quiet); }
+.road li { list-style: none; font-size: 36px; font-weight: 600; letter-spacing: -0.015em; line-height: 1.1; padding: 18px 0; border-top: 2px solid rgba(1,25,54,0.15); }
+.road li small { display: block; font-size: 26px; font-weight: 400; color: var(--quiet); letter-spacing: 0; margin-top: 6px; }
+
+/* Team. */
+.team { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; }
+.person .avatar { width: 96px; height: 96px; display: grid; place-items: center; font-size: 42px; font-weight: 600; color: #fff; background: var(--ink); margin-bottom: 28px; }
+.person .avatar.melon { background: var(--melon); }
+.person h3 { font-size: 64px; font-weight: 600; letter-spacing: -0.025em; line-height: 1; }
+.person .role { font-size: 28px; font-weight: 600; color: var(--melon); margin: 12px 0 22px; }
+.person p { font-size: 30px; line-height: 1.38; color: var(--quiet); font-weight: 400; max-width: 26em; }
+
+.qrbox { border: 3px solid var(--ink); box-shadow: 12px 12px 0 var(--ink); background: #fff; padding: 22px; display: inline-block; }
+
+/* Typewriter caret on the cover. */
+h1 .role::after { content: ''; display: inline-block; width: 6px; height: 0.85em; background: var(--ink); margin-left: 8px; vertical-align: -0.08em; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+/* --- Controls. */
+.nav { position: fixed; right: 28px; bottom: 24px; display: flex; gap: 8px; z-index: 5; }
+.nav button { width: 44px; height: 44px; border: 2px solid var(--ink); background: var(--paper); color: var(--ink); font-size: 22px; cursor: pointer; font-family: inherit; }
+.nav button:hover { background: #fff; }
+.progress { position: fixed; left: 0; bottom: 0; height: 6px; background: var(--melon); width: 0; transition: width 0.4s var(--ease); z-index: 5; }
+.counter { position: fixed; left: 28px; bottom: 30px; font-size: 16px; color: var(--quiet); z-index: 5; font-weight: 500; }
+.hint { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); font-size: 15px; color: var(--quiet); z-index: 5; transition: opacity 1s; }
+
+/* --- Static mode: every slide stacked and every reveal finished, for PNG/PDF export. */
+body.static { overflow: auto; }
+body.static .stage { position: static; transform: none; width: 1920px; height: auto; }
+body.static .slide { position: relative; opacity: 1; visibility: visible; margin-bottom: 40px; }
+body.static [data-reveal] { opacity: 1; transform: none; transition: none; }
+body.static .mark-in { animation: none; }
+body.static .nav, body.static .progress, body.static .counter, body.static .hint { display: none; }
+body.static h1 .role::after { display: none; }
+@page { size: 1920px 1080px; margin: 0; }
+@media print { body.static .slide { margin: 0; page-break-after: always; } }

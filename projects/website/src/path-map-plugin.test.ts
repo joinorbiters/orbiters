@@ -50,6 +50,7 @@ describe('route', () => {
   it('puts the landing at the front door and the community page under its old name (ORB-145)', () => {
     expect(route('/')).toEqual({ kind: 'page', file: '/index.html' })
     expect(route('/orbiters')).toEqual({ kind: 'page', file: '/orbiters.html' })
+    expect(route('/pitch')).toEqual({ kind: 'page', file: '/pitch.html' })
     expect(route('/privacy')).toEqual({ kind: 'page', file: '/privacy.html' })
     expect(route('/termini')).toEqual({ kind: 'page', file: '/termini.html' })
   })
