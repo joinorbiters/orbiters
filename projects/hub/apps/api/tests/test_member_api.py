@@ -281,3 +281,47 @@ def test_a_member_never_sees_another_members_row(
     assert client.get("/api/hub/me").json()["email"] == "grace@studio.it"
     # There is no route that takes an id: the only row reachable is the session's.
     assert client.get("/api/hub/me/00000000-0000-7000-8000-000000000000").status_code == 404
+
+
+# ---- completing a card an admin wrote from a signup (ORB-155) -------------------------
+
+
+def test_a_member_completes_the_card_an_admin_drafted(
+    client: TestClient, sender: RecordingSender, clean: None, api_session: Session
+) -> None:
+    from orbiters_core.freelancers import FreelancerService
+    from orbiters_core.schemas import FreelancerDraft, SignupCreate
+    from orbiters_core.service import SignupService
+
+    signup = SignupService(api_session).subscribe(
+        SignupCreate(email="ada@studio.it", nome="Ada", cognome="Lovelace")
+    )
+    FreelancerService(api_session).draft_from_signup(
+        signup.id,
+        FreelancerDraft(nome="Ada", cognome="Lovelace", fonti=["https://ada.dev"]),
+        "Claude",
+    )
+    profile, _ = _enter(client, sender, "ada@studio.it")
+    assert profile["completa"] is False and profile["cv_filename"] is None
+    assert client.get("/api/hub/me/cv").status_code == 404
+
+    answered = client.patch(
+        "/api/hub/me",
+        json={
+            "nome": "Ada",
+            "cognome": "Lovelace",
+            "linkedin_url": None,
+            "tariffa_giornaliera": "500",
+            "posizione": "CTO",
+            "remoto": "ibrido",
+            "links": [],
+        },
+    )
+    assert answered.status_code == 200, answered.text
+    assert answered.json()["completa"] is False
+    with_cv = client.put("/api/hub/me/cv", files={"cv": ("Ada CV.pdf", PDF, "application/pdf")})
+    assert with_cv.status_code == 200, with_cv.text
+    assert with_cv.json()["completa"] is True
+    assert client.get("/api/hub/me/cv").status_code == 200
+    api_session.execute(text("DELETE FROM signups"))
+    api_session.commit()
