@@ -505,8 +505,15 @@ class FreelancerRead(BaseModel):
 
 
 class FreelancerList(BaseModel):
+    """The cards, and since ORB-163 the leads beside them: signups whose address has no
+    card yet, as «Developer e CTO» shows them with a «Lead» state. `totale` counts the
+    cards the filter selects, `totale_lead` the leads; `lead` is empty when a `stato`
+    other than «lead» is asked for, `items` when «lead» is."""
+
     totale: int
     items: list[FreelancerRead]
+    totale_lead: int = 0
+    lead: list[SignupListItem] = Field(default_factory=list)
 
 
 class CompanyRead(BaseModel):

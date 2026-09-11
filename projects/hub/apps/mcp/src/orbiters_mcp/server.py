@@ -105,7 +105,9 @@ def build_server(factory: SessionFactory) -> MCPServer:
         """I freelance che hanno compilato il profilo sull'hub, dal più recente: nome,
         email, posizione, tariffa a giornata, disponibilità (remoto/ibrido/in_sede), link,
         stato della candidatura (nuovo, contattato, attivo, scartato) e note. Mai il CV:
-        quello si scarica dall'area admin. `stato` filtra; `totale` conta tutto."""
+        quello si scarica dall'area admin. `stato` filtra; `totale` conta tutto. `lead`
+        sono le iscrizioni senza scheda (nome se c'è, email, quando), `totale_lead` quante:
+        piene senza filtro o con `stato="lead"`, vuote con un altro stato."""
         return _run(lambda s: FreelancerService(s).list_recent(limit=limit, stato=stato))
 
     @mcp.tool()

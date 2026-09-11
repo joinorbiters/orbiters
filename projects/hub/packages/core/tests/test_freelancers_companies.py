@@ -326,3 +326,21 @@ def test_a_card_says_whether_its_address_also_signed_up_on_the_landing(clean: Se
     assert listed == {"solo@studio.it": "landing", "ada@studio.it": "form"}
     assert service.get(wizard_only.id).provenienza == "landing"
     assert service.get(both.id).provenienza == "form"
+
+
+def test_signups_without_a_card_are_the_leads_beside_the_cards(clean: Session) -> None:
+    service = FreelancerService(clean)
+    service.apply(_application("ada@studio.it"), PDF, "cv.pdf", "application/pdf")
+    _signup(clean, "ADA@studio.it")  # has a card: not a lead
+    _signup(clean, "nuovo@studio.it", nome="Nuovo", cognome="Arrivato")
+    everything = service.list_recent()
+    assert [item.email for item in everything.items] == ["ada@studio.it"]
+    assert [lead.email for lead in everything.lead] == ["nuovo@studio.it"]
+    assert (everything.totale, everything.totale_lead) == (1, 1)
+    assert everything.lead[0].freelancer_id is None and everything.lead[0].nome == "Nuovo"
+    only_leads = service.list_recent(stato="lead")
+    assert only_leads.items == [] and [lead.email for lead in only_leads.lead] == [
+        "nuovo@studio.it"
+    ]
+    only_new = service.list_recent(stato="nuovo")
+    assert len(only_new.items) == 1 and only_new.lead == [] and only_new.totale_lead == 0

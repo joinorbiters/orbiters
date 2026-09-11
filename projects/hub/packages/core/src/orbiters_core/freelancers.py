@@ -24,10 +24,14 @@ from orbiters_core.schemas import (
     FreelancerDraft,
     FreelancerList,
     FreelancerRead,
+    SignupListItem,
     StatusChange,
 )
 
 ENTITY = "freelancer"
+# The pseudo-state the list filter uses for signups without a card (ORB-163): never
+# stored on a row, since a lead has no row of its own.
+LEAD_STATE = "lead"
 LIST_LIMIT_DEFAULT = 100
 LIST_LIMIT_MAX = 500
 PDF_MAGIC = b"%PDF-"
@@ -186,6 +190,10 @@ class FreelancerService:
         self, limit: int = LIST_LIMIT_DEFAULT, stato: str | None = None
     ) -> FreelancerList:
         limit = max(1, min(limit, LIST_LIMIT_MAX))
+        if stato == LEAD_STATE:
+            lead, totale_lead = self._leads(limit)
+            return FreelancerList(totale=0, items=[], totale_lead=totale_lead, lead=lead)
+        lead, totale_lead = self._leads(limit) if stato is None else ([], 0)
         logins, signed = _logins_per_card(), _signed_up()
         stmt = (
             select(Freelancer, logins.c.accessi, logins.c.ultimo_accesso, signed.c.email)
@@ -206,7 +214,30 @@ class FreelancerService:
                 _read_with_logins(row, accessi, ultimo, signed_up)
                 for row, accessi, ultimo, signed_up in rows
             ],
+            totale_lead=totale_lead,
+            lead=lead,
         )
+
+    def _leads(self, limit: int) -> tuple[list[SignupListItem], int]:
+        """Signups whose address has no card (ORB-163), newest first, and how many
+        there are: one anti-join on the two case-insensitive indexes."""
+        no_card = Freelancer.id.is_(None)
+        base = select(Signup).outerjoin(
+            Freelancer, func.lower(Freelancer.email) == func.lower(Signup.email)
+        )
+        rows = self.session.scalars(
+            base.where(no_card).order_by(Signup.created_at.desc(), Signup.id.desc()).limit(limit)
+        ).all()
+        totale = (
+            self.session.scalar(
+                select(func.count())
+                .select_from(Signup)
+                .outerjoin(Freelancer, func.lower(Freelancer.email) == func.lower(Signup.email))
+                .where(no_card)
+            )
+            or 0
+        )
+        return [SignupListItem.model_validate(row) for row in rows], totale
 
     def get(self, freelancer_id: UUID) -> FreelancerRead:
         """The row with its thread of comments, newest first. Only here: the list
