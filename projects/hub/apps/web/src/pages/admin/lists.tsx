@@ -5,9 +5,10 @@ import { useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import { admin, type Comment, type Company, type Freelancer } from '@/lib/api'
+import { admin, type Comment, type Company, type Freelancer, type Signup } from '@/lib/api'
 import {
   COMPANY_STATES,
+  FREELANCER_LIST_STATES,
   FREELANCER_STATES,
   REMOTO_LABELS,
   STATE_LABELS,
@@ -21,6 +22,7 @@ import { Comments } from './Comments'
 
 const TONE: Record<string, string> = {
   nuovo: 'bg-[var(--color-royal-gold)]',
+  lead: 'bg-muted',
   contattato: 'bg-muted-foreground',
   attivo: 'bg-foreground',
   in_corso: 'bg-foreground',
@@ -109,19 +111,32 @@ export function Figure({ label, value, note }: { label: string; value: number; n
 
 // ---- freelancers -----------------------------------------------------------------------
 
+/** One row of the freelancer table: a card, or a lead (a signup with no card, ORB-163),
+ *  ordered together by when they arrived. */
+type FreelancerRow = { kind: 'card'; at: string; card: Freelancer } | { kind: 'lead'; at: string; lead: Signup }
+
+function mergeRows(items: Freelancer[], leads: Signup[]): FreelancerRow[] {
+  const rows: FreelancerRow[] = [
+    ...items.map((card): FreelancerRow => ({ kind: 'card', at: card.created_at, card })),
+    ...leads.map((lead): FreelancerRow => ({ kind: 'lead', at: lead.created_at, lead })),
+  ]
+  return rows.sort((a, b) => b.at.localeCompare(a.at))
+}
+
 export function AdminFreelancers() {
   const [stato, setStato] = useState<string | undefined>(undefined)
   const list = useQuery({ queryKey: ['freelancers', stato], queryFn: () => admin.freelancers(stato) })
+  const rows = list.data ? mergeRows(list.data.items, list.data.lead) : []
   return (
     <>
-      <Header title="Developer e CTO" count={list.data?.totale}>
-        <StateFilter states={FREELANCER_STATES} value={stato} onChange={setStato} />
+      <Header title="Developer e CTO" count={list.data ? list.data.totale + list.data.totale_lead : undefined}>
+        <StateFilter states={FREELANCER_LIST_STATES} value={stato} onChange={setStato} />
       </Header>
       {list.isError ? (
         <Empty>Non riesco a leggere la lista.</Empty>
       ) : list.isPending ? (
         <Empty>Caricamento…</Empty>
-      ) : list.data.items.length === 0 ? (
+      ) : rows.length === 0 ? (
         <Empty>Nessun profilo qui.</Empty>
       ) : (
         <table className="w-full text-sm">
@@ -138,36 +153,61 @@ export function AdminFreelancers() {
             </tr>
           </thead>
           <tbody>
-            {list.data.items.map((item) => (
-              <tr key={item.id} className="border-b last:border-0 hover:bg-muted">
+            {rows.map((row) =>
+              row.kind === 'lead' ? (
+                <LeadRow key={`lead-${row.lead.id}`} lead={row.lead} />
+              ) : (
+              <tr key={row.card.id} className="border-b last:border-0 hover:bg-muted">
                 <td className="px-6 py-2.5">
-                  <Link to="/admin/freelance/$id" params={{ id: item.id }} className="font-medium hover:underline">
-                    {item.nome} {item.cognome}
+                  <Link to="/admin/freelance/$id" params={{ id: row.card.id }} className="font-medium hover:underline">
+                    {row.card.nome} {row.card.cognome}
                   </Link>
-                  <p className="text-xs text-muted-foreground">{item.email}</p>
+                  <p className="text-xs text-muted-foreground">{row.card.email}</p>
                 </td>
-                <td className="px-3 py-2.5 text-muted-foreground">{item.provenienza}</td>
-                <td className="px-3 py-2.5">{item.posizione ?? '—'}</td>
+                <td className="px-3 py-2.5 text-muted-foreground">{row.card.provenienza}</td>
+                <td className="px-3 py-2.5">{row.card.posizione ?? '—'}</td>
                 <td className="px-3 py-2.5 text-right tabular-nums">
-                  {item.tariffa_giornaliera === null ? '—' : formatEuro(item.tariffa_giornaliera)}
+                  {row.card.tariffa_giornaliera === null ? '—' : formatEuro(row.card.tariffa_giornaliera)}
                 </td>
-                <td className="px-3 py-2.5">{item.remoto ? REMOTO_LABELS[item.remoto] : '—'}</td>
+                <td className="px-3 py-2.5">{row.card.remoto ? REMOTO_LABELS[row.card.remoto] : '—'}</td>
                 <td className="px-3 py-2.5">
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <StatePill stato={item.stato} />
-                    {!item.completa && <IncompletePill />}
+                    <StatePill stato={row.card.stato} />
+                    {!row.card.completa && <IncompletePill />}
                   </div>
                 </td>
                 <td className="px-3 py-2.5 text-muted-foreground">
-                  {item.ultimo_accesso === null ? '—' : formatDateTime(item.ultimo_accesso)}
+                  {row.card.ultimo_accesso === null ? '—' : formatDateTime(row.card.ultimo_accesso)}
                 </td>
-                <td className="px-6 py-2.5 text-right text-muted-foreground">{formatDate(item.created_at)}</td>
+                <td className="px-6 py-2.5 text-right text-muted-foreground">{formatDate(row.card.created_at)}</td>
               </tr>
-            ))}
+              ),
+            )}
           </tbody>
         </table>
       )}
     </>
+  )
+}
+
+/** A signup with no card (ORB-163): what the landing knows, a «Lead» pill, dashes for
+ *  everything a card would carry, and no link, since there is no card to open. */
+function LeadRow({ lead }: { lead: Signup }) {
+  const name = [lead.nome, lead.cognome].filter(Boolean).join(' ')
+  return (
+    <tr className="border-b last:border-0 hover:bg-muted">
+      <td className="px-6 py-2.5">
+        <p className="font-medium">{name || '—'}</p>
+        <p className="text-xs text-muted-foreground">{lead.email}</p>
+      </td>
+      <td className="px-3 py-2.5 text-muted-foreground">form</td>
+      <td className="px-3 py-2.5">—</td>
+      <td className="px-3 py-2.5 text-right">—</td>
+      <td className="px-3 py-2.5">—</td>
+      <td className="px-3 py-2.5"><StatePill stato="lead" /></td>
+      <td className="px-3 py-2.5 text-muted-foreground">—</td>
+      <td className="px-6 py-2.5 text-right text-muted-foreground">{formatDate(lead.created_at)}</td>
+    </tr>
   )
 }
 

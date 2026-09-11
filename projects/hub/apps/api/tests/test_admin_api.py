@@ -630,8 +630,11 @@ def test_an_admin_writes_an_incomplete_card_from_a_signup_and_the_list_points_at
     item = next(i for i in items if i["id"] == signup_id)
     assert item["freelancer_id"] == card["id"]
     assert client.get(f"/api/hub/freelancers/{card['id']}/cv").status_code == 404
-    listed = client.get("/api/hub/freelancers").json()["items"]
+    everything = client.get("/api/hub/freelancers").json()
+    listed = everything["items"]
     assert listed[0]["id"] == card["id"] and listed[0]["completa"] is False
+    # With a card, the signup is no longer a lead (ORB-163).
+    assert everything["lead"] == [] and everything["totale_lead"] == 0
     # Born from a signup, so it also signed up on the landing: «form» (ORB-161).
     assert listed[0]["provenienza"] == "form"
     assert client.get(f"/api/hub/freelancers/{card['id']}").json()["provenienza"] == "form"
@@ -641,6 +644,18 @@ def test_an_admin_writes_an_incomplete_card_from_a_signup_and_the_list_points_at
     bad = client.post(f"/api/hub/signups/{signup_id}/scheda", json={**DRAFT, "fonti": []})
     assert bad.status_code == 422
     assert bad.json()["detail"][0]["loc"][-1] == "fonti"
+
+
+def test_a_signup_without_a_card_is_a_lead_on_the_freelancer_list(
+    client: TestClient, admin: None
+) -> None:
+    signup_id = _signup(client, "lead@studio.it")
+    everything = client.get("/api/hub/freelancers").json()
+    assert everything["items"] == [] and everything["totale_lead"] == 1
+    assert everything["lead"][0]["id"] == signup_id
+    assert everything["lead"][0]["email"] == "lead@studio.it"
+    assert client.get("/api/hub/freelancers", params={"stato": "lead"}).json()["totale_lead"] == 1
+    assert client.get("/api/hub/freelancers", params={"stato": "nuovo"}).json()["lead"] == []
 
 
 def test_research_is_refused_on_a_card_the_person_filled(client: TestClient, admin: None) -> None:

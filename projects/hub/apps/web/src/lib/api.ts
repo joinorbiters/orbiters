@@ -253,8 +253,10 @@ export const admin = {
     request<Admin>('/api/hub/auth/login', json({ email, password })),
   logout: () => request<void>('/api/hub/auth/logout', { method: 'POST' }),
   me: () => request<Admin>('/api/hub/auth/me'),
+  /** Cards and, beside them, the leads: signups whose address has no card yet (ORB-163).
+   *  `stato: 'lead'` answers leads alone; another state answers cards alone. */
   freelancers: (stato?: string) =>
-    request<{ totale: number; items: Freelancer[] }>(
+    request<{ totale: number; items: Freelancer[]; totale_lead: number; lead: Signup[] }>(
       `/api/hub/freelancers?limit=500${stato ? `&stato=${encodeURIComponent(stato)}` : ''}`,
     ),
   freelancer: (id: string) => request<Freelancer>(`/api/hub/freelancers/${id}`),

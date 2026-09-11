@@ -30,9 +30,13 @@ export function formatBytes(size: number): string {
 
 export const REMOTO_LABELS = { remoto: 'Da remoto', ibrido: 'Ibrido', in_sede: 'In sede' } as const
 export const FREELANCER_STATES = ['nuovo', 'contattato', 'attivo', 'scartato'] as const
+/** The states the freelancer list filters by: the card's four, plus the pseudo-state of a
+ *  signup with no card (ORB-163). */
+export const FREELANCER_LIST_STATES = [...FREELANCER_STATES, 'lead'] as const
 export const COMPANY_STATES = ['nuovo', 'contattato', 'in_corso', 'chiuso'] as const
 export const STATE_LABELS: Record<string, string> = {
   nuovo: 'Nuovo',
+  lead: 'Lead',
   contattato: 'Contattato',
   attivo: 'Attivo',
   scartato: 'Scartato',

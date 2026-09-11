@@ -133,7 +133,7 @@ describe('the Iscrizioni page', () => {
 
 describe('the Developer e CTO list', () => {
   it('renders an incomplete card with dashes and a «Da completare» pill', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(answer(200, { totale: 2, items: [INCOMPLETE, COMPLETE] }))
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(answer(200, { totale: 2, items: [INCOMPLETE, COMPLETE], totale_lead: 0, lead: [] }))
     mount('/admin/freelance')
     const ada = (await screen.findByText('ada@studio.it')).closest('tr')!
     expect(cellUnder(ada, 'Posizione')).toHaveTextContent('—')
@@ -150,7 +150,7 @@ describe('the Developer e CTO list', () => {
   })
 
   it('shows when each member last came in, or a dash for one who never did (ORB-158)', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(answer(200, { totale: 2, items: [INCOMPLETE, COMPLETE] }))
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(answer(200, { totale: 2, items: [INCOMPLETE, COMPLETE], totale_lead: 0, lead: [] }))
     mount('/admin/freelance')
     const ada = (await screen.findByText('ada@studio.it')).closest('tr')!
     expect(cellUnder(ada, 'Ultimo accesso')).toHaveTextContent('—')
@@ -159,12 +159,30 @@ describe('the Developer e CTO list', () => {
   })
 
   it('says where each lead came from: «form» when the address also signed up, «landing» otherwise (ORB-161)', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(answer(200, { totale: 2, items: [INCOMPLETE, COMPLETE] }))
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(answer(200, { totale: 2, items: [INCOMPLETE, COMPLETE], totale_lead: 0, lead: [] }))
     mount('/admin/freelance')
     const ada = (await screen.findByText('ada@studio.it')).closest('tr')!
     expect(cellUnder(ada, 'Provenienza')).toHaveTextContent('form')
     const grace = screen.getByText('grace@studio.it').closest('tr')!
     expect(cellUnder(grace, 'Provenienza')).toHaveTextContent('landing')
+  })
+})
+
+describe('the leads on the Developer e CTO list (ORB-163)', () => {
+  it('lists a signup with no card as a «Lead» row with dashes and no link, and counts it', async () => {
+    const lead = SIGNUPS.find((signup) => signup.freelancer_id === null)!
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      answer(200, { totale: 1, items: [COMPLETE], totale_lead: 1, lead: [lead] }),
+    )
+    mount('/admin/freelance')
+    const row = (await screen.findByText(lead.email)).closest('tr')!
+    expect(cellUnder(row, 'Stato')).toHaveTextContent('Lead')
+    expect(cellUnder(row, 'Provenienza')).toHaveTextContent('form')
+    expect(cellUnder(row, 'Posizione')).toHaveTextContent('—')
+    expect(cellUnder(row, 'Ultimo accesso')).toHaveTextContent('—')
+    expect(within(row).queryByRole('link')).toBeNull()
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('2')
+    expect(screen.getByRole('button', { name: 'Lead' })).toBeInTheDocument()
   })
 })
 
