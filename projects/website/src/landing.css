@@ -153,9 +153,11 @@ footer .quiet-link:hover {
   color: var(--landing-cta-ink);
 }
 
-/* --- Hero: the field behind, one box in front. */
+/* --- Hero: the field behind, one box in front. A short step down from the header,
+   and no padding of its own below: the first `.section`'s padding is the gap to
+   "Come funziona", the same beat as between every other pair of sections. */
 .hero {
-  padding-block: clamp(3rem, 9vw, 8rem);
+  padding-block: clamp(1rem, 2.5vw, 2rem) 0;
 }
 
 /* --- The field: the same one the community page on `/` has. Fixed, behind everything
