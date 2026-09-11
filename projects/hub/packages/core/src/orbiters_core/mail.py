@@ -246,70 +246,167 @@ GUIDE_LINE = (
 )
 
 
+@dataclass(frozen=True)
+class CardSummary:
+    """What the welcome mail says about a card we wrote from public sources (ORB-157):
+    the person's own words as we found them, so they can see what a company sees."""
+
+    nome: str
+    cognome: str
+    posizione: str | None
+    linkedin_url: str | None
+    links: tuple[str, ...]
+
+
 def welcome_mail(
-    to: str, nome: str, accedi_link: str, *, completa: bool, posizione: str | None
+    to: str,
+    nome: str | None,
+    accedi_link: str,
+    *,
+    kind: str,
+    posizione: str | None = None,
+    summary: CardSummary | None = None,
+    wizard_link: str | None = None,
 ) -> Mail:
-    """The one-off mail that tells a person their area is open (ORB-157): how to get in
-    (the address, no password), what their card looks like from our side, the two perks
-    that wait behind the login, and the LinkedIn page where the first job posts appear.
-    Same voice and same box as the magic link; `nome` and `posizione` are the person's
-    own words and are escaped wherever they land in the HTML."""
-    if completa:
-        card = (
-            f"La tua scheda è completa: sei {posizione}, e le aziende possono trovarti."
-            if posizione
-            else "La tua scheda è completa: le aziende possono trovarti."
-        )
-    else:
-        found = f" Ti abbiamo segnato come {posizione}." if posizione else ""
-        card = (
-            "Abbiamo preparato la tua scheda con quello che si trova in pubblico su di "
-            f"te.{found} Manca la tua parte: il CV, la tariffa a giornata, come preferisci "
-            "lavorare. Sono le cose che le aziende cercano."
-        )
-    text = (
-        f"Ciao {nome},\n"
-        "\n"
+    """The one-off mail that tells a person their area is open (ORB-157), in three
+    voices decided with Ivan on 2026-09-11:
+
+    - `kind == "persona"`: they filled the card themselves; it is complete, they enter.
+    - `kind == "admin"`: we wrote the card from public sources. A short recap of what we
+      found, the ask to enter and add what nothing public states (CV, rate, remote
+      option), and that an offer in line with the profile is already there: reply to
+      talk about it.
+    - `kind == "nessuna"`: nothing public was enough for a card. The wizard, five minutes,
+      and from then on the address is the way in.
+
+    Same box and voice as the magic link; the person's words are escaped in the HTML."""
+    e = html_escape.escape
+    greeting = f"Ciao {nome}," if nome else "Ciao,"
+    paragraph = 'style="margin:24px 0 0 0;"'
+    small = f'style="margin:24px 0 0 0;font-size:13px;line-height:1.5;color:{INK_QUIET};'
+    li = 'style="margin:0 0 8px 0;"'
+    perks_text = (
+        "Dentro trovi i vantaggi della community, disponibili dopo il login:\n"
+        f"- {PIGROCRM_LINE}\n"
+        f"- {GUIDE_LINE}\n"
+    )
+    perks_html = (
+        f"<p {paragraph}>Dentro trovi i vantaggi della community, disponibili dopo il "
+        "login:</p>"
+        '<ul style="margin:8px 0 0 0;padding:0 0 0 22px;">'
+        f"<li {li}>{e(PIGROCRM_LINE)}</li><li>{e(GUIDE_LINE)}</li></ul>"
+    )
+    linkedin_text = (
+        "Un'altra cosa: segui la pagina LinkedIn di Orbiters, "
+        f"{LINKEDIN_PAGE}. Oggi pomeriggio esce il post con le prime job post per "
+        "Forward Deployed Engineer.\n"
+    )
+    linkedin_html = (
+        f"<p {paragraph}>Un'altra cosa: segui "
+        f"{_quiet_link(LINKEDIN_PAGE, 'la pagina LinkedIn di Orbiters')}. Oggi pomeriggio "
+        "esce il post con le prime job post per Forward Deployed Engineer.</p>"
+    )
+    safe_accedi = e(accedi_link, quote=True)
+    enter_text = (
         "la tua area su Orbiters è aperta. Si entra con la tua email, senza password: ti "
         "mandiamo un link e sei dentro.\n"
         "\n"
         f"{accedi_link}\n"
-        "\n"
-        f"{card}\n"
-        "\n"
-        "Dentro trovi i vantaggi della community, disponibili dopo il login:\n"
-        f"- {PIGROCRM_LINE}\n"
-        f"- {GUIDE_LINE}\n"
-        "\n"
-        "Un'altra cosa: segui la pagina LinkedIn di Orbiters, "
-        f"{LINKEDIN_PAGE}. Oggi pomeriggio esce il post con le prime job post per "
-        "Forward Deployed Engineer.\n"
-        "\n"
+    )
+    enter_html = (
+        '<p style="margin:0 0 24px 0;">la tua area su Orbiters è aperta. Si entra con la '
+        "tua email, senza password: ti mandiamo un link e sei dentro.</p>"
+        + _button(safe_accedi, "Entra nella tua area")
+        + f'<p {small}word-break:break-all;">'
+        "Se il bottone non si apre, copia questo indirizzo nel browser:<br>"
+        f"{_quiet_link(safe_accedi, safe_accedi)}</p>"
+    )
+
+    if kind == "persona":
+        card_text = (
+            f"La tua scheda è completa: sei {posizione}, e le aziende possono trovarti."
+            if posizione
+            else "La tua scheda è completa: le aziende possono trovarti."
+        )
+        middle_text = enter_text + "\n" + card_text + "\n"
+        middle_html = enter_html + f"<p {paragraph}>{e(card_text)}</p>"
+    elif kind == "admin":
+        assert summary is not None
+        found: list[tuple[str, str]] = [("Nome", f"{summary.nome} {summary.cognome}")]
+        if summary.posizione:
+            found.append(("Posizione", summary.posizione))
+        if summary.linkedin_url:
+            found.append(("LinkedIn", summary.linkedin_url))
+        if summary.links:
+            found.append(("Link", ", ".join(summary.links)))
+        intro = (
+            "Abbiamo preparato la tua scheda con quello che si trova in pubblico su di te. "
+            "Ecco cosa c'è:"
+        )
+        missing = (
+            "Manca la tua parte: il CV, la tariffa a giornata, come preferisci lavorare. "
+            "Sono le cose che le aziende cercano: entra e completala."
+        )
+        offer = (
+            "Una cosa in più: abbiamo già un'offerta in linea con il tuo profilo. Se vuoi "
+            "approfondire, rispondi a questa mail e ne parliamo."
+        )
+        middle_text = (
+            enter_text
+            + "\n"
+            + intro
+            + "\n"
+            + "".join(f"- {label}: {value}\n" for label, value in found)
+            + "\n"
+            + missing
+            + "\n"
+            + "\n"
+            + offer
+            + "\n"
+        )
+        middle_html = (
+            enter_html
+            + f"<p {paragraph}>{e(intro)}</p>"
+            + '<ul style="margin:8px 0 0 0;padding:0 0 0 22px;">'
+            + "".join(
+                f"<li {li}><strong>{e(label)}:</strong> {e(value)}</li>" for label, value in found
+            )
+            + "</ul>"
+            + f"<p {paragraph}>{e(missing)}</p>"
+            + f"<p {paragraph}>{e(offer)}</p>"
+        )
+    elif kind == "nessuna":
+        assert wizard_link is not None
+        safe_wizard = e(wizard_link, quote=True)
+        intro = (
+            "la tua area su Orbiters è aperta, ma la tua scheda non siamo riusciti a "
+            "prepararla noi: in pubblico non c'era abbastanza. Compilala tu, ci vogliono "
+            "cinque minuti."
+        )
+        after = f"Da quel momento entri con la tua email, senza password, da qui: {accedi_link}"
+        middle_text = intro + "\n\n" + wizard_link + "\n\n" + after + "\n"
+        middle_html = (
+            f'<p style="margin:0 0 24px 0;">{e(intro)}</p>'
+            + _button(safe_wizard, "Compila il tuo profilo")
+            + f'<p {small}word-break:break-all;">'
+            "Se il bottone non si apre, copia questo indirizzo nel browser:<br>"
+            f"{_quiet_link(safe_wizard, safe_wizard)}</p>"
+            + f"<p {paragraph}>Da quel momento entri con la tua email, senza password, da "
+            f"{_quiet_link(safe_accedi, safe_accedi)}.</p>"
+        )
+    else:
+        raise ValueError(f"kind sconosciuto: {kind}")
+
+    text = (
+        f"{greeting}\n\n" + middle_text + "\n" + perks_text + "\n" + linkedin_text + "\n"
         "Noi di Orbiters\n"
     )
-    e = html_escape.escape
-    safe_link = e(accedi_link, quote=True)
-    paragraph = 'style="margin:24px 0 0 0;"'
-    small = f'style="margin:24px 0 0 0;font-size:13px;line-height:1.5;color:{INK_QUIET};'
     body = "\n".join(
         (
-            f'<p style="margin:0 0 20px 0;">Ciao {e(nome)},</p>',
-            '<p style="margin:0 0 24px 0;">la tua area su Orbiters è aperta. Si entra con la '
-            "tua email, senza password: ti mandiamo un link e sei dentro.</p>",
-            _button(safe_link, "Entra nella tua area"),
-            f'<p {small}word-break:break-all;">'
-            "Se il bottone non si apre, copia questo indirizzo nel browser:<br>"
-            f"{_quiet_link(safe_link, safe_link)}</p>",
-            f"<p {paragraph}>{e(card)}</p>",
-            f"<p {paragraph}>Dentro trovi i vantaggi della community, disponibili dopo il "
-            "login:</p>",
-            '<ul style="margin:8px 0 0 0;padding:0 0 0 22px;">'
-            f'<li style="margin:0 0 8px 0;">{e(PIGROCRM_LINE)}</li>'
-            f"<li>{e(GUIDE_LINE)}</li></ul>",
-            f"<p {paragraph}>Un'altra cosa: segui "
-            f"{_quiet_link(LINKEDIN_PAGE, 'la pagina LinkedIn di Orbiters')}. Oggi "
-            "pomeriggio esce il post con le prime job post per Forward Deployed "
-            "Engineer.</p>",
+            f'<p style="margin:0 0 20px 0;">{e(greeting)}</p>',
+            middle_html,
+            perks_html,
+            linkedin_html,
             f"<p {paragraph}>Noi di Orbiters</p>",
         )
     )

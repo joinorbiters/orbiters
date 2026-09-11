@@ -6,7 +6,7 @@ import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orbiters_core.admin import AdminService
@@ -14,9 +14,8 @@ from orbiters_core.config import Settings, get_settings
 from orbiters_core.conversions import pixel_from_settings
 from orbiters_core.db import create_engine_from_settings, session_factory
 from orbiters_core.errors import DomainError
-from orbiters_core.mail import EmailSender, sender_from_settings, welcome_mail
-from orbiters_core.models import Freelancer
-from orbiters_core.schemas import FreelancerRead
+from orbiters_core.mail import CardSummary, EmailSender, sender_from_settings, welcome_mail
+from orbiters_core.models import Freelancer, Signup
 
 
 def createadmin(email: str | None, nome: str | None) -> int:
@@ -82,27 +81,58 @@ def conversions_check() -> int:
 def send_welcome(
     session: Session, settings: Settings, sender: EmailSender, emails: Sequence[str] | None
 ) -> list[tuple[str, str]]:
-    """One welcome mail per freelancer card (ORB-157): the addresses given, or every card
-    when `emails` is `None`. Answers one line per address -- `inviata`, `rifiutata dal
-    provider`, or `nessuna scheda` -- which is the whole record of the mailing."""
-    stmt = select(Freelancer).order_by(Freelancer.created_at, Freelancer.id)
+    """One welcome mail per address the hub knows (ORB-157): every signup and every card,
+    or the addresses given. The voice follows what we hold for the address: a card the
+    person filled, a card we drafted from public sources, or no card at all (the wizard,
+    then). Answers one line per address -- `inviata` with the kind, or `rifiutata dal
+    provider` -- which is the whole record of the mailing."""
+    cards = {
+        row.email.lower(): row
+        for row in session.scalars(
+            select(Freelancer).order_by(Freelancer.created_at, Freelancer.id)
+        ).all()
+    }
+    signups = {
+        row.email.lower(): row
+        for row in session.scalars(select(Signup).order_by(Signup.created_at, Signup.id)).all()
+    }
     if emails is not None:
-        wanted = [email.strip().lower() for email in emails]
-        stmt = stmt.where(func.lower(Freelancer.email).in_(wanted))
-    rows = {row.email.lower(): row for row in session.scalars(stmt).all()}
-    targets = [email.strip().lower() for email in emails] if emails is not None else list(rows)
-    link = f"{settings.hub_url.rstrip('/')}/accedi"
+        targets = [email.strip().lower() for email in emails]
+    else:
+        targets = list(dict.fromkeys([*signups, *cards]))
+    base = settings.hub_url.rstrip("/")
+    accedi, wizard = f"{base}/accedi", f"{base}/freelance"
     outcomes: list[tuple[str, str]] = []
     for email in targets:
-        row = rows.get(email)
-        if row is None:
-            outcomes.append((email, "nessuna scheda"))
+        card = cards.get(email)
+        signup = signups.get(email)
+        if card is None and signup is None:
+            outcomes.append((email, "indirizzo sconosciuto"))
             continue
-        card = FreelancerRead.model_validate(row)
-        mail = welcome_mail(
-            row.email, row.nome, link, completa=card.completa, posizione=row.posizione
-        )
-        outcomes.append((email, "inviata" if sender.send(mail) else "rifiutata dal provider"))
+        if card is not None and card.compilata_da == "persona":
+            kind = "persona"
+            mail = welcome_mail(card.email, card.nome, accedi, kind=kind, posizione=card.posizione)
+        elif card is not None:
+            kind = "admin"
+            mail = welcome_mail(
+                card.email,
+                card.nome,
+                accedi,
+                kind=kind,
+                summary=CardSummary(
+                    nome=card.nome,
+                    cognome=card.cognome,
+                    posizione=card.posizione,
+                    linkedin_url=card.linkedin_url,
+                    links=tuple(card.links),
+                ),
+            )
+        else:
+            assert signup is not None
+            kind = "nessuna"
+            mail = welcome_mail(signup.email, signup.nome, accedi, kind=kind, wizard_link=wizard)
+        sent = sender.send(mail)
+        outcomes.append((email, f"inviata ({kind})" if sent else "rifiutata dal provider"))
     return outcomes
 
 
@@ -123,7 +153,7 @@ def welcome(emails: Sequence[str], everyone: bool) -> int:
         session.close()
     for email, outcome in outcomes:
         print(f"{email}: {outcome}")
-    return 0 if all(outcome == "inviata" for _, outcome in outcomes) else 1
+    return 0 if all(outcome.startswith("inviata") for _, outcome in outcomes) else 1
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -137,7 +167,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     admin.add_argument("--email")
     admin.add_argument("--nome")
     welcome_parser = sub.add_parser(
-        "welcome", help="Manda la mail «la tua area è aperta» a una scheda o a tutte"
+        "welcome",
+        help="Manda la mail «la tua area è aperta» a un indirizzo o a tutti quelli noti",
     )
     welcome_parser.add_argument("--email", action="append", default=[])
     welcome_parser.add_argument("--all", action="store_true")
