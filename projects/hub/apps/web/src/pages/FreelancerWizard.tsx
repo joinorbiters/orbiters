@@ -182,11 +182,40 @@ export const FREELANCER_STEPS: Step<FreelancerApplication>[] = [
   },
 ]
 
+/** The perk the URL says the person came for, if any: `?perk=guida` is what the
+ *  landing's «Entra e scaricala» button carries (ORB-154), so the wizard can say why it
+ *  is worth finishing. Anything else is nobody's business and reads as no perk. */
+export function readPerk(search: string): 'guida' | null {
+  return new URLSearchParams(search).get('perk') === 'guida' ? 'guida' : null
+}
+
+/** One line above the wizard for whoever came for the guide: what finishing buys them,
+ *  and where the file will be. The site's own shapes -- an ink line, a stepped shadow,
+ *  the gold the deck uses for its second accent -- inside the panel, over the progress
+ *  bar, so it reads as part of this page and not as a notice dropped on it. */
+function GuideBanner() {
+  return (
+    <aside
+      role="note"
+      aria-label="Perché completare l’iscrizione"
+      className="mx-auto mb-8 w-full max-w-2xl border-(length:--landing-border-width) bg-(--color-royal-gold) px-4 py-3 text-(--landing-ink) shadow-sm"
+    >
+      <p className="font-medium">
+        Completa l’iscrizione per scaricare la guida per diventare un freelance tech.
+      </p>
+      <p className="mt-1 text-sm">
+        È un PDF: lo trovi nella tua area appena sei dentro. Gratis, come PigroCRM.
+      </p>
+    </aside>
+  )
+}
+
 export function FreelancerWizard() {
   const navigate = useNavigate()
   // The URL's own query string, from the router rather than `window`: the attribution
   // is whatever this page was opened with.
   const searchStr = useLocation({ select: (location) => location.searchStr })
+  const perk = readPerk(searchStr)
   const [value, setValue] = useState<FreelancerApplication>(EMPTY)
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<{ message: string; step?: string } | null>(null)
@@ -209,15 +238,18 @@ export function FreelancerWizard() {
   }
 
   return (
-    <Wizard
-      title="Entra in Orbiters"
-      steps={FREELANCER_STEPS}
-      value={value}
-      set={(patch) => setValue((current) => ({ ...current, ...patch }))}
-      onSubmit={() => void submit()}
-      submitting={submitting}
-      submitError={submitError}
-      submitLabel="Invia la candidatura"
-    />
+    <>
+      {perk === 'guida' && <GuideBanner />}
+      <Wizard
+        title="Entra in Orbiters"
+        steps={FREELANCER_STEPS}
+        value={value}
+        set={(patch) => setValue((current) => ({ ...current, ...patch }))}
+        onSubmit={() => void submit()}
+        submitting={submitting}
+        submitError={submitError}
+        submitLabel="Invia la candidatura"
+      />
+    </>
   )
 }
