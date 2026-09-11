@@ -131,8 +131,10 @@ describe('index.html', () => {
     expect(page).toMatch(/<a class="cta secondary" href="\/hub\/aziende">[^<]+<\/a>/)
     // The old door, the email form on `/`, is not what this page sells any more.
     expect(page).not.toMatch(/<a class="cta" href="\/orbiters">/)
-    // Whoever is already in still finds their space.
-    expect(page).toContain('href="https://pigro.joinorbiters.com/app/registrati"')
+    // Whoever is already in finds the CRM through its own page (ORB-165): the landing
+    // no longer links the registration form directly.
+    expect(page).toMatch(/<a class="cta" href="\/pigrocrm">Scopri PigroCRM<\/a>/)
+    expect(page).not.toContain('pigro.joinorbiters.com/app/registrati')
     // No invented plan or trial: the one price is "be in the community".
     expect(page).not.toMatch(/Prova gratis|abbonamento|piano (Pro|Business)/i)
   })
