@@ -43,7 +43,7 @@ import { REDIRECTS, route } from './path-map-plugin'
  *   cannot, follow it further.
  */
 
-const PAGE_FILES = ['index.html', 'orbiters.html', 'privacy.html', 'termini.html'] as const
+const PAGE_FILES = ['index.html', 'orbiters.html', 'privacy.html', 'termini.html', 'pitch.html'] as const
 type PageFile = (typeof PAGE_FILES)[number]
 
 const SRC_DIR = join(__dirname)

@@ -36,6 +36,7 @@ export default defineConfig({
         privacy: path.resolve(__dirname, 'src/privacy.html'),
         termini: path.resolve(__dirname, 'src/termini.html'),
         orbiters: path.resolve(__dirname, 'src/orbiters.html'),
+        pitch: path.resolve(__dirname, 'src/pitch.html'),
       },
     },
   },

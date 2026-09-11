@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { expect, test } from '@playwright/test'
 
-const PAGES = ['/', '/pigrocrm', '/privacy', '/termini', '/orbiters'] as const
+const PAGES = ['/', '/pigrocrm', '/privacy', '/termini', '/orbiters', '/pitch'] as const
 const BUDGET_BYTES = 40 * 1024
 // The one host these pages may ever talk to besides their own: the ChatGPT Ads
 // measurement SDK. "May ever" is the whole subtlety -- `consent.js` injects it only

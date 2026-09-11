@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Orbiters — il pitch</title>
+    <meta name="description" content="Il pitch di Orbiters: la community di chi fa software in proprio in Italia. Diciannove slide, da Birra&amp;Build a oggi." />
+    <meta name="robots" content="noindex" />
+    <link rel="icon" type="image/svg+xml" href="./orbiters-logo.svg" />
+    <!-- The pitch deck, as Ivan presents it (ORB-153): the same document as
+      ~/Desktop/orbiters-pitch, served here so a link can carry it. Arrow keys, space,
+      swipe and the wheel move between slides; F is full screen; ?static=1 stacks them. -->
+    <link rel="stylesheet" href="./pitch.css" />
+    <!-- Without JavaScript the deck is its static mode: every slide stacked and visible,
+      every reveal finished, no controls. The same rules `?static=1` switches on, applied
+      from here because nothing else can add the class. -->
+    <noscript>
+      <style>
+        /* `html body` on every selector: the build orders this block before the
+           stylesheet, so the rules need the extra weight to win. */
+        html body { overflow: auto; }
+        html body .stage { position: static; transform: none; width: 1920px; height: auto; }
+        html body .slide { position: relative; opacity: 1; visibility: visible; margin-bottom: 40px; }
+        html body [data-reveal] { opacity: 1; transform: none; transition: none; }
+        html body .mark-in { animation: none; }
+        html body .nav, html body .progress, html body .counter, html body .hint { display: none; }
+        html body h1 .role::after { display: none; }
+      </style>
+    </noscript>
+  </head>
+  <body>
+    <div class="stage">
+
+      <!-- 1 · Cover -->
+      <section class="slide" data-seed="3" data-band="diagonal">
+        <canvas></canvas>
+        <div class="box" style="left: 120px; right: 120px; top: 96px; bottom: 130px; padding: 64px 84px;">
+          <div class="brand" style="position: static;"><span class="glyph"></span>Orbiters</div>
+          <div class="center" style="height: 100%; margin-top: -60px;">
+            <p class="kicker" data-reveal style="--d: 0.1s;">Birra&amp;Build · settembre 2026</p>
+            <h1 data-reveal style="--d: 0.25s; margin-top: 36px;"><span class="role" data-roles="Developer|AI engineer|CTO|Fractional CTO|Freelance">Freelance</span>,<br />ma non da soli.</h1>
+            <p class="lead" data-reveal style="--d: 0.5s; margin-top: 44px; font-size: 40px; max-width: 26em;">La community di chi fa software in proprio in Italia.</p>
+          </div>
+          <p class="label" style="position: absolute; left: 84px; bottom: 56px; font-size: 26px;">Ivan Sala · joinorbiters.com</p>
+        </div>
+      </section>
+
+      <!-- 7 · Il problema -->
+      <section class="slide" data-seed="21" data-band="bottomleft">
+        <canvas></canvas>
+        <div class="box" style="left: 120px; right: 120px; top: 72px; bottom: 116px; padding: 56px 84px;">
+          <div class="brand" style="position: static;"><span class="glyph"></span>Orbiters</div>
+          <div class="center" style="height: calc(100% - 60px);">
+            <p class="kicker" data-reveal>Il problema</p>
+            <h2 class="statement" data-reveal style="--d: 0.15s; margin-top: 24px;">Chi fa software in proprio oggi fa <span class="accent">tutto da solo</span>.</h2>
+            <div class="cols" style="margin-top: 80px;">
+              <div data-reveal style="--d: 0.5s;"><h3 style="font-size: 54px;">Il lavoro non arriva</h3><p>se non col passaparola.</p></div>
+              <div data-reveal style="--d: 0.65s;"><h3 style="font-size: 54px;">Perde ore</h3><p>tra preventivi, fatture e solleciti.</p></div>
+              <div data-reveal style="--d: 0.8s;"><h3 style="font-size: 54px;">Non ha nessuno</h3><p>con cui confrontarsi.</p></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 8 · L'obiettivo -->
+      <section class="slide dark" data-seed="5" data-band="topright">
+        <canvas></canvas>
+        <div class="brand"><span class="glyph"></span>Orbiters</div>
+        <div class="pad center">
+          <p class="kicker" data-reveal>L'obiettivo</p>
+          <h2 class="statement" data-reveal style="--d: 0.2s; margin-top: 24px; font-size: 124px;">Il posto dove chi fa software in proprio trova <span class="accent">progetti, colleghi e strumenti</span>.</h2>
+        </div>
+        <div class="foot"><span>joinorbiters.com</span><span></span></div>
+      </section>
+
+      <!-- 9 · Una community -->
+      <section class="slide" data-seed="9" data-band="topright">
+        <canvas></canvas>
+        <div class="box" style="left: 120px; right: 120px; top: 72px; bottom: 116px; padding: 56px 84px;">
+          <div class="brand" style="position: static;"><span class="glyph"></span>Orbiters</div>
+          <div class="center" style="height: calc(100% - 60px);">
+            <p class="kicker" data-reveal>Cos'è Orbiters</p>
+            <h2 class="statement small" data-reveal style="--d: 0.15s; margin-top: 20px;">Una community. Tre cose che oggi cerchi in tre posti diversi.</h2>
+            <div class="cols" style="margin-top: 80px;">
+              <div data-reveal style="--d: 0.45s;"><div class="sw" style="background: var(--ink);"></div><h3>Lavoro</h3><p>Progetti concreti di aziende, scelti per te. Niente gare al ribasso.</p></div>
+              <div data-reveal style="--d: 0.6s;"><div class="sw" style="background: var(--gold);"></div><h3>Persone</h3><p>Colleghi a cui chiedere quanto farsi pagare, come dire di no, cosa firmare.</p></div>
+              <div data-reveal style="--d: 0.75s;"><div class="sw" style="background: var(--melon);"></div><h3>Strumenti</h3><p>PigroCRM e la guida per chi inizia. Gratis per chi è dentro.</p></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2 · Il commitment -->
+      <section class="slide" data-seed="11" data-band="topright">
+        <canvas></canvas>
+        <div class="box" style="left: 120px; right: 120px; top: 72px; bottom: 116px; padding: 56px 84px;">
+          <div class="brand" style="position: static;"><span class="glyph"></span>Orbiters</div>
+          <p class="kicker" data-reveal style="margin-top: 40px;">Il commitment</p>
+          <h2 class="statement small" data-reveal style="--d: 0.15s; margin-top: 12px;">A Birra&amp;Build abbiamo promesso quattro cose.</h2>
+          <div class="agenda" style="margin-top: 60px;">
+            <div data-reveal style="--d: 0.4s;"><div class="n-row"><div class="n">01</div><div class="tick mark-in" style="--d: 1.2s;">✓</div></div><div class="bar"></div><h3>Avviare<br />la realtà</h3></div>
+            <div data-reveal style="--d: 0.55s;"><div class="n-row"><div class="n">02</div><div class="tick mark-in" style="--d: 1.35s;">✓</div></div><div class="bar"></div><h3>Una landing<br />page</h3></div>
+            <div data-reveal style="--d: 0.7s;"><div class="n-row"><div class="n">03</div><div class="tick mark-in" style="--d: 1.5s;">✓</div></div><div class="bar"></div><h3>La presenza<br />social</h3></div>
+            <div data-reveal style="--d: 0.85s;"><div class="n-row"><div class="n">04</div><div class="tick mark-in" style="--d: 1.65s; background: var(--melon); color: #fff;">✓</div></div><div class="bar"></div><h3>Tre<br />utenti</h3></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3 · 58 iscritti -->
+      <section class="slide dark" data-seed="23" data-band="bottomleft">
+        <canvas></canvas>
+        <div class="brand"><span class="glyph"></span>Orbiters</div>
+        <div class="pad center">
+          <p class="kicker" data-reveal>Cinque giorni dopo</p>
+          <div style="display: flex; align-items: flex-end; gap: 60px; margin-top: 30px;">
+            <div class="big" data-reveal style="--d: 0.2s; font-size: 380px;"><span data-count="58">0</span></div>
+            <div data-reveal style="--d: 0.5s; padding-bottom: 40px;">
+              <div class="label" style="font-size: 54px; color: #fff; font-weight: 600; line-height: 1.05;">iscritti.</div>
+              <div class="label" style="font-size: 40px; margin-top: 14px;">Ne avevamo promessi tre.</div>
+            </div>
+          </div>
+          <p class="statement small" data-reveal style="--d: 0.9s; margin-top: 50px;"><span class="accent">53 talenti</span>, <span class="accent">5 aziende</span>, e il <span class="accent">primo match</span> già chiuso.</p>
+        </div>
+        <div class="foot"><span>joinorbiters.com</span><span></span></div>
+      </section>
+
+      <!-- 4 · The numbers -->
+      <section class="slide" data-seed="19" data-band="topright">
+        <canvas></canvas>
+        <div class="box" style="left: 120px; right: 120px; top: 72px; bottom: 116px; padding: 56px 84px;">
+          <div class="brand" style="position: static;"><span class="glyph"></span>Orbiters</div>
+          <div class="center" style="height: calc(100% - 60px);">
+          <p class="kicker" data-reveal>I numeri della prima settimana</p>
+          <div class="stats" style="margin-top: 60px; gap: 70px 48px;">
+            <div data-reveal style="--d: 0.2s;"><div class="n"><span data-count="15">0</span><small>k+</small></div><div class="l">visualizzazioni su LinkedIn</div></div>
+            <div data-reveal style="--d: 0.35s;"><div class="n"><span data-count="500">0</span><small>+</small></div><div class="l">visite uniche al giorno</div></div>
+            <div data-reveal style="--d: 0.5s;"><div class="n"><span data-count="30">0</span></div><div class="l">follower della pagina</div></div>
+            <div data-reveal style="--d: 0.65s;"><div class="n"><span data-count="10">0</span></div><div class="l">stelle su GitHub</div></div>
+            <div data-reveal style="--d: 0.8s;"><div class="n"><span data-count="5">0</span></div><div class="l">aziende con un progetto</div></div>
+            <div data-reveal style="--d: 0.95s;"><div class="n accent"><span data-count="1">0</span></div><div class="l">match già chiuso</div></div>
+          </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 5 · Cosa è andato online -->
+      <section class="slide" data-seed="7" data-band="bottomleft">
+        <canvas></canvas>
+        <div class="box" style="left: 120px; right: 120px; top: 72px; bottom: 116px; padding: 56px 84px;">
+          <div class="brand" style="position: static;"><span class="glyph"></span>Orbiters</div>
+          <p class="kicker" data-reveal style="margin-top: 40px;">Cosa è andato online</p>
+          <h2 class="statement small" data-reveal style="--d: 0.15s; margin-top: 12px;">Quattro cose, in cinque giorni.</h2>
+          <div class="list" style="margin-top: 50px;">
+            <div class="row" data-reveal style="--d: 0.4s;"><span class="n">01</span><span class="t">Landing page</span></div>
+            <div class="row" data-reveal style="--d: 0.55s;"><span class="n">02</span><span class="t">Iscrizione e area privata</span></div>
+            <div class="row" data-reveal style="--d: 0.7s;"><span class="n">03</span><span class="t">Pannello amministrativo</span></div>
+            <div class="row" data-reveal style="--d: 0.85s; border-bottom: 0;"><span class="n">04</span><span class="t">PigroCRM per i membri</span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 6 · Costruito in pubblico -->
+      <section class="slide dark" data-seed="12" data-band="topright">
+        <canvas></canvas>
+        <div class="brand"><span class="glyph"></span>Orbiters</div>
+        <div class="pad">
+          <p class="kicker" data-reveal>Come ci siamo arrivati</p>
+          <h2 class="statement" data-reveal style="--d: 0.15s; margin-top: 24px;">Costruito <span class="accent">in pubblico</span>, un post al giorno.</h2>
+          <div class="stats aligned split" style="grid-template-columns: 1.25fr 1.25fr 1fr 1fr; margin-top: 90px; gap: 40px;">
+            <div data-reveal style="--d: 0.5s;"><div class="n" style="font-size: 64px; line-height: 1.1;">Build in public</div><div class="l">Calendario editoriale founder-led, dal profilo di Ivan e dalla pagina.</div></div>
+            <div data-reveal style="--d: 0.65s;"><div class="n" style="font-size: 64px; line-height: 1.1;">Post sponsorizzati</div><div class="l">I contenuti che funzionano, spinti a developer e CTO in proprio.</div></div>
+            <div data-reveal style="--d: 0.8s;"><div class="n"><span data-count="10">0</span><small>k+</small></div><div class="l logo"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#fff" d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>LinkedIn Ads</div></div>
+            <div data-reveal style="--d: 0.95s;"><div class="n"><span data-count="20">0</span><small>k+</small></div><div class="l logo"><svg aria-hidden="true" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path fill="#fff" d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></svg>OpenAI Ads</div></div>
+          </div>
+        </div>
+        <div class="foot"><span>joinorbiters.com</span><span></span></div>
+      </section>
+
+      
+
+      
+
+      
+
+      <!-- 10 · Landing -->
+      <section class="slide" data-seed="14" data-band="bottomleft">
+        <canvas></canvas>
+        <div class="brand"><span class="glyph"></span>Orbiters</div>
+        <div style="position: absolute; left: 120px; top: 240px; width: 560px;">
+          <p class="kicker" data-reveal>La porta d'ingresso</p>
+          <h2 class="statement" data-reveal style="--d: 0.15s; margin-top: 24px; font-size: 84px;">Due minuti per entrare.</h2>
+          <p class="label" data-reveal style="--d: 0.5s; margin-top: 30px; font-size: 26px; font-weight: 600; color: var(--melon);">joinorbiters.com</p>
+        </div>
+        <div class="mac" data-reveal style="--d: 0.3s; left: 760px; right: 120px; top: 140px; bottom: 116px;"><div class="bar"><i></i><i></i><i></i><span>joinorbiters.com</span></div><img src="./pitch/shots-landing.webp" alt="La landing page di Orbiters" /></div>
+        <div class="foot"><span>joinorbiters.com</span><span></span></div>
+      </section>
+
+      <!-- 11 · La guida -->
+      <section class="slide" data-seed="8" data-band="topright">
+        <canvas></canvas>
+        <div class="brand"><span class="glyph"></span>Orbiters</div>
+        <div style="position: absolute; left: 120px; top: 240px; width: 560px;">
+          <p class="kicker" data-reveal>Il primo perk</p>
+          <h2 class="statement" data-reveal style="--d: 0.15s; margin-top: 24px; font-size: 76px;">La guida per iniziare ad essere un freelance.</h2>
+        </div>
+        <div class="mac pdf" data-reveal style="--d: 0.3s; left: 760px; right: 120px; top: 140px; bottom: 116px;">
+          <div class="bar"><i></i><i></i><i></i><span><b>PDF</b> guida-primi-passi.pdf</span><em>7 pagine</em></div>
+          <div class="sheet">
+            <img data-reveal style="--d: 0.45s;" src="./pitch/guida-1.webp" alt="Copertina della guida" />
+            <img data-reveal style="--d: 0.6s;" src="./pitch/guida-2.webp" alt="Pagina 2" />
+          </div>
+        </div>
+        <div class="foot"><span>joinorbiters.com</span><span></span></div>
+      </section>
+
+      <!-- 12 · PigroCRM -->
+      <section class="slide" data-seed="16" data-band="bottomleft">
+        <canvas></canvas>
+        <div class="brand"><span class="glyph"></span>Orbiters</div>
+        <div style="position: absolute; left: 120px; top: 240px; width: 560px;">
+          <p class="kicker" data-reveal>Il secondo perk</p>
+          <h2 class="statement" data-reveal style="--d: 0.15s; margin-top: 24px; font-size: 84px;">PigroCRM.</h2>
+          <p class="lead" data-reveal style="--d: 0.35s; margin-top: 30px; font-size: 36px;">Clienti, offerte, fatture e pagamenti in un posto solo. Un assistente AI fa il lavoro noioso.</p>
+          <p class="label" data-reveal style="--d: 0.5s; margin-top: 30px; font-size: 32px; font-weight: 600; color: var(--melon);">Gratis per chi è dentro.</p>
+        </div>
+        <div class="mac" data-reveal style="--d: 0.3s; left: 760px; right: 120px; top: 140px; bottom: 116px;"><div class="bar"><i></i><i></i><i></i><span>pigro.joinorbiters.com</span></div><img src="./pitch/shots-crm-home.webp" alt="La home di uno spazio PigroCRM" /></div>
+        <div class="foot"><span>joinorbiters.com</span><span></span></div>
+      </section>
+
+      <!-- 13 · Il mercato -->
+      <section class="slide" data-seed="31" data-band="diagonal">
+        <canvas></canvas>
+        <div class="box" style="left: 120px; right: 120px; top: 72px; bottom: 116px; padding: 56px 84px;">
+          <div class="brand" style="position: static;"><span class="glyph"></span>Orbiters</div>
+          <div class="center" style="height: calc(100% - 60px);">
+            <p class="kicker" data-reveal>Il mercato</p>
+            <div class="stats" style="margin-top: 50px; gap: 60px;">
+              <div data-reveal style="--d: 0.2s;"><div class="n" style="font-size: 190px;"><span data-count="494">0</span><small>k</small></div><div class="l">sviluppatori software in Italia</div></div>
+              <div data-reveal style="--d: 0.4s;"><div class="n accent" style="font-size: 190px;"><span data-count="236">0</span><small>k</small></div><div class="l">professionisti ICT che mancano: una posizione su due resta scoperta</div></div>
+              <div data-reveal style="--d: 0.6s;"><div class="n" style="font-size: 190px;">5,2<small>mln</small></div><div class="l">lavoratori indipendenti, metà delle nuove partite IVA in forfettario</div></div>
+            </div>
+            <p class="label" data-reveal style="--d: 0.9s; margin-top: 70px; font-size: 20px; max-width: none;">Fonti: Bitboss/Doinnovation; Osservatorio AICA, Anitec-Assinform, Assintel, nov. 2025; ISTAT e Osservatorio MEF partite IVA 2025.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 14 · Perché ora -->
+      <section class="slide dark" data-seed="27" data-band="bottomleft">
+        <canvas></canvas>
+        <div class="brand"><span class="glyph"></span>Orbiters</div>
+        <div class="pad" style="display: grid; grid-template-columns: 1fr 1fr; gap: 80px; align-items: center;">
+          <div>
+            <p class="kicker" data-reveal>Perché ora</p>
+            <h2 class="statement" data-reveal style="--d: 0.15s; margin-top: 24px; font-size: 84px;">Con l'AI un developer consegna quanto un team. <span class="accent">Il problema diventa trovare il progetto.</span></h2>
+          </div>
+          <div data-reveal style="--d: 0.5s;">
+            <div class="big" style="font-size: 260px;">+<span data-count="40">0</span><small>%</small></div>
+            <div class="label" style="font-size: 44px; margin-top: 20px;">domanda di CTO frazionali, anno su anno.</div>
+            <div class="label" style="font-size: 20px; margin-top: 40px; opacity: 0.7;">Fonte: CTO.Clinic, Fractional CTO Market Report 2024–2025. Le piattaforme freelance in Europa valgono 1,5–2,7 mld $ e crescono del 17% l'anno (Grand View Research, KBV Research).</div>
+          </div>
+        </div>
+        <div class="foot"><span>joinorbiters.com</span><span></span></div>
+      </section>
+
+      <!-- 15 · Competitor -->
+      <section class="slide" data-seed="17" data-band="topright">
+        <canvas></canvas>
+        <div class="brand"><span class="glyph"></span>Orbiters</div>
+        <div class="pad">
+          <p class="kicker" data-reveal>I competitor</p>
+          <h2 class="statement small" data-reveal style="--d: 0.15s; margin-top: 24px;">Tutti fanno il match. <span class="accent">Nessuno fa la community.</span></h2>
+          <div class="tiles" style="margin-top: 70px;">
+            <div class="tile" data-reveal style="--d: 0.4s;"><div><h3>Cosmico</h3><p>Rete italiana di freelance digitali: sviluppo, design e marketing insieme.</p></div><div class="meta">20.000+ talenti · ~18 M€ raccolti</div></div>
+            <div class="tile" data-reveal style="--d: 0.55s;"><div><h3>DeveloperWay</h3><p>Rete milanese di developer freelance con talent manager e corsi.</p></div><div class="meta">2.000+ developer</div></div>
+            <div class="tile" data-reveal style="--d: 0.7s;"><div><h3>Odda</h3><p>Hub che seleziona freelance IT per grandi aziende e PA.</p></div><div class="meta">~400 freelance · 1 M€ nel 2023</div></div>
+            <div class="tile" data-reveal style="--d: 0.85s;"><div><h3>Shakers</h3><p>Piattaforma spagnola: team di freelance tech e agenti AI per l'enterprise.</p></div><div class="meta">Serie A 14 M€ · 450+ clienti</div></div>
+          </div>
+        </div>
+        <div class="foot"><span>joinorbiters.com</span><span></span></div>
+      </section>
+
+      <!-- 16 · Come ci differenziamo -->
+      <section class="slide dark" data-seed="4" data-band="topright">
+        <canvas></canvas>
+        <div class="brand"><span class="glyph"></span>Orbiters</div>
+        <div class="pad center">
+          <p class="kicker" data-reveal>Come ci differenziamo</p>
+          <h2 class="statement" data-reveal style="--d: 0.15s; margin-top: 24px;">Gli altri trovano il lavoro. <span class="accent">Noi restiamo anche dopo.</span></h2>
+          <div class="flow" style="margin-top: 110px;">
+            <div class="step" data-reveal style="--d: 0.5s;"><span class="t">Trovi il progetto</span><small>scelto per te, da chi fa il tuo mestiere</small></div>
+            <svg class="arrow" data-reveal style="--d: 0.65s;" viewBox="0 0 40 80" width="40" height="80" aria-hidden="true"><path d="M6 6 L34 40 L6 74" fill="none" stroke="#f9dc5c" stroke-width="9" stroke-linecap="square" stroke-linejoin="miter"/></svg>
+            <div class="step" data-reveal style="--d: 0.8s;"><span class="t">Lo fai con qualcuno accanto</span><small>colleghi a cui chiedere, strumenti già pronti</small></div>
+            <svg class="arrow" data-reveal style="--d: 0.95s;" viewBox="0 0 40 80" width="40" height="80" aria-hidden="true"><path d="M6 6 L34 40 L6 74" fill="none" stroke="#f9dc5c" stroke-width="9" stroke-linecap="square" stroke-linejoin="miter"/></svg>
+            <div class="step" data-reveal style="--d: 1.1s;"><span class="t">Ti fai pagare</span><small>offerta, fattura, incasso: senza pensarci</small></div>
+          </div>
+        </div>
+        <div class="foot"><span>joinorbiters.com</span><span></span></div>
+      </section>
+
+      <!-- 17 · Roadmap -->
+      <section class="slide" data-seed="9" data-band="topright">
+        <canvas></canvas>
+        <div class="box" style="left: 120px; right: 120px; top: 72px; bottom: 116px; padding: 56px 84px;">
+          <div class="brand" style="position: static;"><span class="glyph"></span>Orbiters</div>
+          <p class="kicker" data-reveal style="margin-top: 40px;">La roadmap</p>
+          <h2 class="statement small" data-reveal style="--d: 0.15s; margin-top: 12px;">Prima i match, poi il modello,<br />poi la scala.</h2>
+          <div class="road" style="margin-top: 50px;">
+            <div class="now" data-reveal style="--d: 0.4s;"><h3>Ora · settembre 2026</h3><ul>
+              <li>Primi 3 match</li>
+              <li>200 iscritti</li>
+              <li>PigroCRM per tutti</li></ul></div>
+            <div data-reveal style="--d: 0.6s;"><h3>Prossimi 90 giorni</h3><ul>
+              <li>10 match chiusi</li>
+              <li>Modello di ricavo</li>
+              <li>Community viva</li></ul></div>
+            <div class="later" data-reveal style="--d: 0.8s;"><h3>2027</h3><ul>
+              <li>Oltre l'Italia</li>
+              <li>1.000+ freelance</li>
+              <li>100+ match</li></ul></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 18 · Team -->
+      <section class="slide" data-seed="15" data-band="bottomleft">
+        <canvas></canvas>
+        <div class="box" style="left: 120px; right: 120px; top: 72px; bottom: 116px; padding: 56px 84px;">
+          <div class="brand" style="position: static;"><span class="glyph"></span>Orbiters</div>
+          <div>
+            <p class="kicker" data-reveal style="margin-top: 40px;">Il team</p>
+            <h2 class="statement small" data-reveal style="--d: 0.15s; margin-top: 12px; font-size: 74px; white-space: nowrap; max-width: none;">Un founder e una squadra di agenti AI.</h2>
+            <div class="team" style="margin-top: 36px;">
+              <div class="person" data-reveal style="--d: 0.4s;">
+                <img class="photo" src="./pitch/ivan.webp" alt="Ivan Sala" />
+                <h3>Ivan Sala</h3>
+                <p class="role">Founder · fractional CTO, humancraft.tech</p>
+                <p>Più di dieci anni tra sviluppo software e guida di team tech. In passato CTO di Beatdata e founder e CEO di Owlise, private AI platform. Vincitore di oltre dieci hackathon.</p>
+              </div>
+              <div class="person" data-reveal style="--d: 0.6s;">
+                <div class="logos"><span><svg fill="#fff" aria-hidden="true" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"/></svg></span><span><svg aria-hidden="true" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path fill="#fff" d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></svg></span><span><img src="./pitch/orca.webp" alt="Orca AI" /></span></div>
+                <h3>Gli agenti AI</h3>
+                <p class="role">La squadra</p>
+                <p>Sviluppo, contenuti e operazioni li fa una squadra di agenti AI. Una persona rivede tutto prima che vada online. Così landing, iscrizioni, pannello e CRM sono arrivati in cinque giorni.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 19 · Close -->
+      <section class="slide" data-seed="6" data-band="diagonal">
+        <canvas></canvas>
+        <div class="box" style="left: 120px; right: 120px; top: 72px; bottom: 116px; padding: 56px 84px; display: grid; grid-template-columns: 1fr auto; gap: 80px; align-items: center;">
+          <div>
+            <div class="brand" style="position: static;"><span class="glyph"></span>Orbiters</div>
+            <h2 class="h1" data-reveal style="--d: 0.1s; margin-top: 60px; font-size: 140px;">Pronti a entrare<br />in orbita?</h2>
+            <p class="lead" data-reveal style="--d: 0.4s; margin-top: 40px; font-size: 34px;">Cerchiamo aziende con un progetto tech, talenti che fanno software in proprio, e chi vuole dirci dove sbagliamo.</p>
+            <p class="label" data-reveal style="--d: 0.6s; margin-top: 60px; font-size: 24px;">Ivan Sala · joinorbiters.com · github.com/joinorbiters/orbiters</p>
+          </div>
+          <div data-reveal style="--d: 0.3s; text-align: center;">
+            <div class="qrbox"><svg viewBox="0 0 25 25" width="300" height="300" shape-rendering="crispEdges" class="qr"><path class="qrline" stroke="#011936" stroke-width="1.02" d="M0 0.5h7m1 0h1m1 0h2m1 0h2m3 0h7m-25 1h1m5 0h1m1 0h2m2 0h2m4 0h1m5 0h1m-25 1h1m1 0h3m1 0h1m1 0h1m2 0h1m1 0h3m2 0h1m1 0h3m1 0h1m-25 1h1m1 0h3m1 0h1m3 0h4m4 0h1m1 0h3m1 0h1m-25 1h1m1 0h3m1 0h1m1 0h1m1 0h2m4 0h1m1 0h1m1 0h3m1 0h1m-25 1h1m5 0h1m4 0h1m1 0h1m4 0h1m5 0h1m-25 1h7m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h7m-16 1h2m2 0h2m-15 1h1m2 0h10m1 0h1m1 0h2m2 0h1m1 0h3m-25 1h1m1 0h1m1 0h1m2 0h2m1 0h3m2 0h1m3 0h5m-24 1h1m2 0h1m1 0h2m1 0h1m1 0h1m1 0h4m5 0h1m2 0h1m-25 1h2m1 0h2m3 0h1m1 0h1m1 0h1m1 0h3m3 0h5m-20 1h2m2 0h1m2 0h1m1 0h3m1 0h2m4 0h1m-25 1h2m2 0h2m3 0h2m1 0h1m1 0h3m3 0h1m2 0h1m-24 1h2m2 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h3m3 0h5m-25 1h1m1 0h1m1 0h1m3 0h1m1 0h1m1 0h1m1 0h6m1 0h2m1 0h1m-25 1h1m1 0h8m1 0h3m1 0h6m1 0h2m-16 1h2m1 0h2m2 0h2m3 0h1m1 0h2m-24 1h7m1 0h4m2 0h1m1 0h1m1 0h1m1 0h1m3 0h1m-25 1h1m5 0h1m1 0h4m1 0h1m1 0h2m3 0h1m2 0h2m-25 1h1m1 0h3m1 0h1m1 0h2m1 0h2m1 0h7m-21 1h1m1 0h3m1 0h1m1 0h1m1 0h6m1 0h2m4 0h2m-25 1h1m1 0h3m1 0h1m4 0h1m1 0h1m2 0h2m2 0h5m-25 1h1m5 0h1m3 0h2m2 0h1m4 0h2m1 0h3m-25 1h7m1 0h3m1 0h1m3 0h2m3 0h1m2 0h1"/></svg></div>
+            <p class="label" style="margin-top: 32px; font-weight: 600; color: var(--ink); font-size: 32px;">joinorbiters.com</p>
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+    <div class="nav"><button id="prev" aria-label="Precedente">←</button><button id="next" aria-label="Successiva">→</button></div>
+    <div class="progress" id="progress"></div>
+    <div class="counter" id="counter"></div>
+    <div class="hint" id="hint">← → per muoverti · F per schermo intero</div>
+
+    <script>
+      /* --- The field of tiles, deterministic per slide (from the site's field.js). */
+      function hash(x, y) { var n = (x * 374761393 + y * 668265263) | 0; n = ((n ^ (n >>> 13)) * 1274126177) | 0; return ((n ^ (n >>> 16)) >>> 0) / 4294967296 }
+      function lerp(a, b, t) { return a + (b - a) * t }
+      function noise(x, y) { var x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0; fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+        return lerp(lerp(hash(x0, y0), hash(x0 + 1, y0), fx), lerp(hash(x0, y0 + 1), hash(x0 + 1, y0 + 1), fx), fy) }
+      var bands = {
+        diagonal: function (u, v) { return 1 - Math.abs((u + v - 1) * 1.6) },
+        topright: function (u, v) { return (u - 0.35) * 1.3 - v * 0.9 },
+        bottomleft: function (u, v) { return (0.65 - u) * 1.3 - (1 - v) * 0.9 },
+      }
+      var colours = ['#011936', '#f9dc5c', '#465362', '#ed254e']
+      var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'))
+      slides.forEach(function (slide) {
+        var canvas = slide.querySelector('canvas'), ctx = canvas.getContext('2d')
+        var W = 1920, H = 1080, cell = 24, dpr = 2
+        canvas.width = W * dpr; canvas.height = H * dpr; ctx.scale(dpr, dpr)
+        var seed = +slide.dataset.seed || 0, band = bands[slide.dataset.band] || bands.diagonal
+        var dark = slide.classList.contains('dark')
+        var cols = Math.ceil(W / cell), rows = Math.ceil(H / cell)
+        for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+          var density = band(x / cols, y / rows)
+          if (density <= 0) continue
+          var coarse = noise(x * 0.07 + seed, y * 0.07 + seed * 0.3), fine = noise(x * 0.45 - seed, y * 0.45)
+          var v = (coarse * 0.6 + fine * 0.4) * density * 1.4
+          if (v < 0.36) continue
+          if (fine > 0.8 && v < 0.55) continue
+          var pick = v < 0.52 ? 0 : v < 0.6 ? 2 : v < 0.76 ? (fine > 0.55 ? 1 : 0) : 1
+          if (v > 0.5 && hash(x + seed, y) > 0.985) pick = 3
+          if (dark && pick === 0) continue
+          ctx.fillStyle = colours[pick]
+          ctx.fillRect(x * cell + 1, y * cell + 1, cell - 2, cell - 2)
+        }
+      })
+
+      /* --- Static mode for export: everything visible, counters at their final value. */
+      var isStatic = /[?&]static/.test(location.search)
+      if (isStatic) document.body.classList.add('static')
+
+      /* --- Counters. */
+      function runCounters(slide) {
+        slide.querySelectorAll('[data-count]').forEach(function (el) {
+          var target = +el.dataset.count, start = null, dur = 1400
+          var delay = parseFloat(getComputedStyle(el.closest('[data-reveal]') || el).getPropertyValue('--d')) || 0
+          el.textContent = '0'
+          setTimeout(function () {
+            function tick(t) {
+              if (start === null) start = t
+              var p = Math.min(1, (t - start) / dur); p = 1 - Math.pow(1 - p, 3)
+              el.textContent = Math.round(target * p)
+              if (p < 1) requestAnimationFrame(tick)
+            }
+            requestAnimationFrame(tick)
+          }, delay * 1000 + 200)
+        })
+      }
+      if (isStatic) document.querySelectorAll('[data-count]').forEach(function (el) { el.textContent = el.dataset.count })
+
+      /* --- Typewriter on the cover, the landing's own gesture. */
+      var role = document.querySelector('.role')
+      if (role && !isStatic) {
+        var words = role.dataset.roles.split('|'), wi = 0, ci = words[0].length, deleting = false
+        role.textContent = words[0]
+        setTimeout(function step() {
+          var w = words[wi]
+          if (!deleting) { ci++; if (ci > w.length) { deleting = true; setTimeout(step, 1600); return } }
+          else { ci--; if (ci < 0) { deleting = false; wi = (wi + 1) % words.length; ci = 0 } }
+          role.textContent = words[wi].slice(0, Math.max(0, ci))
+          setTimeout(step, deleting ? 45 : 90)
+        }, 2200)
+      }
+
+      /* --- Navigation. */
+      var current = -1
+      var progress = document.getElementById('progress'), counter = document.getElementById('counter'), hint = document.getElementById('hint')
+      function go(i) {
+        if (isStatic) return
+        i = Math.max(0, Math.min(slides.length - 1, i))
+        if (i === current) return
+        if (current >= 0) slides[current].classList.remove('active')
+        current = i
+        slides[i].classList.add('active')
+        runCounters(slides[i])
+        progress.style.width = ((i + 1) / slides.length * 100) + '%'
+        counter.textContent = (i + 1) + ' / ' + slides.length
+        location.hash = '#' + (i + 1)
+        if (i > 0) hint.style.opacity = 0
+      }
+      function fit() {
+        var s = Math.min(window.innerWidth / 1920, window.innerHeight / 1080)
+        document.documentElement.style.setProperty('--s', s)
+      }
+      window.addEventListener('resize', fit); fit()
+      document.getElementById('prev').addEventListener('click', function () { go(current - 1) })
+      document.getElementById('next').addEventListener('click', function () { go(current + 1) })
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown' || e.key === 'Enter') { e.preventDefault(); go(current + 1) }
+        else if (e.key === 'ArrowLeft' || e.key === 'PageUp' || e.key === 'Backspace') { e.preventDefault(); go(current - 1) }
+        else if (e.key === 'Home') go(0)
+        else if (e.key === 'End') go(slides.length - 1)
+        else if (e.key === 'f' || e.key === 'F') { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen() }
+      })
+      var tx = null
+      document.addEventListener('touchstart', function (e) { tx = e.touches[0].clientX }, { passive: true })
+      document.addEventListener('touchend', function (e) { if (tx === null) return; var dx = e.changedTouches[0].clientX - tx; if (Math.abs(dx) > 50) go(current + (dx < 0 ? 1 : -1)); tx = null })
+      var wheelLock = 0
+      document.addEventListener('wheel', function (e) { var now = Date.now(); if (now - wheelLock < 900 || Math.abs(e.deltaY) < 20) return; wheelLock = now; go(current + (e.deltaY > 0 ? 1 : -1)) }, { passive: true })
+      if (!isStatic) go(Math.max(0, (parseInt(location.hash.slice(1), 10) || 1) - 1))
+    </script>
+  </body>
+</html>

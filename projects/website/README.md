@@ -5,7 +5,7 @@ community page with its signup form at `/orbiters`, and the two policy pages
 (`/privacy`, `/termini`); it is called `website` rather than `landing` because it is
 expected to grow past those.
 
-Four HTML pages, five scripts, three stylesheets. No React, no Tailwind, no router.
+Five HTML pages, five scripts, four stylesheets. No React, no Tailwind, no router.
 That absence is the requirement rather than an omission: this is the first page a
 visitor loads, and it does not drag an application bundle behind it. The build takes
 about 300 milliseconds. Anything added here should keep that true.
@@ -30,6 +30,7 @@ pnpm --filter website lint
 | `src/orbiters.html` | `/orbiters` | The community page and its signup form, the front door until 2026-09-11 |
 | `src/privacy.html` | `/privacy` | Privacy notice |
 | `src/termini.html` | `/termini` | Terms |
+| `src/pitch.html` | `/pitch` | The pitch deck, nineteen slides with keyboard, swipe and wheel navigation; shared by link, `noindex`. Its own stylesheet, `pitch.css`; its pictures under `src/pitch/` |
 
 The Orbiters form posts to `POST /api/orbiters/signups`, which since 2026-09-09 is
 implemented in the Orbiters hub's API (`projects/hub/apps/api`) and reached on the same
