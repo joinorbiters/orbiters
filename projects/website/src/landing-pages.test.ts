@@ -24,9 +24,9 @@ describe.each(PAGES)('%s', (name) => {
     // legal pages. ORB-36: privacy.html and termini.html are served on
     // joinorbiters.com, not on pigro.joinorbiters.com, and it is the Orbiters signup
     // form that links to them, so they title themselves after the site they are on
-    // rather than after the CRM. index.html is PigroCRM's own landing page (served
-    // at /pigrocrm; orbiters.html is the community page at /), so it keeps naming
-    // the CRM in its title regardless of Ivan's separate «freelance» exception
+    // rather than after the CRM. index.html is the landing (at / since ORB-145;
+    // orbiters.html is the community page at /orbiters) and still names the CRM in
+    // its title, the perk, regardless of Ivan's separate «freelance» exception
     // (ORB-24, positioning.md line 85); see the brand-link assertion below for the
     // same title/brand split.
     expect(title).toContain(name === 'index.html' ? 'PigroCRM' : 'Orbiters')
@@ -94,7 +94,11 @@ describe.each(PAGES)('%s', (name) => {
     )
   })
 
-  it('has no entrance animation to fail', () => {
+  it('carries no reveal library and no grain: what moves is the page\'s own', () => {
+    // Since ORB-145 index.html does rise in, block by block, but with its own
+    // `data-reveal` attribute and its own script (landing.js), gated so that a page
+    // without the script shows everything; `landing-style.test.ts` holds the gate.
+    // What stays out is a third-party reveal script and the old grain overlay.
     expect(page).not.toMatch(/class="[^"]*\brise\b|reveal\.js|class="grain"/)
   })
 })
@@ -132,19 +136,28 @@ describe('index.html', () => {
 
   it('explains itself in three steps and says what is inside', () => {
     expect(page).toContain('Come funziona')
-    expect(page.match(/<li class="card">\s*<span class="step-number"/g)).toHaveLength(3)
+    // The deck's agenda since ORB-145: three numbered steps on the dark band, no card.
+    expect(page.match(/<span class="step-number" aria-hidden="true">0[1-3]<\/span>/g)).toHaveLength(3)
     expect(page).toContain('Cosa trovi dentro')
   })
 
-  it('has one section for clients and testimonials, four tiles, all still placeholders', () => {
-    // Ivan's shape: «Mario Rossi ha lavorato per XYZ» plus a quote, one section for both
-    // sides. Until the real ones arrive every tile says so in the markup; when they do,
-    // the attribute goes and this assertion is rewritten to count the real ones.
+  it('has one section for the four voices, real people, no placeholder left', () => {
+    // Until 2026-09-11 the four tiles were placeholders marked `data-placeholder`, to
+    // be counted here when the real ones arrived. They did (Ivan, ORB-145): four people
+    // of Orbiters, a role each, one sentence each about the platform.
     expect(page).toContain('Hanno lavorato con noi')
-    const tiles = page.match(/<figure class="card testimonial"[^>]*>/g) ?? []
+    const tiles = page.match(/<figure class="testimonial"[^>]*>/g) ?? []
     expect(tiles).toHaveLength(4)
-    for (const tile of tiles) expect(tile).toContain('data-placeholder="true"')
-    expect(page).toContain('<strong>Mario Rossi</strong> ha lavorato per <strong>XYZ</strong>')
+    expect(page).not.toContain('data-placeholder')
+    for (const [name, role] of [
+      ['Ivan Sala', 'Fractional CTO'],
+      ['Lorenzo Fiore', 'Fractional CTO'],
+      ['Luca Franzesi', 'Head of Software Solution'],
+      ['Andrea Ciceri', 'Lead Infrastructure Engineer'],
+    ]) {
+      expect(page).toMatch(new RegExp(`<strong>${name}</strong><br /><span class="role">${role}</span>`))
+    }
+    expect(page).not.toMatch(/Mario Rossi|XYZ|Nome Cognome/)
     expect(page.match(/<blockquote>/g)).toHaveLength(4)
   })
 
@@ -210,7 +223,7 @@ describe('index.html', () => {
   })
 
   it('mounts the same field as the community page behind the whole page, from the shared script', () => {
-    // Ivan, 2026-09-09: `/pigrocrm` has the same background as `/`. One fixed canvas
+    // Ivan, 2026-09-09: the landing has the same background as the community page. One fixed canvas
     // right after <body>, the same id, the same mount options in landing.js.
     expect(page).toMatch(/<body>\s*(?:<!--[\s\S]*?-->\s*)?<canvas id="field" aria-hidden="true"><\/canvas>/)
     expect(page).not.toContain('hero-field')

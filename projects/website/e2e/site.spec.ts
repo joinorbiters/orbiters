@@ -280,7 +280,7 @@ test.describe('every page of the site', () => {
       })
 
       test('sits under the footer on the landing, and the room goes with a no', async ({ page }) => {
-        await page.goto('/pigrocrm', { waitUntil: 'networkidle' })
+        await page.goto('/', { waitUntil: 'networkidle' })
         const shown = await page.evaluate(geometry)
         expect(shown.noticeTop).not.toBeNull()
         expect(shown.room).toBe(`${Math.ceil(shown.innerHeight - shown.noticeTop!)}px`)
@@ -303,7 +303,7 @@ test.describe('every page of the site', () => {
   // while it does. The layout half is checked for every word at every width without
   // waiting for the cycle to reach it; the motion half once per page.
   const ROLES = ['Developer', 'AI engineer', 'CTO', 'Fractional CTO', 'Tech lead', 'Freelance']
-  const TITLED = ['/', '/pigrocrm'] as const
+  const TITLED = ['/', '/orbiters'] as const
 
   /** The tops that must not move, and the title's height, with `word` in the role. */
   function titledLayout(word: string | null) {
@@ -428,15 +428,15 @@ test.describe('the path map, as production serves it', () => {
   const source = (name: string) =>
     readFileSync(new URL(`../src/${name}`, import.meta.url), 'utf-8').match(/<title>([^<]+)<\/title>/)?.[1]
 
-  test('/ is the community page and /pigrocrm is the landing', async ({ page }) => {
+  test('/ is the landing and /orbiters is the community page (ORB-145)', async ({ page }) => {
     await page.goto('/')
-    await expect(page).toHaveTitle(source('orbiters.html')!)
-    await page.goto('/pigrocrm')
     await expect(page).toHaveTitle(source('index.html')!)
+    await page.goto('/orbiters')
+    await expect(page).toHaveTitle(source('orbiters.html')!)
   })
 
-  test('/orbiters is a 301 to /', async ({ page }) => {
-    const response = await page.request.get('/orbiters', { maxRedirects: 0 })
+  test('/pigrocrm, where the landing lived until 2026-09-11, is a 301 to /', async ({ page }) => {
+    const response = await page.request.get('/pigrocrm', { maxRedirects: 0 })
     expect(response.status()).toBe(301)
     expect(response.headers()['location']).toBe('/')
   })

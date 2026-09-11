@@ -108,8 +108,8 @@ describe('orbiters.html', () => {
     expect(html).toMatch(/href="\/privacy"/)
     const privacy = readFileSync(join(__dirname, 'privacy.html'), 'utf-8')
     expect(privacy).toContain('Orbiters')
-    // "/orbiters" is a 301 to "/", where the community page actually lives
-    // (path-map-plugin.ts). Pinned on the link's own text ("joinorbiters.com", the
+    // Since ORB-145 the community page lives at "/orbiters" and "/" is the landing
+    // (path-map-plugin.ts); either is a way back. Pinned on the link's own text ("joinorbiters.com", the
     // paragraph explaining where the signup's data goes) rather than a bare `"/"`,
     // which the header brand and the footer's "Home" link also match and would pass
     // even if this specific back-link were ever removed.

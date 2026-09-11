@@ -29,6 +29,15 @@
   --landing-cell: var(--system-cell);
   /* The shadow is an offset, never a blur: the same colour as the border, moved. */
   --landing-step: 8px;
+  /* The deck's second accent, for the dark bands: the kicker and the accented words
+     there are gold, where the light bands use the watermelon (ORB-145). */
+  --landing-gold: var(--color-royal-gold);
+  /* On the ink: the grid line at a whisper, the quiet text at three quarters. */
+  --landing-grid-on-ink: color-mix(in oklab, var(--color-paper) 8%, transparent);
+  --landing-quiet-on-ink: color-mix(in oklab, var(--color-paper) 78%, transparent);
+  --landing-rule-on-ink: color-mix(in oklab, var(--color-paper) 22%, transparent);
+  /* The paper at four fifths: what a light band lays over the field. */
+  --landing-veil: color-mix(in oklab, var(--color-paper) 80%, transparent);
 }
 
 /* Same woff2 as the app, same origin, one file in the repository. Never a CDN: a
@@ -420,4 +429,142 @@ li {
   background-color: var(--landing-cta);
   color: var(--landing-cta-ink);
   font-weight: 500;
+}
+
+/* --- The deck (ORB-145, Ivan 2026-09-11): the landing keeps the pitch deck's rhythm.
+   Bands that alternate dark and light, a boxed one where the deck has a box; an
+   uppercase, tracked kicker in the accent over a statement; and every block rising
+   in when it scrolls into view, the way the deck reveals a slide. The rules below are
+   scoped to `.deck`, which only index.html's <main> carries: the two policy pages keep
+   the sentence-case kicker with its tile, and their sheet is unchanged. */
+.band {
+  position: relative;
+}
+
+/* A light band is a veil of the paper over the field, the deck's field at a fifth of
+   its strength behind a slide: the tiles still drift through, the statement on top of
+   them stays readable. The hero keeps the field at full strength, its box on it. */
+.band:not(.dark) {
+  background-color: var(--landing-veil);
+}
+
+/* A dark band is the ink with the same grid drawn light on it, the deck's dark slide.
+   It is opaque, so the field behind the page shows only between the dark bands. */
+.band.dark {
+  background-color: var(--landing-ink);
+  background-image:
+    linear-gradient(to right, var(--landing-grid-on-ink) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--landing-grid-on-ink) 1px, transparent 1px);
+  background-size: var(--landing-cell) var(--landing-cell);
+  color: var(--landing-cta-ink);
+}
+
+.band.dark h2,
+.band.dark h3,
+.band.dark .lead,
+.band.dark .testimonial blockquote p,
+.band.dark .who strong {
+  color: var(--landing-cta-ink);
+}
+
+.band.dark p,
+.band.dark li,
+.band.dark .who {
+  color: var(--landing-quiet-on-ink);
+}
+
+/* The deck's kicker: capitals, tracked, in the accent; gold on the ink. */
+.deck .kicker {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--landing-cta);
+  margin-bottom: 1rem;
+}
+
+.deck .kicker::before {
+  display: none;
+}
+
+.band.dark .kicker,
+.band.dark .accent {
+  color: var(--landing-gold);
+}
+
+/* The statement under the kicker: the deck's `.statement`, at the page's scale. */
+.statement {
+  font-size: clamp(1.9rem, 2vw + 1.2rem, 3rem);
+  font-weight: 500;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  max-width: 22ch;
+  margin-bottom: clamp(2rem, 4vw, 3.5rem);
+}
+
+.accent {
+  color: var(--landing-cta);
+}
+
+/* The deck's numbered agenda: the number large in the accent, a rule, the title. */
+.deck .steps li {
+  border-top-width: 2px;
+  border-top-color: var(--landing-rule-on-ink);
+  padding-top: 1.25rem;
+}
+
+.deck .step-number {
+  display: block;
+  width: auto;
+  height: auto;
+  background-color: transparent;
+  color: var(--landing-gold);
+  font-size: clamp(2.6rem, 3vw + 1.5rem, 4.5rem);
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  margin-bottom: 1rem;
+}
+
+/* The three cards open with one tile each, the deck's three swatches. */
+.swatch {
+  display: block;
+  width: 1.5rem;
+  height: 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+/* The voices sit on the ink with no card around them: a quote, then who said it. */
+.voices .testimonial {
+  border-top-width: 2px;
+  border-top-color: var(--landing-rule-on-ink);
+  padding-top: 1.5rem;
+}
+
+/* Rising in: the deck's reveal. Only under `html.js` (the gate in index.html's head),
+   so a page without the script shows everything where it is; `.reveal-all` is the
+   three-second net for a script that loaded and did nothing. `transform` moves nothing
+   in the flow, so the page's height and the cookie notice's arithmetic are untouched. */
+.js .deck [data-reveal] {
+  opacity: 0;
+  transform: translateY(24px);
+  transition:
+    opacity 0.7s cubic-bezier(0.2, 0.7, 0.2, 1),
+    transform 0.7s cubic-bezier(0.2, 0.7, 0.2, 1);
+  transition-delay: var(--d, 0s);
+}
+
+.js .deck [data-reveal].in,
+.js.reveal-all .deck [data-reveal] {
+  opacity: 1;
+  transform: none;
+}
+
+/* Whoever asked for less motion gets the page as it is, with nothing to wait for. */
+@media (prefers-reduced-motion: reduce) {
+  .js .deck [data-reveal] {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
 }

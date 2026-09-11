@@ -16,8 +16,8 @@ export default defineConfig({
   // application's bundle behind it.
   //
   // `pathMapPlugin` is the dev and preview servers' copy of deploy/nginx.conf: `/` is
-  // the community page, `/pigrocrm` the landing, `/orbiters` a 301, and anything else
-  // a 404. Its unit test reads nginx.conf, so the two cannot drift quietly.
+  // the landing, `/orbiters` the community page, `/pigrocrm` a 301 to `/`, and anything
+  // else a 404. Its unit test reads nginx.conf, so the two cannot drift quietly.
   plugins: [palettePlugin(), pathMapPlugin()],
   // 'mpa' turns off Vite's fallback to index.html for a path that resolves to no file.
   // With it on, an unknown path answered 200 with PigroCRM's page here and 404 in

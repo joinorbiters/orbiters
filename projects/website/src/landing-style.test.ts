@@ -88,13 +88,30 @@ describe('the landing shares the product system', () => {
     expect(drawn).toEqual(BRAND_TILES.map((tile) => BRAND_TILE_VARS[tile]))
   })
 
-  it('has no entrance animation and nothing tied to scroll', () => {
-    // The initial state is the final state. Nothing to reveal means nothing that a
-    // failed script can leave hidden, and nothing that accumulates on a long page.
-    // The one animation both pages carry, the title's cursor, is in system.css and
-    // is checked below: it decorates a word that is already there.
-    expect(css).not.toMatch(/\.rise|data-hidden|@keyframes|animation:|transition:/)
+  it('reveals the deck\'s blocks only behind the script gate, and never by scroll-driven CSS (ORB-145)', () => {
+    // Until 2026-09-11 this read "no entrance animation": the initial state was the
+    // final state, so a failed script could leave nothing hidden. Ivan's ruling that
+    // day (docs/design/DECISIONS.md): the landing keeps the pitch deck's rhythm, and
+    // its blocks rise in. The promise that survives is the second half -- nothing a
+    // failed script can leave hidden: a block is hidden only under `html.js`, which
+    // the inline gate in index.html's head sets, `.reveal-all` shows everything after
+    // three seconds whatever the script did, and reduced motion turns it all off.
+    const hidden = rule('.js .deck [data-reveal]')
+    expect(hidden).toMatch(/opacity:\s*0/)
+    expect(hidden).toMatch(/transition:/)
+    expect(css).toMatch(/\.js\.reveal-all \.deck \[data-reveal\]\s*\{[^}]*opacity:\s*1/)
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.js \.deck \[data-reveal\]\s*\{[^}]*transition:\s*none/)
+    // No other transition or animation, and nothing keyed to the scroll position.
+    expect(css.match(/transition:/g)).toHaveLength(2)
+    expect(css).not.toMatch(/\.rise|data-hidden|@keyframes|animation:/)
     expect(css).not.toMatch(/animation-timeline|scroll\(\)|view\(\)/)
+    // The gate is in the page, first thing after the stylesheet, and in no other page.
+    const index = readFileSync(join(__dirname, 'index.html'), 'utf-8')
+    expect(index).toMatch(/<script>\s*document\.documentElement\.classList\.add\('js'\)/)
+    expect(index).toMatch(/classList\.add\('reveal-all'\)\s*\}, 3000\)/)
+    for (const name of ['privacy.html', 'termini.html', 'orbiters.html']) {
+      expect(readFileSync(join(__dirname, name), 'utf-8')).not.toMatch(/data-reveal|class="deck"/)
+    }
   })
 
   describe('the title\'s cursor (ORB-24)', () => {
@@ -129,10 +146,18 @@ describe('the landing shares the product system', () => {
     })
   })
 
-  it('uses sentence-case kickers, not tracked-out capitals', () => {
-    expect(css).not.toMatch(/text-transform:\s*uppercase/)
+  it('tracks out the deck\'s kicker on the landing only; the policy pages keep the sentence with its tile', () => {
+    // ORB-145: the landing's kicker is the pitch deck's, capitals in the accent, and it
+    // lives under `.deck`, which only index.html's <main> carries. `.kicker` itself is
+    // unchanged, so privacy.html and termini.html still open with a sentence and a
+    // tile, and a <time> inside it still flows as text.
+    expect(rule('.deck .kicker')).toMatch(/text-transform:\s*uppercase/)
+    expect(rule('.deck .kicker')).toMatch(/letter-spacing:\s*0\.12em/)
+    expect(css.match(/text-transform:\s*uppercase/g)).toHaveLength(1)
     expect(css).not.toMatch(/letter-spacing:\s*0\.[2-9]/)
+    expect(rule('.kicker')).not.toMatch(/text-transform/)
     expect(rule('.kicker::before')).toMatch(/background-color:\s*var\(--landing-cta\)/)
+    expect(rule('.deck .kicker::before')).toMatch(/display:\s*none/)
   })
 
   it('turns the field and the grid off when the reader asked for more contrast, once', () => {

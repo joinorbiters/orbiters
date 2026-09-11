@@ -17,6 +17,14 @@
     <meta property="og:locale" content="it_IT" />
     <link rel="icon" type="image/svg+xml" href="./orbiters-logo.svg" />
     <link rel="stylesheet" href="./landing.css" />
+    <!-- The reveal gate (ORB-145): landing.css hides `[data-reveal]` only under
+      `html.js`, so a page whose script never runs shows everything, and the timer is
+      the net for a script that loads but fails: whatever happened, after three seconds
+      nothing is hidden. Inline because it has to run before the first paint. -->
+    <script>
+      document.documentElement.classList.add('js')
+      setTimeout(function () { document.documentElement.classList.add('reveal-all') }, 3000)
+    </script>
     <!-- The cookie notice, and with it the ChatGPT Ads measurement pixel: consent.js
       shows the notice and injects the SDK only once somebody has said yes, so before a
       decision this page asks nothing of anyone. Here and on orbiters.html, the two
@@ -36,7 +44,7 @@
       <a class="quiet-link" href="/app/">Accedi</a>
     </header>
 
-    <main>
+    <main class="deck">
       <section class="hero">
         <div class="wrap">
           <div class="box">
@@ -60,160 +68,179 @@
         </div>
       </section>
 
-      <section class="wrap section">
-        <h2 class="kicker">Come funziona</h2>
-        <ol class="steps grid-3">
-          <li class="card">
-            <span class="step-number" aria-hidden="true">1</span>
-            <h3>Ti presenti</h3>
-            <p>
-              Nome, CV, tariffa a giornata, come preferisci lavorare. Niente profilo da curare:
-              quello che ci serve per capire chi sei e cosa cerchi.
-            </p>
-          </li>
-          <li class="card">
-            <span class="step-number" aria-hidden="true">2</span>
-            <h3>Ti proponiamo un progetto</h3>
-            <p>
-              Quando un'azienda ci racconta cosa le serve, guardiamo chi in Orbiters ha già fatto
-              cose simili e glielo diciamo. Tu decidi se ti interessa.
-            </p>
-          </li>
-          <li class="card">
-            <span class="step-number" aria-hidden="true">3</span>
-            <h3>Lavori, con qualcuno accanto</h3>
-            <p>
-              Preventivo, contratto, fatture: gli strumenti sono già dentro, e c'è chi ha già
-              fatto la stessa telefonata difficile prima di te.
-            </p>
-          </li>
-        </ol>
-      </section>
-
-      <section class="wrap section" style="padding-top: 0">
-        <h2 class="kicker">Cosa trovi dentro</h2>
-        <div class="grid-3">
-          <article class="card">
-            <h3>Lavoro</h3>
-            <p>
-              Progetti che arrivano da aziende vere, portati da chi le conosce. Niente gare al
-              ribasso: guardi, chiedi, e decidi tu se ti interessa.
-            </p>
-          </article>
-          <article class="card">
-            <h3>Persone</h3>
-            <p>
-              Chi fa il tuo stesso mestiere e chi ne fa uno diverso. Per chiedere quanto farsi
-              pagare, come dire di no a un cliente, o solo per non pranzare sempre da soli.
-            </p>
-          </article>
-          <article class="card">
-            <h3>Strumenti</h3>
-            <p>
-              Le cose che ci siamo costruiti perché ci servivano: fatturare senza sbagliare, tenere
-              in ordine clienti e progetti, farsi pagare in tempo. Le trovi già dentro, a partire
-              da PigroCRM.
-            </p>
-          </article>
-        </div>
-      </section>
-
-      <!-- Clients and testimonials in one section: each tile is a person of Orbiters and the
-        company they worked for, with what one of the two said. The four below are
-        placeholders, marked as such in the markup (data-placeholder) so a test can tell
-        when the real ones have arrived and the attribute goes. -->
-      <section class="wrap section" style="padding-top: 0" aria-labelledby="worked-with">
-        <h2 class="kicker" id="worked-with">Hanno lavorato con noi</h2>
-        <div class="grid-2">
-          <figure class="card testimonial" data-placeholder="true">
-            <blockquote>
+      <!-- From here down the page keeps the pitch deck's rhythm (Ivan, 2026-09-11,
+        ORB-145): bands that alternate dark, light and boxed, an uppercase kicker over a
+        statement, and every block rising in when it scrolls into view. `data-reveal`
+        with a `--d` delay is the deck's own device; landing.js observes it, and the
+        gate in <head> says what happens without the script. -->
+      <section class="band dark" aria-labelledby="come-funziona">
+        <div class="wrap section">
+          <p class="kicker" data-reveal>Come funziona</p>
+          <h2 class="statement" id="come-funziona" data-reveal style="--d: 0.1s">
+            Tre passi. <span class="accent">Nessuna gara al ribasso.</span>
+          </h2>
+          <ol class="steps grid-3">
+            <li data-reveal style="--d: 0.25s">
+              <span class="step-number" aria-hidden="true">01</span>
+              <h3>Ti presenti</h3>
               <p>
-                «Qui va la frase di chi ha lavorato con noi: due righe, dette da loro, che
-                raccontano com'è andata.»
+                Nome, CV, tariffa a giornata, come preferisci lavorare. Niente profilo da curare:
+                quello che ci serve per capire chi sei e cosa cerchi.
               </p>
-            </blockquote>
-            <figcaption class="who">
-              <span class="avatar" aria-hidden="true">I</span>
-              <span><strong>Mario Rossi</strong> ha lavorato per <strong>XYZ</strong><br /><span
-                  class="role"
-                  >Backend developer · 3 mesi</span
-                ></span>
-            </figcaption>
-          </figure>
-          <figure class="card testimonial" data-placeholder="true">
-            <blockquote>
-              <p>
-                «Qui va la frase dell'azienda: cosa cercava, chi ha trovato, e se lo rifarebbe.»
-              </p>
-            </blockquote>
-            <figcaption class="who">
-              <span class="avatar" aria-hidden="true">X</span>
-              <span><strong>XYZ</strong> ha lavorato con <strong>Mario Rossi</strong><br /><span
-                  class="role"
-                  >CTO, XYZ</span
-                ></span>
-            </figcaption>
-          </figure>
-          <figure class="card testimonial" data-placeholder="true">
-            <blockquote>
-              <p>«Un'altra voce di Orbiters, quando arriva.»</p>
-            </blockquote>
-            <figcaption class="who">
-              <span class="avatar" aria-hidden="true">N</span>
-              <span><strong>Nome Cognome</strong> ha lavorato per <strong>XYZ</strong><br /><span
-                  class="role"
-                  >Product designer · 6 settimane</span
-                ></span>
-            </figcaption>
-          </figure>
-          <figure class="card testimonial" data-placeholder="true">
-            <blockquote>
-              <p>«Un'altra azienda, quando arriva.»</p>
-            </blockquote>
-            <figcaption class="who">
-              <span class="avatar" aria-hidden="true">A</span>
-              <span><strong>Azienda</strong> ha lavorato con <strong>Nome Cognome</strong><br /><span
-                  class="role"
-                  >Head of Product, Azienda</span
-                ></span>
-            </figcaption>
-          </figure>
-        </div>
-      </section>
-
-      <section class="wrap section" style="padding-top: 0">
-        <h2 class="kicker">PigroCRM, il perk</h2>
-        <div class="box">
-          <h2 class="measure-tight">Il CRM che lavora al posto tuo.</h2>
-          <p class="lead measure">
-            L'abbiamo fatto per noi: developer e CTO freelance in Italia, spesso in forfettario,
-            con pochi clienti da tenere stretti e troppe cose da ricordare. Poi ci è sembrato
-            giusto darlo a chi entra.
-          </p>
-          <ul class="tiles measure">
-            <li>Clienti, contatti e trattative in un posto solo, con i campi che servono a te.</li>
-            <li>Offerte e contratti in PDF dai tuoi template, già con i tuoi dati fiscali.</li>
-            <li>Fatture e ore lavorate, con lo stato di ognuna sempre sotto gli occhi.</li>
-            <li>Le email con un cliente sulla sua scheda, senza aprire Gmail.</li>
-            <li>
-              Un assistente AI che fa il lavoro noioso: registra le ore, prepara le offerte, ti
-              riassume la settimana.
             </li>
-            <li>Uno spazio tutto tuo, con un database separato, su pigro.joinorbiters.com/il-tuo-nome.</li>
-          </ul>
-          <p class="lead measure">
-            <strong>Gratis per chi è in community.</strong> Nessun piano, nessuna carta, nessuna
-            sorpresa dopo.
-          </p>
-          <p class="fine measure">
-            Sei già dei nostri?
-            <a class="quiet-link" href="https://pigro.joinorbiters.com/app/registrati"
-              >Crea il tuo spazio PigroCRM</a
-            >. Preferisci averlo sul tuo server? È open source e self-hosted quando vuoi:
-            <a class="quiet-link" href="https://github.com/joinorbiters/orbiters/blob/main/projects/pigrocrm/README.md#deploy"
-              >le istruzioni sono su GitHub</a
-            >.
-          </p>
+            <li data-reveal style="--d: 0.4s">
+              <span class="step-number" aria-hidden="true">02</span>
+              <h3>Ti proponiamo un progetto</h3>
+              <p>
+                Quando un'azienda ci racconta cosa le serve, guardiamo chi in Orbiters ha già fatto
+                cose simili e glielo diciamo. Tu decidi se ti interessa.
+              </p>
+            </li>
+            <li data-reveal style="--d: 0.55s">
+              <span class="step-number" aria-hidden="true">03</span>
+              <h3>Lavori, con qualcuno accanto</h3>
+              <p>
+                Preventivo, contratto, fatture: gli strumenti sono già dentro, e c'è chi ha già
+                fatto la stessa telefonata difficile prima di te.
+              </p>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="band" aria-labelledby="dentro">
+        <div class="wrap section">
+          <p class="kicker" data-reveal>Cosa trovi dentro</p>
+          <h2 class="statement" id="dentro" data-reveal style="--d: 0.1s">
+            Tre cose che oggi cerchi <span class="accent">in tre posti diversi.</span>
+          </h2>
+          <div class="grid-3">
+            <article class="card" data-reveal style="--d: 0.25s">
+              <span class="swatch" style="background-color: var(--landing-ink)" aria-hidden="true"></span>
+              <h3>Lavoro</h3>
+              <p>
+                Progetti che arrivano da aziende vere, portati da chi le conosce. Niente gare al
+                ribasso: guardi, chiedi, e decidi tu se ti interessa.
+              </p>
+            </article>
+            <article class="card" data-reveal style="--d: 0.4s">
+              <span class="swatch" style="background-color: var(--landing-gold)" aria-hidden="true"></span>
+              <h3>Persone</h3>
+              <p>
+                Chi fa il tuo stesso mestiere e chi ne fa uno diverso. Per chiedere quanto farsi
+                pagare, come dire di no a un cliente, o solo per non pranzare sempre da soli.
+              </p>
+            </article>
+            <article class="card" data-reveal style="--d: 0.55s">
+              <span class="swatch" style="background-color: var(--landing-cta)" aria-hidden="true"></span>
+              <h3>Strumenti</h3>
+              <p>
+                Le cose che ci siamo costruiti perché ci servivano: fatturare senza sbagliare, tenere
+                in ordine clienti e progetti, farsi pagare in tempo. Le trovi già dentro, a partire
+                da PigroCRM.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <!-- The four voices: people who are in Orbiters and what each says about it, one
+        sentence each (Ivan, 2026-09-11). Real names, no placeholder left: a tile here is
+        a person who agreed to be quoted, and the test counts four of them. -->
+      <section class="band dark" aria-labelledby="worked-with">
+        <div class="wrap section">
+          <p class="kicker" id="worked-with" data-reveal>Hanno lavorato con noi</p>
+          <h2 class="statement" data-reveal style="--d: 0.1s">
+            Chi è già <span class="accent">in orbita.</span>
+          </h2>
+          <div class="grid-2 voices">
+            <figure class="testimonial" data-reveal style="--d: 0.25s">
+              <blockquote>
+                <p>
+                  «Un progetto proposto da chi conosce il mio lavoro vale più di cento candidature:
+                  qui arrivano così.»
+                </p>
+              </blockquote>
+              <figcaption class="who">
+                <span class="avatar" aria-hidden="true">IS</span>
+                <span><strong>Ivan Sala</strong><br /><span class="role">Fractional CTO</span></span>
+              </figcaption>
+            </figure>
+            <figure class="testimonial" data-reveal style="--d: 0.4s">
+              <blockquote>
+                <p>
+                  «Offerta, contratto e fattura in una sera, senza aprire tre strumenti diversi: il
+                  tempo che avanza lo passo a fare il CTO.»
+                </p>
+              </blockquote>
+              <figcaption class="who">
+                <span class="avatar" aria-hidden="true">LF</span>
+                <span><strong>Lorenzo Fiore</strong><br /><span class="role">Fractional CTO</span></span>
+              </figcaption>
+            </figure>
+            <figure class="testimonial" data-reveal style="--d: 0.55s">
+              <blockquote>
+                <p>
+                  «Cercavo un backend developer e ho avuto due nomi giusti in una settimana, senza
+                  leggere cinquanta CV.»
+                </p>
+              </blockquote>
+              <figcaption class="who">
+                <span class="avatar" aria-hidden="true">LF</span>
+                <span><strong>Luca Franzesi</strong><br /><span class="role">Head of Software Solution</span></span>
+              </figcaption>
+            </figure>
+            <figure class="testimonial" data-reveal style="--d: 0.7s">
+              <blockquote>
+                <p>
+                  «Quando un cliente ha chiesto più di quanto avevamo pattuito, c'era qualcuno che
+                  quella telefonata l'aveva già fatta.»
+                </p>
+              </blockquote>
+              <figcaption class="who">
+                <span class="avatar" aria-hidden="true">AC</span>
+                <span><strong>Andrea Ciceri</strong><br /><span class="role">Lead Infrastructure Engineer</span></span>
+              </figcaption>
+            </figure>
+          </div>
+        </div>
+      </section>
+
+      <section class="band" aria-labelledby="perk">
+        <div class="wrap section">
+          <p class="kicker" id="perk" data-reveal>PigroCRM, il perk</p>
+          <div class="box" data-reveal style="--d: 0.15s">
+            <h2 class="measure-tight">Il CRM che lavora <span class="accent">al posto tuo.</span></h2>
+            <p class="lead measure">
+              L'abbiamo fatto per noi: developer e CTO freelance in Italia, spesso in forfettario,
+              con pochi clienti da tenere stretti e troppe cose da ricordare. Poi ci è sembrato
+              giusto darlo a chi entra.
+            </p>
+            <ul class="tiles measure">
+              <li>Clienti, contatti e trattative in un posto solo, con i campi che servono a te.</li>
+              <li>Offerte e contratti in PDF dai tuoi template, già con i tuoi dati fiscali.</li>
+              <li>Fatture e ore lavorate, con lo stato di ognuna sempre sotto gli occhi.</li>
+              <li>Le email con un cliente sulla sua scheda, senza aprire Gmail.</li>
+              <li>
+                Un assistente AI che fa il lavoro noioso: registra le ore, prepara le offerte, ti
+                riassume la settimana.
+              </li>
+              <li>Uno spazio tutto tuo, con un database separato, su pigro.joinorbiters.com/il-tuo-nome.</li>
+            </ul>
+            <p class="lead measure">
+              <strong>Gratis per chi è in community.</strong> Nessun piano, nessuna carta, nessuna
+              sorpresa dopo.
+            </p>
+            <p class="fine measure">
+              Sei già dei nostri?
+              <a class="quiet-link" href="https://pigro.joinorbiters.com/app/registrati"
+                >Crea il tuo spazio PigroCRM</a
+              >. Preferisci averlo sul tuo server? È open source e self-hosted quando vuoi:
+              <a class="quiet-link" href="https://github.com/joinorbiters/orbiters/blob/main/projects/pigrocrm/README.md#deploy"
+                >le istruzioni sono su GitHub</a
+              >.
+            </p>
+          </div>
         </div>
       </section>
 
@@ -224,36 +251,38 @@
         the CRM as the largest of them, and it should absorb this block when it lands.
         No size or page count in this copy on purpose, since the file lives in another
         project and a number here would have nothing holding it true. -->
-      <section class="wrap section" style="padding-top: 0">
-        <h2 class="kicker">La guida, il secondo perk</h2>
-        <div class="box">
-          <h2 class="measure-tight">I primi passi da freelance.</h2>
-          <p class="lead measure">
+      <section class="band dark" aria-labelledby="guida">
+        <div class="wrap section">
+          <p class="kicker" id="guida" data-reveal>La guida, il secondo perk</p>
+          <h2 class="statement" data-reveal style="--d: 0.1s">I primi passi <span class="accent">da freelance.</span></h2>
+          <p class="lead measure" data-reveal style="--d: 0.25s">
             La parte che nessuno ti spiega prima della prima fattura: come dirti in una frase,
             come arrivare a un numero e difenderlo, cosa scrivere prima di iniziare, e le
             richieste che arrivano a tutti. Si legge in venti minuti.
           </p>
-          <p class="actions">
+          <p class="actions" data-reveal style="--d: 0.4s">
             <a class="cta" href="/hub/freelance">Entra e scaricala</a>
           </p>
-          <p class="fine measure">
+          <p class="fine measure" data-reveal style="--d: 0.5s">
             PDF, la scarichi dalla tua area appena sei dentro. Gratis, come PigroCRM.
           </p>
         </div>
       </section>
 
-      <section class="wrap section" style="padding-top: 0">
-        <div class="box">
-          <h2 class="measure-tight">Pronto a entrare in orbita?</h2>
-          <p class="actions">
-            <a class="cta" href="/hub/freelance">Entra come talento</a>
-            <a class="cta secondary" href="/hub/aziende">Ho un progetto</a>
-          </p>
-          <p class="fine measure">
-            Il CV resta nel nostro database, lo leggiamo noi e chi ti proporrà un progetto, e lo
-            cancelliamo quando ce lo chiedi. Il resto è nella
-            <a class="quiet-link" href="/privacy">privacy</a>.
-          </p>
+      <section class="band" aria-labelledby="orbita">
+        <div class="wrap section">
+          <div class="box" data-reveal>
+            <h2 class="measure-tight" id="orbita">Pronto a entrare <span class="accent">in orbita?</span></h2>
+            <p class="actions">
+              <a class="cta" href="/hub/freelance">Entra come talento</a>
+              <a class="cta secondary" href="/hub/aziende">Ho un progetto</a>
+            </p>
+            <p class="fine measure">
+              Il CV resta nel nostro database, lo leggiamo noi e chi ti proporrà un progetto, e lo
+              cancelliamo quando ce lo chiedi. Il resto è nella
+              <a class="quiet-link" href="/privacy">privacy</a>.
+            </p>
+          </div>
         </div>
       </section>
 

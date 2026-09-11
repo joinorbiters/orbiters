@@ -6,10 +6,11 @@ import type { Plugin } from 'vite'
  *
  * Production is `deploy/nginx.conf`, inside the website's own image: four exact
  * extensionless paths, one redirect, the hashed assets, and a 404 for everything else.
- * Vite's servers know none of that on their own. Left alone they answer `index.html`
- * at `/`, which is PigroCRM's page and not the site's front door, and fall back to it
- * with a 200 for any path that resolves to no file, so a link nobody serves passes the
- * suite locally and 404s in production (ORB-21). This module says the same thing
+ * Vite's servers know none of that on their own. Left alone they fall back to
+ * `index.html` with a 200 for any path that resolves to no file, so a link nobody
+ * serves passes the suite locally and 404s in production (ORB-21); and until
+ * 2026-09-11 `/` was the community page, not `index.html`, so they served the wrong
+ * page at the front door as well (ORB-145 put the landing there). This module says the same thing
  * nginx says, once more, in the shape of a middleware; `path-map-plugin.test.ts` reads
  * `deploy/nginx.conf` and fails when the two copies disagree, which is the only way
  * two copies of anything stay equal.
@@ -17,8 +18,8 @@ import type { Plugin } from 'vite'
 
 /** `location = <path> { try_files <file> =404; }`, one line each in nginx.conf. */
 export const PAGES: Readonly<Record<string, string>> = {
-  '/': '/orbiters.html',
-  '/pigrocrm': '/index.html',
+  '/': '/index.html',
+  '/orbiters': '/orbiters.html',
   '/privacy': '/privacy.html',
   '/termini': '/termini.html',
 }
@@ -26,7 +27,7 @@ export const PAGES: Readonly<Record<string, string>> = {
 /** `location = <path> { return 301 <to>; }`. nginx's `return` drops the query string
  *  and so does this. */
 export const REDIRECTS: Readonly<Record<string, string>> = {
-  '/orbiters': '/',
+  '/pigrocrm': '/',
 }
 
 /**
