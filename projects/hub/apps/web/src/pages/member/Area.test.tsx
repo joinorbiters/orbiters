@@ -7,7 +7,7 @@ import {
   createRoute,
   createRouter,
 } from '@tanstack/react-router'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Area } from './Area'
 import { MemberGuard } from './Guard'
@@ -33,6 +33,19 @@ const PROFILE = {
   links: ['https://github.com/ada'],
   created_at: '2026-09-10T10:00:00Z',
   updated_at: '2026-09-10T10:00:00Z',
+  completa: true,
+}
+
+/** The card an admin wrote from Ada's signup (ORB-155): the person has yet to add the
+ *  CV, the rate, the position and how she works. */
+const INCOMPLETE = {
+  ...PROFILE,
+  cv_filename: null,
+  cv_size: null,
+  tariffa_giornaliera: null,
+  posizione: null,
+  remoto: null,
+  completa: false,
 }
 
 function mount() {
@@ -74,6 +87,21 @@ describe('/io', () => {
     )
     expect(screen.getByText('PDF, 6 pagine, 48 KB.')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Modifica' })).toHaveAttribute('href', '/io/modifica')
+    // A complete card gets no reminder.
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.queryByText('Nessun CV')).toBeNull()
+  })
+
+  it('asks the person to complete a card the admin wrote, and shows no CV link', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(answer(200, INCOMPLETE))
+    mount()
+    const notice = await screen.findByRole('status')
+    expect(notice).toHaveTextContent('La tua scheda è incompleta.')
+    expect(within(notice).getByRole('link', { name: 'Completa la scheda' })).toHaveAttribute('href', '/io/modifica')
+    expect(screen.getByText('Nessun CV')).toBeInTheDocument()
+    expect(screen.getAllByRole('link').some((link) => link.getAttribute('href') === '/api/hub/me/cv')).toBe(false)
+    // The unanswered questions read as dashes, not as a crash.
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(3)
   })
 
   it('sends a visitor without a session to /accedi', async () => {

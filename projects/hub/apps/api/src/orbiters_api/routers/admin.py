@@ -4,7 +4,9 @@ One cookie, `orbiters_admin`, opaque and httpOnly, resolved against `admin_sessi
 every request (`deps.get_admin`). The login shares the public token bucket, so a
 password guess costs the same budget as a signup flood. Everything under this router
 reads or moves rows other people wrote, or adds one more admin (ORB-123); nothing here
-writes on an applicant's behalf.
+writes on an applicant's behalf. The one thing it writes about a person is the card an
+admin drafts from a signup (ORB-155), and that is signed by the admin and refused where
+the person has already spoken.
 """
 
 from typing import Annotated
@@ -27,6 +29,7 @@ from orbiters_core.schemas import (
     CommentRead,
     CompanyList,
     CompanyRead,
+    FreelancerDraft,
     FreelancerList,
     FreelancerRead,
     GuideStats,
@@ -211,6 +214,22 @@ def guide_stats(_: AdminDep, session: SessionDep) -> GuideStats:
 @router.get("/signups", response_model=SignupList)
 def list_signups(_: AdminDep, session: SessionDep, limit: Limit = 100) -> SignupList:
     return SignupService(session).list_recent(limit=limit)
+
+
+@router.post(
+    "/signups/{signup_id}/scheda",
+    response_model=FreelancerRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def draft_card_from_signup(
+    admin: AdminDep, session: SessionDep, signup_id: UUID, payload: FreelancerDraft
+) -> FreelancerRead:
+    """The freelancer card an admin writes from what the public web says about a signup
+    (ORB-155): incomplete until the person adds the CV, the rate and the rest from the
+    member area. The comment naming the sources is signed by the admin the cookie
+    resolves to. 404 for an unknown signup; 422 naming `email` when the person has
+    already filled their card, which research never overwrites."""
+    return FreelancerService(session).draft_from_signup(signup_id, payload, admin.nome)
 
 
 # ---- comments --------------------------------------------------------------------------

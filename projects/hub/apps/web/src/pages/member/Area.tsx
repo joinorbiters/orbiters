@@ -50,6 +50,21 @@ export function Area() {
         </div>
       </header>
 
+      {!profile.completa && (
+        // The card was written by an admin from the signup (ORB-155): what is missing
+        // is what a company would search by, so it is said here and not only in the
+        // dashes below.
+        <div role="status" className="rounded-2xl border-2 border-[var(--color-royal-gold)] bg-card p-5 text-sm">
+          <p>
+            La tua scheda è incompleta. Aggiungi CV, tariffa, posizione e modalità di lavoro
+            perché le aziende possano trovarti.
+          </p>
+          <Button asChild size="sm" className="mt-3">
+            <Link to="/io/modifica">Completa la scheda</Link>
+          </Button>
+        </div>
+      )}
+
       <section aria-label="Quello che ci hai mandato">
         <dl className="divide-y rounded-2xl border bg-card">
           {steps.map((step) => (
@@ -61,11 +76,15 @@ export function Area() {
           <div className="flex items-start gap-4 px-4 py-3 text-sm">
             <dt className="w-40 shrink-0 text-muted-foreground">Il tuo CV</dt>
             <dd className="min-w-0 flex-1">
-              <a href={member.cvUrl} className="inline-flex items-center gap-1.5 font-medium underline-offset-2 hover:underline">
-                <Download className="size-4" aria-hidden="true" />
-                {profile.cv_filename}
-                <span className="font-normal text-muted-foreground">({formatBytes(profile.cv_size)})</span>
-              </a>
+              {profile.cv_filename === null || profile.cv_size === null ? (
+                <span className="text-muted-foreground">Nessun CV</span>
+              ) : (
+                <a href={member.cvUrl} className="inline-flex items-center gap-1.5 font-medium underline-offset-2 hover:underline">
+                  <Download className="size-4" aria-hidden="true" />
+                  {profile.cv_filename}
+                  <span className="font-normal text-muted-foreground">({formatBytes(profile.cv_size)})</span>
+                </a>
+              )}
             </dd>
           </div>
         </dl>

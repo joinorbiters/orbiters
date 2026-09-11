@@ -36,6 +36,7 @@ def admin(api_engine: Engine, api_session: Session) -> Iterator[None]:
         "admin_users",
         "freelancers",
         "companies",
+        "signups",
     ):
         api_session.execute(text(f"DELETE FROM {table}"))
     api_session.commit()
@@ -580,3 +581,70 @@ def test_when_the_crm_refuses_or_falls_over_the_answer_is_a_502_sentence(
     down = client.get("/api/hub/pigro/istanze")
     assert down.status_code == 502, down.text
     assert down.json()["detail"] == "Pigro non risponde."
+
+
+# ---- a card from a signup (ORB-155) --------------------------------------------------
+
+
+def _signup(client: TestClient, email: str = "ada@studio.it") -> str:
+    response = client.post(
+        "/api/orbiters/signups", json={"email": email, "nome": "Ada", "cognome": "Lovelace"}
+    )
+    assert response.status_code in (200, 201), response.text
+    _login(client)
+    listed = client.get("/api/hub/signups").json()["iscrizioni"]
+    return next(item["id"] for item in listed if item["email"] == email)
+
+
+DRAFT = {
+    "nome": "Ada",
+    "cognome": "Lovelace",
+    "linkedin_url": "https://www.linkedin.com/in/ada",
+    "posizione": "Backend developer",
+    "links": ["https://github.com/ada"],
+    "fonti": ["https://www.linkedin.com/in/ada"],
+}
+
+
+def test_without_the_cookie_the_card_from_a_signup_is_a_401(
+    client: TestClient, admin: None
+) -> None:
+    response = client.post(f"/api/hub/signups/{MISSING}/scheda", json=DRAFT)
+    assert response.status_code == 401
+
+
+def test_an_admin_writes_an_incomplete_card_from_a_signup_and_the_list_points_at_it(
+    client: TestClient, admin: None
+) -> None:
+    signup_id = _signup(client)
+    created = client.post(f"/api/hub/signups/{signup_id}/scheda", json=DRAFT)
+    assert created.status_code == 201, created.text
+    card = created.json()
+    assert card["email"] == "ada@studio.it"
+    assert card["compilata_da"] == "admin" and card["completa"] is False
+    assert card["cv_filename"] is None and card["tariffa_giornaliera"] is None
+    assert card["commenti"][0]["autore"] == "Ivan"
+    assert "https://www.linkedin.com/in/ada" in card["commenti"][0]["testo"]
+
+    items = client.get("/api/hub/signups").json()["iscrizioni"]
+    item = next(i for i in items if i["id"] == signup_id)
+    assert item["freelancer_id"] == card["id"]
+    assert client.get(f"/api/hub/freelancers/{card['id']}/cv").status_code == 404
+    listed = client.get("/api/hub/freelancers").json()["items"]
+    assert listed[0]["id"] == card["id"] and listed[0]["completa"] is False
+
+    # A wrong id is a 404, a bad body a 422 naming the field, as everywhere else.
+    assert client.post(f"/api/hub/signups/{MISSING}/scheda", json=DRAFT).status_code == 404
+    bad = client.post(f"/api/hub/signups/{signup_id}/scheda", json={**DRAFT, "fonti": []})
+    assert bad.status_code == 422
+    assert bad.json()["detail"][0]["loc"][-1] == "fonti"
+
+
+def test_research_is_refused_on_a_card_the_person_filled(client: TestClient, admin: None) -> None:
+    _apply(client)
+    signup_id = _signup(client)
+    body = {**DRAFT, "posizione": "CTO"}
+    refused = client.post(f"/api/hub/signups/{signup_id}/scheda", json=body)
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["detail"][0]["loc"][-1] == "email"
+    assert client.get("/api/hub/freelancers").json()["items"][0]["posizione"] == "Backend developer"

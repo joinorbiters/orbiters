@@ -7,10 +7,10 @@ import {
   createRoute,
   createRouter,
 } from '@tanstack/react-router'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { EDIT_STEPS, Modifica } from './Modifica'
+import { Modifica, editSteps } from './Modifica'
 
 function answer(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -33,7 +33,12 @@ const PROFILE = {
   links: [],
   created_at: '2026-09-10T10:00:00Z',
   updated_at: '2026-09-10T10:00:00Z',
+  completa: true,
 }
+
+/** The same card without a CV: what an admin's research leaves for the person to add
+ *  (ORB-155), with everything else already answered so the CV is the one thing missing. */
+const WITHOUT_CV = { ...PROFILE, cv_filename: null, cv_size: null, completa: false }
 
 function mount() {
   const root = createRootRoute({ component: () => <Outlet /> })
@@ -55,16 +60,28 @@ afterEach(() => vi.restoreAllMocks())
 describe('the edit steps', () => {
   const base = { ...PROFILE, linkedin_url: '', cv: null }
 
-  it('leave the email out and make the CV optional', () => {
-    expect(EDIT_STEPS.map((step) => step.id)).not.toContain('email')
-    const cv = EDIT_STEPS.find((step) => step.id === 'cv')!
+  it('leave the email out and make the CV optional when we already hold one', () => {
+    const steps = editSteps(true)
+    expect(steps.map((step) => step.id)).not.toContain('email')
+    const cv = steps.find((step) => step.id === 'cv')!
+    expect(cv.optional).toBe(true)
     expect(cv.validate(base as never)).toBeNull()
     const png = new File(['x'], 'cv.png', { type: 'image/png' })
     expect(cv.validate({ ...base, cv: png } as never)).not.toBeNull()
   })
 
+  it('require the CV, with the wizard’s own words, when there is none to keep', () => {
+    const steps = editSteps(false)
+    expect(steps.map((step) => step.id)).not.toContain('email')
+    const cv = steps.find((step) => step.id === 'cv')!
+    expect(cv.optional).toBeFalsy()
+    expect(cv.validate(base as never)).toBe('Serve il CV, in PDF.')
+    const pdf = new File(['%PDF'], 'cv.pdf', { type: 'application/pdf' })
+    expect(cv.validate({ ...base, cv: pdf } as never)).toBeNull()
+  })
+
   it('keep the wizard’s rules for everything else', () => {
-    const linkedin = EDIT_STEPS.find((step) => step.id === 'linkedin_url')!
+    const linkedin = editSteps(true).find((step) => step.id === 'linkedin_url')!
     expect(linkedin.validate({ ...base, linkedin_url: 'https://twitter.com/ada' } as never)).not.toBeNull()
   })
 })
@@ -98,6 +115,19 @@ describe('/io/modifica', () => {
       links: [],
     })
     expect(fetchSpy.mock.calls.some(([, init]) => init?.method === 'PUT')).toBe(false)
+  })
+
+  it('refuses to save a card without a CV until one is chosen, and sends nothing', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(answer(200, WITHOUT_CV))
+    mount()
+    const user = userEvent.setup()
+    await screen.findByLabelText('Posizione')
+    const cvSection = screen.getByRole('region', { name: 'Il tuo CV' })
+    expect(within(cvSection).queryByText('(facoltativo)')).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Salva' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Serve il CV, in PDF.')
+    // Only the profile was read; nothing was written.
+    expect(fetchSpy.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([['/api/hub/me', undefined]])
   })
 
   it('shows a server refusal under the field it names', async () => {

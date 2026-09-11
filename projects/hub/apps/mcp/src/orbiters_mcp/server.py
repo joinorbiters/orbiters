@@ -12,6 +12,7 @@ measured as zero rows written under concurrency.
 """
 
 from collections.abc import Callable
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -25,7 +26,7 @@ from orbiters_core.companies import CompanyService
 from orbiters_core.errors import DomainError
 from orbiters_core.freelancers import FreelancerService
 from orbiters_core.perks import PerkService
-from orbiters_core.schemas import StatusChange
+from orbiters_core.schemas import FreelancerDraft, StatusChange
 from orbiters_core.service import LIST_LIMIT_DEFAULT, SignupService
 
 SessionFactory = sessionmaker[Session]
@@ -34,8 +35,10 @@ INSTRUCTIONS = (
     "Orbiters, la community di freelance di joinorbiters.com. Gli strumenti leggono chi "
     "ha chiesto di entrare (iscrizioni), i freelance che hanno compilato il profilo con il "
     "CV e le aziende che cercano persone; possono cambiare lo stato di una candidatura, "
-    "annotarla e lasciare un commento datato nel suo thread. Sono dati di altre persone: da "
-    "usare solo per decidere quando e cosa scrivere loro, mai da riportare altrove."
+    "annotarla e lasciare un commento datato nel suo thread; da un'iscrizione possono "
+    "creare la scheda freelance con quanto si trova in pubblico su quella persona, che poi "
+    "lei completa dalla sua area. Sono dati di altre persone: da usare solo per decidere "
+    "quando e cosa scrivere loro, mai da riportare altrove."
 )
 
 # Who signs a comment when the caller does not say: the MCP client has no login, so the
@@ -54,6 +57,45 @@ def build_server(factory: SessionFactory) -> MCPServer:
         quando il form chiedeva la sola email. `totale` conta tutta la lista anche
         quando `limit` ne restituisce una parte."""
         return _run(lambda s: SignupService(s).list_recent(limit=limit))
+
+    @mcp.tool()
+    def create_freelancer_from_signup(
+        signup_id: str,
+        nome: str,
+        cognome: str,
+        fonti: list[str],
+        linkedin_url: str | None = None,
+        posizione: str | None = None,
+        tariffa_giornaliera: str | None = None,
+        remoto: str | None = None,
+        links: list[str] | None = None,
+        autore: str | None = None,
+    ) -> dict[str, Any]:
+        """Crea (o riscrive) la scheda freelance di un'iscrizione con quanto si trova in
+        pubblico su quella persona: nome e cognome obbligatori, poi il profilo LinkedIn,
+        la posizione come la dichiara lei, altri link (sito, GitHub, portfolio). Tariffa e
+        modalità di lavoro solo se una fonte pubblica le dice, altrimenti restano vuote
+        con il CV: la persona le completa dalla sua area. `fonti` sono gli indirizzi https
+        da cui vengono le informazioni, da una a dieci, e finiscono nel thread della
+        scheda firmate da `autore` ("MCP" se non dici chi sta scrivendo). Una scheda che
+        la persona ha già compilato non si tocca: il tool rifiuta."""
+        draft = FreelancerDraft(
+            nome=nome,
+            cognome=cognome,
+            linkedin_url=linkedin_url,
+            posizione=posizione,
+            tariffa_giornaliera=(
+                Decimal(tariffa_giornaliera) if tariffa_giornaliera is not None else None
+            ),
+            remoto=remoto,  # type: ignore[arg-type]
+            links=links or [],
+            fonti=fonti,
+        )
+        return _run(
+            lambda s: FreelancerService(s).draft_from_signup(
+                UUID(signup_id), draft, autore or DEFAULT_AUTHOR
+            )
+        )
 
     @mcp.tool()
     def list_freelancers(

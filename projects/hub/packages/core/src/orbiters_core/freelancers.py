@@ -1,4 +1,5 @@
-"""Freelancers: the wizard's applications, and what an admin does with them."""
+"""Freelancers: the wizard's applications, what an admin does with them, and since
+ORB-155 the card an admin writes from a signup for the person to complete."""
 
 from uuid import UUID
 
@@ -8,10 +9,11 @@ from sqlalchemy.orm import Session
 
 from orbiters_core.comments import CommentService
 from orbiters_core.errors import NotFound, ValidationFailed
-from orbiters_core.models import CV_MAX_BYTES, FREELANCER_STATES, Freelancer
+from orbiters_core.models import CV_MAX_BYTES, FREELANCER_STATES, UTM_COLUMNS, Freelancer, Signup
 from orbiters_core.schemas import (
     CvFile,
     FreelancerCreate,
+    FreelancerDraft,
     FreelancerList,
     FreelancerRead,
     StatusChange,
@@ -45,6 +47,15 @@ def check_cv(content: bytes, filename: str, mime: str) -> tuple[str, str]:
     ) else "application/pdf"
 
 
+def cv_of(row: Freelancer) -> CvFile:
+    """The stored CV as a download, or `NotFound("cv", ...)` on a card born from a
+    signup that the person has not completed yet (ORB-155). Shared with the member
+    area, so the two downloads answer the same thing to the same row."""
+    if row.cv_bytes is None or row.cv_filename is None or row.cv_mime is None:
+        raise NotFound("cv", row.id)
+    return CvFile(filename=row.cv_filename, mime=row.cv_mime, content=row.cv_bytes)
+
+
 class FreelancerService:
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -55,7 +66,9 @@ class FreelancerService:
         """One row per address. A second application from the same address is the same
         person correcting or refreshing theirs, so it overwrites what the wizard asked
         and leaves what the admin wrote (`stato`, `note`) alone. The first attribution
-        stays, as it does for signups."""
+        stays, as it does for signups. A card an admin drafted from a signup (ORB-155)
+        is taken over the same way: the person's answers replace the research and the
+        card becomes theirs (`compilata_da = "persona"`)."""
         filename, mime = check_cv(cv, cv_filename, cv_mime)
         email = data.email.strip().lower()
         row = self._find(email)
@@ -74,6 +87,7 @@ class FreelancerService:
         row.posizione = data.posizione
         row.remoto = data.remoto
         row.links = list(data.links)
+        row.compilata_da = "persona"
         try:
             self.session.commit()
         except IntegrityError:
@@ -82,6 +96,53 @@ class FreelancerService:
             self.session.rollback()
             return self.apply(data, cv, cv_filename, cv_mime)
         return FreelancerRead.model_validate(row)
+
+    def draft_from_signup(
+        self, signup_id: UUID, data: FreelancerDraft, autore: str
+    ) -> FreelancerRead:
+        """A card written by an admin from what the public web says about a signup
+        (ORB-155): the address and the attribution come from the signup, the answers
+        from the research, the CV from nobody -- the person adds it from the member
+        area. One row per address still: a second research on a card the admin wrote
+        replaces the researched fields and leaves `stato`, `note` and the CV alone; a
+        research on a card the person filled (`compilata_da == "persona"`) is refused,
+        because their own words win. One comment in the thread names the sources, so
+        whoever reads the card can check where it came from."""
+        signup = self.session.get(Signup, signup_id)
+        if signup is None:
+            raise NotFound("signup", signup_id)
+        email = signup.email.strip().lower()
+        row = self._find(email)
+        if row is not None and row.compilata_da == "persona":
+            raise ValidationFailed(ENTITY, "email", "la persona ha già compilato la sua scheda")
+        created = row is None
+        if row is None:
+            utm = {column: getattr(signup, column) for column in UTM_COLUMNS}
+            row = Freelancer(email=email, **utm)
+            self.session.add(row)
+        row.nome = data.nome
+        row.cognome = data.cognome
+        row.linkedin_url = data.linkedin_url
+        row.posizione = data.posizione
+        row.tariffa_giornaliera = data.tariffa_giornaliera
+        row.remoto = data.remoto
+        row.links = list(data.links)
+        row.compilata_da = "admin"
+        try:
+            self.session.commit()
+        except IntegrityError:
+            # Two first drafts racing on one address: the index decides, and the loser
+            # drafts again on top of the winner's row.
+            self.session.rollback()
+            return self.draft_from_signup(signup_id, data, autore)
+        sources = ", ".join(data.fonti)
+        text = (
+            f"Scheda creata dall'iscrizione del {signup.created_at:%d/%m/%Y}. Fonti: {sources}"
+            if created
+            else f"Scheda aggiornata dalla ricerca. Fonti: {sources}"
+        )
+        CommentService(self.session).add(ENTITY, row.id, text, autore)
+        return self.get(row.id)
 
     def list_recent(
         self, limit: int = LIST_LIMIT_DEFAULT, stato: str | None = None
@@ -106,8 +167,7 @@ class FreelancerService:
         return read
 
     def cv(self, freelancer_id: UUID) -> CvFile:
-        row = self._require(freelancer_id)
-        return CvFile(filename=row.cv_filename, mime=row.cv_mime, content=row.cv_bytes)
+        return cv_of(self._require(freelancer_id))
 
     def set_status(self, freelancer_id: UUID, change: StatusChange) -> FreelancerRead:
         if change.stato not in FREELANCER_STATES:

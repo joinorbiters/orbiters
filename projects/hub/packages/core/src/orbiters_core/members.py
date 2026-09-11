@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from orbiters_core.comments import CommentService
 from orbiters_core.config import Settings
 from orbiters_core.errors import NotFound
-from orbiters_core.freelancers import check_cv
+from orbiters_core.freelancers import check_cv, cv_of
 from orbiters_core.mail import Mail, magic_link_mail
 from orbiters_core.models import AUTORE_MAX_LENGTH, Freelancer, MagicLinkToken, MemberSession
 from orbiters_core.schemas import CvFile, MemberProfile, MemberUpdate
@@ -152,8 +152,10 @@ class MemberService:
 
     def update(self, freelancer_id: UUID, data: MemberUpdate) -> MemberProfile:
         """Applies the seven answers and leaves one comment naming the ones that moved,
-        signed with the person's name after the change. Nothing moved, no comment.
-        `stato`, `note` and the attribution are never touched here."""
+        signed with the person's name after the change. Nothing moved, no comment --
+        unless the card was an admin's draft from a signup (ORB-155): saving it, even
+        unchanged, makes it the person's (`compilata_da = "persona"`), and the thread
+        says so. `stato`, `note` and the attribution are never touched here."""
         row = self._require(freelancer_id)
         changed: list[str] = []
         for field, label in FIELD_LABELS.items():
@@ -163,10 +165,15 @@ class MemberService:
             if getattr(row, field) != value:
                 setattr(row, field, value)
                 changed.append(label)
-        if not changed:
+        taken_over = row.compilata_da != "persona"
+        if not changed and not taken_over:
             return MemberProfile.model_validate(row)
+        row.compilata_da = "persona"
         self.session.commit()
-        self._comment(row, f"Profilo aggiornato dalla persona: {', '.join(changed)}")
+        if changed:
+            self._comment(row, f"Profilo aggiornato dalla persona: {', '.join(changed)}")
+        else:
+            self._comment(row, "Scheda confermata dalla persona")
         return MemberProfile.model_validate(row)
 
     def replace_cv(
@@ -176,19 +183,20 @@ class MemberService:
         ones and the thread says so."""
         filename, mime = check_cv(content, filename, mime)
         row = self._require(freelancer_id)
+        first = row.cv_bytes is None
         row.cv_bytes, row.cv_filename, row.cv_mime, row.cv_size = (
             content,
             filename,
             mime,
             len(content),
         )
+        row.compilata_da = "persona"
         self.session.commit()
-        self._comment(row, "CV aggiornato dalla persona")
+        self._comment(row, "CV caricato dalla persona" if first else "CV aggiornato dalla persona")
         return MemberProfile.model_validate(row)
 
     def cv(self, freelancer_id: UUID) -> CvFile:
-        row = self._require(freelancer_id)
-        return CvFile(filename=row.cv_filename, mime=row.cv_mime, content=row.cv_bytes)
+        return cv_of(self._require(freelancer_id))
 
     # ---- helpers ---------------------------------------------------------------------
 

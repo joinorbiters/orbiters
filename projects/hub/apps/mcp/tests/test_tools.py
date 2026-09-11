@@ -129,6 +129,7 @@ async def test_the_admin_tools_read_and_move_a_candidate_without_the_cv(
         names = {tool.name for tool in (await client.list_tools()).tools}
         assert names == {
             "list_signups",
+            "create_freelancer_from_signup",
             "list_freelancers",
             "get_freelancer",
             "set_freelancer_status",
@@ -269,4 +270,38 @@ async def test_a_company_comment_lands_on_the_company_and_a_bad_one_is_a_sentenc
         # Nothing edits or deletes a comment, from here or anywhere.
         names = {tool.name for tool in (await client.list_tools()).tools}
         assert not [n for n in names if "comment" in n and not n.startswith("add_")]
+    _wipe(factory)
+
+
+async def test_a_card_is_written_from_a_signup_with_its_sources_in_the_thread(
+    factory: sessionmaker[Session],
+) -> None:
+    _seed(factory, ["ada@studio.it"])
+    async with Client(build_server(factory)) as client:
+        signup_id = _payload(await client.call_tool("list_signups", {}))["iscrizioni"][0]["id"]
+        created = _payload(
+            await client.call_tool(
+                "create_freelancer_from_signup",
+                {
+                    "signup_id": signup_id,
+                    "nome": "Ada",
+                    "cognome": "Lovelace",
+                    "posizione": "Backend developer",
+                    "fonti": ["https://www.linkedin.com/in/ada"],
+                },
+            )
+        )
+        assert created["email"] == "ada@studio.it"
+        assert created["compilata_da"] == "admin" and created["completa"] is False
+        assert created["cv_filename"] is None and created["tariffa_giornaliera"] is None
+        assert created["commenti"][0]["autore"] == "MCP"
+        assert "https://www.linkedin.com/in/ada" in created["commenti"][0]["testo"]
+        listed = _payload(await client.call_tool("list_signups", {}))["iscrizioni"][0]
+        assert listed["freelancer_id"] == created["id"]
+
+        refused = await client.call_tool(
+            "create_freelancer_from_signup",
+            {"signup_id": signup_id, "nome": "Ada", "cognome": "Lovelace", "fonti": []},
+        )
+        assert refused.is_error
     _wipe(factory)

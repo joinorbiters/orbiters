@@ -133,17 +133,23 @@ export interface Freelancer {
   cognome: string
   email: string
   linkedin_url: string | null
-  cv_filename: string
-  cv_size: number
-  tariffa_giornaliera: string
-  posizione: string
-  remoto: Remoto
+  /** Null on a card an admin wrote from a signup, until the person adds them (ORB-155). */
+  cv_filename: string | null
+  cv_size: number | null
+  tariffa_giornaliera: string | null
+  posizione: string | null
+  remoto: Remoto | null
   links: string[]
   stato: 'nuovo' | 'contattato' | 'attivo' | 'scartato'
   note: string | null
   utm_source: string | null
   utm_campaign: string | null
   created_at: string
+  /** Who wrote the answers last: the person, through the wizard or the member area, or
+   *  an admin from research. */
+  compilata_da: 'persona' | 'admin'
+  /** CV, rate, position and remote preference all present. */
+  completa: boolean
   /** The thread, newest first. The detail carries it; the list leaves it empty. */
   commenti: Comment[]
 }
@@ -213,6 +219,8 @@ export interface Signup {
   linkedin_url: string | null
   utm_source: string | null
   created_at: string
+  /** The card with the same address, if one exists (ORB-155). */
+  freelancer_id: string | null
 }
 
 export const admin = {
@@ -274,14 +282,17 @@ export interface MemberProfile {
   cognome: string
   email: string
   linkedin_url: string | null
-  cv_filename: string
-  cv_size: number
-  tariffa_giornaliera: string
-  posizione: string
-  remoto: Remoto
+  /** Null while the card is the admin's research and not yet the person's (ORB-155). */
+  cv_filename: string | null
+  cv_size: number | null
+  tariffa_giornaliera: string | null
+  posizione: string | null
+  remoto: Remoto | null
   links: string[]
   created_at: string
   updated_at: string
+  /** CV, rate, position and remote preference all present. */
+  completa: boolean
 }
 
 /** The seven answers a member may change. The email is not among them. */

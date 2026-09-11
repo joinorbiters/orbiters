@@ -15,7 +15,7 @@ from orbiters_core.config import Settings
 from orbiters_core.errors import NotFound, ValidationFailed
 from orbiters_core.freelancers import FreelancerService
 from orbiters_core.members import MemberService
-from orbiters_core.models import MagicLinkToken, MemberSession
+from orbiters_core.models import Freelancer, MagicLinkToken, MemberSession
 from orbiters_core.schemas import FreelancerCreate, MemberProfile, MemberUpdate, StatusChange
 
 PDF = b"%PDF-1.7\n1 0 obj<<>>endobj\n%%EOF\n"
@@ -211,3 +211,70 @@ def test_a_row_that_is_not_there_is_not_found(members: MemberService) -> None:
         members.profile(missing)
     with pytest.raises(NotFound):
         members.update(missing, MemberUpdate(**GOOD))
+
+
+# ---- completing a card an admin wrote from a signup (ORB-155) -------------------------
+
+
+def _draft_card(session: Session, email: str = "ada@studio.it") -> UUID:
+    from orbiters_core.schemas import FreelancerDraft, SignupCreate
+    from orbiters_core.service import SignupService
+
+    signup = SignupService(session).subscribe(
+        SignupCreate(email=email, nome="Ada", cognome="Lovelace")
+    )
+    draft = FreelancerDraft(
+        nome="Ada",
+        cognome="Lovelace",
+        posizione="Backend developer",
+        fonti=["https://www.linkedin.com/in/ada"],
+    )
+    return FreelancerService(session).draft_from_signup(signup.id, draft, "Claude").id
+
+
+def test_an_incomplete_card_reads_as_such_and_has_no_cv_to_download(
+    members: MemberService, hub_session: Session
+) -> None:
+    freelancer_id = _draft_card(hub_session)
+    profile = members.profile(freelancer_id)
+    assert profile.completa is False
+    assert (profile.cv_filename, profile.tariffa_giornaliera, profile.remoto) == (None, None, None)
+    with pytest.raises(NotFound):
+        members.cv(freelancer_id)
+
+
+def test_the_person_completes_the_card_and_takes_it_over(
+    members: MemberService, hub_session: Session
+) -> None:
+    freelancer_id = _draft_card(hub_session)
+    after_answers = members.update(freelancer_id, MemberUpdate(**GOOD))
+    assert after_answers.completa is False  # the CV is still missing
+    after_cv = members.replace_cv(freelancer_id, PDF, "Ada CV.pdf", "application/pdf")
+    assert after_cv.completa is True and after_cv.cv_filename == "Ada CV.pdf"
+    row = hub_session.scalar(select(Freelancer).where(Freelancer.id == freelancer_id))
+    assert row is not None and row.compilata_da == "persona"
+    texts = [c.testo for c in CommentService(hub_session).list("freelancer", freelancer_id)]
+    assert texts[0] == "CV caricato dalla persona"
+    assert texts[1].startswith("Profilo aggiornato dalla persona: ")
+    assert "tariffa giornaliera" in texts[1] and "modalità di lavoro" in texts[1]
+
+
+def test_confirming_a_researched_card_unchanged_still_makes_it_the_persons(
+    members: MemberService, hub_session: Session
+) -> None:
+    freelancer_id = _draft_card(hub_session)
+    members.update(
+        freelancer_id,
+        MemberUpdate(**{**GOOD, "linkedin_url": None, "links": []}),
+    )
+    # Nothing but the rate and the remote option moved the first time; the second call
+    # sends the very same answers, and the card still says «persona» afterwards.
+    row = hub_session.scalar(select(Freelancer).where(Freelancer.id == freelancer_id))
+    assert row is not None
+    row.compilata_da = "admin"
+    hub_session.commit()
+    members.update(freelancer_id, MemberUpdate(**{**GOOD, "linkedin_url": None, "links": []}))
+    hub_session.refresh(row)
+    assert row.compilata_da == "persona"
+    texts = [c.testo for c in CommentService(hub_session).list("freelancer", freelancer_id)]
+    assert texts[0] == "Scheda confermata dalla persona"

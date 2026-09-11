@@ -23,6 +23,12 @@ Three public flows and the admin area behind them:
 - `/hub/admin/login` and the freelancer, company and signup lists behind it — a cookie
   session. The first admin is created with `orbiters createadmin` (below); the next ones
   from «Amministratori» inside the area, where they are also edited.
+- A freelancer card can also be born from a signup (ORB-155): an admin writes what the
+  public web says about the person through `POST /api/hub/signups/{id}/scheda` or the
+  MCP tool `create_freelancer_from_signup`, «Iscrizioni» links to it, and the card stays
+  «da completare» until the person adds the CV, the rate and the rest from `/hub/io`.
+  Research never overwrites a card the person filled. Spec:
+  `docs/superpowers/specs/2026-09-11-freelancer-card-from-a-signup-design.md`.
 
 `POST /api/orbiters/signups` is the community site's signup endpoint, moved here
 unchanged on 2026-09-09: the website's form and the ChatGPT Ads conversion still post

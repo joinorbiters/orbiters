@@ -9,21 +9,23 @@ import type { Step } from '@/wizard/Wizard'
 /**
  * The wizard's steps, as a form: every question at once, because the person is
  * correcting and not answering for the first time. The email is not among them (it is
- * the identity the link proved) and the CV is optional here: `null` keeps the one we
- * hold. Everything else, control and rule alike, is the wizard's own.
+ * the identity the link proved). The CV is optional only while we hold one: `null` then
+ * keeps it. On a card an admin wrote from a signup there is none to keep (ORB-155), so
+ * the step stays the wizard's own, required, with its own words. Everything else,
+ * control and rule alike, is the wizard's own.
  */
-export const EDIT_STEPS: Step<FreelancerApplication>[] = FREELANCER_STEPS.filter(
-  (step) => step.id !== 'email',
-).map((step) =>
-  step.id === 'cv'
-    ? {
-        ...step,
-        optional: true,
-        hint: 'Solo se vuoi sostituirlo: un PDF, al massimo 5 MB. Altrimenti teniamo quello che abbiamo.',
-        validate: (value) => (value.cv ? step.validate(value) : null),
-      }
-    : step,
-)
+export function editSteps(hasCv: boolean): Step<FreelancerApplication>[] {
+  return FREELANCER_STEPS.filter((step) => step.id !== 'email').map((step) =>
+    step.id === 'cv' && hasCv
+      ? {
+          ...step,
+          optional: true,
+          hint: 'Solo se vuoi sostituirlo: un PDF, al massimo 5 MB. Altrimenti teniamo quello che abbiamo.',
+          validate: (value) => (value.cv ? step.validate(value) : null),
+        }
+      : step,
+  )
+}
 
 export function Modifica() {
   const me = useMember()
@@ -41,6 +43,7 @@ export function Modifica() {
     return <p className="text-sm text-muted-foreground">Caricamento…</p>
   }
   const value = draft
+  const steps = editSteps(me.data.cv_filename !== null)
   const set = (patch: Partial<FreelancerApplication>) =>
     setDraft((current) => (current ? { ...current, ...patch } : current))
   const saving = update.isPending || replaceCv.isPending
@@ -48,7 +51,7 @@ export function Modifica() {
   async function save() {
     setFailure(null)
     const problems: Record<string, string> = {}
-    for (const step of EDIT_STEPS) {
+    for (const step of steps) {
       const problem = step.validate(value)
       if (problem) problems[step.id] = problem
     }
@@ -65,7 +68,7 @@ export function Modifica() {
       // The PATCH and the CV replacement are two requests: when the first has already
       // gone through, a refusal on the second must not read as if nothing was saved.
       const suffix = saved ? ' Le altre risposte sono salvate.' : ''
-      const known = refusal?.fields.filter((field) => EDIT_STEPS.some((step) => step.id === field)) ?? []
+      const known = refusal?.fields.filter((field) => steps.some((step) => step.id === field)) ?? []
       if (known.length) {
         setErrors(Object.fromEntries(known.map((field) => [field, refusal!.message + suffix])))
       } else {
@@ -85,7 +88,7 @@ export function Modifica() {
         </p>
       </div>
 
-      {EDIT_STEPS.map((step) => (
+      {steps.map((step) => (
         <section key={step.id} className="space-y-3" aria-labelledby={`edit-${step.id}`}>
           <div>
             <h2 id={`edit-${step.id}`} className="text-lg font-semibold tracking-tight">
