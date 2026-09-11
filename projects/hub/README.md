@@ -105,6 +105,16 @@ docker compose -p orbiters exec api uv run --no-sync orbiters createadmin --emai
 
 Asks for the password on the terminal, twice, and never takes it as an argument.
 
+Telling the people with a card that their area is open (ORB-157), once, by hand:
+
+```
+docker compose -p orbiters exec api uv run --no-sync orbiters welcome --email you@example.com
+docker compose -p orbiters exec api uv run --no-sync orbiters welcome --all
+```
+
+One line per address with the outcome; that output is the record of the mailing. Needs
+`ORBITERS_RESEND_API_KEY` in the host `.env`, like the magic link.
+
 ## Deploy
 
 `.github/workflows/deploy-hub.yml`: preview on a push to `main` that touched the hub,

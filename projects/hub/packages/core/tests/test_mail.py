@@ -14,6 +14,7 @@ from orbiters_core.mail import (
     ResendSender,
     magic_link_mail,
     sender_from_settings,
+    welcome_mail,
 )
 
 KEY = "re_non_una_chiave_vera"
@@ -113,3 +114,44 @@ def test_the_magic_link_mail_has_an_html_version_in_the_landings_system() -> Non
     # and it is attribute-safe.
     hostile = magic_link_mail("ada@studio.it", 'https://x.it/?t="><script>', 15)
     assert hostile.html is not None and "<script>" not in hostile.html
+
+
+# ---- the welcome mail (ORB-157) ---------------------------------------------------------
+
+ACCEDI = "https://joinorbiters.com/hub/accedi"
+
+
+def test_the_welcome_mail_says_how_to_enter_what_waits_inside_and_where_the_jobs_are() -> None:
+    mail = welcome_mail(
+        "ada@studio.it", "Ada", ACCEDI, completa=True, posizione="Backend developer"
+    )
+    assert mail.subject == "La tua area su Orbiters è aperta"
+    assert mail.text.startswith("Ciao Ada,")
+    assert ACCEDI in mail.text and "senza password" in mail.text
+    assert "sei Backend developer" in mail.text and "scheda è completa" in mail.text
+    assert "PigroCRM, gratis" in mail.text and "I primi passi da freelance" in mail.text
+    assert "disponibili dopo il login" in mail.text
+    assert "https://www.linkedin.com/company/joinorbiters" in mail.text
+    assert "Forward Deployed Engineer" in mail.text
+
+
+def test_the_welcome_mail_asks_an_incomplete_card_for_the_persons_part() -> None:
+    mail = welcome_mail("ada@studio.it", "Ada", ACCEDI, completa=False, posizione="AI Architect")
+    assert "quello che si trova in pubblico" in mail.text
+    assert "Ti abbiamo segnato come AI Architect." in mail.text
+    assert "il CV, la tariffa a giornata" in mail.text
+    bare = welcome_mail("ada@studio.it", "Ada", ACCEDI, completa=False, posizione=None)
+    assert "segnato come" not in bare.text and "Manca la tua parte" in bare.text
+
+
+def test_the_welcome_mail_has_the_landings_box_and_escapes_the_persons_words() -> None:
+    mail = welcome_mail("ada@studio.it", "<Ada>", ACCEDI, completa=False, posizione="<b>x</b>")
+    assert mail.html is not None
+    html = mail.html
+    assert html.count(ACCEDI) == 3 and "Entra nella tua area" in html
+    assert "<Ada>" not in html and "&lt;Ada&gt;" in html
+    assert "<b>x</b>" not in html and "&lt;b&gt;x&lt;/b&gt;" in html
+    assert 'href="https://www.linkedin.com/company/joinorbiters"' in html
+    for colour in ("#f1f2f3", "#011936", "#ed254e", "#e5133e"):
+        assert colour in html, colour
+    assert "border-radius" not in html and "Privacy" in html
