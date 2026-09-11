@@ -67,7 +67,8 @@ function idsOn(page: string): Set<string> {
  *  No `example.com` here on purpose: it is the host the suite's fixtures use, and a link
  *  to it on a page is a fixture that leaked into the markup (ORB-116, after ORB-97 on
  *  the hub). */
-const EXTERNAL_HOSTS = ['github.com', 'pigro.joinorbiters.com', 'openai.com', 'humancraft.tech']
+// `www.linkedin.com` since ORB-151: the four voices link to their public profiles.
+const EXTERNAL_HOSTS = ['github.com', 'pigro.joinorbiters.com', 'openai.com', 'humancraft.tech', 'www.linkedin.com']
 
 function checkExternal(href: string): string | undefined {
   let url: URL
