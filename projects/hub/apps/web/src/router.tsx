@@ -8,6 +8,7 @@ import { Shell } from '@/components/Shell'
 import { Chooser } from '@/pages/Chooser'
 import { CompanyWizard } from '@/pages/CompanyWizard'
 import { FreelancerWizard } from '@/pages/FreelancerWizard'
+import { AdminAccessi } from '@/pages/admin/Accessi'
 import { AdminGuida } from '@/pages/admin/Guida'
 import { Thanks } from '@/pages/Thanks'
 import { AdminLayout } from '@/pages/admin/AdminLayout'
@@ -113,6 +114,7 @@ const adminIscrizioni = createRoute({
 })
 const adminPigro = createRoute({ getParentRoute: () => adminArea, path: '/pigro', component: AdminPigro })
 const adminGuida = createRoute({ getParentRoute: () => adminArea, path: '/guida', component: AdminGuida })
+const adminAccessi = createRoute({ getParentRoute: () => adminArea, path: '/accessi', component: AdminAccessi })
 const adminAmministratori = createRoute({
   getParentRoute: () => adminArea,
   path: '/amministratori',
@@ -138,6 +140,7 @@ const routeTree = root.addChildren([
     adminIscrizioni,
     adminPigro,
     adminGuida,
+    adminAccessi,
     adminAmministratori,
   ]),
 ])

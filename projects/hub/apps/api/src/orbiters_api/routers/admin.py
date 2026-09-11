@@ -22,6 +22,7 @@ from orbiters_core.admin import AdminRead, AdminService
 from orbiters_core.comments import CommentService
 from orbiters_core.companies import CompanyService
 from orbiters_core.freelancers import FreelancerService
+from orbiters_core.logins import LoginService
 from orbiters_core.models import NAME_MAX_LENGTH
 from orbiters_core.perks import PerkService
 from orbiters_core.schemas import (
@@ -33,6 +34,7 @@ from orbiters_core.schemas import (
     FreelancerList,
     FreelancerRead,
     GuideStats,
+    LoginStats,
     SignupList,
     StatusChange,
 )
@@ -201,6 +203,14 @@ def move_company(
     _: AdminDep, session: SessionDep, company_id: UUID, change: StatusChange
 ) -> CompanyRead:
     return CompanyService(session).set_status(company_id, change)
+
+
+@router.get("/logins", response_model=LoginStats)
+def login_stats(_: AdminDep, session: SessionDep) -> LoginStats:
+    """Who entered the hub and when (ORB-158): every login through a magic link, the
+    distinct members behind them, the last week, the latest by name. Written by
+    `POST /auth/enter` and by nothing else."""
+    return LoginService(session).stats()
 
 
 @router.get("/perks/guida", response_model=GuideStats)

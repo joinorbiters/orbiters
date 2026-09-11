@@ -1,15 +1,23 @@
 """Freelancers: the wizard's applications, what an admin does with them, and since
 ORB-155 the card an admin writes from a signup for the person to complete."""
 
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import Subquery, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orbiters_core.comments import CommentService
 from orbiters_core.errors import NotFound, ValidationFailed
-from orbiters_core.models import CV_MAX_BYTES, FREELANCER_STATES, UTM_COLUMNS, Freelancer, Signup
+from orbiters_core.models import (
+    CV_MAX_BYTES,
+    FREELANCER_STATES,
+    UTM_COLUMNS,
+    Freelancer,
+    MemberLogin,
+    Signup,
+)
 from orbiters_core.schemas import (
     CvFile,
     FreelancerCreate,
@@ -54,6 +62,29 @@ def cv_of(row: Freelancer) -> CvFile:
     if row.cv_bytes is None or row.cv_filename is None or row.cv_mime is None:
         raise NotFound("cv", row.id)
     return CvFile(filename=row.cv_filename, mime=row.cv_mime, content=row.cv_bytes)
+
+
+def _logins_per_card() -> Subquery:
+    """How many times each card's owner entered and when last (ORB-158), as one grouped
+    subquery the list joins once: two hundred people are not two hundred counts."""
+    return (
+        select(
+            MemberLogin.freelancer_id,
+            func.count().label("accessi"),
+            func.max(MemberLogin.logged_at).label("ultimo_accesso"),
+        )
+        .group_by(MemberLogin.freelancer_id)
+        .subquery()
+    )
+
+
+def _read_with_logins(
+    row: Freelancer, accessi: int | None, ultimo: datetime | None
+) -> FreelancerRead:
+    read = FreelancerRead.model_validate(row)
+    read.accessi = accessi or 0
+    read.ultimo_accesso = ultimo
+    return read
 
 
 class FreelancerService:
@@ -148,21 +179,34 @@ class FreelancerService:
         self, limit: int = LIST_LIMIT_DEFAULT, stato: str | None = None
     ) -> FreelancerList:
         limit = max(1, min(limit, LIST_LIMIT_MAX))
-        stmt = select(Freelancer)
+        logins = _logins_per_card()
+        stmt = select(Freelancer, logins.c.accessi, logins.c.ultimo_accesso).outerjoin(
+            logins, logins.c.freelancer_id == Freelancer.id
+        )
         count = select(func.count()).select_from(Freelancer)
         if stato is not None:
             stmt = stmt.where(Freelancer.stato == stato)
             count = count.where(Freelancer.stato == stato)
-        rows = self.session.scalars(
+        rows = self.session.execute(
             stmt.order_by(Freelancer.created_at.desc(), Freelancer.id.desc()).limit(limit)
         ).all()
         totale = self.session.scalar(count) or 0
-        return FreelancerList(totale=totale, items=[FreelancerRead.model_validate(r) for r in rows])
+        return FreelancerList(
+            totale=totale,
+            items=[_read_with_logins(row, accessi, ultimo) for row, accessi, ultimo in rows],
+        )
 
     def get(self, freelancer_id: UUID) -> FreelancerRead:
         """The row with its thread of comments, newest first. Only here: the list
         leaves `commenti` empty."""
-        read = FreelancerRead.model_validate(self._require(freelancer_id))
+        row = self._require(freelancer_id)
+        logins = _logins_per_card()
+        counted = self.session.execute(
+            select(logins.c.accessi, logins.c.ultimo_accesso).where(
+                logins.c.freelancer_id == row.id
+            )
+        ).first()
+        read = _read_with_logins(row, *(counted or (None, None)))
         read.commenti = CommentService(self.session).list(ENTITY, freelancer_id)
         return read
 

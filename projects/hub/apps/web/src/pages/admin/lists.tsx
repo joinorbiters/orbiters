@@ -13,6 +13,7 @@ import {
   STATE_LABELS,
   formatBytes,
   formatDate,
+  formatDateTime,
   formatEuro,
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -93,6 +94,19 @@ export function Empty({ children }: { children: React.ReactNode }) {
   return <p className="px-6 py-10 text-center text-sm text-muted-foreground">{children}</p>
 }
 
+/** One number on a stats page («La guida», «Accessi»), inside a `<dl>`. */
+export function Figure({ label, value, note }: { label: string; value: number; note?: string }) {
+  return (
+    <div>
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="mt-1 text-3xl font-semibold tracking-tight">
+        {value}
+        {note && <span className="ml-2 text-base font-normal text-muted-foreground">{note}</span>}
+      </dd>
+    </div>
+  )
+}
+
 // ---- freelancers -----------------------------------------------------------------------
 
 export function AdminFreelancers() {
@@ -118,6 +132,7 @@ export function AdminFreelancers() {
               <th className="px-3 py-2 text-right font-medium">Tariffa</th>
               <th className="px-3 py-2 font-medium">Dove</th>
               <th className="px-3 py-2 font-medium">Stato</th>
+              <th className="px-3 py-2 font-medium">Ultimo accesso</th>
               <th className="px-6 py-2 text-right font-medium">Quando</th>
             </tr>
           </thead>
@@ -140,6 +155,9 @@ export function AdminFreelancers() {
                     <StatePill stato={item.stato} />
                     {!item.completa && <IncompletePill />}
                   </div>
+                </td>
+                <td className="px-3 py-2.5 text-muted-foreground">
+                  {item.ultimo_accesso === null ? '—' : formatDateTime(item.ultimo_accesso)}
                 </td>
                 <td className="px-6 py-2.5 text-right text-muted-foreground">{formatDate(item.created_at)}</td>
               </tr>
@@ -242,6 +260,11 @@ export function AdminFreelancerDetail() {
             ) : '—'}
           </Row>
           <Row label="Arrivato">{formatDate(f.created_at)}{f.utm_source ? ` · da ${f.utm_source}` : ''}</Row>
+          <Row label="Accessi">
+            {f.accessi === 0 || f.ultimo_accesso === null
+              ? 'Mai entrato'
+              : `${f.accessi} · ultimo ${formatDateTime(f.ultimo_accesso)}`}
+          </Row>
           <Row label="Scheda">{ownership(f)}</Row>
         </dl>
         <StatusEditor

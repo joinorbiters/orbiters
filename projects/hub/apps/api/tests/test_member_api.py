@@ -348,3 +348,26 @@ def test_a_member_completes_the_card_an_admin_drafted(
     assert client.get("/api/hub/me/cv").status_code == 200
     api_session.execute(text("DELETE FROM signups"))
     api_session.commit()
+
+
+def test_a_login_shows_up_on_the_admin_side(
+    client: TestClient, sender: RecordingSender, clean: None, api_session: Session
+) -> None:
+    from orbiters_core.admin import AdminService
+
+    _apply(client, "ada@studio.it")
+    _enter(client, sender, "ada@studio.it")
+    assert client.post("/api/hub/me/logout").status_code == 204
+    # The session is gone; the login stays.
+    assert client.get("/api/hub/logins").status_code == 401
+    AdminService(api_session, Settings(_env_file=None)).create(  # type: ignore[call-arg]
+        ADMIN["email"], "Ivan", ADMIN["password"]
+    )
+    assert client.post("/api/hub/auth/login", json=ADMIN).status_code == 200
+    stats = client.get("/api/hub/logins").json()
+    assert (stats["totale"], stats["membri"], stats["membri_totali"]) == (1, 1, 1)
+    assert stats["recenti"][0]["email"] == "ada@studio.it"
+    card = client.get("/api/hub/freelancers").json()["items"][0]
+    assert card["accessi"] == 1 and card["ultimo_accesso"] is not None
+    detail = client.get(f"/api/hub/freelancers/{card['id']}").json()
+    assert detail["accessi"] == 1

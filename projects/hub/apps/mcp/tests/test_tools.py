@@ -139,6 +139,7 @@ async def test_the_admin_tools_read_and_move_a_candidate_without_the_cv(
             "set_company_status",
             "add_company_comment",
             "guide_stats",
+            "login_stats",
         }
     _wipe(factory)
 
@@ -304,4 +305,17 @@ async def test_a_card_is_written_from_a_signup_with_its_sources_in_the_thread(
             {"signup_id": signup_id, "nome": "Ada", "cognome": "Lovelace", "fonti": []},
         )
         assert refused.is_error
+    _wipe(factory)
+
+
+async def test_login_stats_reads_an_empty_hub_and_a_card_carries_its_count(
+    factory: sessionmaker[Session],
+) -> None:
+    freelancer_id = _seed_freelancer(factory)
+    async with Client(build_server(factory)) as client:
+        stats = _payload(await client.call_tool("login_stats", {}))
+        assert (stats["totale"], stats["membri"], stats["membri_totali"]) == (0, 0, 1)
+        assert stats["recenti"] == []
+        card = _payload(await client.call_tool("get_freelancer", {"freelancer_id": freelancer_id}))
+        assert card["accessi"] == 0 and card["ultimo_accesso"] is None
     _wipe(factory)

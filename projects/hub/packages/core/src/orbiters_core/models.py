@@ -257,6 +257,23 @@ class MagicLinkToken(Base, PrimaryKeyMixin):
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
+class MemberLogin(Base, PrimaryKeyMixin):
+    """One row per time a member entered through a magic link (ORB-158): who and when,
+    and nothing else -- no address, no user agent. A log rather than the session table,
+    which forgets a session on logout and on expiry, so the admin can read who came in
+    and when a week later. Written by `MemberService.enter` in the commit that opens the
+    session. Hangs on the freelancer with `ON DELETE CASCADE`, like the sessions."""
+
+    __tablename__ = "member_logins"
+
+    freelancer_id: Mapped[UUID] = mapped_column(
+        ForeignKey("freelancers.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    logged_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class GuideDownload(Base, PrimaryKeyMixin):
     """One row per time a member fetched the guide (ORB-156): who and when, and nothing
     else. A log rather than a counter on the freelancer, so the admin can read a trend

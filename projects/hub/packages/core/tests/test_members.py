@@ -280,6 +280,40 @@ def test_confirming_a_researched_card_unchanged_still_makes_it_the_persons(
     assert texts[0] == "Scheda confermata dalla persona"
 
 
+# ---- who entered, and when (ORB-158) ----------------------------------------------------
+
+
+def test_entering_is_recorded_and_the_card_and_the_stats_read_it_back(
+    members: MemberService, hub_session: Session
+) -> None:
+    from orbiters_core.logins import LoginService
+
+    ada = _apply(hub_session, "ada@studio.it")
+    _apply(hub_session, "bob@studio.it")
+    before = LoginService(hub_session).stats()
+    assert (before.totale, before.membri, before.membri_totali) == (0, 0, 2)
+    assert FreelancerService(hub_session).get(ada).accessi == 0
+
+    for _ in range(2):
+        mail = members.request_link("ada@studio.it")
+        assert mail is not None
+        assert members.enter(_token_from(mail.text)) is not None
+    # A spent link and a wrong token open nothing, so they record nothing either.
+    assert members.enter("non-un-token-vero-ma-lungo-abbastanza") is None
+
+    card = FreelancerService(hub_session).get(ada)
+    assert card.accessi == 2 and card.ultimo_accesso is not None
+    listed = {item.email: item for item in FreelancerService(hub_session).list_recent().items}
+    assert listed["ada@studio.it"].accessi == 2
+    assert listed["bob@studio.it"].accessi == 0 and listed["bob@studio.it"].ultimo_accesso is None
+
+    stats = LoginService(hub_session).stats()
+    assert (stats.totale, stats.membri, stats.membri_totali, stats.ultimi_7_giorni) == (2, 1, 2, 2)
+    assert [login.email for login in stats.recenti] == ["ada@studio.it", "ada@studio.it"]
+    assert stats.recenti[0].logged_at >= stats.recenti[1].logged_at
+    assert stats.recenti[0].freelancer_id == ada
+
+
 # ---- the welcome mailing (ORB-157) ------------------------------------------------------
 
 

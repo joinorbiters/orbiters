@@ -25,6 +25,7 @@ from orbiters_core.comments import CommentService
 from orbiters_core.companies import CompanyService
 from orbiters_core.errors import DomainError
 from orbiters_core.freelancers import FreelancerService
+from orbiters_core.logins import LoginService
 from orbiters_core.perks import PerkService
 from orbiters_core.schemas import FreelancerDraft, StatusChange
 from orbiters_core.service import LIST_LIMIT_DEFAULT, SignupService
@@ -182,6 +183,15 @@ def build_server(factory: SessionFactory) -> MCPServer:
         `ultimi_7_giorni` i download dell'ultima settimana e `recenti` gli ultimi con
         nome ed email. Solo lettura."""
         return _run(lambda s: PerkService(s).guide_stats())
+
+    @mcp.tool()
+    def login_stats() -> dict[str, Any]:
+        """Chi è entrato nella sua area e quando: `totale` gli accessi con il link via
+        email, `membri` le persone diverse dietro, `membri_totali` quante hanno una
+        scheda, `ultimi_7_giorni` gli accessi dell'ultima settimana e `recenti` gli
+        ultimi con nome ed email. Ogni scheda in `list_freelancers` e `get_freelancer`
+        porta anche `accessi` e `ultimo_accesso`."""
+        return _run(lambda s: LoginService(s).stats())
 
     def _run(call: Callable[[Session], BaseModel]) -> dict[str, Any]:
         """One session per call, closed whatever happened, and a domain error rendered
