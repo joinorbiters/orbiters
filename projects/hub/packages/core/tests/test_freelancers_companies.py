@@ -2,7 +2,7 @@
 
 from datetime import date
 from decimal import Decimal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -13,7 +13,13 @@ from orbiters_core.companies import CompanyService
 from orbiters_core.errors import NotFound, ValidationFailed
 from orbiters_core.freelancers import FreelancerService, check_cv
 from orbiters_core.models import CV_MAX_BYTES
-from orbiters_core.schemas import CompanyCreate, FreelancerCreate, SignupUtm, StatusChange
+from orbiters_core.schemas import (
+    CompanyCreate,
+    FreelancerCreate,
+    FreelancerDraft,
+    SignupUtm,
+    StatusChange,
+)
 
 PDF = b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
 
@@ -36,6 +42,7 @@ def _application(email: str = "ada@studio.it", **extra: object) -> FreelancerCre
 def clean(hub_session: Session) -> Session:
     yield hub_session  # type: ignore[misc]
     hub_session.rollback()
+    hub_session.execute(text("DELETE FROM comments"))
     hub_session.execute(text("DELETE FROM freelancers"))
     hub_session.execute(text("DELETE FROM companies"))
     hub_session.commit()
@@ -198,3 +205,113 @@ def test_a_company_request_outside_the_form_is_refused(bad: dict[str, object]) -
     payload.update(bad)
     with pytest.raises(ValidationError):
         CompanyCreate(**payload)  # type: ignore[arg-type]
+
+
+# ---- a card born from a signup (ORB-155) ---------------------------------------------
+
+
+def _signup(session: Session, email: str = "ada@studio.it", **extra: object) -> UUID:
+    from orbiters_core.schemas import SignupCreate
+    from orbiters_core.service import SignupService
+
+    payload: dict[str, object] = {"email": email, "nome": "Ada", "cognome": "Lovelace"}
+    payload.update(extra)
+    read = SignupService(session).subscribe(SignupCreate(**payload))  # type: ignore[arg-type]
+    return read.id
+
+
+def _draft(**extra: object) -> FreelancerDraft:
+    payload: dict[str, object] = {
+        "nome": "Ada",
+        "cognome": "Lovelace",
+        "linkedin_url": "https://www.linkedin.com/in/ada",
+        "posizione": "Backend developer",
+        "links": ["https://github.com/ada"],
+        "fonti": ["https://www.linkedin.com/in/ada", "https://ada.dev"],
+    }
+    payload.update(extra)
+    return FreelancerDraft(**payload)  # type: ignore[arg-type]
+
+
+def test_a_draft_needs_a_source_and_takes_only_https_ones() -> None:
+    assert _draft().tariffa_giornaliera is None and _draft().remoto is None
+    for bad in ({"fonti": []}, {"fonti": ["http://ada.dev"]}, {"posizione": "   "}):
+        with pytest.raises(ValidationError):
+            _draft(**bad)
+
+
+def test_a_card_from_a_signup_is_incomplete_and_carries_the_signup_attribution(
+    clean: Session,
+) -> None:
+    signup_id = _signup(clean, utm=SignupUtm(utm_source="openai"))
+    read = FreelancerService(clean).draft_from_signup(signup_id, _draft(), "Claude")
+    assert read.email == "ada@studio.it" and read.utm_source == "openai"
+    assert read.compilata_da == "admin" and read.completa is False
+    assert (read.cv_filename, read.cv_size, read.tariffa_giornaliera, read.remoto) == (
+        None,
+        None,
+        None,
+        None,
+    )
+    assert read.posizione == "Backend developer" and read.links == ["https://github.com/ada"]
+    assert read.stato == "nuovo"
+    assert len(read.commenti) == 1
+    comment = read.commenti[0]
+    assert comment.autore == "Claude"
+    assert comment.testo.startswith("Scheda creata dall'iscrizione del ")
+    assert "https://www.linkedin.com/in/ada" in comment.testo and "https://ada.dev" in comment.testo
+    # «Iscrizioni» can now point at it.
+    from orbiters_core.service import SignupService
+
+    item = SignupService(clean).list_recent().iscrizioni[0]
+    assert item.freelancer_id == read.id
+
+
+def test_a_second_research_replaces_the_researched_fields_and_leaves_the_admins(
+    clean: Session,
+) -> None:
+    service = FreelancerService(clean)
+    signup_id = _signup(clean)
+    first = service.draft_from_signup(signup_id, _draft(), "Claude")
+    service.set_status(first.id, StatusChange(stato="contattato", note="chiamata fatta"))
+    again = service.draft_from_signup(
+        signup_id, _draft(posizione="CTO", fonti=["https://ada.dev/about"]), "Claude"
+    )
+    assert again.id == first.id
+    assert again.posizione == "CTO"
+    assert (again.stato, again.note) == ("contattato", "chiamata fatta")
+    assert again.commenti[0].testo.startswith("Scheda aggiornata dalla ricerca.")
+    assert len(again.commenti) == 2
+
+
+def test_research_never_overwrites_a_card_the_person_filled(clean: Session) -> None:
+    service = FreelancerService(clean)
+    service.apply(_application(), PDF, "Ada CV.pdf", "application/pdf")
+    signup_id = _signup(clean)
+    with pytest.raises(ValidationFailed) as refused:
+        service.draft_from_signup(signup_id, _draft(posizione="CTO"), "Claude")
+    assert refused.value.details["field"] == "email"
+    assert service.list_recent().items[0].posizione == "Backend developer"
+
+
+def test_a_draft_on_an_unknown_signup_is_not_found(clean: Session) -> None:
+    with pytest.raises(NotFound):
+        FreelancerService(clean).draft_from_signup(uuid4(), _draft(), "Claude")
+
+
+def test_the_wizard_takes_over_a_researched_card(clean: Session) -> None:
+    service = FreelancerService(clean)
+    signup_id = _signup(clean)
+    drafted = service.draft_from_signup(signup_id, _draft(), "Claude")
+    assert drafted.compilata_da == "admin"
+    applied = service.apply(_application(), PDF, "Ada CV.pdf", "application/pdf")
+    assert applied.id == drafted.id
+    assert applied.compilata_da == "persona" and applied.completa is True
+
+
+def test_a_card_without_a_cv_has_none_to_download(clean: Session) -> None:
+    service = FreelancerService(clean)
+    drafted = service.draft_from_signup(_signup(clean), _draft(), "Claude")
+    with pytest.raises(NotFound) as missing:
+        service.cv(drafted.id)
+    assert missing.value.details["entity"] == "cv"

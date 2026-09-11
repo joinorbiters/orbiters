@@ -4,7 +4,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field, field_validator
 
 from orbiters_core.models import (
     AZIENDA_MAX_LENGTH,
@@ -158,6 +158,9 @@ class SignupListItem(BaseModel):
     utm_campaign: str | None = None
     utm_content: str | None = None
     utm_term: str | None = None
+    # The freelancer card with this address, if one exists: what «Iscrizioni» links to
+    # (ORB-155). Filled by `SignupService.list_recent` with one join, not a query per row.
+    freelancer_id: UUID | None = None
     utm_id: str | None = None
 
 
@@ -298,6 +301,51 @@ class MemberUpdate(FreelancerFields):
     (it is the identity the link proved) and never the admin's fields."""
 
 
+FONTI_MAX = 10
+
+
+class FreelancerDraft(BaseModel):
+    """What an admin found about a signup on the public web (ORB-155): a name, maybe a
+    LinkedIn profile, a position, some links. The same rules as `FreelancerFields` on
+    the same names, with the answers nothing public states -- the rate, the remote
+    option, even the position -- optional, and `None` meaning «not found». The CV is
+    not here at all: it comes from the person. `fonti` is required and non-empty, because
+    a card written from research with no source is a card nobody can check."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    nome: SafeStr = Field(min_length=1, max_length=NAME_MAX_LENGTH)
+    cognome: SafeStr = Field(min_length=1, max_length=NAME_MAX_LENGTH)
+    linkedin_url: SafeStr | None = Field(default=None, max_length=LINKEDIN_URL_MAX_LENGTH)
+    posizione: SafeStr | None = Field(default=None, max_length=POSIZIONE_MAX_LENGTH)
+    tariffa_giornaliera: Decimal | None = Field(
+        default=None, max_digits=7, decimal_places=2, ge=TARIFFA_MIN, le=TARIFFA_MAX
+    )
+    remoto: Remoto | None = None
+    links: list[SafeStr] = Field(default_factory=list, max_length=LINKS_MAX)
+    fonti: list[SafeStr] = Field(min_length=1, max_length=FONTI_MAX)
+
+    @field_validator("nome", "cognome", mode="after")
+    @classmethod
+    def _trimmed(cls, value: str) -> str:
+        return _clean_text(value, what="un valore")
+
+    @field_validator("posizione", mode="after")
+    @classmethod
+    def _trimmed_or_none(cls, value: str | None) -> str | None:
+        return None if value is None else _clean_text(value, what="una posizione")
+
+    @field_validator("linkedin_url", mode="after")
+    @classmethod
+    def _linkedin(cls, value: str | None) -> str | None:
+        return SignupCreate._linkedin(value)
+
+    @field_validator("links", "fonti", mode="after")
+    @classmethod
+    def _urls(cls, value: list[str]) -> list[str]:
+        return FreelancerFields._links(value)
+
+
 class CompanyCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -353,6 +401,16 @@ class CommentCreate(BaseModel):
     testo: SafeStr = Field(min_length=1, max_length=COMMENT_MAX_LENGTH)
 
 
+def _is_complete(card: "MemberProfile | FreelancerRead") -> bool:
+    """A card the wizard would have accepted: CV, rate, position and remote option all
+    there. What «Da completare» in the admin area and the notice in the member area read
+    (ORB-155). The name and the address are never missing, so they are not checked."""
+    return all(
+        value is not None
+        for value in (card.cv_size, card.tariffa_giornaliera, card.posizione, card.remoto)
+    )
+
+
 class MemberProfile(BaseModel):
     """The row as its owner reads it: what they gave, and nothing the admin wrote.
     No `stato`, no `note`, no attribution, and never the CV bytes."""
@@ -364,14 +422,21 @@ class MemberProfile(BaseModel):
     cognome: str
     email: str
     linkedin_url: str | None
-    cv_filename: str
-    cv_size: int
-    tariffa_giornaliera: Decimal
-    posizione: str
-    remoto: str
+    # `None` on a card an admin wrote from a signup and the person has not completed
+    # yet (ORB-155): no CV, no rate, no position, no remote option until they say so.
+    cv_filename: str | None
+    cv_size: int | None
+    tariffa_giornaliera: Decimal | None
+    posizione: str | None
+    remoto: str | None
     links: list[str]
     created_at: datetime
     updated_at: datetime
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def completa(self) -> bool:
+        return _is_complete(self)
 
 
 class LinkRequest(BaseModel):
@@ -403,15 +468,18 @@ class FreelancerRead(BaseModel):
     cognome: str
     email: str
     linkedin_url: str | None
-    cv_filename: str
-    cv_mime: str
-    cv_size: int
-    tariffa_giornaliera: Decimal
-    posizione: str
-    remoto: str
+    # `None` on a card born from a signup that the person has not completed (ORB-155).
+    cv_filename: str | None
+    cv_mime: str | None
+    cv_size: int | None
+    tariffa_giornaliera: Decimal | None
+    posizione: str | None
+    remoto: str | None
     links: list[str]
     stato: str
     note: str | None
+    # Who wrote the seven answers last: `persona` or `admin` (`COMPILATA_DA`).
+    compilata_da: str
     utm_source: str | None = None
     utm_medium: str | None = None
     utm_campaign: str | None = None
@@ -421,6 +489,11 @@ class FreelancerRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     commenti: list[CommentRead] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def completa(self) -> bool:
+        return _is_complete(self)
 
 
 class FreelancerList(BaseModel):

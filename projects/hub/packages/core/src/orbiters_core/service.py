@@ -2,7 +2,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from orbiters_core.models import Signup
+from orbiters_core.models import Freelancer, Signup
 from orbiters_core.schemas import SignupCreate, SignupList, SignupListItem, SignupRead
 
 LIST_LIMIT_DEFAULT = 100
@@ -57,13 +57,23 @@ class SignupService:
         tool by construction: neither hands an actor down here, because there is exactly
         one kind of caller allowed to reach this method at all."""
         limit = max(1, min(limit, LIST_LIMIT_MAX))
-        rows = self.session.scalars(
-            select(Signup).order_by(Signup.created_at.desc(), Signup.id.desc()).limit(limit)
+        # The freelancer card with the same address, when there is one (ORB-155): one
+        # outer join on the two case-insensitive unique indexes, not a query per row.
+        rows = self.session.execute(
+            select(Signup, Freelancer.id)
+            .outerjoin(Freelancer, func.lower(Freelancer.email) == func.lower(Signup.email))
+            .order_by(Signup.created_at.desc(), Signup.id.desc())
+            .limit(limit)
         ).all()
         totale = self.session.scalar(select(func.count()).select_from(Signup)) or 0
         return SignupList(
             totale=totale,
-            iscrizioni=[SignupListItem.model_validate(row) for row in rows],
+            iscrizioni=[
+                SignupListItem.model_validate(
+                    {**SignupListItem.model_validate(row).model_dump(), "freelancer_id": card_id}
+                )
+                for row, card_id in rows
+            ],
         )
 
     def _fill_in_what_is_missing(self, row: Signup, data: SignupCreate) -> Signup:
