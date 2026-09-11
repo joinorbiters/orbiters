@@ -837,12 +837,15 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
         tipo: str | None = None,
         stato: str | None = None,
         anno: int | None = None,
+        escludi_consumate: bool = False,
         limit: BoundedLimit = 50,
         cursor: str | None = None,
     ) -> dict[str, Any]:
         """Elenca fatture e proforma. Passa `next_cursor` come `cursor` per la pagina
-        successiva. Per scaricare il PDF o l'XML usa l'API REST: MCP restituisce
-        identificativi, non file."""
+        successiva. `escludi_consumate` lascia fuori le proforma gia' emesse come
+        fattura, che l'elenco del sito non mostra sotto «Tutte»: la fattura porta il
+        loro numero e `origine_proforma_id` punta alla proforma. Per scaricare il PDF
+        o l'XML usa l'API REST: MCP restituisce identificativi, non file."""
         return invoices.search(
             context,
             InvoiceListQuery(
@@ -851,6 +854,7 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
                 tipo=tipo,  # type: ignore[arg-type]
                 stato=stato,  # type: ignore[arg-type]
                 anno=anno,
+                escludi_consumate=escludi_consumate,
                 limit=cast(int, limit),
                 cursor=UUID(cursor) if cursor else None,
             ),
