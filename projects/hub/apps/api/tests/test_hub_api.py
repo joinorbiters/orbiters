@@ -54,6 +54,47 @@ def test_an_application_with_a_cv_is_accepted_and_stored(
     assert row.utm_source == "linkedin"
 
 
+def test_the_page_the_person_started_from_is_stored_beside_the_campaign(
+    client: TestClient, api_session: Session
+) -> None:
+    """ORB-167: `origine` is the page of the site the door was on, `home` or `pigrocrm`,
+    as the landing's script put it on the link. A slug, or nothing: a value that is not
+    one is refused with the field's name, the same as any other field."""
+    _clean(api_session)
+    accepted = client.post(
+        "/api/hub/freelancers",
+        data={**_form(), "origine": "pigrocrm"},
+        files={"cv": ("Ada CV.pdf", PDF, "application/pdf")},
+    )
+    assert accepted.status_code == 201, accepted.text
+    row = api_session.execute(text("SELECT origine, utm_source FROM freelancers")).one()
+    assert (row.origine, row.utm_source) == ("pigrocrm", "linkedin")
+
+    refused = client.post(
+        "/api/hub/freelancers",
+        data={**_form(email="bob@studio.it"), "origine": "<script>"},
+        files={"cv": ("CV.pdf", PDF, "application/pdf")},
+    )
+    assert refused.status_code == 422
+    assert "origine" in [error["loc"][-1] for error in refused.json()["detail"]]
+
+    company = client.post(
+        "/api/hub/companies",
+        json={
+            "nome_azienda": "XYZ",
+            "referente": "Grace Hopper",
+            "email": "grace@xyz.it",
+            "progetto": "Un backend da rifare.",
+            "periodo_da": "2026-10-01",
+            "durata": "3 mesi",
+            "budget_giornaliero": "500",
+            "utm": {"utm_source": "linkedin", "origine": "home"},
+        },
+    )
+    assert company.status_code == 201, company.text
+    assert api_session.execute(text("SELECT origine FROM companies")).scalar() == "home"
+
+
 def test_a_missing_or_non_pdf_cv_is_a_422_that_names_the_field(
     client: TestClient, api_session: Session
 ) -> None:

@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FREELANCER_STEPS, FreelancerWizard, readPerk } from './FreelancerWizard'
 
 /** The wizard mounted on its own little router, so `navigate` has somewhere to go. */
-function mount(path = '/freelance?utm_source=linkedin') {
+function mount(path = '/freelance?utm_source=linkedin&da=pigrocrm') {
   const root = createRootRoute({ component: () => <Outlet /> })
   const freelance = createRoute({ getParentRoute: () => root, path: '/freelance', component: FreelancerWizard })
   const grazie = createRoute({
@@ -121,6 +121,7 @@ describe('FreelancerWizard', () => {
     expect(body.get('email')).toBe('ada@studio.it')
     expect(body.get('remoto')).toBe('remoto')
     expect(body.get('utm_source')).toBe('linkedin')
+    expect(body.get('origine')).toBe('pigrocrm')
     expect(body.getAll('links')).toEqual(['https://github.com/ada'])
   })
 })

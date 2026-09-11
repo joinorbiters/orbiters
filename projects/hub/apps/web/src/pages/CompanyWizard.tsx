@@ -1,7 +1,7 @@
 import { useLocation, useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import { ApiError, requestPeople, type CompanyRequest } from '@/lib/api'
-import { resolveUtm } from '@/lib/utm'
+import { resolveAttribution } from '@/lib/utm'
 import { LongTextField, TextField } from '@/wizard/fields'
 import { Wizard, type Step } from '@/wizard/Wizard'
 
@@ -145,7 +145,7 @@ export function CompanyWizard() {
     try {
       await requestPeople(
         { ...value, budget_giornaliero: value.budget_giornaliero.replace(',', '.') },
-        resolveUtm(searchStr),
+        resolveAttribution(searchStr),
       )
       void navigate({ to: '/grazie', search: { chi: 'azienda' } })
     } catch (error) {

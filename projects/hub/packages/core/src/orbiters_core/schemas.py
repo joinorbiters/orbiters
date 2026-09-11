@@ -12,6 +12,7 @@ from orbiters_core.models import (
     DURATA_MAX_LENGTH,
     LINKEDIN_URL_MAX_LENGTH,
     NAME_MAX_LENGTH,
+    ORIGINE_MAX_LENGTH,
     POSIZIONE_MAX_LENGTH,
     UTM_MAX_LENGTH,
 )
@@ -57,6 +58,11 @@ class SignupUtm(BaseModel):
     utm_content: str | None = Field(default=None, max_length=UTM_MAX_LENGTH)
     utm_term: str | None = Field(default=None, max_length=UTM_MAX_LENGTH)
     utm_id: str | None = Field(default=None, max_length=UTM_MAX_LENGTH)
+    # The page of the site the person started from (`home`, `pigrocrm`), a slug and
+    # nothing else: it is ours, not an ad platform's, so it is held to a shape.
+    origine: str | None = Field(
+        default=None, max_length=ORIGINE_MAX_LENGTH, pattern=r"^[a-z0-9-]+$"
+    )
 
     def is_empty(self) -> bool:
         return not any(self.model_dump().values())
@@ -488,6 +494,7 @@ class FreelancerRead(BaseModel):
     # left its email on the landing («Iscrizioni»), «landing» otherwise. Derived by the
     # service from the two tables, never stored, so it cannot drift.
     provenienza: str = "landing"
+    origine: str | None = None
     utm_source: str | None = None
     utm_medium: str | None = None
     utm_campaign: str | None = None
@@ -529,6 +536,7 @@ class CompanyRead(BaseModel):
     budget_giornaliero: Decimal
     stato: str
     note: str | None
+    origine: str | None = None
     utm_source: str | None = None
     utm_medium: str | None = None
     utm_campaign: str | None = None
