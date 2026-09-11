@@ -152,6 +152,10 @@ export interface Freelancer {
   completa: boolean
   /** The thread, newest first. The detail carries it; the list leaves it empty. */
   commenti: Comment[]
+  /** How many times the person came in through the magic link (ORB-158). */
+  accessi: number
+  /** When they last did, null if never. */
+  ultimo_accesso: string | null
 }
 
 export interface Company {
@@ -211,6 +215,24 @@ export interface GuideDownload {
   downloaded_at: string
 }
 
+/** The logins for the admin area (ORB-158), as `GET /api/hub/logins` answers. */
+export interface LoginStats {
+  totale: number
+  membri: number
+  membri_totali: number
+  ultimi_7_giorni: number
+  recenti: LoginRead[]
+}
+
+export interface LoginRead {
+  id: string
+  freelancer_id: string
+  nome: string
+  cognome: string
+  email: string
+  logged_at: string
+}
+
 export interface Signup {
   id: string
   email: string
@@ -257,6 +279,8 @@ export const admin = {
   pigroSpaces: () => request<{ totale: number; items: PigroSpace[] }>('/api/hub/pigro/istanze'),
   /** How the guide is doing: downloads, the members behind them, the latest (ORB-156). */
   guideStats: () => request<GuideStats>('/api/hub/perks/guida'),
+  /** Who comes back in: logins, the members behind them, the latest (ORB-158). */
+  loginStats: () => request<LoginStats>('/api/hub/logins'),
   /** Who reads this area, oldest first, and one more of them (ORB-123). */
   admins: () => request<Admin[]>('/api/hub/admins'),
   createAdmin: (data: AdminCreate) => request<Admin>('/api/hub/admins', json(data)),

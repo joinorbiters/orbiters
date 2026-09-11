@@ -37,6 +37,8 @@ const INCOMPLETE = {
   compilata_da: 'admin',
   completa: false,
   commenti: [],
+  accessi: 0,
+  ultimo_accesso: null,
 }
 
 const COMPLETE = {
@@ -52,6 +54,8 @@ const COMPLETE = {
   remoto: 'remoto',
   compilata_da: 'persona',
   completa: true,
+  accessi: 3,
+  ultimo_accesso: '2026-09-11T12:04:00Z',
 }
 
 const SIGNUPS = [
@@ -142,6 +146,15 @@ describe('the Developer e CTO list', () => {
     expect(cellUnder(grace, 'Dove')).toHaveTextContent('Da remoto')
     expect(within(grace).queryByText('Da completare')).toBeNull()
   })
+
+  it('shows when each member last came in, or a dash for one who never did (ORB-158)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(answer(200, { totale: 2, items: [INCOMPLETE, COMPLETE] }))
+    mount('/admin/freelance')
+    const ada = (await screen.findByText('ada@studio.it')).closest('tr')!
+    expect(cellUnder(ada, 'Ultimo accesso')).toHaveTextContent('—')
+    const grace = screen.getByText('grace@studio.it').closest('tr')!
+    expect(cellUnder(grace, 'Ultimo accesso')).toHaveTextContent(/11 set 2026/)
+  })
 })
 
 describe('the freelancer detail', () => {
@@ -153,6 +166,7 @@ describe('the freelancer detail', () => {
     expect(screen.queryByRole('link', { name: /CV/ })).toBeNull()
     expect(screen.getByText('Da completare')).toBeInTheDocument()
     expect(screen.getByText('scritta dall’admin, da completare')).toBeInTheDocument()
+    expect(screen.getByText('Mai entrato')).toBeInTheDocument()
     // The three answers the person has not given yet read as dashes, not as a crash.
     const rows = screen.getAllByRole('definition')
     expect(rows.filter((row) => row.textContent === '—').length).toBeGreaterThanOrEqual(3)
@@ -166,5 +180,6 @@ describe('the freelancer detail', () => {
     expect(screen.queryByText('Da completare')).toBeNull()
     expect(screen.getByText('compilata dalla persona')).toBeInTheDocument()
     expect(screen.getByText('Da remoto')).toBeInTheDocument()
+    expect(screen.getByText(/^3 · ultimo 11 set 2026/)).toBeInTheDocument()
   })
 })
