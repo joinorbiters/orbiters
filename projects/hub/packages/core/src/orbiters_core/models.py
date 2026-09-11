@@ -245,6 +245,23 @@ class MagicLinkToken(Base, PrimaryKeyMixin):
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
+class GuideDownload(Base, PrimaryKeyMixin):
+    """One row per time a member fetched the guide (ORB-156): who and when, and nothing
+    else. A log rather than a counter on the freelancer, so the admin can read a trend
+    and see who came back for it; nothing about the file itself is stored, since the
+    file is package data and the same for everybody. Hangs on the freelancer with
+    `ON DELETE CASCADE`, like their sessions: a deleted person takes their downloads."""
+
+    __tablename__ = "guide_downloads"
+
+    freelancer_id: Mapped[UUID] = mapped_column(
+        ForeignKey("freelancers.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    downloaded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class MemberSession(Base, PrimaryKeyMixin):
     """The admin session's shape, for a freelancer: opaque cookie, hashed at rest, sliding
     expiry, revoked by deleting the row. A second table and a second cookie rather than

@@ -24,6 +24,7 @@ from orbiters_core.comments import CommentService
 from orbiters_core.companies import CompanyService
 from orbiters_core.errors import DomainError
 from orbiters_core.freelancers import FreelancerService
+from orbiters_core.perks import PerkService
 from orbiters_core.schemas import StatusChange
 from orbiters_core.service import LIST_LIMIT_DEFAULT, SignupService
 
@@ -131,6 +132,14 @@ def build_server(factory: SessionFactory) -> MCPServer:
                 "company", UUID(company_id), testo, autore or DEFAULT_AUTHOR
             )
         )
+
+    @mcp.tool()
+    def guide_stats() -> dict[str, Any]:
+        """Quanti hanno scaricato la guida ai primi passi da freelance: `totale` i
+        download, `membri` le persone diverse dietro, `membri_totali` quante potevano,
+        `ultimi_7_giorni` i download dell'ultima settimana e `recenti` gli ultimi con
+        nome ed email. Solo lettura."""
+        return _run(lambda s: PerkService(s).guide_stats())
 
     def _run(call: Callable[[Session], BaseModel]) -> dict[str, Any]:
         """One session per call, closed whatever happened, and a domain error rendered

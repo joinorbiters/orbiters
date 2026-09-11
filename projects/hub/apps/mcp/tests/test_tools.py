@@ -59,6 +59,24 @@ async def test_no_tool_subscribes_or_applies_on_somebody_elses_behalf(
 PDF = b"%PDF-1.7\n1 0 obj<<>>endobj\n%%EOF\n"
 
 
+async def test_the_guide_stats_are_zero_on_an_empty_hub_and_read_only(
+    factory: sessionmaker[Session],
+) -> None:
+    """ORB-156: the counter the admin area shows is one tool away for an agent too."""
+    async with Client(build_server(factory)) as client:
+        result = await client.call_tool("guide_stats", {})
+        names = {tool.name for tool in (await client.list_tools()).tools}
+    body = _payload(result)
+    assert body == {
+        "totale": 0,
+        "membri": 0,
+        "membri_totali": 0,
+        "ultimi_7_giorni": 0,
+        "recenti": [],
+    }
+    assert "record_guide_download" not in names
+
+
 async def test_the_admin_tools_read_and_move_a_candidate_without_the_cv(
     factory: sessionmaker[Session],
 ) -> None:
@@ -119,6 +137,7 @@ async def test_the_admin_tools_read_and_move_a_candidate_without_the_cv(
             "get_company",
             "set_company_status",
             "add_company_comment",
+            "guide_stats",
         }
     _wipe(factory)
 

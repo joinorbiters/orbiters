@@ -465,6 +465,30 @@ class StatusChange(BaseModel):
     note: SafeStr | None = Field(default=None, max_length=PROGETTO_MAX_LENGTH)
 
 
+class GuideDownloadRead(BaseModel):
+    """One download, with the member's name for the admin's list."""
+
+    id: UUID
+    freelancer_id: UUID
+    nome: str
+    cognome: str
+    email: str
+    downloaded_at: datetime
+
+
+class GuideStats(BaseModel):
+    """The guide's numbers for the admin area (ORB-156). `totale` counts every download,
+    `membri` the distinct people behind them, `membri_totali` everybody who could have
+    (the freelancers on file), `ultimi_7_giorni` the downloads of the last week, and
+    `recenti` the latest ones, newest first, with a name each."""
+
+    totale: int
+    membri: int
+    membri_totali: int
+    ultimi_7_giorni: int
+    recenti: list[GuideDownloadRead]
+
+
 class CvFile(BaseModel):
     """The bytes and the two headers a download needs."""
 
