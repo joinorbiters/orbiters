@@ -14,8 +14,57 @@
  * script does not reach: landing.css hides a block only under `html.js`, which the
  * inline gate in the page's head sets, and shows everything again after three seconds
  * whatever happened here. Under reduced motion every block is marked at once.
+ *
+ * Since ORB-166 the script also carries the campaign: a visitor from an ad lands here
+ * with the six UTM keys in the URL, and the doors into the hub are plain paths, so the
+ * first click used to lose them. `carryUtm` appends the keys the page was opened with
+ * to every link into `/hub/` (never overriding one a link already carries, `perk` and
+ * the like untouched) and writes them in `sessionStorage` under `orbiters.utm`, the key
+ * the hub's `resolveUtm` reads when its own URL has none. Session storage on purpose:
+ * it dies with the tab, and the only thing it holds is the campaign, never the person.
+ * Without JavaScript the links are what the markup says and the attribution is lost,
+ * which is what happened before and is the honest fallback.
  */
 ;(function () {
+  var UTM_KEYS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'utm_id']
+  var UTM_STORAGE_KEY = 'orbiters.utm'
+
+  /** The UTM keys in `search`, trimmed and capped at 200 characters like the hub does. */
+  function readUtm(search) {
+    var params = new URLSearchParams(search)
+    var utm = new URLSearchParams()
+    UTM_KEYS.forEach(function (key) {
+      var value = (params.get(key) || '').trim().slice(0, 200)
+      if (value) utm.set(key, value)
+    })
+    return utm
+  }
+
+  /** Appends the page's UTM keys to every link into the hub and remembers them for the
+   *  tab. Returns how many links were rewritten, for the test. */
+  function carryUtm(root, search) {
+    var utm = readUtm(search === undefined ? window.location.search : search)
+    var keys = Array.from(utm.keys())
+    if (!keys.length) return 0
+    try {
+      window.sessionStorage.setItem(UTM_STORAGE_KEY, utm.toString())
+    } catch {
+      /* storage refused: the links still carry the keys */
+    }
+    var rewritten = 0
+    ;(root || document).querySelectorAll('a[href^="/hub/"]').forEach(function (link) {
+      var url = new URL(link.getAttribute('href'), window.location.origin)
+      keys.forEach(function (key) {
+        if (!url.searchParams.has(key)) url.searchParams.set(key, utm.get(key))
+      })
+      link.setAttribute('href', url.pathname + url.search + url.hash)
+      rewritten += 1
+    })
+    return rewritten
+  }
+
+  window.__landing = { carryUtm: carryUtm, readUtm: readUtm, UTM_KEYS: UTM_KEYS, UTM_STORAGE_KEY: UTM_STORAGE_KEY }
+
   function reveal() {
     var blocks = document.querySelectorAll('[data-reveal]')
     if (!blocks.length) return
@@ -40,6 +89,7 @@
   }
 
   function start() {
+    carryUtm()
     reveal()
     var role = document.querySelector('h1 .role')
     if (role && window.__typewriter) window.__typewriter.mount(role)

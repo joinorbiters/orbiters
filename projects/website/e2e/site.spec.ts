@@ -424,6 +424,37 @@ test.describe('every page of the site', () => {
 // page at `/` and a 200 for any path at all, so a test written against `/` checked a
 // page production never serves there. These pin the served map to deploy/nginx.conf's:
 // the same file under each name, the same redirect, and a 404 where nginx has one.
+// The campaign follows the visitor into the hub (ORB-166): every door on the landing
+// carries the six UTM keys the page was opened with, and nothing else does.
+test.describe('a visitor from a campaign', () => {
+  for (const path of ['/', '/pigrocrm']) {
+    test(`${path} carries the UTM keys onto every link into the hub`, async ({ page }) => {
+      await page.goto(`${path}?utm_source=linkedin&utm_campaign=orbita&utm_id=42&gclid=nope`, { waitUntil: 'networkidle' })
+      const doors = await page.locator('a[href^="/hub/"]').evaluateAll((links) => links.map((a) => a.getAttribute('href')))
+      expect(doors.length).toBeGreaterThan(0)
+      for (const href of doors) {
+        const url = new URL(href!, 'https://joinorbiters.com')
+        expect(url.searchParams.get('utm_source'), href!).toBe('linkedin')
+        expect(url.searchParams.get('utm_campaign'), href!).toBe('orbita')
+        expect(url.searchParams.get('utm_id'), href!).toBe('42')
+        expect(url.searchParams.has('gclid'), href!).toBe(false)
+      }
+      // The guide's door keeps its own key beside the campaign's.
+      expect(doors.some((href) => href!.startsWith('/hub/freelance?perk=guida&utm_source=linkedin'))).toBe(true)
+      // The rest of the page's links are what the markup says.
+      expect(await page.locator('a[href="/privacy"]').count()).toBeGreaterThan(0)
+      expect(await page.evaluate(() => sessionStorage.getItem('orbiters.utm'))).toBe('utm_source=linkedin&utm_campaign=orbita&utm_id=42')
+    })
+  }
+
+  test('/ without a campaign leaves the doors as the markup wrote them', async ({ page }) => {
+    await page.goto('/', { waitUntil: 'networkidle' })
+    const doors = await page.locator('a[href^="/hub/"]').evaluateAll((links) => links.map((a) => a.getAttribute('href')))
+    expect(doors.filter((href) => href!.includes('utm_'))).toEqual([])
+    expect(await page.evaluate(() => sessionStorage.getItem('orbiters.utm'))).toBeNull()
+  })
+})
+
 test.describe('the path map, as production serves it', () => {
   const source = (name: string) =>
     readFileSync(new URL(`../src/${name}`, import.meta.url), 'utf-8').match(/<title>([^<]+)<\/title>/)?.[1]
