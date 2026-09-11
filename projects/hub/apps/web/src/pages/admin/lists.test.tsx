@@ -38,6 +38,7 @@ const INCOMPLETE = {
   completa: false,
   commenti: [],
   accessi: 0,
+  provenienza: 'form',
   ultimo_accesso: null,
 }
 
@@ -55,6 +56,7 @@ const COMPLETE = {
   compilata_da: 'persona',
   completa: true,
   accessi: 3,
+  provenienza: 'landing',
   ultimo_accesso: '2026-09-11T12:04:00Z',
 }
 
@@ -154,6 +156,15 @@ describe('the Developer e CTO list', () => {
     expect(cellUnder(ada, 'Ultimo accesso')).toHaveTextContent('—')
     const grace = screen.getByText('grace@studio.it').closest('tr')!
     expect(cellUnder(grace, 'Ultimo accesso')).toHaveTextContent(/11 set 2026/)
+  })
+
+  it('says where each lead came from: «form» when the address also signed up, «landing» otherwise (ORB-161)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(answer(200, { totale: 2, items: [INCOMPLETE, COMPLETE] }))
+    mount('/admin/freelance')
+    const ada = (await screen.findByText('ada@studio.it')).closest('tr')!
+    expect(cellUnder(ada, 'Provenienza')).toHaveTextContent('form')
+    const grace = screen.getByText('grace@studio.it').closest('tr')!
+    expect(cellUnder(grace, 'Provenienza')).toHaveTextContent('landing')
   })
 })
 
