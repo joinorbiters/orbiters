@@ -61,7 +61,7 @@ policy about it is Ivan's part, outside this PR.
 
 ## The data
 
-Migration `0006_freelancer_card_from_signup`, on `freelancers`, safe on the table in
+Migration `0007_freelancer_card_from_signup`, on `freelancers`, safe on the table in
 production (one row, Ivan's, complete):
 
 - `cv_bytes`, `cv_filename`, `cv_mime`, `cv_size`, `tariffa_giornaliera`, `posizione`,

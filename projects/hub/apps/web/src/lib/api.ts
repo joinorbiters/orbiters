@@ -193,6 +193,24 @@ export interface PigroSpace {
   membro: { id: string; nome: string; cognome: string } | null
 }
 
+/** The guide's numbers for the admin area (ORB-156), as `GET /api/hub/perks/guida` answers. */
+export interface GuideStats {
+  totale: number
+  membri: number
+  membri_totali: number
+  ultimi_7_giorni: number
+  recenti: GuideDownload[]
+}
+
+export interface GuideDownload {
+  id: string
+  freelancer_id: string
+  nome: string
+  cognome: string
+  email: string
+  downloaded_at: string
+}
+
 export interface Signup {
   id: string
   email: string
@@ -237,6 +255,8 @@ export const admin = {
   /** PigroCRM's spaces, read by the hub's API with the token it holds: the browser
    *  never talks to the CRM (ORB-142). A 503 carries the sentence the page shows. */
   pigroSpaces: () => request<{ totale: number; items: PigroSpace[] }>('/api/hub/pigro/istanze'),
+  /** How the guide is doing: downloads, the members behind them, the latest (ORB-156). */
+  guideStats: () => request<GuideStats>('/api/hub/perks/guida'),
   /** Who reads this area, oldest first, and one more of them (ORB-123). */
   admins: () => request<Admin[]>('/api/hub/admins'),
   createAdmin: (data: AdminCreate) => request<Admin>('/api/hub/admins', json(data)),

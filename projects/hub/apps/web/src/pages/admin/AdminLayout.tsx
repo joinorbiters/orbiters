@@ -1,5 +1,5 @@
 import { Link, Outlet, useNavigate } from '@tanstack/react-router'
-import { Boxes, Briefcase, LogOut, Mail, ShieldCheck, UserRound } from 'lucide-react'
+import { BookOpen, Boxes, Briefcase, LogOut, Mail, ShieldCheck, UserRound } from 'lucide-react'
 import { useEffect } from 'react'
 import { BrandMark } from '@/components/BrandMark'
 import { Button } from '@/components/ui/button'
@@ -10,6 +10,7 @@ const NAV = [
   { to: '/admin/aziende', label: 'Aziende', icon: Briefcase },
   { to: '/admin/iscrizioni', label: 'Iscrizioni', icon: Mail },
   { to: '/admin/pigro', label: 'Istanze Pigro', icon: Boxes },
+  { to: '/admin/guida', label: 'La guida', icon: BookOpen },
   { to: '/admin/amministratori', label: 'Amministratori', icon: ShieldCheck },
 ] as const
 

@@ -1,8 +1,8 @@
 """freelancers: a card may be born from a signup, without a CV, a rate, a position or
 a remote option, and says who filled it
 
-Revision ID: 0006
-Revises: 0005
+Revision ID: 0007
+Revises: 0006
 
 An admin can now write a freelancer card from what the public web says about a signup
 (ORB-155, spec 2026-09-11). Nothing public states a CV, a daily rate or where somebody
@@ -21,8 +21,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0006"
-down_revision: str | Sequence[str] | None = "0005"
+revision: str = "0007"
+down_revision: str | Sequence[str] | None = "0006"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -118,7 +118,7 @@ class Freelancer(Base, PrimaryKeyMixin, TimestampMixin, UtmMixin):
     the position and the remote option are therefore nullable -- nothing public states
     them -- and the person completes the card from the member area. `compilata_da` says
     who wrote the answers last, so research can tell a card it may replace from one it
-    may not. Migration 0006 loosened the columns; the wizard still requires all of them."""
+    may not. Migration 0007 loosened the columns; the wizard still requires all of them."""
 
     __tablename__ = "freelancers"
 
@@ -255,6 +255,23 @@ class MagicLinkToken(Base, PrimaryKeyMixin):
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+class GuideDownload(Base, PrimaryKeyMixin):
+    """One row per time a member fetched the guide (ORB-156): who and when, and nothing
+    else. A log rather than a counter on the freelancer, so the admin can read a trend
+    and see who came back for it; nothing about the file itself is stored, since the
+    file is package data and the same for everybody. Hangs on the freelancer with
+    `ON DELETE CASCADE`, like their sessions: a deleted person takes their downloads."""
+
+    __tablename__ = "guide_downloads"
+
+    freelancer_id: Mapped[UUID] = mapped_column(
+        ForeignKey("freelancers.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    downloaded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class MemberSession(Base, PrimaryKeyMixin):

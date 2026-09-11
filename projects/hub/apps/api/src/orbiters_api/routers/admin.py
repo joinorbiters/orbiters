@@ -23,6 +23,7 @@ from orbiters_core.comments import CommentService
 from orbiters_core.companies import CompanyService
 from orbiters_core.freelancers import FreelancerService
 from orbiters_core.models import NAME_MAX_LENGTH
+from orbiters_core.perks import PerkService
 from orbiters_core.schemas import (
     CommentCreate,
     CommentRead,
@@ -31,6 +32,7 @@ from orbiters_core.schemas import (
     FreelancerDraft,
     FreelancerList,
     FreelancerRead,
+    GuideStats,
     SignupList,
     StatusChange,
 )
@@ -199,6 +201,14 @@ def move_company(
     _: AdminDep, session: SessionDep, company_id: UUID, change: StatusChange
 ) -> CompanyRead:
     return CompanyService(session).set_status(company_id, change)
+
+
+@router.get("/perks/guida", response_model=GuideStats)
+def guide_stats(_: AdminDep, session: SessionDep) -> GuideStats:
+    """How the guide is doing (ORB-156): every download, the distinct members behind
+    them, the last week, and the latest ones by name. Read-only; the rows are written by
+    `GET /me/guida` and by nothing else."""
+    return PerkService(session).guide_stats()
 
 
 @router.get("/signups", response_model=SignupList)

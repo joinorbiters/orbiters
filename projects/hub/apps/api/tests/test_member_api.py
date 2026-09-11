@@ -7,7 +7,7 @@ from collections.abc import Iterator
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from orbiters_api.deps import get_sender
@@ -15,6 +15,7 @@ from orbiters_api.ratelimit import reset_rate_limit
 from orbiters_core.admin import AdminService
 from orbiters_core.config import Settings
 from orbiters_core.mail import Mail, RecordingSender
+from orbiters_core.models import GuideDownload
 from orbiters_core.perks import GUIDE_PATH
 
 PDF = b"%PDF-1.7\n1 0 obj<<>>endobj\n%%EOF\n"
@@ -40,6 +41,7 @@ def clean(api_session: Session) -> Iterator[None]:
     yield
     api_session.rollback()
     for table in (
+        "guide_downloads",
         "member_sessions",
         "magic_link_tokens",
         "comments",
@@ -187,6 +189,27 @@ def test_the_guide_is_a_perk_of_the_session_and_not_a_public_file(
 
     client.post("/api/hub/me/logout")
     assert client.get("/api/hub/me/guida").status_code == 401
+
+
+def test_every_download_of_the_guide_is_written_down_with_the_member_behind_it(
+    client: TestClient, sender: RecordingSender, api_session: Session, clean: None
+) -> None:
+    """ORB-156: the admin's counter is a row per download, who and when. Two downloads
+    by the same member are two rows for one person, an anonymous 401 writes nothing,
+    and the bytes still arrive: recording is a side of the route, not a gate."""
+    _apply(client, "ada@studio.it")
+    assert client.get("/api/hub/me/guida").status_code == 401
+    assert api_session.scalar(select(func.count()).select_from(GuideDownload)) == 0
+
+    profile, _ = _enter(client, sender, "ada@studio.it")
+    for _ in range(2):
+        answer = client.get("/api/hub/me/guida")
+        assert answer.status_code == 200 and answer.content == GUIDE_PATH.read_bytes()
+    api_session.expire_all()
+    rows = api_session.scalars(select(GuideDownload)).all()
+    assert len(rows) == 2
+    assert {str(row.freelancer_id) for row in rows} == {profile["id"]}
+    assert all(row.downloaded_at is not None for row in rows)
 
 
 def test_a_wrong_token_is_a_401_and_a_malformed_one_a_422(

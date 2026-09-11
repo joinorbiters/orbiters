@@ -29,10 +29,10 @@ SDK; React 19, TanStack Router and Query, vitest with Testing Library.
 
 ---
 
-### Task 1: Migration 0006 and the model
+### Task 1: Migration 0007 and the model
 
 **Files:**
-- Create: `projects/hub/packages/core/migrations/versions/0006_freelancer_card_from_signup.py`
+- Create: `projects/hub/packages/core/migrations/versions/0007_freelancer_card_from_signup.py`
 - Modify: `projects/hub/packages/core/src/orbiters_core/models.py` (`Freelancer`)
 - Test: `projects/hub/packages/core/tests/test_migrations.py` (existing, must stay green)
 
