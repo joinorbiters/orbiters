@@ -56,8 +56,10 @@ describe.each(PAGES)('%s', (name) => {
       // allow the origin; since ORB-116 index.html's footer links the same studio,
       // restored to what production served before website-v0.4.0. It is the only real
       // identity left anywhere in this repository.
+      // `www.linkedin.com` since ORB-151: the four voices' avatars link to their public
+      // profiles. An href, never a src: the photos themselves are served from here.
       expect(url, 'external subresource').toMatch(
-        /^https:\/\/(?:github\.com|pigro\.joinorbiters\.com|openai\.com|humancraft\.tech)\//,
+        /^https:\/\/(?:github\.com|pigro\.joinorbiters\.com|openai\.com|humancraft\.tech|www\.linkedin\.com)\//,
       )
     }
     expect(page).not.toMatch(/fonts\.googleapis\.com|fonts\.gstatic\.com/)
@@ -161,6 +163,11 @@ describe('index.html', () => {
     }
     expect(page).not.toMatch(/Mario Rossi|XYZ|Nome Cognome/)
     expect(page.match(/<blockquote>/g)).toHaveLength(4)
+    // ORB-151: each tile is the person's face, served from this site, and a link to the
+    // profile. Four faces, four LinkedIn links, and no image fetched from LinkedIn.
+    const faces = [...page.matchAll(/<a class="avatar" href="(https:\/\/www\.linkedin\.com\/in\/[^"]+)" aria-label="[^"]+ su LinkedIn"><img src="\.\/voices\/([a-z-]+)\.webp" alt="" width="96" height="96" loading="lazy" \/><\/a>/g)]
+    expect(faces.map((m) => m[2])).toEqual(['ivan-sala', 'lorenzo-fiore', 'luca-franzesi', 'andrea-ciceri'])
+    expect(page).not.toMatch(/src="https?:\/\/[^"]*linkedin/)
   })
 
   it('says who it is for, in the words that qualify a reader in fifteen seconds', () => {

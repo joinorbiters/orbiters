@@ -419,8 +419,9 @@ li {
   font-size: 1rem;
 }
 
-/* The initial, on a tile the colour of the accent: the one saturated thing a card
-   carries, and the smallest. */
+/* The face, on a tile the size the initial had: a 96px WebP of the person's LinkedIn
+   photo, and the tile is a link to the profile (ORB-151). The accent ground shows only
+   while the image loads, or never loads. */
 .avatar {
   display: inline-flex;
   align-items: center;
@@ -431,6 +432,19 @@ li {
   background-color: var(--landing-cta);
   color: var(--landing-cta-ink);
   font-weight: 500;
+  overflow: hidden;
+}
+
+.avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* A link, so it says so on hover: the step, in gold on the ink. */
+a.avatar:hover {
+  box-shadow: 4px 4px 0 var(--landing-gold);
 }
 
 /* --- The deck (ORB-145, Ivan 2026-09-11): the landing keeps the pitch deck's rhythm.
