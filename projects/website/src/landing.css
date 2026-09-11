@@ -169,6 +169,26 @@ footer .quiet-link:hover {
    (ORB-146; ORB-144 had set it to 0 when the section below still carried the gap). */
 .hero {
   padding-block: clamp(1rem, 2.5vw, 2rem) clamp(3rem, 6vw, 5rem);
+  /* The first screen is the box on the field (ORB-152): the hero is at least the
+     viewport minus the header, the box grows to fill it and centres its rows, so the
+     first dark band starts under the fold instead of peeking in beneath the box.
+     `svh` is the small viewport, the one a phone's browser chrome leaves; `vh` is the
+     fallback where it is unknown. Never a cap: taller content still grows the box. */
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 5.5rem);
+  min-height: calc(100svh - 5.5rem);
+}
+
+.hero .wrap {
+  display: flex;
+  flex: 1;
+  width: 100%;
+}
+
+.hero .box {
+  flex: 1;
+  align-content: center;
 }
 
 /* --- The field: the same one the community page on `/` has. Fixed, behind everything
