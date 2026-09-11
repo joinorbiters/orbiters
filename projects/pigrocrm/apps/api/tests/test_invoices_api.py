@@ -408,7 +408,9 @@ def test_the_list_leaves_out_consumed_proformas_when_asked(
     assert logged_in.post(f"/api/invoices/{proforma['id']}/confirm").status_code == 200
     issued = logged_in.post(f"/api/invoices/{proforma['id']}/issue", json={}).json()
 
-    ids = lambda response: {row["id"] for row in response.json()["items"]}  # noqa: E731
+    def ids(response: Any) -> set[str]:
+        return {row["id"] for row in response.json()["items"]}
+
     everything = ids(logged_in.get("/api/invoices"))
     assert {proforma["id"], issued["id"]} <= everything
     trimmed = ids(logged_in.get("/api/invoices", params={"escludi_consumate": "true"}))
