@@ -152,9 +152,9 @@ describe('index.html', () => {
     // Two talents and two companies, the role line saying which (ORB-146).
     for (const [name, role] of [
       ['Ivan Sala', 'Fractional CTO · talento'],
-      ['Lorenzo Fiore', 'Fractional CTO · talento'],
+      ['Lorenzo Fiore', 'Fractional CTO · azienda'],
       ['Luca Franzesi', 'Head of Software Solution · azienda'],
-      ['Andrea Ciceri', 'Lead Infrastructure Engineer · azienda'],
+      ['Andrea Ciceri', 'Lead Infrastructure Engineer · talento'],
     ]) {
       expect(page).toMatch(new RegExp(`<strong>${name}</strong><br /><span class="role">${role}</span>`))
     }

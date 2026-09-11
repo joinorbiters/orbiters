@@ -474,6 +474,29 @@ li {
   color: var(--landing-quiet-on-ink);
 }
 
+/* On the ink the hover cannot be the ink: the button would vanish into the band. It
+   goes gold, with the ink for its label, the deck's second accent (ORB-147). */
+.band.dark .cta:hover {
+  background-color: var(--landing-gold);
+  border-color: var(--landing-gold);
+  color: var(--landing-ink);
+}
+
+/* A centred band, the way the deck centres a call to action: everything on the axis,
+   the measures kept but placed in the middle (ORB-147, the guide). */
+.band.centred .section {
+  text-align: center;
+}
+
+.band.centred .statement,
+.band.centred .measure {
+  margin-inline: auto;
+}
+
+.band.centred .actions {
+  justify-content: center;
+}
+
 /* The deck's kicker: capitals, tracked, in the accent; gold on the ink. */
 .deck .kicker {
   font-size: 0.9375rem;
