@@ -16,7 +16,7 @@ from sqlalchemy import Engine, text
 
 from pigrocrm.core.config import Settings, get_settings
 from pigrocrm.core.db.sidecar import drop_database
-from pigrocrm.core.tenants import ensure_tenants_database
+from pigrocrm.core.tenants import MemberLookup, ensure_tenants_database
 from pigrocrm.core.tenants.database import tenant_database_name, tenant_database_url
 from pigrocrm_api.deps import get_session, reset_session_factories
 from pigrocrm_api.main import create_app
@@ -273,3 +273,61 @@ def test_the_list_of_spaces_answers_only_to_the_registry_token(
     assert [row["slug"] for row in rows] == [SLUG]
     assert rows[0]["owner_email"] == SIGNUP["email"]
     assert set(rows[0]) == {"id", "slug", "owner_email", "created_at"}
+
+
+def test_the_signup_learns_whether_an_address_is_a_member_and_which_spaces_it_owns(
+    spaces_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ORB-173: the hub's answer and the registry's, in one body. The hub is stubbed at
+    the client the router calls; `spazi` is what only the registry knows and is read for
+    real, from the space this test provisions."""
+    asked: list[str] = []
+
+    def fake_lookup(settings: Settings, email: str) -> MemberLookup:
+        asked.append(email)
+        return MemberLookup(membro=True, nome="Ada", cognome="Lovelace")
+
+    monkeypatch.setattr("pigrocrm_api.routers.tenants.lookup_member", fake_lookup)
+
+    before = spaces_client.get("/api/tenants/membro", params={"email": "Ada@Studio.it"})
+    assert before.status_code == 200, before.text
+    assert before.json() == {"membro": True, "nome": "Ada", "cognome": "Lovelace", "spazi": []}
+    assert asked == ["ada@studio.it"]
+
+    created = spaces_client.post("/api/tenants/", json=SIGNUP)
+    assert created.status_code == 201, created.text
+    after = spaces_client.get("/api/tenants/membro", params={"email": SIGNUP["email"]})
+    assert after.json()["spazi"] == [SLUG]
+    # Somebody else's address owns nothing here, whatever the hub says about them.
+    assert (
+        spaces_client.get("/api/tenants/membro", params={"email": "bob@studio.it"}).json()["spazi"]
+        == []
+    )
+
+
+def test_an_unreachable_hub_still_answers_and_says_not_a_member(
+    container_settings: Settings,
+) -> None:
+    """The real client against a loopback port nobody listens on, with a token set: the
+    route answers 200 and `membro: false`, and the signup goes on. The community is the
+    fast lane, never a gate."""
+    with_hub = container_settings.model_copy(
+        update={"registry_token": REGISTRY_TOKEN, "hub_url": "http://127.0.0.1:9"}
+    )
+    with _serving(with_hub) as client:
+        answer = client.get("/api/tenants/membro", params={"email": "ada@studio.it"})
+        assert answer.status_code == 200, answer.text
+        assert answer.json() == {"membro": False, "nome": None, "cognome": None, "spazi": []}
+
+
+def test_a_malformed_or_missing_address_is_a_422_and_membro_is_not_a_space(
+    spaces_client: TestClient,
+) -> None:
+    for params in ({"email": "non-una-mail"}, {"email": ""}, None):
+        refused = spaces_client.get("/api/tenants/membro", params=params)
+        assert refused.status_code == 422, (params, refused.text)
+    # The literal path is the member question, never `/{slug}/disponibile` for a slug «membro».
+    assert (
+        "spazi"
+        in spaces_client.get("/api/tenants/membro", params={"email": "ada@studio.it"}).json()
+    )

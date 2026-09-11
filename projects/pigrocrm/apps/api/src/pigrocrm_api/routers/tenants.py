@@ -10,10 +10,16 @@ thing this product means.
 import secrets
 from typing import Annotated
 
-from fastapi import APIRouter, Header, HTTPException, Response, status
-from pydantic import BaseModel
+from fastapi import APIRouter, Header, HTTPException, Query, Response, status
+from pydantic import BaseModel, EmailStr
 
-from pigrocrm.core.tenants import TenantAvailability, TenantRead, TenantService, TenantSignup
+from pigrocrm.core.tenants import (
+    TenantAvailability,
+    TenantRead,
+    TenantService,
+    TenantSignup,
+    lookup_member,
+)
 from pigrocrm_api.deps import SettingsDep, TenantsRegistryDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
 
@@ -55,6 +61,38 @@ def list_spaces(
     ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "token non valido")
     return TenantService(registry, settings).list()
+
+
+class MemberAnswer(BaseModel):
+    """What the signup learns about an address before the person has an account: whether
+    the Orbiters hub knows them as a community member, their two names if so, and the
+    spaces the registry already holds in that name."""
+
+    membro: bool
+    nome: str | None
+    cognome: str | None
+    spazi: list[str]
+
+
+# Declared before `/{slug}/disponibile` so `membro` is never read as a space's name.
+@router.get("/membro", response_model=MemberAnswer)
+def member(
+    email: Annotated[EmailStr, Query()], registry: TenantsRegistryDep, settings: SettingsDep
+) -> MemberAnswer:
+    """Whether an address belongs to an Orbiters community member, and which spaces it
+    already owns here (ORB-173). No auth, like the signup itself: the person has no
+    account yet. The hub is asked with `PIGROCRM_REGISTRY_TOKEN` at `PIGROCRM_HUB_URL`
+    and given five seconds; unreachable, unconfigured or refusing, the answer is
+    `membro: false` and the signup goes on. `spazi` comes from this installation's own
+    registry and answers even when the hub does not."""
+    address = str(email).strip().lower()
+    found = lookup_member(settings, address)
+    return MemberAnswer(
+        membro=found.membro,
+        nome=found.nome,
+        cognome=found.cognome,
+        spazi=TenantService(registry, settings).slugs_for_owner(address),
+    )
 
 
 @router.get("/{slug}/disponibile", response_model=TenantAvailability)

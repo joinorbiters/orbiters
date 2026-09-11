@@ -63,6 +63,19 @@ class TenantService:
         self.session = session
         self.settings = settings
 
+    def slugs_for_owner(self, email: str) -> list[str]:
+        """The spaces already opened by that address, oldest first: what only the registry
+        knows, and what the signup shows a returning person so they open a second space
+        on purpose and not by mistake (ORB-173). `owner_email` is stored lowercased by
+        `provision`, so the match is on the lowercased input. Above `list` on purpose:
+        below it the annotation `list[str]` would name the method."""
+        rows = self.session.scalars(
+            select(Tenant.slug)
+            .where(Tenant.owner_email == email.strip().lower())
+            .order_by(Tenant.created_at.asc(), Tenant.id.asc())
+        ).all()
+        return list(rows)
+
     def list(self) -> list[TenantRead]:
         """Every space, newest first: what the registry knows, which is who opened it and
         when, never what is inside it (ORB-142)."""
