@@ -43,7 +43,7 @@ import { REDIRECTS, route } from './path-map-plugin'
  *   cannot, follow it further.
  */
 
-const PAGE_FILES = ['index.html', 'orbiters.html', 'privacy.html', 'termini.html', 'pitch.html'] as const
+const PAGE_FILES = ['index.html', 'pigrocrm.html', 'orbiters.html', 'privacy.html', 'termini.html', 'pitch.html'] as const
 type PageFile = (typeof PAGE_FILES)[number]
 
 const SRC_DIR = join(__dirname)
@@ -169,8 +169,10 @@ describe('checkHref, edge cases none of the four pages exercise today', () => {
   it('drops the query string before routing, like the dev server does', () => {
     expect(checkHref('index.html', '/privacy?utm_source=newsletter')).toBeUndefined()
     // The redirect-is-wrong rule still applies once the query string is gone.
-    expect(checkHref('index.html', '/pigrocrm?utm_source=newsletter')).toMatch(/is a redirect to \//)
+    expect(checkHref('index.html', '/pigrocrm?utm_source=newsletter')).toBeUndefined()
     expect(checkHref('index.html', '/orbiters?utm_source=newsletter')).toBeUndefined()
+    // The map knows no redirects any more; an unknown path is still refused.
+    expect(checkHref('index.html', '/vecchia?utm_source=newsletter')).toMatch(/404s it/)
   })
 
   it('skips a scheme it does not otherwise resolve, the same way it skips mailto:', () => {

@@ -55,8 +55,9 @@ describe('route', () => {
     expect(route('/termini')).toEqual({ kind: 'page', file: '/termini.html' })
   })
 
-  it('sends /pigrocrm, where the landing lived until 2026-09-11, home to /', () => {
-    expect(route('/pigrocrm')).toEqual({ kind: 'redirect', to: '/' })
+  it('serves PigroCRM its own page at /pigrocrm again (ORB-159), and keeps no redirect', () => {
+    expect(route('/pigrocrm')).toEqual({ kind: 'page', file: '/pigrocrm.html' })
+    expect(REDIRECTS).toEqual({})
   })
 
   it('404s what nginx 404s: unknown paths, trailing slashes, and the files under their own names', () => {

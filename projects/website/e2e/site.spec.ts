@@ -435,10 +435,10 @@ test.describe('the path map, as production serves it', () => {
     await expect(page).toHaveTitle(source('orbiters.html')!)
   })
 
-  test('/pigrocrm, where the landing lived until 2026-09-11, is a 301 to /', async ({ page }) => {
-    const response = await page.request.get('/pigrocrm', { maxRedirects: 0 })
-    expect(response.status()).toBe(301)
-    expect(response.headers()['location']).toBe('/')
+  test('/pigrocrm is the CRM\'s own page again (ORB-159)', async ({ page }) => {
+    await page.goto('/pigrocrm')
+    await expect(page).toHaveTitle(source('pigrocrm.html')!)
+    await expect(page.getByRole('heading', { level: 1 })).toContainText('Il CRM che lavora')
   })
 
   for (const path of ['/nonexistent', '/pigrocrm/', '/index.html', '/orbiters.html']) {

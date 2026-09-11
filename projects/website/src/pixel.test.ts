@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest'
 const PIXEL_ID = '9r6qrnPxBV8WDVGtpuaqxh'
 const SDK_URL = 'https://bzrcdn.openai.com/sdk/oaiq.min.js'
 
-const MEASURED = ['index.html', 'orbiters.html'] as const
+const MEASURED = ['index.html', 'pigrocrm.html', 'orbiters.html'] as const
 const UNMEASURED = ['privacy.html', 'termini.html'] as const
 const ALL = [...MEASURED, ...UNMEASURED]
 
