@@ -28,6 +28,7 @@ from pigrocrm.core.gmail.tokens import GoogleTokenClient  # noqa: E402
 from pigrocrm.core.gmail.transport import GmailTransport  # noqa: E402
 from pigrocrm.core.storage import lazy_drive  # noqa: E402
 from pigrocrm.core.storage.lazy_drive import LazyUserDriveStorage  # noqa: E402
+from pigrocrm.core.tenants import SpaceRegistry  # noqa: E402
 from pigrocrm_api.deps import get_storage  # noqa: E402
 
 PDF = b"%PDF-1.7\nfinto\n"
@@ -376,12 +377,15 @@ def _drive_installation(
 
     * `PIGROCRM_STORAGE_BACKEND=gdrive` with no service account -- the settings the
       dependency reads to choose the second Drive route;
-    * `deps._factory` -- the API's own sessionmaker, pointed at this test's connection,
-      because `get_storage` hands the storage a factory that opens *fresh* sessions and
-      the real one would build an engine against a database that is not the
-      testcontainer. `join_transaction_mode="create_savepoint"` is what lets those
+    * `deps._registry`'s root sessionmaker -- the API's own, pointed at this test's
+      connection, because `get_storage` hands the storage a factory that opens *fresh*
+      sessions and the real one would build an engine against a database that is not
+      the testcontainer. `join_transaction_mode="create_savepoint"` is what lets those
       sessions see this test's uncommitted rows and nest their own work inside the
-      transaction the `api_session` fixture rolls back;
+      transaction the `api_session` fixture rolls back. `SpaceRegistry.session_factory`
+      returns whatever is already in `_root` without opening anything of its own, so a
+      registry built for this purpose and never asked for a space's engine is exactly
+      the API's own registry with one field pinned;
     * `lazy_drive.user_transport_for` -- the network. The real helper still runs (it is
       what unseals the refresh token), only with the Drive HTTP call and Google's token
       endpoint pointed at the two in-memory fakes. One `GoogleTokenClient`, built here
@@ -396,16 +400,14 @@ def _drive_installation(
         storage_backend="gdrive",
         jwt_secret=Settings(_env_file=None).jwt_secret,  # type: ignore[call-arg]
     )
-    monkeypatch.setattr(
-        deps,
-        "_factory",
-        sessionmaker(
-            bind=session.get_bind(),
-            expire_on_commit=False,
-            future=True,
-            join_transaction_mode="create_savepoint",
-        ),
+    registry = SpaceRegistry(settings)
+    registry._root = sessionmaker(
+        bind=session.get_bind(),
+        expire_on_commit=False,
+        future=True,
+        join_transaction_mode="create_savepoint",
     )
+    monkeypatch.setattr(deps, "_registry", registry)
     tokens = GoogleTokenClient(
         client_id=settings.google_client_id,
         client_secret=settings.google_client_secret,
@@ -485,20 +487,21 @@ def test_the_api_builds_one_storage_for_the_whole_process_and_opens_nothing_to_d
     *One instance.* Every request that touches a document asks for `get_storage`, and
     each one that built its own `LazyUserDriveStorage` would throw away the access token
     the previous request obtained -- so the instance is cached in the module, behind a
-    lock, the way `_engine`/`_factory` already are (`_storage_lock`; `test_deps.py`
-    drives the engine's equivalent cold start with eight threads).
+    lock, the way the registry already is (`_storage_lock`; `test_deps.py` drives the
+    registry's equivalent cold start with eight threads).
 
     *Nothing is opened to build it.* The session factory is passed as a callable, not
     called, so a process configured for Drive can construct its storage without an
     engine, without a connection and without the `google_drive_accounts` row that may
-    not exist yet -- which is the entire reason this storage resolves late. `_factory`
-    staying `None` is that, asserted.
+    not exist yet -- which is the entire reason this storage resolves late. The registry
+    staying unbuilt is that, asserted: `_fresh_session` would have to run to reach
+    `_get_session_factory`, and nothing here ever calls it.
 
     The storage cache is cleared through the module's own `reset_storage_cache`
-    (`fresh_storage_cache`, above); `_factory` is still monkeypatched, which `pytest`
+    (`fresh_storage_cache`, above); `_registry` is still monkeypatched, which `pytest`
     undoes at the end of the test.
     """
-    monkeypatch.setattr(deps, "_factory", None)
+    monkeypatch.setattr(deps, "_registry", None)
     settings = gmail_settings(storage_backend="gdrive")
     # A root request: a space would get its own on-disk storage instead (deps.get_storage).
     request = Request({"type": "http", "path": "/api/documents", "headers": [], "state": {}})
@@ -508,4 +511,4 @@ def test_the_api_builds_one_storage_for_the_whole_process_and_opens_nothing_to_d
 
     assert isinstance(first, LazyUserDriveStorage)
     assert first is second
-    assert deps._factory is None
+    assert deps._registry is None

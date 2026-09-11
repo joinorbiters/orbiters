@@ -1,11 +1,9 @@
 import threading
-import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
-from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from pigrocrm.core.actor import Actor, Role
@@ -13,28 +11,25 @@ from pigrocrm.core.auth.pat_service import PAT_PREFIX, PatService
 from pigrocrm.core.auth.repository import UserRepository
 from pigrocrm.core.auth.tokens import decode_token
 from pigrocrm.core.config import Settings, get_settings
-from pigrocrm.core.db import create_engine_from_settings, session_factory
 from pigrocrm.core.errors import DomainError
-from pigrocrm.core.space_settings import SpaceSettingsService, apply_overrides
+from pigrocrm.core.space_settings import apply_overrides
 from pigrocrm.core.storage import DocumentStorage, LocalFileStorage, storage_from_settings
-from pigrocrm.core.tenants import TenantService, ensure_tenants_database
-from pigrocrm.core.tenants.database import tenant_database_url
+from pigrocrm.core.tenants import SpaceRegistry, space_base_settings
 from pigrocrm_api.tenancy import first_cookie, tenant_slug
 
 ACCESS_COOKIE = "pigrocrm_access"
 REFRESH_COOKIE = "pigrocrm_refresh"
 
-_engine: Engine | None = None
-_factory: sessionmaker[Session] | None = None
-# Guards the two lines below: FastAPI runs sync dependencies in a thread pool, so
-# several requests can reach a cold start at once. Without this, each could pass the
-# "is it built yet" check before any of them finishes, each build its own Engine, and
-# leave the module globals pointing at whichever one wrote last -- wasteful, and not a
-# guarantee this codebase wants to lean on.
-_engine_lock = threading.Lock()
+# One registry per process (spec 2026-09-08, lifted to core in ORB-170): the root's
+# engine, every space's engine and the tenants registry, all built on first use from the
+# first caller's settings. Callers with a request pass the settings dependency through,
+# so a test's override of `get_settings` decides the server; callers without one
+# (`_fresh_session`) get the process settings, which in production are the same object.
+_registry: SpaceRegistry | None = None
+_registry_lock = threading.Lock()
 
 _storage: DocumentStorage | None = None
-# The same guarantee as `_engine_lock`, for the same reason and with the same shape:
+# The same guarantee as `_registry_lock`, for the same reason and with the same shape:
 # one storage per process even when several requests reach a cold start at once. It
 # matters more here than for the engine, because the object being cached holds a token
 # cache -- two instances mean two `GoogleTokenClient`s and an extra OAuth round-trip
@@ -42,62 +37,34 @@ _storage: DocumentStorage | None = None
 _storage_lock = threading.Lock()
 
 
+def _space_registry(settings: Settings | None = None) -> SpaceRegistry:
+    global _registry
+    if _registry is None:
+        with _registry_lock:
+            if _registry is None:  # a concurrent caller may have just finished building it
+                _registry = SpaceRegistry(settings or get_settings())
+    return _registry
+
+
 def _get_session_factory(settings: Settings | None = None) -> sessionmaker[Session]:
-    """The root's engine, built once from the first caller's settings. Callers with a
-    request pass the settings dependency through, so a test's override of
-    `get_settings` decides the server; callers without one (`_fresh_session`) get the
-    process settings, which in production are the same object."""
-    global _engine, _factory
-    if _factory is None:
-        with _engine_lock:
-            if _factory is None:  # a concurrent caller may have just finished building it
-                _engine = create_engine_from_settings(settings or get_settings())
-                _factory = session_factory(_engine)
-    return _factory
+    return _space_registry(settings).session_factory(None)
 
 
 def reset_session_factories() -> None:
-    """Forgets the root's engine along with every space's (`reset_tenant_caches`), for a
-    test that points the whole process at another server through `get_settings`."""
-    global _engine, _factory
-    with _engine_lock:
-        if _engine is not None:
-            _engine.dispose()
-        _engine = None
-        _factory = None
-    _overrides_cache.clear()
-    reset_tenant_caches()
-
-
-# --- Spaces (spec 2026-09-08). One engine per space per process, built on first use and
-# kept, exactly like the root's above; the registry that says which database a slug
-# owns is a sidecar of its own, opened the same way.
-_tenant_factories: dict[str, sessionmaker[Session]] = {}
-_tenants_registry: sessionmaker[Session] | None = None
-# Re-entrant, and it has to be: building a space's engine (`_tenant_session_factory`)
-# holds this lock while it asks the registry, and the registry's own first build
-# (`_registry_factory`) takes the same lock. A plain Lock deadlocks the first request a
-# space ever receives -- found the hard way, with a test suite that never finished.
-_tenants_lock = threading.RLock()
-
-
-def _registry_factory(settings: Settings) -> sessionmaker[Session]:
-    global _tenants_registry
-    if _tenants_registry is None:
-        with _tenants_lock:
-            if _tenants_registry is None:
-                _tenants_registry = session_factory(ensure_tenants_database(settings))
-    return _tenants_registry
+    """Forgets the root's engine along with every space's and the registry, for a test
+    that points the whole process at another server through `get_settings`."""
+    global _registry
+    with _registry_lock:
+        if _registry is not None:
+            _registry.dispose()
+        _registry = None
 
 
 def get_tenants_registry_session(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> Iterator[Session]:
-    """A session on the registry database -- the list of spaces, never a space.
-
-    `settings` arrives as a dependency rather than a `get_settings()` call so a test's
-    override of `get_settings` decides which server the registry lives on."""
-    session = _registry_factory(settings)()
+    """A session on the registry database -- the list of spaces, never a space."""
+    session = _space_registry(settings).registry_factory()()
     try:
         yield session
     finally:
@@ -108,42 +75,12 @@ TenantsRegistryDep = Annotated[Session, Depends(get_tenants_registry_session)]
 
 
 def _tenant_session_factory(slug: str, settings: Settings) -> sessionmaker[Session]:
-    factory = _tenant_factories.get(slug)
-    if factory is None:
-        with _tenants_lock:
-            factory = _tenant_factories.get(slug)
-            if factory is None:
-                registry = _registry_factory(settings)()
-                try:
-                    # `NotFound` -> 404 «spazio non trovato» through the domain handler:
-                    # a slug nobody registered is a wrong address, not a server fault.
-                    tenant = TenantService(registry, settings).get(slug)
-                finally:
-                    registry.close()
-                engine = create_engine(
-                    tenant_database_url(settings, tenant.db_name), pool_pre_ping=True, future=True
-                )
-                factory = session_factory(engine)
-                _tenant_factories[slug] = factory
-    return factory
+    return _space_registry(settings).session_factory(slug)
 
 
 def _factory_for(request: Request, settings: Settings) -> sessionmaker[Session]:
     slug = tenant_slug(request)
     return _tenant_session_factory(slug, settings) if slug else _get_session_factory(settings)
-
-
-def reset_tenant_caches() -> None:
-    """Forgets every space's engine and the registry, for tests that provision spaces
-    against a container and must not leak engines across settings."""
-    global _tenants_registry
-    with _tenants_lock:
-        for factory in _tenant_factories.values():
-            bind = factory.kw.get("bind")
-            if isinstance(bind, Engine):
-                bind.dispose()
-        _tenant_factories.clear()
-        _tenants_registry = None
 
 
 def get_session(
@@ -206,47 +143,16 @@ def request_base_settings(
     environment untouched. Chained on `get_settings` so a test's override of that one
     dependency still reaches every route.
     """
-    slug = tenant_slug(request)
-    if slug is None:
-        return settings
-    public_url = f"{settings.public_url.rstrip('/')}/{slug}" if settings.public_url else ""
-    return settings.model_copy(
-        update={
-            "google_client_id": "",
-            "google_client_secret": "",
-            "google_token_key": "",
-            "public_url": public_url,
-            "google_app_unverified": False,
-            "storage_backend": "local",
-        }
-    )
+    return space_base_settings(settings, tenant_slug(request))
 
 
 BaseSettingsDep = Annotated[Settings, Depends(request_base_settings)]
-
-# The rows of `space_settings`, per database, remembered briefly: every request asks
-# for its settings, and a read of a one-row table on each of them is cheap but not
-# free. Ten seconds, and `invalidate_space_settings` after every write, so the page
-# that just saved sees what it saved.
-_overrides_cache: dict[str, tuple[float, dict[str, str]]] = {}
-OVERRIDES_TTL_SECONDS = 10.0
-
-
-def _space_overrides(request: Request, base: Settings, session: Session) -> dict[str, str]:
-    key = tenant_slug(request) or ""
-    cached = _overrides_cache.get(key)
-    now = time.monotonic()
-    if cached is not None and now - cached[0] < OVERRIDES_TTL_SECONDS:
-        return cached[1]
-    overrides = SpaceSettingsService(session, base).overrides()
-    _overrides_cache[key] = (now, overrides)
-    return overrides
 
 
 def invalidate_space_settings(slug: str | None) -> None:
     """After a write to `space_settings`: forget the cached rows and the storage built
     from them, for this database only."""
-    _overrides_cache.pop(slug or "", None)
+    _space_registry().invalidate(slug)
     if slug is None:
         reset_storage_cache()
     else:
@@ -257,13 +163,14 @@ def invalidate_space_settings(slug: str | None) -> None:
 def get_request_settings(
     request: Request,
     base: BaseSettingsDep,
+    settings: Annotated[Settings, Depends(get_settings)],
     session: Annotated[Session, Depends(get_session)],
 ) -> Settings:
     """The settings every route reads: the environment as this request may see it,
     with the rows of this database's `space_settings` laid over it. The session is the
     request's own (FastAPI caches the dependency), so a test's override of
     `get_session` is where the rows come from too."""
-    return apply_overrides(base, _space_overrides(request, base, session))
+    return apply_overrides(base, _space_registry(settings).overrides(tenant_slug(request), session))
 
 
 SettingsDep = Annotated[Settings, Depends(get_request_settings)]
