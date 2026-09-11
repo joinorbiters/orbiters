@@ -168,7 +168,8 @@ describe('checkHref, edge cases none of the four pages exercise today', () => {
   it('drops the query string before routing, like the dev server does', () => {
     expect(checkHref('index.html', '/privacy?utm_source=newsletter')).toBeUndefined()
     // The redirect-is-wrong rule still applies once the query string is gone.
-    expect(checkHref('index.html', '/orbiters?utm_source=newsletter')).toMatch(/is a redirect to \//)
+    expect(checkHref('index.html', '/pigrocrm?utm_source=newsletter')).toMatch(/is a redirect to \//)
+    expect(checkHref('index.html', '/orbiters?utm_source=newsletter')).toBeUndefined()
   })
 
   it('skips a scheme it does not otherwise resolve, the same way it skips mailto:', () => {

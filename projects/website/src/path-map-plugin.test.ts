@@ -47,15 +47,15 @@ describe('the path map, against deploy/nginx.conf', () => {
 })
 
 describe('route', () => {
-  it('puts the community page at the front door and the landing under its name', () => {
-    expect(route('/')).toEqual({ kind: 'page', file: '/orbiters.html' })
-    expect(route('/pigrocrm')).toEqual({ kind: 'page', file: '/index.html' })
+  it('puts the landing at the front door and the community page under its old name (ORB-145)', () => {
+    expect(route('/')).toEqual({ kind: 'page', file: '/index.html' })
+    expect(route('/orbiters')).toEqual({ kind: 'page', file: '/orbiters.html' })
     expect(route('/privacy')).toEqual({ kind: 'page', file: '/privacy.html' })
     expect(route('/termini')).toEqual({ kind: 'page', file: '/termini.html' })
   })
 
-  it('keeps the old /orbiters as a redirect to /', () => {
-    expect(route('/orbiters')).toEqual({ kind: 'redirect', to: '/' })
+  it('sends /pigrocrm, where the landing lived until 2026-09-11, home to /', () => {
+    expect(route('/pigrocrm')).toEqual({ kind: 'redirect', to: '/' })
   })
 
   it('404s what nginx 404s: unknown paths, trailing slashes, and the files under their own names', () => {
