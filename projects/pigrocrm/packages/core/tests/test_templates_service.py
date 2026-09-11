@@ -317,3 +317,47 @@ def test_declared_variables_is_a_public_method_that_drops_options(db_session: Se
     assert declared == (
         DeclaredVariable(nome="colore", etichetta="Colore", tipo="select", obbligatoria=True),
     )
+
+
+# --- the default offer (spec 2026-09-12 §6.5) --------------------------------------
+
+import re  # noqa: E402 - the seed tests below are a section of their own
+
+from pigrocrm.core.templates.service import OFFERTA_TEMPLATE_NOME  # noqa: E402
+
+# What the body may read without the form asking for it: `cliente` and `emittente`
+# come from `DocumentService._template_scope`, and so does `oggi`.
+_SCOPE_PREFIXES = ("cliente.", "emittente.")
+_SCOPE_KEYS = {"oggi"}
+
+
+def test_seed_creates_a_default_offer_a_space_can_render_without_editing(
+    db_session: Session,
+) -> None:
+    service = TemplateService(db_session)
+    created = service.seed_defaults(ADMIN)
+    offerta = next(t for t in created if t.nome == OFFERTA_TEMPLATE_NOME)
+    assert offerta.tipo == "offerta"
+    assert offerta.attivo is True
+    declared = {v.nome for v in offerta.variabili_dichiarate}
+    assert declared == {"oggetto", "ambito", "attivita", "compenso", "pagamento"}
+    # Every placeholder in the body is either declared or supplied by the document
+    # scope, so the first render of a fresh space cannot fail on a missing variable.
+    placeholders = set(re.findall(r"\{\{([a-z_.]+)\}\}", offerta.corpo_markdown))
+    for name in placeholders:
+        assert name in declared or name in _SCOPE_KEYS or name.startswith(_SCOPE_PREFIXES), name
+    assert "{{#each" not in offerta.corpo_markdown
+
+
+def test_seed_skips_the_offer_when_a_template_with_that_name_exists(
+    db_session: Session,
+) -> None:
+    service = TemplateService(db_session)
+    service.create(
+        TemplateCreate(nome=OFFERTA_TEMPLATE_NOME, tipo="offerta", corpo_markdown="mia"),
+        ADMIN,
+    )
+    created = service.seed_defaults(ADMIN)
+    assert OFFERTA_TEMPLATE_NOME not in {t.nome for t in created}
+    kept = TemplateRepository(db_session).get_by_nome(OFFERTA_TEMPLATE_NOME)
+    assert kept is not None and kept.corpo_markdown == "mia"
