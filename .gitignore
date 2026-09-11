@@ -2,6 +2,8 @@
 .claude/worktrees/
 .reference-*/
 .superpowers/
+# direnv's per-checkout cache of the flake's shell
+.direnv/
 
 # Python
 .venv/
