@@ -218,3 +218,16 @@
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
+
+/* --- The four voices on white (ORB-164): the landing draws them on the ink with light
+   rules; here the box is white, so the rules are the ink at the card's strength and the
+   captions keep their quiet ink. The `data-reveal` blocks inside inherit nothing odd:
+   the box itself rises, the figures with it. */
+.voices-light .voices .testimonial {
+  border-top-color: color-mix(in oklab, var(--landing-ink) 15%, transparent);
+}
+
+.voices-light .voices [data-reveal] {
+  opacity: 1;
+  transform: none;
+}
