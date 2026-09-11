@@ -19,6 +19,7 @@ import type { Plugin } from 'vite'
 /** `location = <path> { try_files <file> =404; }`, one line each in nginx.conf. */
 export const PAGES: Readonly<Record<string, string>> = {
   '/': '/index.html',
+  '/pigrocrm': '/pigrocrm.html',
   '/orbiters': '/orbiters.html',
   '/pitch': '/pitch.html',
   '/privacy': '/privacy.html',
@@ -27,9 +28,7 @@ export const PAGES: Readonly<Record<string, string>> = {
 
 /** `location = <path> { return 301 <to>; }`. nginx's `return` drops the query string
  *  and so does this. */
-export const REDIRECTS: Readonly<Record<string, string>> = {
-  '/pigrocrm': '/',
-}
+export const REDIRECTS: Readonly<Record<string, string>> = {}
 
 /**
  * Paths the host's vhost (`deploy/joinorbiters.conf`) hands to other tenants of the

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const PAGES = ['index.html', 'privacy.html', 'termini.html'] as const
+const PAGES = ['index.html', 'pigrocrm.html', 'privacy.html', 'termini.html'] as const
 const html = Object.fromEntries(
   PAGES.map((name) => [name, readFileSync(join(__dirname, name), 'utf-8')]),
 ) as Record<(typeof PAGES)[number], string>

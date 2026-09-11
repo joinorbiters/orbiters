@@ -5,7 +5,7 @@ community page with its signup form at `/orbiters`, and the two policy pages
 (`/privacy`, `/termini`); it is called `website` rather than `landing` because it is
 expected to grow past those.
 
-Five HTML pages, five scripts, four stylesheets. No React, no Tailwind, no router.
+Six HTML pages, five scripts, five stylesheets. No React, no Tailwind, no router.
 That absence is the requirement rather than an omission: this is the first page a
 visitor loads, and it does not drag an application bundle behind it. The build takes
 about 300 milliseconds. Anything added here should keep that true.
@@ -26,7 +26,8 @@ pnpm --filter website lint
 
 | Page | Served at | What it is |
 |---|---|---|
-| `src/index.html` | `joinorbiters.com/` | The Orbiters landing: two doors into the hub, how it works, the four voices, the perks. Since 2026-09-11 (ORB-145); `/pigrocrm`, where it lived before, is a 301 here |
+| `src/index.html` | `joinorbiters.com/` | The Orbiters landing: two doors into the hub, how it works, the four voices, the perks. Since 2026-09-11 (ORB-145) |
+| `src/pigrocrm.html` | `/pigrocrm` | PigroCRM's own page (ORB-159): the CRM's call to action with a drawn Claude conversation, what is inside, the guide, the closing box. Its own `pigrocrm.css` on top of `landing.css` |
 | `src/orbiters.html` | `/orbiters` | The community page and its signup form, the front door until 2026-09-11 |
 | `src/privacy.html` | `/privacy` | Privacy notice |
 | `src/termini.html` | `/termini` | Terms |
@@ -59,8 +60,8 @@ restated here:
 
 Its own container. `Dockerfile` builds the pages into an nginx image, `docker-compose.yml`
 runs it on 127.0.0.1:8082 (8083 for preview), and `deploy/nginx.conf` inside the image
-holds the path map: which extensionless path is which file, a 301 from `/pigrocrm` to
-`/`, and a 404 for anything else. That map and `src/path-map-plugin.ts` say the same
+holds the path map: which extensionless path is which file, and a 404 for anything
+else. That map and `src/path-map-plugin.ts` say the same
 thing twice, once for production and once for the dev and preview servers. Change one
 and change the other: `path-map-plugin.test.ts` reads `nginx.conf` and fails until you
 have.

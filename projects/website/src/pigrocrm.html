@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PigroCRM — il CRM di Orbiters, gratis per chi è in community</title>
+    <meta
+      name="description"
+      content="PigroCRM: clienti, offerte, fatture e pagamenti in un posto solo, e un assistente AI che fa il lavoro noioso. Lo abbiamo costruito da freelance per i freelance. Gratis per chi è in Orbiters, open source per tutti."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="PigroCRM — il CRM di Orbiters, che lavora al posto tuo" />
+    <meta
+      property="og:description"
+      content="Clienti, offerte, fatture e pagamenti in un posto solo. Un assistente AI fa il lavoro noioso. Gratis per chi è in Orbiters."
+    />
+    <meta property="og:locale" content="it_IT" />
+    <link rel="icon" type="image/svg+xml" href="./orbiters-logo.svg" />
+    <link rel="stylesheet" href="./landing.css" />
+    <link rel="stylesheet" href="./pigrocrm.css" />
+    <!-- The reveal gate, the landing's (ORB-145): landing.css hides `[data-reveal]` only
+      under `html.js`, and after three seconds nothing is hidden whatever the script did. -->
+    <script>
+      document.documentElement.classList.add('js')
+      setTimeout(function () { document.documentElement.classList.add('reveal-all') }, 3000)
+    </script>
+    <!-- The cookie notice and the measurement pixel, as on the landing and the community
+      page: this is the third page an ad can land on (ORB-159), so it asks the same
+      question and loads the SDK only on a yes. privacy.html names all three. -->
+    <script type="module" src="./consent.js"></script>
+  </head>
+  <body>
+    <canvas id="field" aria-hidden="true"></canvas>
+
+    <header class="wrap top">
+      <a class="brand" href="/"><span class="glyph" aria-hidden="true"></span>Orbiters</a>
+      <a class="quiet-link" href="/app/">Accedi</a>
+    </header>
+
+    <!-- PigroCRM's own page (ORB-159), on the landing's base: the same field, the same
+      deck rhythm, the same bands. What is its own is the hero, a box in two halves: the
+      CRM's call to action on the left and, on the right, a conversation with Claude that
+      issues an invoice through PigroCRM's MCP. The conversation is drawn, not a
+      screenshot: `pigrocrm.css` owns its shapes, so the landing's own sheet keeps its
+      hard-edge rules. -->
+    <main class="deck">
+      <section class="hero">
+        <div class="wrap">
+          <div class="box">
+            <div class="hero-split">
+              <div class="hero-copy">
+                <p class="kicker">PigroCRM</p>
+                <h1 class="measure-tight">Il CRM che lavora <span class="accent">al posto tuo.</span></h1>
+                <p class="lead measure">
+                  Clienti, offerte, fatture e pagamenti in un posto solo. Un assistente AI fa il
+                  lavoro noioso: glielo dici, e lui lo fa su PigroCRM.
+                </p>
+                <p class="actions">
+                  <a class="cta" href="https://pigro.joinorbiters.com/app/registrati">Crea il tuo spazio</a>
+                  <a class="cta secondary" href="/hub/freelance">Entra in Orbiters</a>
+                </p>
+                <p class="fine">
+                  Gratis per chi è in community. Uno spazio tuo, con un database separato, su
+                  pigro.joinorbiters.com/il-tuo-nome. Open source, self-hosted quando vuoi.
+                </p>
+              </div>
+              <figure class="chat" aria-label="Una conversazione con Claude che emette una fattura su PigroCRM">
+                <div class="chat-bar"><i></i><i></i><i></i><span>Claude</span></div>
+                <div class="chat-body">
+                  <p class="chat-user">Emetti la fattura per il cliente XYZ su maggio.</p>
+                  <div class="chat-turn">
+                    <span class="chat-mark" aria-hidden="true"></span>
+                    <div class="chat-text">
+                      <p>Su PigroCRM XYZ ha 6 giornate registrate a maggio, 2.700,00 €. Preparo la fattura e la emetto.</p>
+                      <div class="chat-tool">
+                        <p class="chat-tool-name"><span>PigroCRM</span> issue_invoice</p>
+                        <dl>
+                          <div><dt>cliente</dt><dd>XYZ</dd></div>
+                          <div><dt>periodo</dt><dd>maggio 2026</dd></div>
+                          <div><dt>righe</dt><dd>6 giornate · 450,00 €</dd></div>
+                        </dl>
+                        <p class="chat-tool-out">Fattura 2026/14 emessa · 2.700,00 € · scadenza 30 giugno</p>
+                      </div>
+                      <p>Fatto: <strong>fattura 2026/14</strong> emessa per 2.700,00 €, scadenza 30 giugno. Il PDF è sulla scheda di XYZ e la mail di invio è in bozza, la mandi quando vuoi.</p>
+                    </div>
+                  </div>
+                </div>
+                <figcaption class="fine">L'assistente parla con PigroCRM attraverso il suo MCP: ogni azione resta tua da rivedere.</figcaption>
+              </figure>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="band dark" aria-labelledby="dentro">
+        <div class="wrap section">
+          <p class="kicker" data-reveal>Cosa c'è dentro</p>
+          <h2 class="statement" id="dentro" data-reveal style="--d: 0.1s">
+            Sei cose. <span class="accent">Nessun piano da scegliere.</span>
+          </h2>
+          <div class="grid-3 inside">
+            <div data-reveal style="--d: 0.25s"><h3>Clienti e trattative</h3><p>Contatti, deal e attività in un posto solo, con i campi che servono a te.</p></div>
+            <div data-reveal style="--d: 0.35s"><h3>Offerte e contratti</h3><p>PDF dai tuoi template, già con i tuoi dati fiscali, pronti da mandare.</p></div>
+            <div data-reveal style="--d: 0.45s"><h3>Fatture e ore</h3><p>Emetti, incassa, tieni lo stato di ognuna sotto gli occhi. Anche in forfettario.</p></div>
+            <div data-reveal style="--d: 0.55s"><h3>Le email sulla scheda</h3><p>Quello che vi siete scritti resta accanto al cliente, senza aprire Gmail.</p></div>
+            <div data-reveal style="--d: 0.65s"><h3>Un assistente AI</h3><p>Registra le ore, prepara le offerte, emette le fatture, ti riassume la settimana.</p></div>
+            <div data-reveal style="--d: 0.75s"><h3>Uno spazio tuo</h3><p>Database separato, su pigro.joinorbiters.com/il-tuo-nome. O sul tuo server: è open source.</p></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- The second perk. It is announced here and downloaded in the hub: the file is
+        behind the member session (`GET /api/hub/me/guida`), so this section links to the
+        wizard and never to a PDF. Deliberately a section of its own rather than a fourth
+        line inside the CRM's: ORB-68 is the card that makes the perks read as a set with
+        the CRM as the largest of them, and it should absorb this block when it lands.
+        No size or page count in this copy on purpose, since the file lives in another
+        project and a number here would have nothing holding it true. -->
+      <section class="band dark centred" aria-labelledby="guida">
+        <div class="wrap section">
+          <p class="kicker" id="guida" data-reveal>La guida, il secondo perk</p>
+          <h2 class="statement" data-reveal style="--d: 0.1s">I primi passi <span class="accent">da freelance.</span></h2>
+          <p class="lead measure" data-reveal style="--d: 0.25s">
+            La parte che nessuno ti spiega prima della prima fattura: come dirti in una frase,
+            come arrivare a un numero e difenderlo, cosa scrivere prima di iniziare, e le
+            richieste che arrivano a tutti. Si legge in venti minuti.
+          </p>
+          <p class="actions" data-reveal style="--d: 0.4s">
+            <a class="cta" href="/hub/freelance?perk=guida">Entra e scaricala</a>
+          </p>
+          <p class="fine measure" data-reveal style="--d: 0.5s">
+            PDF, la scarichi dalla tua area appena sei dentro. Gratis, come PigroCRM.
+          </p>
+        </div>
+      </section>
+
+      <section class="band" aria-labelledby="orbita">
+        <div class="wrap section">
+          <div class="box" data-reveal>
+            <h2 class="measure-tight" id="orbita">Pronto a entrare <span class="accent">in orbita?</span></h2>
+            <p class="actions">
+              <a class="cta" href="/hub/freelance">Entra come talento</a>
+              <a class="cta secondary" href="/hub/aziende">Ho un progetto</a>
+            </p>
+            <p class="fine measure">
+              Il CV resta nel nostro database, lo leggiamo noi e chi ti proporrà un progetto, e lo
+              cancelliamo quando ce lo chiedi. Il resto è nella
+              <a class="quiet-link" href="/privacy">privacy</a>.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <footer class="wrap rule" style="padding-block: 2rem">
+        <p class="fine" style="display: flex; gap: 1.5rem; flex-wrap: wrap">
+          <a class="quiet-link" href="/">Orbiters</a>
+          <a class="quiet-link" href="/privacy">Privacy</a>
+          <a class="quiet-link" href="/termini">Termini</a>
+          <a class="quiet-link" href="https://humancraft.tech/">Humancraft</a>
+          <a class="quiet-link" href="/hub/admin/freelance">Admin</a>
+        </p>
+      </footer>
+    </main>
+
+    <script type="module" src="./field.js"></script>
+    <script type="module" src="./landing.js"></script>
+  </body>
+</html>

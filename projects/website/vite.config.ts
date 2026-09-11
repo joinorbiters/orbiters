@@ -16,8 +16,8 @@ export default defineConfig({
   // application's bundle behind it.
   //
   // `pathMapPlugin` is the dev and preview servers' copy of deploy/nginx.conf: `/` is
-  // the landing, `/orbiters` the community page, `/pigrocrm` a 301 to `/`, and anything
-  // else a 404. Its unit test reads nginx.conf, so the two cannot drift quietly.
+  // the landing, `/pigrocrm` the CRM's page, `/orbiters` the community page, and
+  // anything else a 404. Its unit test reads nginx.conf, so the two cannot drift quietly.
   plugins: [palettePlugin(), pathMapPlugin()],
   // 'mpa' turns off Vite's fallback to index.html for a path that resolves to no file.
   // With it on, an unknown path answered 200 with PigroCRM's page here and 404 in
@@ -33,6 +33,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         index: path.resolve(__dirname, 'src/index.html'),
+        pigrocrm: path.resolve(__dirname, 'src/pigrocrm.html'),
         privacy: path.resolve(__dirname, 'src/privacy.html'),
         termini: path.resolve(__dirname, 'src/termini.html'),
         orbiters: path.resolve(__dirname, 'src/orbiters.html'),
