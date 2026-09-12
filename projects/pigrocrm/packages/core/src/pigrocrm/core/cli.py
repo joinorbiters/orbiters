@@ -108,44 +108,50 @@ def ensure_space_defaults() -> int:
     (spec 2026-09-12 §6.5). Runs in the API image's CMD after the migrations, so the
     spaces created before the seeds existed catch up at the first boot after the deploy.
 
-    Always answers 0. One space that cannot be reached is reported on stderr and skipped:
-    this runs before uvicorn, and a furnishing problem must never keep the API down. The
-    root installation is not in the registry and is not touched."""
-    from sqlalchemy import create_engine
+    Always answers 0, whatever happens: this runs before uvicorn, and a furnishing
+    problem must never keep the API down. A registry that cannot be reached, or one
+    space that cannot, is one line on stderr with the exception's type and never its
+    text (a psycopg error can carry the URL, password included). The root installation
+    is not in the registry and is not touched."""
+    from sqlalchemy import create_engine, select
 
-    from pigrocrm.core.tenants import TenantService, ensure_defaults, ensure_tenants_database
-    from pigrocrm.core.tenants.database import tenant_database_name, tenant_database_url
+    from pigrocrm.core.tenants import Tenant, ensure_defaults, ensure_tenants_database
+    from pigrocrm.core.tenants.database import tenant_database_url
 
     settings = get_settings()
-    registry = ensure_tenants_database(settings)
     try:
-        with session_factory(registry)() as session:
-            spaces = TenantService(session, settings).list()
-    finally:
-        registry.dispose()
+        registry = ensure_tenants_database(settings)
+        try:
+            with session_factory(registry)() as session:
+                spaces = [
+                    (row.slug, row.db_name)
+                    for row in session.scalars(select(Tenant).order_by(Tenant.created_at)).all()
+                ]
+        finally:
+            registry.dispose()
+    except Exception as exc:  # noqa: BLE001 - never a boot failure
+        print(f"registro degli spazi non raggiungibile ({type(exc).__name__})", file=sys.stderr)
+        return 0
     if not spaces:
         print("nessuno spazio nel registro")
         return 0
-    for tenant in spaces:
-        url = tenant_database_url(settings, tenant_database_name(tenant.slug))
-        engine = create_engine(url, future=True)
+    for slug, db_name in spaces:
+        engine = create_engine(tenant_database_url(settings, db_name), future=True)
         try:
             with session_factory(engine)() as space:
                 report = ensure_defaults(space)
         except Exception as exc:  # noqa: BLE001 - one space must not stop the others
-            # The type only, never the text: a psycopg OperationalError can carry the
-            # URL, password included.
-            print(f"{tenant.slug}: non raggiungibile ({type(exc).__name__})", file=sys.stderr)
+            print(f"{slug}: non arredato ({type(exc).__name__})", file=sys.stderr)
             continue
         finally:
             engine.dispose()
         if report.seeded:
             print(
-                f"{tenant.slug}: stati {report.stages}, template {report.templates}, "
+                f"{slug}: stati {report.stages}, template {report.templates}, "
                 f"categorie {report.categories}"
             )
         else:
-            print(f"{tenant.slug}: già a posto")
+            print(f"{slug}: già a posto")
     return 0
 
 

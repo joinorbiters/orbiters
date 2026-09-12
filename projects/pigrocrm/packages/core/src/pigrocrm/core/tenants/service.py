@@ -24,7 +24,7 @@ from pigrocrm.core.auth.service import UserService
 from pigrocrm.core.config import Settings
 from pigrocrm.core.db.session import session_factory
 from pigrocrm.core.db.sidecar import create_database_if_missing, drop_database
-from pigrocrm.core.emitter.schemas import RAGIONE_SOCIALE_MAX_LENGTH, EmitterProfileUpsert
+from pigrocrm.core.emitter.schemas import EmitterProfileUpsert
 from pigrocrm.core.emitter.service import EmitterProfileService
 from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 from pigrocrm.core.tenants.database import tenant_database_name, tenant_database_url
@@ -133,10 +133,11 @@ class TenantService:
                     # fiscal. Inside the same try: a space that fails here is undone
                     # like one whose migration failed.
                     ensure_defaults(space)
+                    # `nome` is capped at 200 by `TenantSignup`, under the emitter's 255;
+                    # a name that is only spaces would make an empty header, so the
+                    # address stands in for it.
                     EmitterProfileService(space).upsert(
-                        EmitterProfileUpsert(
-                            ragione_sociale=data.nome[:RAGIONE_SOCIALE_MAX_LENGTH]
-                        ),
+                        EmitterProfileUpsert(ragione_sociale=data.nome.strip() or data.slug),
                         Actor.system(),
                     )
             finally:
