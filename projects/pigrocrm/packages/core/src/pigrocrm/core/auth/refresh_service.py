@@ -200,6 +200,13 @@ class RefreshTokenService:
             raise ValidationFailed("refresh_token", "jti", INVALID_REFRESH_TOKEN)
         return record
 
+    def revoke_all(self, user_id: UUID, now: datetime | None = None) -> None:
+        """Every still-valid refresh token of `user_id` is consumed. Public for the one
+        caller outside this class that has a reason: `MagicLinkService.enter`, on the
+        first link entry of a user, when whoever opened a session before the address was
+        proven must lose it (spec 2026-09-12 §6.2)."""
+        self._revoke_all_valid(user_id, now or datetime.now(UTC))
+
     def _revoke_all_valid(self, user_id: UUID, now: datetime) -> None:
         # `order_by(id)` is not decorative: without it, this UPDATEs whatever order
         # session.dirty happens to hand SQLAlchemy, and two concurrent replays that
