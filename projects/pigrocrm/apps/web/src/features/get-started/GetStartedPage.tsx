@@ -8,20 +8,34 @@
  */
 import { Link } from '@tanstack/react-router'
 import { Bot, Check, ChevronRight, Circle, Rocket } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { useAuth, useCanWrite } from '@/lib/auth'
+import { SPACE_SETTINGS_KEY } from '@/features/settings/SpacePanel'
+import { api, unwrap } from '@/lib/api'
+import { useAuth, useCanWrite, useIsAdmin } from '@/lib/auth'
 import { CopyPrompt } from './CopyPrompt'
 import { CONNECT_ASSISTANT_TO, markGetStartedSeen, useFirstSteps, type FirstStep } from './firstSteps'
-import { INTRO_PROMPT, STEP_PROMPTS } from './prompts'
+import { INTRO_PROMPT, promptFor } from './prompts'
 
 export function GetStartedPage() {
   const { user } = useAuth()
   const userId = user?.id ?? ''
   const canWrite = useCanWrite()
+  const isAdmin = useIsAdmin()
   const state = useFirstSteps()
+  // Whether the agent may write the fiscal profile in this space: the settings are an
+  // admin's read, and the fiscal step is an admin's step, so nobody else asks.
+  const settings = useQuery({
+    queryKey: SPACE_SETTINGS_KEY,
+    queryFn: () => unwrap(api.GET('/api/settings/space')),
+    enabled: isAdmin,
+    retry: false,
+    staleTime: 30_000,
+  })
+  const fullAccess = settings.data?.mcp_full_access === true
 
   // Being here is what the Home's one-time redirect remembers, however one arrived:
   // through the redirect or through the sidebar. Either way the page has been seen.
@@ -40,7 +54,12 @@ export function GetStartedPage() {
         {state.loading ? null : (
           <>
             {!state.assistantConnected && <AssistantCard />}
-            <FirstStepsList steps={state.steps} doneCount={state.doneCount} canWrite={canWrite} />
+            <FirstStepsList
+              steps={state.steps}
+              doneCount={state.doneCount}
+              canWrite={canWrite}
+              fullAccess={fullAccess}
+            />
           </>
         )}
       </div>
@@ -79,10 +98,12 @@ function FirstStepsList({
   steps,
   doneCount,
   canWrite,
+  fullAccess,
 }: {
   steps: FirstStep[]
   doneCount: number
   canWrite: boolean
+  fullAccess: boolean
 }) {
   const allDone = doneCount === steps.length
   return (
@@ -123,8 +144,14 @@ function FirstStepsList({
                     </p>
                   )}
                   {/* The same step, said to the assistant (ORB-182): only for a step still
-                      to do, and only for someone who may do it. */}
-                  {linkable && <CopyPrompt text={STEP_PROMPTS[step.id]} />}
+                      to do, and only for someone who may do it. Named after the step, so
+                      three disclosures on one page read apart. */}
+                  {linkable && (
+                    <CopyPrompt
+                      text={promptFor(step.id, { fullAccess })}
+                      summary={`Prompt per l’assistente: ${step.title}`}
+                    />
+                  )}
                 </div>
               </li>
             )
