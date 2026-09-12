@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createContext, use, type ReactNode } from 'react'
+import { createContext, use, useEffect, useRef, type ReactNode } from 'react'
+import { forgetSession, identifySession } from './analytics'
 import { api, unwrap } from './api'
 import { queryKeys } from './query'
 import { tenantPrefix } from './tenant'
@@ -62,8 +63,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     mutationFn: () => unwrap(api.POST('/api/auth/logout')),
   })
 
+  const user = (data as SessionUser | null) ?? null
+
+  // The effect keys are the properties PostHog receives: a role change re-identifies,
+  // a new object from the thirty-second poll does not. `identified` remembers who, so a
+  // session that vanishes without a logout here (another tab logged out, a
+  // deactivation, a revoked refresh) is forgotten once, before the router shows the
+  // login page to what would otherwise still be that person. An anonymous visitor's
+  // first `null` is not a reset: that would break the merge of their login pageview
+  // into the person they are about to become.
+  const identified = useRef<string | undefined>(undefined)
+  const forget = () => {
+    identified.current = undefined
+    forgetSession()
+  }
+  const userId = user?.id
+  const email = user?.email
+  const nome = user?.nome
+  const ruolo = user?.ruolo
+  useEffect(() => {
+    if (userId === undefined || email === undefined || nome === undefined || ruolo === undefined) {
+      if (identified.current !== undefined) forget()
+      return
+    }
+    identified.current = userId
+    identifySession({ id: userId, email, nome, ruolo })
+  }, [userId, email, nome, ruolo])
+
   const value: AuthValue = {
-    user: (data as SessionUser | null) ?? null,
+    user,
     isLoading,
     login: async (email, password) => {
       await loginMutation.mutateAsync({ email, password })
@@ -90,6 +118,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         await logoutMutation.mutateAsync()
       } finally {
+        // Before the page leaves, and in the `finally` for the same reason the
+        // navigation is: the person asked to be forgotten here too, and the next login
+        // on this browser must not be stitched onto them. Leaving matters more than
+        // forgetting, so a third-party call that throws cannot keep the page here.
+        try {
+          forget()
+        } catch {
+          // deliberately ignored
+        }
         queryClient.clear()
         window.location.assign(`${tenantPrefix}/app/login`)
       }

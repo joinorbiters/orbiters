@@ -1,7 +1,10 @@
+import { initAnalytics } from '@orbiters/analytics/browser'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider, createRouter } from '@tanstack/react-router'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { analyticsMiddleware } from './lib/analytics'
+import { api } from './lib/api'
 import { AuthProvider } from './lib/auth'
 import { queryClient } from './lib/query'
 import { tenantPrefix } from './lib/tenant'
@@ -17,6 +20,14 @@ declare module '@tanstack/react-router' {
     router: typeof router
   }
 }
+
+// Once, before anything renders: `initAnalytics` decides on the hostname whether this
+// page is measured at all (nothing on localhost), and every wrapper after it is a
+// no-op until it has. Every text in a replay is masked, not only the inputs: a
+// recording of the CRM shows where a person clicks and stops, never an invoice
+// amount or a customer's name.
+initAnalytics({ maskText: true })
+api.use(analyticsMiddleware())
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
