@@ -95,11 +95,21 @@
       "why": "Build before typecheck, always: a bare tsc --noEmit on a clean checkout fails every route file with TS2307 because src/routeTree.gen.ts is gitignored and only a Vite run writes it."
     },
     {
+      "id": "analytics-unit",
+      "run": "pnpm --filter @orbiters/analytics lint && pnpm --filter @orbiters/analytics test && pnpm --filter @orbiters/analytics exec tsc --noEmit",
+      "when": [
+        "shared/analytics/**",
+        "pnpm-lock.yaml"
+      ],
+      "why": "The one PostHog project every surface reports to, and the init policy the two SPAs share. A second of vitest with posthog-js mocked; the consumers test their own wiring."
+    },
+    {
       "id": "website-lint",
       "run": "pnpm --filter website lint",
       "when": [
         "projects/website/**",
-        "shared/brand/**"
+        "shared/brand/**",
+        "shared/analytics/**"
       ]
     },
     {
@@ -108,6 +118,7 @@
       "when": [
         "projects/website/**",
         "shared/brand/**",
+        "shared/analytics/**",
         "pnpm-lock.yaml"
       ],
       "why": "99 assertions on the built and unbuilt text: which tokens each sheet may declare, what each page promises, how the field behaves. No services, about two seconds."
@@ -130,6 +141,7 @@
       "when": [
         "projects/website/**",
         "shared/brand/**",
+        "shared/analytics/**",
         "package.json",
         "pnpm-lock.yaml",
         "pnpm-workspace.yaml"
@@ -174,6 +186,7 @@
       "when": [
         "projects/hub/apps/web/**",
         "shared/brand/**",
+        "shared/analytics/**",
         "pnpm-lock.yaml",
         "pnpm-workspace.yaml"
       ],
@@ -185,6 +198,7 @@
       "when": [
         "projects/hub/apps/web/**",
         "shared/brand/**",
+        "shared/analytics/**",
         "pnpm-lock.yaml",
         "pnpm-workspace.yaml"
       ],
@@ -195,7 +209,8 @@
       "run": "pnpm --filter website exec tsc --noEmit",
       "when": [
         "projects/website/**",
-        "shared/brand/**"
+        "shared/brand/**",
+        "shared/analytics/**"
       ],
       "why": "Vitest transpiles without typechecking, so unit tests pass on code tsc rejects. This project has noUncheckedIndexedAccess on and the trunk went red that way once (ORB-15)."
     },
@@ -204,7 +219,8 @@
       "run": "pnpm --filter website test:e2e",
       "when": [
         "projects/website/**",
-        "shared/brand/**"
+        "shared/brand/**",
+        "shared/analytics/**"
       ],
       "unless": [
         "projects/website/src/**/*.test.ts"
@@ -244,6 +260,7 @@
       "when": [
         "projects/website/**",
         "shared/brand/**",
+        "shared/analytics/**",
         ".dockerignore",
         "pnpm-lock.yaml"
       ],

@@ -58,8 +58,11 @@ describe.each(PAGES)('%s', (name) => {
       // identity left anywhere in this repository.
       // `www.linkedin.com` since ORB-151: the four voices' avatars link to their public
       // profiles. An href, never a src: the photos themselves are served from here.
+      // `posthog.com` since ORB-183: the cookie section links PostHog's policy the way
+      // it links OpenAI's. The SDK itself is on `i.posthog.com`, which is not here and
+      // never will be: `pixel.test.ts` keeps it out of every page.
       expect(url, 'external subresource').toMatch(
-        /^https:\/\/(?:github\.com|pigro\.joinorbiters\.com|openai\.com|humancraft\.tech|www\.linkedin\.com)\//,
+        /^https:\/\/(?:github\.com|pigro\.joinorbiters\.com|openai\.com|posthog\.com|humancraft\.tech|www\.linkedin\.com)\//,
       )
     }
     expect(page).not.toMatch(/fonts\.googleapis\.com|fonts\.gstatic\.com/)

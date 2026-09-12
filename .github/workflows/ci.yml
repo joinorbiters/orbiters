@@ -186,6 +186,7 @@ jobs:
             pigrocrm_web:
               - 'projects/pigrocrm/apps/web/**'
               - 'shared/brand/**'
+              - 'shared/analytics/**'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
@@ -194,6 +195,7 @@ jobs:
             website:
               - 'projects/website/**'
               - 'shared/brand/**'
+              - 'shared/analytics/**'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
@@ -214,6 +216,7 @@ jobs:
             hub_web:
               - 'projects/hub/apps/web/**'
               - 'shared/brand/**'
+              - 'shared/analytics/**'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
@@ -227,6 +230,7 @@ jobs:
             pigrocrm_image: &pigrocrm_image
               - 'projects/pigrocrm/**'
               - 'shared/brand/**'
+              - 'shared/analytics/**'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
@@ -237,6 +241,7 @@ jobs:
             website_image: &website_image
               - 'projects/website/**'
               - 'shared/brand/**'
+              - 'shared/analytics/**'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
@@ -245,6 +250,7 @@ jobs:
             hub_image: &hub_image
               - 'projects/hub/**'
               - 'shared/brand/**'
+              - 'shared/analytics/**'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'

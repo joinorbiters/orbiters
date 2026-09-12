@@ -1,0 +1,33 @@
+{
+  "name": "@orbiters/analytics",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "The one PostHog project every Orbiters surface reports to: its key, its hosts, and the policy the two SPAs initialise it with.",
+  "exports": {
+    ".": "./posthog.ts",
+    "./browser": "./browser.ts",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "posthog.ts",
+    "browser.ts"
+  ],
+  "scripts": {
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "posthog-js": "1.429.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "catalog:",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "globals": "catalog:",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:",
+    "vitest": "catalog:"
+  }
+}

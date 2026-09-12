@@ -443,6 +443,38 @@ describe('the form, once the script has hold of it', () => {
     ])
   })
 
+  it('tells PostHog about the signup once, after the 201', async () => {
+    const capture = vi.fn()
+    vi.stubGlobal('posthog', { capture })
+    mount()
+    fill(filled)
+    await submit()
+    expect(capture).toHaveBeenCalledTimes(1)
+    expect(capture).toHaveBeenCalledWith('iscrizione_community')
+  })
+
+  it('tells PostHog nothing when the API refused the signup, and survives a broken stub', async () => {
+    const capture = vi.fn()
+    vi.stubGlobal('posthog', { capture })
+    mount('', refusedField('email'))
+    fill(filled)
+    await submit()
+    expect(capture).not.toHaveBeenCalled()
+
+    // And a stub whose `capture` throws (an extension replacing the SDK) never reaches
+    // whoever signed up: the note still says the signup worked.
+    document.body.innerHTML = ''
+    vi.stubGlobal('posthog', {
+      capture: vi.fn(() => {
+        throw new Error('bloccato')
+      }),
+    })
+    mount()
+    fill(filled)
+    await submit()
+    expect(note().textContent).toBe('Sei in orbita. Ti scriviamo noi.')
+  })
+
   it('measures nothing when the API refused the signup', async () => {
     const calls: unknown[][] = []
     vi.stubGlobal(

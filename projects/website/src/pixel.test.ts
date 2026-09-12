@@ -1,22 +1,25 @@
-/* The ChatGPT Ads measurement pixel: what may load it, where, and the one string that
- * must never appear in a page.
+/* The two trackers, the ChatGPT Ads pixel and PostHog: what may load them, where, and
+ * the strings that must never appear in a page.
  *
- * Every rule about the pixel lives in this file rather than being spread over the page
- * tests, because they are rules about one decision -- we measure the ad conversion, we
- * measure nothing else, and we load nothing before somebody says yes -- and a rule
- * split across three files is a rule that gets half-changed. The page tests keep saying
- * what a page is; this says what it may fetch.
+ * Every rule about a tracker lives in this file rather than being spread over the page
+ * tests, because they are rules about one decision -- we measure the ad conversion and
+ * how the site is used, we measure nothing else, and we load nothing before somebody
+ * says yes -- and a rule split across three files is a rule that gets half-changed. The
+ * page tests keep saying what a page is; this says what it may fetch.
  *
  * The consent mechanics themselves are `consent.test.ts`, which drives the script in a
- * DOM. What is here is the static half: which pages can ever load the pixel, which must
- * not, and that no page contains a key.
+ * DOM. What is here is the static half: which pages can ever load a tracker, which must
+ * not, that no page contains a key, and that the PostHog literals in consent.js are the
+ * ones every other surface reads from `shared/analytics`.
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { POSTHOG_ASSET_HOST, POSTHOG_HOST, POSTHOG_KEY } from '@orbiters/analytics'
 import { describe, expect, it } from 'vitest'
 
 const PIXEL_ID = '9r6qrnPxBV8WDVGtpuaqxh'
 const SDK_URL = 'https://bzrcdn.openai.com/sdk/oaiq.min.js'
+const POSTHOG_URL = `${POSTHOG_ASSET_HOST}/static/array.js`
 
 const MEASURED = ['index.html', 'pigrocrm.html', 'orbiters.html'] as const
 const UNMEASURED = ['privacy.html', 'termini.html'] as const
@@ -39,13 +42,19 @@ describe.each(MEASURED)('%s', (name) => {
     expect(page[name].match(/<script[^>]+consent\.js/g)).toHaveLength(1)
   })
 
-  it('contains no pixel of its own: no id, no SDK, no init', () => {
-    // The gate is worth nothing if the snippet is also sitting in the markup. Before
-    // 2026-09-09 it was, and consent was the change that took it out: markup runs
-    // whatever the visitor decided.
+  it('contains no tracker of its own: no id, no key, no SDK, no init', () => {
+    // The gate is worth nothing if a snippet is also sitting in the markup. Before
+    // 2026-09-09 the pixel was, and consent was the change that took it out: markup
+    // runs whatever the visitor decided. PostHog arrived on 2026-09-12 through the
+    // same door and never through the head.
     expect(page[name]).not.toContain(PIXEL_ID)
     expect(page[name]).not.toContain(SDK_URL)
     expect(page[name]).not.toContain('oaiq')
+    expect(page[name]).not.toContain(POSTHOG_KEY)
+    expect(page[name]).not.toMatch(/https:\/\/[a-z-]+\.i\.posthog\.com/)
+    for (const [block] of page[name].matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/g)) {
+      expect(block).not.toMatch(/posthog/i)
+    }
   })
 })
 
@@ -56,6 +65,13 @@ describe.each(UNMEASURED)('%s', (name) => {
     expect(page[name]).not.toContain('consent.js')
     expect(page[name]).not.toContain('oaiq')
     expect(page[name]).not.toContain('bzrcdn')
+    // A *link* to PostHog's policy is not a tracker either -- privacy.html points at it,
+    // and names the EU host in prose; what is refused is a URL to it, and a key.
+    expect(page[name]).not.toMatch(/https:\/\/[a-z-]+\.i\.posthog\.com/)
+    expect(page[name]).not.toContain(POSTHOG_KEY)
+    for (const [block] of page[name].matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/g)) {
+      expect(block).not.toMatch(/posthog/i)
+    }
     // A *link* to OpenAI's policy is not a pixel -- privacy.html has to point at it --
     // so what is refused is a script, not the name.
     expect(page[name]).not.toMatch(/<script[^>]*>[\s\S]*openai/i)
@@ -72,9 +88,9 @@ describe.each(ALL)('%s', (name) => {
     expect(page[name]).not.toMatch(/Authorization|Bearer/i)
   })
 
-  it('measures through this pixel or not at all', () => {
-    // No second analytics stack arriving next to the first. Deliberately a closed list
-    // rather than a free hand.
+  it('measures through consent.js or not at all', () => {
+    // No third analytics stack arriving next to the two that enter through the gate.
+    // Deliberately a closed list rather than a free hand.
     expect(page[name]).not.toMatch(
       /gtag|googletagmanager|plausible|fathom|hotjar|matomo|segment\.com/i,
     )
@@ -82,29 +98,57 @@ describe.each(ALL)('%s', (name) => {
 })
 
 describe('consent.js', () => {
-  it('is the only file that names the pixel id or the SDK', () => {
+  it('is the only file that names the pixel id, the SDK, or the PostHog project', () => {
     expect(consent).toContain(PIXEL_ID)
     expect(consent).toContain(SDK_URL)
-    const external = [...consent.matchAll(/https:\/\/[a-z0-9.-]+\.openai\.com[^'"\s]*/g)]
-    expect(external.map((match) => match[0])).toEqual([SDK_URL])
+    const external = [...consent.matchAll(/https:\/\/[a-z0-9.-]+\.[a-z]+[^'"\s]*/g)]
+    expect(external.map((match) => match[0]).sort()).toEqual(
+      [SDK_URL, POSTHOG_HOST, POSTHOG_ASSET_HOST].sort(),
+    )
     // Not duplicated into the page script: one id, one place.
     expect(orbiters).not.toContain(PIXEL_ID)
+    expect(orbiters).not.toContain(POSTHOG_KEY)
   })
 
-  it('injects the SDK from inside the accepting branch and nowhere else', () => {
-    // The assertion that keeps the gate a gate. `loadPixel` is the only function that
-    // touches the SDK URL, and the only call to it that is not behind a stored
-    // `granted` is in `decide`, after the click.
-    const load = consent.slice(
+  it('carries the same PostHog project as every other surface', () => {
+    // `shared/analytics/posthog.ts` is the source; this file cannot import it because
+    // it runs without a bundler, so it repeats the three values and this test is what
+    // keeps the copy honest -- the same idiom path-map-plugin.test.ts uses for
+    // nginx.conf.
+    expect(consent).toContain(`var POSTHOG_KEY = '${POSTHOG_KEY}'`)
+    expect(consent).toContain(`var POSTHOG_HOST = '${POSTHOG_HOST}'`)
+    expect(consent).toContain(`var POSTHOG_ASSET_HOST = '${POSTHOG_ASSET_HOST}'`)
+    // The literal in the DOM test above is the URL the browser will actually request.
+    expect(readFileSync(join(__dirname, 'consent.test.ts'), 'utf-8')).toContain(POSTHOG_URL)
+  })
+
+  it('injects both SDKs from inside the accepting branch and nowhere else', () => {
+    // The assertion that keeps the gate a gate. `loadPixel` and `loadPostHog` are the
+    // only functions that touch a script's `src`, both are called only from `accept`,
+    // and the only call to `accept` that is not behind a stored `granted` is in
+    // `decide`, after the click.
+    const pixel = consent.slice(
       consent.indexOf('function loadPixel'),
+      consent.indexOf('function loadPostHog'),
+    )
+    const posthog = consent.slice(
+      consent.indexOf('function loadPostHog'),
       consent.indexOf('function button'),
     )
-    // The URL reaches a script element in exactly one place in the file, and that place
-    // is inside `loadPixel`.
-    expect(load).toContain('script.src = SDK_URL')
-    expect(consent.match(/\.src = /g)).toHaveLength(1)
-    expect(consent).toContain("if (decision === GRANTED) return loadPixel()")
-    expect(consent).toContain("if (decision === GRANTED) loadPixel()")
+    expect(pixel).toContain('script.src = SDK_URL')
+    expect(posthog).toContain("script.src = POSTHOG_ASSET_HOST + '/static/array.js'")
+    // A `src` is assigned in exactly two places in the file, and both are above.
+    expect(consent.match(/\.src = /g)).toHaveLength(2)
+    const accept = consent.slice(consent.indexOf('function accept'), consent.indexOf('function decide'))
+    expect(accept).toContain('loadPixel()')
+    expect(accept).toContain('loadPostHog()')
+    // Calls, not definitions: `function loadPixel()` is the one place each is written
+    // besides its call.
+    expect(consent.match(/(?<!function )loadPixel\(\)/g)).toHaveLength(1)
+    expect(consent.match(/(?<!function )loadPostHog\(\)/g)).toHaveLength(1)
+    expect(consent).toContain('if (decision === GRANTED) return accept()')
+    expect(consent).toContain('if (decision === GRANTED) accept()')
+    expect(consent.match(/(?<!function )accept\(\)/g)).toHaveLength(2)
   })
 
   it('asks again only while nothing has been decided', () => {
@@ -136,17 +180,18 @@ describe('the conversion event', () => {
     expect(orbiters.match(/var id = eventId\(\)/g)).toHaveLength(1)
   })
 
-  it('is a no-op under a refusal, because there is no oaiq to call', () => {
-    // With consent denied `consent.js` never defines the stub, so this guard is what
-    // makes a signup under a refusal measure nothing at all -- and it is also what
-    // keeps a blocked SDK from breaking the page.
+  it('is a no-op under a refusal, because there is no oaiq and no posthog to call', () => {
+    // With consent denied `consent.js` never defines either stub, so these guards are
+    // what make a signup under a refusal measure nothing at all -- and they are also
+    // what keeps a blocked SDK from breaking the page.
     const measure = orbiters.slice(
       orbiters.indexOf('function measure(id)'),
       orbiters.indexOf('/* The four fields'),
     )
     expect(measure).toContain("typeof window.oaiq === 'function'")
-    expect(measure).toContain('try {')
-    expect(measure).toContain('catch')
+    expect(measure).toContain("typeof window.posthog?.capture === 'function'")
+    expect(measure).toContain("window.posthog.capture('iscrizione_community')")
+    expect(measure.match(/try \{/g)).toHaveLength(2)
   })
 })
 
@@ -173,6 +218,27 @@ describe('privacy.html', () => {
     // than an interest we assert: consent first, and a way back.
     const policy = page['privacy.html']
     expect(policy).toMatch(/consenso/i)
-    expect(policy).toContain('<time datetime="2026-09-09">')
+    // Both halves of the date: the attribute a machine reads and the words a person does.
+    // The first version of this change moved one and not the other.
+    expect(policy).toContain('<time datetime="2026-09-12">12 settembre 2026</time>')
+  })
+
+  it('says PostHog is there, on the site after the yes and behind the logins without one', () => {
+    // The page used to promise «nessuna analitica» inside the CRM. That stops being
+    // true the day the CRM's card (ORB-184) ships, so the sentence changes first, here,
+    // and this test keeps the policy and the code moving together.
+    const policy = page['privacy.html']
+    expect(policy).toContain('PostHog')
+    expect(policy).toMatch(/eu\.i\.posthog\.com|in Europa/)
+    expect(policy).toContain('posthog.com/privacy')
+    expect(policy).not.toMatch(/nessuna analitica e nessun\s+tracciamento/)
+    // What is sent about a signed-in person, named, and the legal basis.
+    expect(policy).toMatch(/interesse legittimo/i)
+    for (const claim of ['email', 'nome', 'ruolo', 'spazio']) expect(policy).toContain(claim)
+    // The site records sessions too (consent.js sets `session_recording`), and the hub
+    // masks its inputs but not every text: the policy says exactly that, no more.
+    expect(policy).toContain('registra la sessione con i campi mascherati')
+    expect(policy).toContain('ogni campo è mascherato, e nel CRM anche ogni testo')
+    expect(policy).toContain('indirizzo IP e il tuo browser')
   })
 })

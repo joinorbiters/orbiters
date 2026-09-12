@@ -16,6 +16,14 @@ thing a visitor loads and it must not drag an application bundle behind it. A de
 added here has to justify itself against that, and "the CRM already uses it" is not a
 justification: the CRM is behind a login and this is not.
 
+## A tracker enters through `consent.js` or not at all
+
+The ChatGPT Ads pixel and PostHog are both injected by `src/consent.js` after the
+visitor's yes; neither sits in a `<head>`, and `pixel.test.ts` fails the page that tries.
+PostHog's key and hosts are literals there because the file runs without a bundler, and
+the same test compares them with `shared/analytics`, the source every other surface
+imports. Change the key there first, then here.
+
 ## Colour, typeface and the mark come from `shared/brand`
 
 Never restate them. `src/palette-plugin.ts` reads the shared tokens out of

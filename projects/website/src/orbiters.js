@@ -59,16 +59,16 @@
 
   /* One id per submitted form, for the browser event and the server one: OpenAI
      deduplicates on (pixel id, event name, id), so the two halves are one conversion.
-     `randomUUID` wants a secure context, which the landing has; the fallback is for a
-     form reached over plain http, where a collision would merge two conversions. */
+     `randomUUID` wants a secure context, which the landing has; the fallback is for
+     plain http, where a collision would merge two conversions. */
   function eventId() {
     var crypto = window.crypto
     if (crypto && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
     return 'e-' + Date.now().toString(16) + '-' + Math.random().toString(16).slice(2, 14)
   }
 
-  /* The browser half, and never in the way: the SDK comes from another origin and an
-     extension may remove it, which is no reason to show an error to whoever signed up. */
+  /* The browser half, and never in the way: the SDKs come from another origin and an
+     extension may remove them, which is no reason to show an error to whoever signed up. */
   function measure(id) {
     try {
       if (typeof window.oaiq === 'function') {
@@ -78,6 +78,13 @@
       }
     } catch {
       /* A pixel that will not fire is not the problem of whoever signed up. */
+    }
+    try {
+      if (typeof window.posthog?.capture === 'function') {
+        window.posthog.capture('iscrizione_community')
+      }
+    } catch {
+      /* Same. */
     }
   }
 
