@@ -1,5 +1,6 @@
 import { Outlet, useNavigate } from '@tanstack/react-router'
 import { useEffect } from 'react'
+import { useIdentifyMember } from '@/lib/analytics'
 import { useMember } from '@/lib/member'
 
 /** Nothing under /io renders until the session is known; without one the visitor goes
@@ -7,6 +8,8 @@ import { useMember } from '@/lib/member'
 export function MemberGuard() {
   const me = useMember()
   const navigate = useNavigate()
+  // Here rather than in each page: everything under /io passes through this guard.
+  useIdentifyMember(me.data)
 
   useEffect(() => {
     if (!me.isPending && me.data === null) void navigate({ to: '/accedi', replace: true })

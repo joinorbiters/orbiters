@@ -1,3 +1,4 @@
+import { resetUser } from '@orbiters/analytics/browser'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError, admin, type Admin } from './api'
 
@@ -35,6 +36,7 @@ export function useLogout() {
   return useMutation({
     mutationFn: () => admin.logout(),
     onSettled: () => {
+      resetUser()
       client.clear()
       window.location.assign('/hub/admin/login')
     },

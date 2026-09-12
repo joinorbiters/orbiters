@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import './site-controls.css'
@@ -44,6 +44,7 @@ export function Wizard<T>({
   submitting,
   submitError,
   submitLabel,
+  onStep,
 }: {
   title: string
   steps: Step<T>[]
@@ -55,12 +56,20 @@ export function Wizard<T>({
    *  the engine jumps back to that step and shows it there. */
   submitError: { message: string; step?: string } | null
   submitLabel: string
+  /** Called with the step on screen and how many there are, whenever it changes: the
+   *  first one on mount, the review as `steps.length`, a jump back on a server error
+   *  too. Memoise it, or it fires on every render. */
+  onStep?: (index: number, total: number) => void
 }) {
   const [index, setIndex] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const review = index === steps.length
   const step = steps[index]
   const [handled, setHandled] = useState<string | null>(null)
+
+  useEffect(() => {
+    onStep?.(index, steps.length)
+  }, [index, steps.length, onStep])
 
   // A server error that names a step sends the person back to it, once per error. State
   // adjusted during render, the way React asks for "state that follows a prop", rather
