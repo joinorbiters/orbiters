@@ -29,7 +29,6 @@ SIGNUP = {
     "slug": SLUG,
     "nome": "Ada Lovelace",
     "email": "ada@studio.it",
-    "password": "lunghissima1",
 }
 
 
@@ -120,19 +119,18 @@ def test_signing_up_creates_a_space_that_serves_its_own_data(
     created = spaces_client.post("/api/tenants/", json=SIGNUP)
     assert created.status_code == 201, created.text
     assert created.json()["slug"] == SLUG
-    assert created.headers["Location"] == f"/{SLUG}/app/login"
+    # Registering is entering (spec 2026-09-12 §6.4): the space's home, not its login.
+    assert created.headers["Location"] == f"/{SLUG}/app/"
 
     # The name is gone, and a second signup with it is a 409, not a second space.
     assert spaces_client.get(f"/api/tenants/{SLUG}/disponibile").json()["disponibile"] is False
     again = spaces_client.post("/api/tenants/", json={**SIGNUP, "email": "bob@studio.it"})
     assert again.status_code == 409, again.text
 
-    # The space's own login, with the admin the signup created, and a cookie scoped to it.
-    login = spaces_client.post(
-        f"/{SLUG}/api/auth/login", json={"email": SIGNUP["email"], "password": SIGNUP["password"]}
-    )
-    assert login.status_code == 200, login.text
-    assert f"Path=/{SLUG}/" in login.headers["set-cookie"]
+    # The signup opened the space's session (ORB-176): the access cookie is scoped to it
+    # and the space's own `me` answers the admin the signup created.
+    assert f"Path=/{SLUG}/" in created.headers["set-cookie"]
+    assert spaces_client.get(f"/{SLUG}/api/auth/me").json()["email"] == SIGNUP["email"]
 
     # The space is empty and separate: the root's session is not this one.
     customers = spaces_client.get(f"/{SLUG}/api/customers")
@@ -144,10 +142,10 @@ def test_signing_up_creates_a_space_that_serves_its_own_data(
     assert spaces_client.get(f"/{SLUG}/api/gmail/account").json()["account"] is None
     assert spaces_client.get(f"/{SLUG}/api/gmail/oauth/start").status_code == 409
 
-    # The root does not know this user: the same credentials are refused there.
+    # The root does not know this user, and the admin has no password anywhere.
     assert (
         spaces_client.post(
-            "/api/auth/login", json={"email": SIGNUP["email"], "password": SIGNUP["password"]}
+            "/api/auth/login", json={"email": SIGNUP["email"], "password": "qualunque11"}
         ).status_code
         == 401
     )
@@ -296,6 +294,8 @@ def test_a_link_asked_at_the_root_reaches_the_space_that_address_owns(
     created = spaces_client.post("/api/tenants/", json=SIGNUP)
     assert created.status_code == 201, created.text
 
+    # The signup mailed the welcome (ORB-176); the link mail is the second one.
+    recording.sent.clear()
     response = spaces_client.post("/api/auth/link", json={"email": SIGNUP["email"]})
     assert response.status_code == 202
     assert len(recording.sent) == 1
@@ -321,6 +321,7 @@ def test_a_link_asked_under_a_space_reaches_that_space_only(spaces_client: TestC
     created = spaces_client.post("/api/tenants/", json=SIGNUP)
     assert created.status_code == 201, created.text
 
+    recording.sent.clear()  # the welcome mail of the signup (ORB-176)
     response = spaces_client.post(f"/{SLUG}/api/auth/link", json={"email": SIGNUP["email"]})
     assert response.status_code == 202
     assert len(recording.sent) == 1
@@ -412,3 +413,75 @@ def test_the_member_question_is_throttled_per_client(
         "/api/tenants/membro", json={"email": "ada@studio.it"}, headers={"X-Real-IP": "10.0.0.7"}
     )
     assert other.status_code == 200, other.text
+
+
+WIZARD_SIGNUP = {**SIGNUP, "membro": False}
+
+
+def test_signing_up_enters_for_a_while_and_the_welcome_link_makes_it_durable(
+    spaces_client: TestClient,
+) -> None:
+    """Spec 2026-09-12 §6.4, the whole chain: the 201 carries the access cookie only; the
+    welcome mail carries a link that enters; that click verifies the address, opens the
+    refresh cookie and is what makes the session durable. Before it, the admin can
+    neither mint a token nor add a user."""
+    from pigrocrm.core.mail import RecordingSender
+    from pigrocrm_api.sessions import get_sender
+
+    recording = RecordingSender()
+    spaces_client.app.dependency_overrides[get_sender] = lambda: recording  # type: ignore[attr-defined]
+    created = spaces_client.post("/api/tenants/", json=WIZARD_SIGNUP)
+    assert created.status_code == 201, created.text
+    assert created.headers["Location"] == f"/{SLUG}/app/"
+    cookies = created.headers.get_list("set-cookie")
+    assert any("pigrocrm_access=" in c and f"Path=/{SLUG}/" in c for c in cookies)
+    assert not any("pigrocrm_refresh=" in c for c in cookies)
+    # In, for the access token's life: `me` answers, `refresh` has nothing to refresh.
+    me = spaces_client.get(f"/{SLUG}/api/auth/me")
+    assert me.status_code == 200 and me.json()["ruolo"] == "admin"
+    assert spaces_client.post(f"/{SLUG}/api/auth/refresh").status_code == 401
+    # Nothing durable before the address is proven: no token, no second user.
+    token = spaces_client.post(f"/{SLUG}/api/tokens", json={"nome": "claude"})
+    assert token.status_code == 422, token.text
+    assert "conferma il tuo indirizzo" in token.text
+    user = spaces_client.post(
+        f"/{SLUG}/api/users",
+        json={
+            "email": "b@studio.it",
+            "password": "lunghissima1",
+            "nome": "B",
+            "ruolo": "collaboratore",
+        },
+    )
+    assert user.status_code == 422, user.text
+    # The welcome mail: to the owner, with a link that enters and the Orbiters paragraph
+    # for someone who is not a member yet.
+    assert len(recording.sent) == 1
+    mail = recording.sent[0]
+    assert mail.to == "ada@studio.it" and mail.subject == "Il tuo spazio PigroCRM è pronto"
+    assert f"https://pigro.test/{SLUG}/app/login" in mail.text and "hub/freelance" in mail.text
+    raw = mail.text.split(f"/{SLUG}/app/entra?t=", 1)[1].split()[0]
+    entered = spaces_client.post(f"/{SLUG}/api/auth/entra", json={"t": raw})
+    assert entered.status_code == 200, entered.text
+    assert any(
+        "pigrocrm_refresh=" in c and f"Path=/{SLUG}/" in c
+        for c in entered.headers.get_list("set-cookie")
+    )
+    assert spaces_client.post(f"/{SLUG}/api/auth/refresh").status_code == 200
+    assert spaces_client.post(f"/{SLUG}/api/tokens", json={"nome": "claude"}).status_code == 201
+    # No password was ever set: the password form knows nothing of this admin.
+    denied = spaces_client.post(
+        f"/{SLUG}/api/auth/login", json={"email": "ada@studio.it", "password": "qualunque11"}
+    )
+    assert denied.status_code == 401
+
+
+def test_signing_up_without_a_sender_still_creates_the_space(spaces_client: TestClient) -> None:
+    created = spaces_client.post("/api/tenants/", json={**WIZARD_SIGNUP, "membro": True})
+    assert created.status_code == 201, created.text
+    assert spaces_client.get(f"/{SLUG}/api/auth/me").status_code == 200
+
+
+def test_the_signup_refuses_a_password(spaces_client: TestClient) -> None:
+    refused = spaces_client.post("/api/tenants/", json={**SIGNUP, "password": "lunghissima1"})
+    assert refused.status_code == 422, refused.text

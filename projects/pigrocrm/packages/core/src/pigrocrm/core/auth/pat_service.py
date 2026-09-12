@@ -13,6 +13,7 @@ from pigrocrm.core.actor import Actor, Role
 from pigrocrm.core.auth.models import User
 from pigrocrm.core.auth.pat_models import PersonalAccessToken
 from pigrocrm.core.auth.service import ENTITY as USER_ENTITY
+from pigrocrm.core.auth.service import require_verified_identity
 from pigrocrm.core.config import Settings, get_settings
 from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 
@@ -71,6 +72,9 @@ class PatService:
     def create(self, nome: str, actor: Actor) -> tuple[PatRead, str]:
         if actor.id is None:
             raise ValidationFailed("token", "actor", "serve un utente autenticato")
+        # A token outlives the revocation the first link by mail performs, so an
+        # address nobody has proven yet cannot mint one (spec 2026-09-12 §6.4).
+        require_verified_identity(self.session, actor, "create_token")
 
         raw = PAT_PREFIX + secrets.token_urlsafe(32)
         record = PersonalAccessToken(

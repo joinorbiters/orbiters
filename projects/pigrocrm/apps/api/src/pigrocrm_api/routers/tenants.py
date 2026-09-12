@@ -10,9 +10,15 @@ thing this product means.
 import secrets
 from typing import Annotated
 
-from fastapi import APIRouter, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, EmailStr
+from sqlalchemy import create_engine
 
+from pigrocrm.core.auth.magic_link import MagicLinkService
+from pigrocrm.core.auth.repository import UserRepository
+from pigrocrm.core.auth.tokens import issue_access_token
+from pigrocrm.core.db.session import session_factory
+from pigrocrm.core.mail import welcome_mail
 from pigrocrm.core.tenants import (
     TenantAvailability,
     TenantRead,
@@ -20,9 +26,11 @@ from pigrocrm.core.tenants import (
     TenantSignup,
     lookup_member,
 )
+from pigrocrm.core.tenants.database import tenant_database_name, tenant_database_url
 from pigrocrm_api.deps import SettingsDep, TenantsRegistryDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
 from pigrocrm_api.ratelimit import spend_one
+from pigrocrm_api.sessions import SenderDep, set_access_cookie
 
 router = APIRouter(prefix="/api/tenants", tags=["tenants"], responses=PROBLEM_RESPONSES)
 
@@ -119,11 +127,62 @@ def availability(
 
 @router.post("/", response_model=TenantRead, status_code=status.HTTP_201_CREATED)
 def signup(
-    data: TenantSignup, registry: TenantsRegistryDep, settings: SettingsDep, response: Response
+    data: TenantSignup,
+    request: Request,
+    registry: TenantsRegistryDep,
+    settings: SettingsDep,
+    response: Response,
+    background: BackgroundTasks,
+    sender: SenderDep,
 ) -> TenantRead:
-    """Creates the space: a registry row, a migrated database, its first admin. 409 when
-    the name is taken, 422 when it is malformed or reserved or the password too short.
-    The `Location` header is where the person logs in next."""
+    """Creates the space: a registry row, a migrated database, its first admin, its
+    defaults. 409 when the name is taken, 422 when it is malformed or reserved.
+
+    Registering is entering (spec 2026-09-12 §6.4), for as long as an address nobody has
+    proven deserves: the response carries the space's *access* cookie, at the space's
+    path (the browser accepts it from the root's response: same host), and `Location` is
+    the space's home. No refresh token: whoever typed somebody else's email works for
+    `access_token_minutes` and then stops, cannot mint a personal token and cannot add a
+    user (`require_verified_identity`). The welcome mail carries a link that enters:
+    the first click proves the address, opens the durable session and revokes what came
+    before (`MagicLinkService.enter`). Without a sender or a public origin the space is
+    created all the same, and the login page's own link does the rest. Throttled per
+    client like the member question: a `CREATE DATABASE` per anonymous POST."""
+    spend_one(request)
     tenant = TenantService(registry, settings).provision(data)
-    response.headers["Location"] = f"/{tenant.slug}/app/login"
+    engine = create_engine(
+        tenant_database_url(settings, tenant_database_name(tenant.slug)), future=True
+    )
+    try:
+        with session_factory(engine)() as space:
+            admin = UserRepository(space).get_by_email(tenant.owner_email)
+            if admin is None:  # pragma: no cover - provision just created it
+                raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "spazio senza admin")
+            access = issue_access_token(admin.id, admin.ruolo, settings)
+            origin = settings.public_url.strip().rstrip("/")
+            raw = (
+                MagicLinkService(space, settings).request(tenant.owner_email)
+                if sender and origin
+                else None
+            )
+    finally:
+        engine.dispose()
+    set_access_cookie(
+        response,
+        access,
+        settings.access_token_minutes,
+        secure=settings.cookie_secure,
+        path=f"/{tenant.slug}/",
+    )
+    response.headers["Location"] = f"/{tenant.slug}/app/"
+    if sender is not None and origin and raw:
+        background.add_task(
+            sender.send,
+            welcome_mail(
+                tenant.owner_email,
+                f"{origin}/{tenant.slug}/app/entra?t={raw}",
+                f"{origin}/{tenant.slug}/app/login",
+                membro=data.membro,
+            ),
+        )
     return tenant

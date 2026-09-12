@@ -194,14 +194,17 @@ proposta; sotto, in una riga, `pigro.joinorbiters.com/ada-lovelace è libero` e 
 disponibilità di oggi. Nessuna password. Una riga «Creando lo spazio accetti i termini e
 la privacy». Il bottone «Crea lo spazio».
 
-**`POST /api/tenants`** perde `password`, crea l'admin senza password
-(`UserService.create` accetta `password=None` solo quando lo chiama il provisioning:
-`UserCreate.password: str | None`, e `create` lo rifiuta da un attore che non sia il
-sistema), semina i predefiniti (§6.5), scrive `ragione_sociale = nome` nel profilo
-emittente, **apre la sessione dello spazio** (la coppia access/refresh con `path=/<slug>/`
-come farebbe `login` sotto quel prefisso; è lo stesso host, il browser la accetta), manda
-la mail di benvenuto (§6.6) e risponde 201 con `Location: /<slug>/app/`. La pagina naviga
-lì. Il rate limit non c'è oggi e non arriva qui: la registrazione era già senza verifica.
+**`POST /api/tenants`** perde `password` (la rifiuta: `extra="forbid"`), crea l'admin senza
+password (`UserCreate.password: str | None`, accettato solo da `Actor.system()`), semina i
+predefiniti (§6.5), scrive `ragione_sociale = nome` nel profilo emittente, **apre la sessione
+dello spazio per la durata di un access token** (il solo cookie di accesso, `path=/<slug>/`,
+quindici minuti: è quanto merita un indirizzo che nessuno ha ancora dimostrato), manda la
+mail di benvenuto (§6.6) il cui bottone è un link via mail, e risponde 201 con
+`Location: /<slug>/app/`. La pagina naviga lì. Il click sul link del benvenuto dimostra
+l'indirizzo, apre il refresh token e revoca quanto aperto prima (§6.2). Finché non succede,
+un account senza password e senza indirizzo verificato non può creare token personali né
+utenti (`require_verified_identity`): chi scrive l'email di un altro lavora quindici minuti e
+non tiene nulla. La registrazione è limitata per client come la domanda sul membro.
 
 **Atterraggio.** La Home dello spazio nuovo (§6.7).
 
@@ -226,8 +229,10 @@ Impostazioni → Template e lo modifica come suo, perché è una riga del suo da
 
 ### 6.6 La mail di benvenuto (core, api)
 
-Al 201 di `POST /api/tenants`: oggetto «Il tuo spazio PigroCRM è pronto», il link
-`/<slug>/app/login` come «Da qui si entra: scrivi la tua email, ti arriva un link»,
+Al 201 di `POST /api/tenants`: oggetto «Il tuo spazio PigroCRM è pronto», il bottone «Entra nel
+tuo spazio» che è un link via mail (`/<slug>/app/entra?t=…`, quindici minuti, una volta sola:
+il click dimostra l'indirizzo e apre la sessione durevole), il link `/<slug>/app/login` come
+«le altre volte si entra con la tua email, ti arriva un link»,
 l'assistente in una frase con il link alla pagina che lo collega, i tre primi passi come
 frasi (dati fiscali, primo cliente, prima offerta), e per chi non è membro un paragrafo
 su Orbiters con il link al wizard. Voce di `docs/design/positioning.md`, cornice di §6.1.
@@ -283,8 +288,8 @@ vecchio, era già falsa (ORB-175, annullata).
 | Decisione | Scelta | Perché |
 |---|---|---|
 | Chi non è nella community può creare uno spazio? | Sì. La community è la via veloce (nome già scritto), non un cancello | Un passo in più prima del valore costa più di quanto rende; la mail di benvenuto lo invita nella community |
-| Sessione aperta subito alla registrazione, o solo dal link nella mail? | Subito, e il primo ingresso via link del vero titolare revoca ogni sessione precedente | Zero porte per chi è onesto; nessun vantaggio duraturo per chi scrive l'email di un altro |
-| La password sparisce? | Non viene più chiesta a nessuno; resta come seconda via per chi la ha | La radice, i sette spazi e l'e2e continuano a funzionare il giorno del deploy |
+| Sessione aperta subito alla registrazione, o solo dal link nella mail? | Subito ma breve: il solo access token, quindici minuti, senza refresh, senza token personali né utenti nuovi finché il link del benvenuto non dimostra l'indirizzo; quel click apre la sessione durevole e revoca ogni sessione precedente | Zero porte per chi è onesto; nessun vantaggio duraturo per chi scrive l'email di un altro (revisione di ORB-176: la prima stesura lasciava un refresh di sei mesi e una password) |
+| La password sparisce? | Non viene più chiesta a nessuno e la registrazione la rifiuta; resta come seconda via per chi la ha | La radice, i sette spazi e l'e2e continuano a funzionare il giorno del deploy |
 | Gli spazi esistenti ricevono i predefiniti? | Sì, al primo avvio dopo il deploy, solo se la tabella è vuota | Sono tutti vuoti; nessun comando a mano, nessun template cancellato che rispunta |
 
 ## 9. Ordine e card
