@@ -8,6 +8,7 @@ from pigrocrm.core.mail import (
     ResendSender,
     magic_link_mail,
     sender_from_settings,
+    welcome_mail,
 )
 
 
@@ -78,3 +79,22 @@ def test_the_recording_sender_keeps_what_it_was_given() -> None:
     mail = Mail(to="a@x.it", subject="s", text="t")
     assert recording.send(mail) is True
     assert recording.sent == [mail]
+
+
+def test_the_welcome_mail_says_where_to_enter_and_what_to_do_first() -> None:
+    member = welcome_mail("ada@x.it", "Ada", "https://pigro.test/ada/app/login", membro=True)
+    assert member.subject == "Il tuo spazio PigroCRM è pronto"
+    assert member.text.startswith("Ciao Ada,")
+    assert "https://pigro.test/ada/app/login" in member.text
+    assert (
+        "assistente" in member.text
+        and "dati fiscali" in member.text
+        and "primo cliente" in member.text
+    )
+    assert "joinorbiters.com/hub/freelance" not in member.text
+    guest = welcome_mail("bob@x.it", None, "https://pigro.test/bob/app/login", membro=False)
+    assert guest.text.startswith("Ciao,")
+    assert "joinorbiters.com/hub/freelance" in guest.text
+    assert guest.html is not None and "hub/freelance" in guest.html
+    hostile = welcome_mail("x@x.it", "<b>Ada</b>", "https://pigro.test/x/app/login", membro=True)
+    assert hostile.html is not None and "<b>Ada</b>" not in hostile.html
