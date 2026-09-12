@@ -34,7 +34,7 @@ from typing import Any
 
 import anyio
 import anyio.to_thread
-from anyio.abc import TaskGroup
+from anyio.abc import TaskGroup, TaskStatus
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.types import ASGIApp
 
@@ -117,18 +117,30 @@ class McpHttpApp:
             yield
         finally:
             shutdown.set()
-            await owner  # re-raises whatever a space's lifespan failed with
-            self._registry.dispose()
+            try:
+                await owner  # re-raises whatever a space's lifespan failed with
+            finally:
+                # Under the `finally` too: a space whose lifespan failed is exactly the
+                # process that must still give its engines back.
+                self._registry.dispose()
 
     async def _own(self, running: anyio.Event, shutdown: anyio.Event) -> None:
         async with anyio.create_task_group() as task_group:
             self._task_group = task_group
             running.set()
-            await shutdown.wait()
-            for space in self._spaces.values():
-                space.stop.set()
-            self._spaces.clear()
-            self._task_group = None
+            try:
+                await shutdown.wait()
+                for space in self._spaces.values():
+                    space.stop.set()
+            finally:
+                # `finally`, not two plain statements after the wait: a space's lifespan
+                # failing cancels this scope, and what must not survive that is a
+                # `_task_group` pointing at a group that has exited (`start_soon` then
+                # raises «task group is not active») or a cached `_SpaceApp` whose
+                # session manager has stopped (every request through it is a 500 from
+                # the SDK). Forgetting both makes the next request rebuild instead.
+                self._spaces.clear()
+                self._task_group = None
         # Left the group, so every space's lifespan has finished: nothing is using the
         # engines any more.
 
@@ -209,7 +221,15 @@ class McpHttpApp:
             if current is not None and current.overrides == auth.overrides:
                 return current
             if current is not None:
-                current.stop.set()  # the settings changed: this server's tool list is stale
+                # Forgotten *before* it is stopped, and that order is the whole point:
+                # the settings changed, so this server's tool list is stale, but the
+                # build that replaces it can fail (a bad override is exactly what this
+                # path exists for). Left in the dictionary it would be handed to every
+                # later request with these overrides, each one a 500 from a session
+                # manager that has stopped. Forgotten, a failed rebuild costs one
+                # request and the next one builds again.
+                self._spaces.pop(key, None)
+                current.stop.set()
             built = await self._build(slug, auth)
             self._spaces[key] = built
             return built
@@ -235,16 +255,19 @@ class McpHttpApp:
             # no host port, so nginx is what binds the name. Off is the honest setting.
             transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
         )
-        started = anyio.Event()
         stop = anyio.Event()
 
-        async def serve() -> None:
+        async def serve(*, task_status: TaskStatus[None]) -> None:
             async with starlette.router.lifespan_context(starlette):
-                started.set()
+                task_status.started()
                 await stop.wait()
 
-        self._task_group.start_soon(serve)
-        await started.wait()
+        # `start`, not `start_soon` plus an event of our own: this task is not a child
+        # of the group, so a lifespan that fails before it is ready would cancel the
+        # group without cancelling us, and an event nobody will ever set is a request
+        # that hangs forever holding `_build_lock` -- every later build behind it. anyio
+        # re-raises a pre-start failure here instead, and the caller answers with it.
+        await self._task_group.start(serve)
         return _SpaceApp(app=starlette, overrides=auth.overrides, stop=stop)
 
 
@@ -265,9 +288,12 @@ def _bearer_of(scope: Scope) -> str | None:
     headers: list[tuple[bytes, bytes]] = scope.get("headers", [])
     for name, value in headers:
         if name.lower() == b"authorization":
-            header = value.decode("latin-1")
-            if header.startswith("Bearer ") and header[7:].startswith(PAT_PREFIX):
-                return header[7:]
+            scheme, _, credential = value.decode("latin-1").partition(" ")
+            # The scheme is case-insensitive (RFC 9110); the token is not, and one that
+            # is not a PAT is no credential of ours, so the caller answers the same 401
+            # it answers a wrong one with.
+            if scheme.lower() == "bearer" and credential.startswith(PAT_PREFIX):
+                return credential
             return None
     return None
 

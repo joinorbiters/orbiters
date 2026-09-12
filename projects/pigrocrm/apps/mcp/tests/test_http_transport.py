@@ -5,11 +5,14 @@ client on top, so the wire is the real one and no port is opened. The root datab
 the MCP suite's container; Task 5 adds spaces provisioned on the same server.
 """
 
+import asyncio
 import json
 from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from typing import Any
 from uuid import UUID
 
+import anyio
 import httpx2
 import pytest
 import pytest_asyncio
@@ -219,3 +222,100 @@ async def test_the_token_use_is_stamped(
     with session_factory(mcp_engine)() as session:
         [record] = PatService(session).list(Actor(id=user_id, type="user", role="collaboratore"))
     assert record.last_used_at is not None
+
+
+@pytest.mark.asyncio
+async def test_the_lifespan_protocol_starts_the_app_serves_and_stops_it() -> None:
+    """What a server drives, and the only path `lifespan()` does not cover.
+
+    `uvicorn pigrocrm_mcp.http:app` never calls `lifespan()`: it sends `lifespan.startup`
+    into `__call__` and expects `lifespan.startup.complete` back, serves requests, then
+    sends `lifespan.shutdown`. No database is opened here -- `/health` answers before any
+    space is resolved -- so this is the one test in the file that needs no container row.
+    """
+    app = create_app(Settings(_env_file=None))  # type: ignore[call-arg]
+    inbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    sent: list[dict[str, Any]] = []
+
+    async def receive() -> dict[str, Any]:
+        return await inbox.get()
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    protocol = asyncio.create_task(app({"type": "lifespan"}, receive, send))
+    await inbox.put({"type": "lifespan.startup"})
+    with anyio.fail_after(10):
+        while not sent:
+            await anyio.sleep(0.01)
+    assert sent == [{"type": "lifespan.startup.complete"}]
+
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://prova") as client:
+        response = await client.get("/health")
+    assert response.json() == {"status": "ok"}
+
+    await inbox.put({"type": "lifespan.shutdown"})
+    with anyio.fail_after(10):
+        await protocol
+    assert sent == [
+        {"type": "lifespan.startup.complete"},
+        {"type": "lifespan.shutdown.complete"},
+    ]
+
+
+class _LifespanThatFails:
+    """Stands in for the SDK's Starlette app when its lifespan fails before it is ready.
+
+    Its own `router`, because `_build` enters `starlette.router.lifespan_context(...)`
+    and that is the only attribute of the real app it touches before the app is served.
+    """
+
+    def __init__(self) -> None:
+        self.router = self
+
+    @asynccontextmanager
+    async def lifespan_context(self, app: Any) -> AsyncIterator[None]:
+        raise RuntimeError("la lifespan non parte")
+        yield  # pragma: no cover -- unreachable, and what makes this a context manager
+
+
+class _ServerWhoseAppFails:
+    def streamable_http_app(self, **kwargs: Any) -> Any:
+        return _LifespanThatFails()
+
+
+@pytest.mark.asyncio
+async def test_a_space_lifespan_that_fails_to_start_answers_the_request_instead_of_hanging(
+    served: tuple[McpHttpApp, httpx2.AsyncClient],
+    root_token: tuple[str, UUID],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The failure arrives at the request that asked for the build, under a deadline.
+
+    The deadline is the assertion: the task that enters a space's lifespan is not a
+    child of the request, so a failure before it is ready used to leave the request
+    waiting on an event nobody would ever set, holding the build lock and blocking every
+    later build behind it.
+    """
+    raw, _ = root_token
+    _, client = served
+    monkeypatch.setattr(
+        "pigrocrm_mcp.http.build_server", lambda *args, **kwargs: _ServerWhoseAppFails()
+    )
+    with anyio.fail_after(10):
+        with pytest.raises(RuntimeError, match="la lifespan non parte"):
+            await client.post("/mcp", json=INITIALIZE, headers={**ACCEPT, **_bearer(raw)})
+
+
+@pytest.mark.asyncio
+async def test_the_bearer_scheme_is_read_case_insensitively(
+    served: tuple[McpHttpApp, httpx2.AsyncClient], root_token: tuple[str, UUID]
+) -> None:
+    """`bearer` is the same scheme as `Bearer` (RFC 9110), and some clients send it."""
+    raw, _ = root_token
+    _, client = served
+    response = await client.post(
+        "/mcp", json=INITIALIZE, headers={**ACCEPT, "Authorization": f"bearer {raw}"}
+    )
+    assert response.status_code == 200
