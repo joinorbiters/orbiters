@@ -11,7 +11,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -63,18 +63,21 @@ class TenantService:
         self.session = session
         self.settings = settings
 
-    def slugs_for_owner(self, email: str) -> list[str]:
-        """The spaces already opened by that address, oldest first: what only the registry
-        knows, and what the signup shows a returning person so they open a second space
-        on purpose and not by mistake (ORB-173). `owner_email` is stored lowercased by
-        `provision`, so the match is on the lowercased input. Above `list` on purpose:
-        below it the annotation `list[str]` would name the method."""
-        rows = self.session.scalars(
-            select(Tenant.slug)
-            .where(Tenant.owner_email == email.strip().lower())
-            .order_by(Tenant.created_at.asc(), Tenant.id.asc())
-        ).all()
-        return list(rows)
+    def count_for_owner(self, email: str) -> int:
+        """How many spaces that address has already opened: what only the registry knows,
+        and what the signup uses to tell a returning person there is something to get
+        back into, so a second space is opened on purpose and not by mistake (ORB-173).
+        A count and not the slugs: the caller has not proven the address yet, and which
+        spaces are whose is the mail's to tell. `owner_email` is stored lowercased by
+        `provision`, so the match is on the lowercased input."""
+        return (
+            self.session.scalar(
+                select(func.count())
+                .select_from(Tenant)
+                .where(Tenant.owner_email == email.strip().lower())
+            )
+            or 0
+        )
 
     def list(self) -> list[TenantRead]:
         """Every space, newest first: what the registry knows, which is who opened it and

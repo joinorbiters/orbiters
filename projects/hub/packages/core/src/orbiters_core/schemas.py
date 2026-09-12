@@ -445,6 +445,16 @@ class MemberProfile(BaseModel):
         return _is_complete(self)
 
 
+class MemberLookupRequest(BaseModel):
+    """The address PigroCRM asks about, in a body and never in the URL: a query string is
+    written by every access log and proxy on the way, a body is not. A plain `str`, not
+    `EmailStr`: a malformed address is simply not a member's, never an error."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: str = Field(min_length=1, max_length=320)
+
+
 class MemberLookup(BaseModel):
     """What the hub tells PigroCRM about an address (ORB-173): whether a freelancer with
     it exists, and if so the two names the CRM's signup would otherwise ask for again.

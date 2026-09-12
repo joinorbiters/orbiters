@@ -20,6 +20,7 @@ from pigrocrm.core.tenants import MemberLookup, ensure_tenants_database
 from pigrocrm.core.tenants.database import tenant_database_name, tenant_database_url
 from pigrocrm_api.deps import get_session, reset_session_factories
 from pigrocrm_api.main import create_app
+from pigrocrm_api.ratelimit import REQUESTS_PER_MINUTE, reset_rate_limit
 from pigrocrm_api.tenancy import split_tenant_prefix
 
 SLUG = "studio-prova"
@@ -38,6 +39,9 @@ def container_settings(api_engine: Engine) -> Settings:
         database_url=api_engine.url.render_as_string(hide_password=False),
         jwt_secret="test-secret-for-the-api-test-suite-only",
         cookie_secure=True,
+        # A loopback port nobody listens on, so no test in this file can ever ask the
+        # real hub whatever a developer's `.env` says (ORB-173).
+        hub_url="http://127.0.0.1:9",
         _env_file=None,  # type: ignore[call-arg]
     )
 
@@ -50,6 +54,8 @@ def _serving(settings: Settings) -> Iterator[TestClient]:
     created under `SLUG` is dropped on the way out, and the registry emptied."""
     reset_session_factories()
     get_settings.cache_clear()
+    # The limiter counts per process: one test's questions must not be the next one's budget.
+    reset_rate_limit()
     app = create_app()
     app.dependency_overrides[get_settings] = lambda: settings
     registry = ensure_tenants_database(settings)
@@ -275,12 +281,13 @@ def test_the_list_of_spaces_answers_only_to_the_registry_token(
     assert set(rows[0]) == {"id", "slug", "owner_email", "created_at"}
 
 
-def test_the_signup_learns_whether_an_address_is_a_member_and_which_spaces_it_owns(
+def test_the_signup_learns_whether_an_address_is_a_member_and_how_many_spaces_it_owns(
     spaces_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """ORB-173: the hub's answer and the registry's, in one body. The hub is stubbed at
     the client the router calls; `spazi` is what only the registry knows and is read for
-    real, from the space this test provisions."""
+    real, from the space this test provisions. A count and never the slugs: the address
+    is not proven yet."""
     asked: list[str] = []
 
     def fake_lookup(settings: Settings, email: str) -> MemberLookup:
@@ -289,19 +296,20 @@ def test_the_signup_learns_whether_an_address_is_a_member_and_which_spaces_it_ow
 
     monkeypatch.setattr("pigrocrm_api.routers.tenants.lookup_member", fake_lookup)
 
-    before = spaces_client.get("/api/tenants/membro", params={"email": "Ada@Studio.it"})
+    before = spaces_client.post("/api/tenants/membro", json={"email": "Ada@Studio.it"})
     assert before.status_code == 200, before.text
-    assert before.json() == {"membro": True, "nome": "Ada", "cognome": "Lovelace", "spazi": []}
+    assert before.json() == {"membro": True, "nome": "Ada", "cognome": "Lovelace", "spazi": 0}
     assert asked == ["ada@studio.it"]
 
     created = spaces_client.post("/api/tenants/", json=SIGNUP)
     assert created.status_code == 201, created.text
-    after = spaces_client.get("/api/tenants/membro", params={"email": SIGNUP["email"]})
-    assert after.json()["spazi"] == [SLUG]
+    after = spaces_client.post("/api/tenants/membro", json={"email": SIGNUP["email"]})
+    assert after.json()["spazi"] == 1
+    assert SLUG not in after.text
     # Somebody else's address owns nothing here, whatever the hub says about them.
     assert (
-        spaces_client.get("/api/tenants/membro", params={"email": "bob@studio.it"}).json()["spazi"]
-        == []
+        spaces_client.post("/api/tenants/membro", json={"email": "bob@studio.it"}).json()["spazi"]
+        == 0
     )
 
 
@@ -311,23 +319,44 @@ def test_an_unreachable_hub_still_answers_and_says_not_a_member(
     """The real client against a loopback port nobody listens on, with a token set: the
     route answers 200 and `membro: false`, and the signup goes on. The community is the
     fast lane, never a gate."""
-    with_hub = container_settings.model_copy(
-        update={"registry_token": REGISTRY_TOKEN, "hub_url": "http://127.0.0.1:9"}
-    )
+    with_hub = container_settings.model_copy(update={"registry_token": REGISTRY_TOKEN})
     with _serving(with_hub) as client:
-        answer = client.get("/api/tenants/membro", params={"email": "ada@studio.it"})
+        answer = client.post("/api/tenants/membro", json={"email": "ada@studio.it"})
         assert answer.status_code == 200, answer.text
-        assert answer.json() == {"membro": False, "nome": None, "cognome": None, "spazi": []}
+        assert answer.json() == {"membro": False, "nome": None, "cognome": None, "spazi": 0}
 
 
-def test_a_malformed_or_missing_address_is_a_422_and_membro_is_not_a_space(
+def test_a_malformed_or_missing_address_is_a_422_and_the_query_string_is_not_read(
     spaces_client: TestClient,
 ) -> None:
-    for params in ({"email": "non-una-mail"}, {"email": ""}, None):
-        refused = spaces_client.get("/api/tenants/membro", params=params)
-        assert refused.status_code == 422, (params, refused.text)
-    # The literal path is the member question, never `/{slug}/disponibile` for a slug «membro».
+    for body in ({"email": "non-una-mail"}, {"email": ""}, {}, None):
+        refused = spaces_client.post("/api/tenants/membro", json=body)
+        assert refused.status_code == 422, (body, refused.text)
+    # The address in the URL is refused too: it would sit in every access log.
     assert (
-        "spazi"
-        in spaces_client.get("/api/tenants/membro", params={"email": "ada@studio.it"}).json()
+        spaces_client.post("/api/tenants/membro", params={"email": "ada@studio.it"}).status_code
+        == 422
     )
+
+
+def test_the_member_question_is_throttled_per_client(
+    spaces_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unauthenticated by design, so the bucket is what stops a sweep of a mailing list:
+    the request past the budget is a 429 with a `Retry-After`, and a 422 spends nothing
+    because the limiter runs inside the route, after validation."""
+    monkeypatch.setattr(
+        "pigrocrm_api.routers.tenants.lookup_member",
+        lambda settings, email: MemberLookup(membro=False),
+    )
+    question = {"email": "ada@studio.it"}
+    for _ in range(REQUESTS_PER_MINUTE):
+        assert spaces_client.post("/api/tenants/membro", json=question).status_code == 200
+    refused = spaces_client.post("/api/tenants/membro", json=question)
+    assert refused.status_code == 429, refused.text
+    assert refused.headers["Retry-After"] == "60"
+    # Another client has its own bucket.
+    other = spaces_client.post(
+        "/api/tenants/membro", json={"email": "ada@studio.it"}, headers={"X-Real-IP": "10.0.0.7"}
+    )
+    assert other.status_code == 200, other.text

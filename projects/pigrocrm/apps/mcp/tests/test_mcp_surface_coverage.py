@@ -502,10 +502,10 @@ _COPERTE_O_UMANE: dict[Method, str] = {
         "spaces are not the titolare's CRM data, and an agent acting in one space has no "
         "business listing everybody else's"
     ),
-    ("TenantService", "slugs_for_owner"): (
+    ("TenantService", "count_for_owner"): (
         "il registro degli spazi non e' superficie di uno spazio: lo legge la registrazione "
-        "(`GET /api/tenants/membro`, ORB-173) per dire a chi torna quali spazi ha gia' aperto, "
-        "prima che esista un actor; un agente dentro uno spazio non ha motivo di leggerlo"
+        "(`POST /api/tenants/membro`, ORB-173) per dire a chi torna che ha gia' aperto degli "
+        "spazi, prima che esista un actor; un agente dentro uno spazio non ha motivo di leggerlo"
     ),
     ("DocumentService", "create"): "create_document_from_template e' l'unica creazione "
     "che non richieda di caricare byte",

@@ -10,8 +10,8 @@ thing this product means.
 import secrets
 from typing import Annotated
 
-from fastapi import APIRouter, Header, HTTPException, Query, Response, status
-from pydantic import BaseModel, EmailStr
+from fastapi import APIRouter, Header, HTTPException, Request, Response, status
+from pydantic import BaseModel, ConfigDict, EmailStr
 
 from pigrocrm.core.tenants import (
     TenantAvailability,
@@ -22,6 +22,7 @@ from pigrocrm.core.tenants import (
 )
 from pigrocrm_api.deps import SettingsDep, TenantsRegistryDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
+from pigrocrm_api.ratelimit import spend_one
 
 router = APIRouter(prefix="/api/tenants", tags=["tenants"], responses=PROBLEM_RESPONSES)
 
@@ -63,35 +64,47 @@ def list_spaces(
     return TenantService(registry, settings).list()
 
 
+class MemberQuestion(BaseModel):
+    """The address the signup asks about. In a body, never in the URL: a query string is
+    written by the access log and by every proxy on the way, on both hosts."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: EmailStr
+
+
 class MemberAnswer(BaseModel):
     """What the signup learns about an address before the person has an account: whether
-    the Orbiters hub knows them as a community member, their two names if so, and the
-    spaces the registry already holds in that name."""
+    the Orbiters hub knows them as a community member, their two names if so, and how
+    many spaces the registry already holds in that name. A count, not the slugs: the
+    address is not proven yet, and which spaces are whose is the mail's to tell."""
 
     membro: bool
     nome: str | None
     cognome: str | None
-    spazi: list[str]
+    spazi: int
 
 
-# Declared before `/{slug}/disponibile` so `membro` is never read as a space's name.
-@router.get("/membro", response_model=MemberAnswer)
+# With the other public signup routes: no account exists yet when this is asked.
+@router.post("/membro", response_model=MemberAnswer)
 def member(
-    email: Annotated[EmailStr, Query()], registry: TenantsRegistryDep, settings: SettingsDep
+    payload: MemberQuestion, request: Request, registry: TenantsRegistryDep, settings: SettingsDep
 ) -> MemberAnswer:
-    """Whether an address belongs to an Orbiters community member, and which spaces it
-    already owns here (ORB-173). No auth, like the signup itself: the person has no
-    account yet. The hub is asked with `PIGROCRM_REGISTRY_TOKEN` at `PIGROCRM_HUB_URL`
-    and given five seconds; unreachable, unconfigured or refusing, the answer is
-    `membro: false` and the signup goes on. `spazi` comes from this installation's own
-    registry and answers even when the hub does not."""
-    address = str(email).strip().lower()
+    """Whether an address belongs to an Orbiters community member, and how many spaces
+    it already owns here (ORB-173). No auth, like the signup itself: the person has no
+    account yet, so the route is throttled per client instead. The hub is asked with
+    `PIGROCRM_REGISTRY_TOKEN` at `PIGROCRM_HUB_URL` and given five seconds; unreachable,
+    unconfigured or refusing, the answer is `membro: false` and the signup goes on.
+    `spazi` comes from this installation's own registry and answers even when the hub
+    does not."""
+    spend_one(request)
+    address = str(payload.email).strip().lower()
     found = lookup_member(settings, address)
     return MemberAnswer(
         membro=found.membro,
         nome=found.nome,
         cognome=found.cognome,
-        spazi=TenantService(registry, settings).slugs_for_owner(address),
+        spazi=TenantService(registry, settings).count_for_owner(address),
     )
 
 

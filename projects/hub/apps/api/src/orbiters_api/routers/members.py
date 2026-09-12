@@ -11,9 +11,10 @@ limit: the first two because they are unauthenticated by design, `PUT /me/cv` be
 FastAPI reads its multipart body while resolving parameters, before `MemberDep` gets a
 chance to reject an anonymous caller with a 401.
 
-`GET /members/lookup` is the one route here for another product rather than for a
+`POST /members/lookup` is the one route here for another product rather than for a
 person: PigroCRM's signup asks whether an address belongs to a member (ORB-173), under
-the token the two hosts already share for the registry of spaces (ORB-142).
+the token the two hosts already share for the registry of spaces (ORB-142). A POST with
+the address in the body, so no access log on either host writes it.
 """
 
 import logging
@@ -26,7 +27,6 @@ from fastapi import (
     File,
     Header,
     HTTPException,
-    Query,
     Request,
     Response,
     UploadFile,
@@ -45,6 +45,7 @@ from orbiters_core.schemas import (
     EnterRequest,
     LinkRequest,
     MemberLookup,
+    MemberLookupRequest,
     MemberProfile,
     MemberUpdate,
 )
@@ -160,9 +161,9 @@ def my_guide(member: MemberDep, session: SessionDep) -> Response:
     return perk_response(guide_bytes(), GUIDE_FILENAME)
 
 
-@router.get("/members/lookup", response_model=MemberLookup)
+@router.post("/members/lookup", response_model=MemberLookup)
 def lookup_member(
-    email: Annotated[str, Query(min_length=1, max_length=320)],
+    payload: MemberLookupRequest,
     session: SessionDep,
     settings: SettingsDep,
     authorization: Annotated[str | None, Header()] = None,
@@ -173,7 +174,8 @@ def lookup_member(
     CRM's `GET /api/tenants/` in the other direction (ORB-142): without the token
     configured the route does not exist (404), so nothing says there is a door; with it,
     a missing or wrong bearer is a 401. An unknown address is `membro: false`, never an
-    error: the hub says who is a member, not who is at the keyboard."""
+    error: the hub says who is a member, not who is at the keyboard. A POST so the address
+    travels in the body and not in a URL the access log would keep."""
     if not settings.pigro_registry_token:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not Found")
     presented = authorization.removeprefix("Bearer ").strip() if authorization else ""
@@ -183,7 +185,7 @@ def lookup_member(
         presented.encode("utf-8"), settings.pigro_registry_token.encode("utf-8")
     ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "token non valido")
-    return MemberService(session, settings).lookup(email)
+    return MemberService(session, settings).lookup(payload.email)
 
 
 @router.post("/me/logout", status_code=status.HTTP_204_NO_CONTENT)

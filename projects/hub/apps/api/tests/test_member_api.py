@@ -389,33 +389,25 @@ def registry_token(client: TestClient) -> None:
     )
 
 
+def _ask(client: TestClient, email: str, **headers: str | bytes) -> httpx.Response:
+    return client.post(LOOKUP, json={"email": email}, headers=headers)  # type: ignore[arg-type]
+
+
 def test_without_a_registry_token_the_member_lookup_does_not_exist(client: TestClient) -> None:
     """The route is a 404 whatever the caller presents, not a 401 that says «there is a
     door»: the same rule as the CRM's `GET /api/tenants/` (ORB-142)."""
-    assert client.get(LOOKUP, params={"email": "ada@studio.it"}).status_code == 404
-    assert (
-        client.get(
-            LOOKUP,
-            params={"email": "ada@studio.it"},
-            headers={"Authorization": f"Bearer {PIGRO_TOKEN}"},
-        ).status_code
-        == 404
-    )
+    assert _ask(client, "ada@studio.it").status_code == 404
+    assert _ask(client, "ada@studio.it", Authorization=f"Bearer {PIGRO_TOKEN}").status_code == 404
 
 
 def test_the_member_lookup_answers_only_to_the_registry_token(
     client: TestClient, registry_token: None
 ) -> None:
-    assert client.get(LOOKUP, params={"email": "ada@studio.it"}).status_code == 401
-    wrong = client.get(
-        LOOKUP, params={"email": "ada@studio.it"}, headers={"Authorization": "Bearer sbagliato"}
-    )
-    assert wrong.status_code == 401
+    assert _ask(client, "ada@studio.it").status_code == 401
+    assert _ask(client, "ada@studio.it", Authorization="Bearer sbagliato").status_code == 401
     # Starlette decodes headers as latin-1, and `secrets.compare_digest` refuses a `str`
     # with a non-ASCII character: a stray byte must be a 401 like any wrong token, never a 500.
-    odd = client.get(
-        LOOKUP, params={"email": "ada@studio.it"}, headers={"Authorization": b"Bearer t\xe9ken"}
-    )
+    odd = _ask(client, "ada@studio.it", Authorization=b"Bearer t\xe9ken")
     assert odd.status_code == 401, odd.text
 
 
@@ -423,21 +415,30 @@ def test_the_member_lookup_names_a_member_and_says_no_to_anyone_else(
     client: TestClient, registry_token: None, clean: None
 ) -> None:
     """Case-insensitive, like `uq_freelancers_email_lower`; an unknown address is a plain
-    `membro: false` and never an error, and nothing beyond the two names leaves."""
+    `membro: false` and never an error, and nothing beyond the two names leaves. The
+    address travels in the body: a GET with `?email=` would sit in every access log."""
     _apply(client, "Ada@Studio.it")
-    bearer = {"Authorization": f"Bearer {PIGRO_TOKEN}"}
+    bearer = f"Bearer {PIGRO_TOKEN}"
 
-    member = client.get(LOOKUP, params={"email": "  ada@studio.IT "}, headers=bearer)
+    member = _ask(client, "  ada@studio.IT ", Authorization=bearer)
     assert member.status_code == 200, member.text
     assert member.json() == {"membro": True, "nome": "Ada", "cognome": "Lovelace"}
 
-    unknown = client.get(LOOKUP, params={"email": "nessuno@example.org"}, headers=bearer)
+    unknown = _ask(client, "nessuno@example.org", Authorization=bearer)
     assert unknown.status_code == 200, unknown.text
     assert unknown.json() == {"membro": False, "nome": None, "cognome": None}
 
     # Not an address at all: still a `false`, the CRM decides what to make of the input.
-    assert client.get(LOOKUP, params={"email": "non-una-mail"}, headers=bearer).json() == {
+    assert _ask(client, "non-una-mail", Authorization=bearer).json() == {
         "membro": False,
         "nome": None,
         "cognome": None,
     }
+    # No body, or the address in the query string instead: a 422, never a lookup.
+    assert client.post(LOOKUP, headers={"Authorization": bearer}).status_code == 422
+    assert (
+        client.post(
+            LOOKUP, params={"email": "ada@studio.it"}, headers={"Authorization": bearer}
+        ).status_code
+        == 422
+    )
