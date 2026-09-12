@@ -147,10 +147,12 @@ class UserService:
 
     def authenticate(self, email: str, password: str) -> UserRead:
         user = self.repo.get_by_email(email)
-        # Compare against a precomputed constant hash when the user is missing, so both
-        # paths cost exactly one verify and timing does not reveal which emails exist.
-        reference = user.password_hash if user else dummy_hash()
+        # Compare against a precomputed constant hash when the user is missing or has
+        # never had a password (a link-by-mail account, spec 2026-09-12 §6.2), so every
+        # path costs exactly one verify and timing does not reveal which case it was.
+        stored = user.password_hash if user is not None else None
+        reference = stored if stored is not None else dummy_hash()
         ok = verify_password(password, reference)
-        if user is None or not ok or not user.attivo:
+        if user is None or stored is None or not ok or not user.attivo:
             raise ValidationFailed("user", "credentials", INVALID_CREDENTIALS)
         return UserRead.model_validate(user)
