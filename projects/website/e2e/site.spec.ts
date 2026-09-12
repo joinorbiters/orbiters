@@ -3,15 +3,18 @@ import { expect, test } from '@playwright/test'
 
 const PAGES = ['/', '/pigrocrm', '/privacy', '/termini', '/orbiters', '/pitch'] as const
 const BUDGET_BYTES = 40 * 1024
-// The one host these pages may ever talk to besides their own: the ChatGPT Ads
-// measurement SDK. "May ever" is the whole subtlety -- `consent.js` injects it only
-// after a visitor has said yes, so with no decision stored no page requests it at all,
-// which is what the first test below checks and the last one checks the other half of.
+// The hosts these pages may ever talk to besides their own: the ChatGPT Ads measurement
+// SDK and PostHog. "May ever" is the whole subtlety -- `consent.js` injects both only
+// after a visitor has said yes, so with no decision stored no page requests them at all,
+// which is what the first test below checks and the later ones check the other half of.
 const PIXEL_HOST = 'bzrcdn.openai.com'
+const POSTHOG_HOSTS = ['eu.i.posthog.com', 'eu-assets.i.posthog.com']
+const TRACKER_HOSTS = [PIXEL_HOST, ...POSTHOG_HOSTS]
 const CONSENT_KEY = 'orbiters.consent'
-// The two pages that carry the notice, and therefore the two that can end up with the
-// pixel. `src/pixel.test.ts` owns which pages declare it.
+// The three pages that carry the notice, and therefore the three that can end up with
+// a tracker. `src/pixel.test.ts` owns which pages declare it.
 const MEASURED_PATHS = ['/', '/pigrocrm', '/orbiters'] as const
+const towards = (hosts: readonly string[]) => (url: string) => hosts.includes(new URL(url).host)
 
 test.describe('every page of the site', () => {
   for (const path of PAGES) {
@@ -41,7 +44,7 @@ test.describe('every page of the site', () => {
     })
   }
 
-  test('loads cold under 40 KB, excluding the shared woff2 and the pixel SDK', async ({
+  test('loads cold under 40 KB, excluding the shared woff2 and the tracker SDKs', async ({
     page,
   }) => {
     let bytes = 0
@@ -51,8 +54,8 @@ test.describe('every page of the site', () => {
       // not been answered), so this branch only matters if somebody runs this test with
       // consent already stored. Either way the weight of a third party's file is not
       // ours to control, and counting it would make this budget a report on OpenAI's
-      // build rather than on our page.
-      if (new URL(request.url()).host === PIXEL_HOST) return
+      // or PostHog's build rather than on our page.
+      if (towards(TRACKER_HOSTS)(request.url())) return
       const sizes = await request.sizes()
       bytes += sizes.responseBodySize + sizes.responseHeadersSize
     })
@@ -61,7 +64,7 @@ test.describe('every page of the site', () => {
   })
 
   for (const path of MEASURED_PATHS) {
-    test(`${path} shows the notice, and loads the pixel only once it is accepted`, async ({
+    test(`${path} shows the notice, and loads the trackers only once it is accepted`, async ({
       page,
     }) => {
       const requested: string[] = []
@@ -71,21 +74,27 @@ test.describe('every page of the site', () => {
 
       const notice = page.locator('.consent')
       await expect(notice).toBeVisible()
-      // Nothing has been fetched from OpenAI while the question is still open.
-      expect(requested.filter((url) => new URL(url).host === PIXEL_HOST)).toEqual([])
+      // Nothing has been fetched from OpenAI or PostHog while the question is still open.
+      expect(requested.filter(towards(TRACKER_HOSTS))).toEqual([])
       // And both answers are one click away, which is what makes it a consent notice.
       await expect(notice.getByRole('button', { name: 'No' })).toBeVisible()
 
       await notice.getByRole('button', { name: 'Va bene' }).click()
       await expect(notice).toBeHidden()
-      // The request really does leave now -- the SDK's host is unreachable from CI, so
-      // what is asserted is the attempt, not a 200.
+      // The pixel's request really does leave now -- its host is unreachable from CI,
+      // so what is asserted is the attempt, not a 200. PostHog's does not, and must
+      // not: `consent.js` keeps it silent on localhost precisely so this suite never
+      // writes a visitor into the project production reports to. That the loader runs
+      // on a real host is `consent.test.ts`'s job, on the site's own URL.
       await expect
-        .poll(() => requested.filter((url) => new URL(url).host === PIXEL_HOST).length)
+        .poll(() => requested.filter(towards([PIXEL_HOST])).length)
         .toBeGreaterThan(0)
+      await page.waitForLoadState('networkidle')
+      expect(requested.filter(towards(POSTHOG_HOSTS))).toEqual([])
+      expect(await page.evaluate(() => 'posthog' in window)).toBe(false)
     })
 
-    test(`${path} asks nothing of OpenAI after a refusal, and does not ask again`, async ({
+    test(`${path} asks nothing of OpenAI or PostHog after a refusal, and does not ask again`, async ({
       page,
     }) => {
       const requested: string[] = []
@@ -98,7 +107,7 @@ test.describe('every page of the site', () => {
       // A notice that comes back until it gets the answer it wants is a dark pattern
       // with a delay.
       await expect(page.locator('.consent')).toHaveCount(0)
-      expect(requested.filter((url) => new URL(url).host === PIXEL_HOST)).toEqual([])
+      expect(requested.filter(towards(TRACKER_HOSTS))).toEqual([])
       expect(await page.evaluate((key) => localStorage.getItem(key), CONSENT_KEY)).toBe('denied')
     })
   }

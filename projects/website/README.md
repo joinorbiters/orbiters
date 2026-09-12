@@ -39,6 +39,16 @@ origin. The landing's two calls to action point at `/hub/freelance` and `/hub/az
 the hub's wizards, on the same origin again. Those paths are the things this project
 does not own, and why the dev server proxies `/api` and leaves `/hub/` alone.
 
+## Measurement
+
+Two trackers, and one door for both: `src/consent.js` shows the cookie notice and
+injects the ChatGPT Ads pixel and PostHog only after «Va bene». Before that click no
+page requests either host; a refusal is remembered. `src/pixel.test.ts` is the rule book
+(which pages may carry a tracker, that no page carries one in its markup, that the
+PostHog literals equal `shared/analytics`), `src/consent.test.ts` drives the gate in a
+DOM, and `e2e/site.spec.ts` watches the network. The policy pages describe both in
+`privacy.html` § Cookie e misurazione. Design: `docs/design/2026-09-12-posthog-analytics-design.md`.
+
 ## Colour, typeface and the mark
 
 All three come from [`shared/brand`](../../shared/brand), and none of them may be
