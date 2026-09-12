@@ -7,16 +7,23 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { api, toProblem } from '@/lib/api'
+import { api, toProblem, unwrap } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { tenantPrefix } from '@/lib/tenant'
 
-function LoginPage() {
+export function LoginPage() {
   const { user, login } = useAuth()
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
+  // Email-first since ORB-172 (spec 2026-09-12 §6.2): the way in is a link by mail, as
+  // in the community. The password form stays as the second way for the accounts that
+  // have one (the root, the spaces of the first days, the e2e admin) and is opened on
+  // purpose; nobody is asked for a password by default any more.
+  const [mode, setMode] = useState<'link' | 'password'>('link')
+  const [sent, setSent] = useState(false)
+  const [linkError, setLinkError] = useState<string | null>(null)
   // Signup is offered by the root only. The root is the unprefixed page -- or the page
   // under the root's own space name (PIGROCRM_ROOT_SLUG), which only the API knows.
   const [isRoot, setIsRoot] = useState(tenantPrefix === '')
@@ -98,6 +105,23 @@ function LoginPage() {
     }
   }
 
+  async function onSendLink(event: FormEvent) {
+    event.preventDefault()
+    setBusy(true)
+    setLinkError(null)
+    try {
+      // 202 whether the address is known or not: the page cannot tell, by design.
+      await unwrap(api.POST('/api/auth/link', { body: { email } }))
+      setSent(true)
+    } catch (error) {
+      // The one honest failure: no sender on this installation (503), with the API's
+      // sentence, which already says to use the password instead.
+      setLinkError(toProblem(error).detail)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-sm">
@@ -109,51 +133,110 @@ function LoginPage() {
           <CardDescription>Il CRM che lavora al posto tuo.</CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={onSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                required
-                autoComplete="username"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                required
-                autoComplete="current-password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-              />
-            </div>
-            <Button type="submit" className="w-full" disabled={busy}>
-              {busy ? 'Accesso in corso…' : 'Accedi'}
-            </Button>
-            {/* Only the root offers to create a space: a space creating spaces is not a
-                thing this product means (spec 2026-09-08 §6). */}
-            {isRoot && (
+          {mode === 'link' && sent ? (
+            <div className="space-y-4">
+              <p className="text-sm" role="status">
+                Controlla la posta: il link per entrare vale 15 minuti. Se non arriva, guarda
+                nello spam.
+              </p>
               <Button
                 type="button"
-                variant="outline"
+                variant="ghost"
                 className="w-full"
-                onClick={() =>
-                  tenantPrefix === ''
-                    ? void navigate({ to: '/app/registrati' })
-                    : // The signup page lives at the unprefixed root: a different basepath
-                      // is a different application instance, so this is a navigation.
-                      window.location.assign('/app/registrati')
-                }
+                onClick={() => {
+                  setSent(false)
+                  setEmail('')
+                }}
               >
-                Crea il tuo spazio
+                Usa un&apos;altra email
               </Button>
-            )}
-          </form>
+            </div>
+          ) : (
+            <form
+              onSubmit={mode === 'link' ? onSendLink : onSubmit}
+              className="space-y-4"
+              noValidate={mode === 'link'}
+            >
+              <div className="space-y-2">
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  required
+                  autoComplete="username"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                />
+              </div>
+              {mode === 'password' && (
+                <div className="space-y-2">
+                  <Label htmlFor="password">Password</Label>
+                  <Input
+                    id="password"
+                    type="password"
+                    required
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                  />
+                </div>
+              )}
+              {linkError && (
+                <p className="text-destructive text-sm" role="alert">
+                  {linkError}
+                </p>
+              )}
+              {mode === 'link' ? (
+                <Button type="submit" className="w-full" disabled={busy || email === ''}>
+                  {busy ? 'Invio in corso…' : 'Mandami il link'}
+                </Button>
+              ) : (
+                <Button type="submit" className="w-full" disabled={busy}>
+                  {busy ? 'Accesso in corso…' : 'Accedi'}
+                </Button>
+              )}
+              {mode === 'link' ? (
+                <Button
+                  type="button"
+                  variant="link"
+                  className="w-full"
+                  onClick={() => {
+                    setMode('password')
+                    setLinkError(null)
+                  }}
+                >
+                  Hai una password? Accedi con la password
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="link"
+                  className="w-full"
+                  onClick={() => setMode('link')}
+                >
+                  Torna al link via email
+                </Button>
+              )}
+            </form>
+          )}
+          {/* Only the root offers to create a space: a space creating spaces is not a
+              thing this product means (spec 2026-09-08 §6). */}
+          {isRoot && (
+            <Button
+              type="button"
+              variant="outline"
+              className="mt-4 w-full"
+              onClick={() =>
+                tenantPrefix === ''
+                  ? void navigate({ to: '/app/registrati' })
+                  : // The signup page lives at the unprefixed root: a different basepath
+                    // is a different application instance, so this is a navigation.
+                    window.location.assign('/app/registrati')
+              }
+            >
+              Crea il tuo spazio
+            </Button>
+          )}
         </CardContent>
       </Card>
     </div>

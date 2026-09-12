@@ -368,3 +368,22 @@ def test_reset_password_refuses_a_short_password_and_an_unknown_email(db_session
     )
     with pytest.raises(ValidationFailed):
         service.reset_password("corta@studio.it", "corta", Actor.system())
+
+
+def test_a_user_without_a_password_cannot_log_in_with_one(db_session: Session) -> None:
+    """A link-by-mail account (spec 2026-09-12 §6.2): same sentence as a wrong password."""
+    from pigrocrm.core.auth.repository import UserRepository
+    from pigrocrm.core.auth.service import INVALID_CREDENTIALS
+
+    service = UserService(db_session)
+    created = service.create(
+        UserCreate(email="link@x.it", password="lunghissima1", nome="Link", ruolo="admin"),
+        Actor.system(),
+    )
+    row = UserRepository(db_session).get(created.id)
+    assert row is not None
+    row.password_hash = None
+    db_session.flush()
+    with pytest.raises(ValidationFailed) as excinfo:
+        service.authenticate("link@x.it", "lunghissima1")
+    assert INVALID_CREDENTIALS in str(excinfo.value)

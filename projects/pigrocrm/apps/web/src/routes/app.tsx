@@ -5,7 +5,7 @@ import { GmailBanner } from '@/components/GmailBanner'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
 
-const PUBLIC_ROUTES = new Set(['/app/login', '/app/registrati'])
+const PUBLIC_ROUTES = new Set(['/app/login', '/app/registrati', '/app/entra'])
 
 function AppLayout() {
   const { user, isLoading } = useAuth()
@@ -21,8 +21,9 @@ function AppLayout() {
   // redirected FROM would be the same gate, chosen forever. The login route is
   // the one child of this layout that must render unconditionally, with no
   // redirect and no AppShell chrome around it.
-  // The two pages a visitor reaches without a session: the login, and the signup that
-  // makes a space (spec 2026-09-08). Everything else under /app bounces to the login.
+  // The three pages a visitor reaches without a session: the login, the signup that
+  // makes a space (spec 2026-09-08) and the page that spends a link by mail (spec
+  // 2026-09-12 §6.2). Everything else under /app bounces to the login.
   // Without a trailing slash: `/app/registrati/` is the same page, and a visitor who
   // arrived through a redirect that kept one must not be bounced to the login for it.
   const isLoginRoute = PUBLIC_ROUTES.has(pathname.replace(/\/+$/, ''))

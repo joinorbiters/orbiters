@@ -78,6 +78,7 @@ beforeEach(() => {
     isLoading: false,
     login: vi.fn(),
     logout: vi.fn(),
+    enterWithLink: vi.fn(),
   })
   Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } })
 })
@@ -145,6 +146,7 @@ describe('TokensPanel', () => {
       isLoading: false,
       login: vi.fn(),
       logout: vi.fn(),
+    enterWithLink: vi.fn(),
     })
     vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok([])))
     renderPanel()

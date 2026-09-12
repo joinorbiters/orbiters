@@ -286,8 +286,10 @@ def test_the_cli_skips_a_space_it_cannot_reach_and_still_furnishes_the_others(
             monkeypatch.setattr(cli, "get_settings", lambda: settings)
             assert cli.main(["ensure-space-defaults"]) == 0
             captured = capsys.readouterr()
-            assert f"{ghost}: non arredato (" in captured.err
-            assert "password" not in captured.err and "postgresql" not in captured.err
+            # Alembic logs the migrations it ran on stderr too; the line under test is the
+            # CLI's own, and it must carry the exception type and nothing of the URL.
+            ghost_lines = [line for line in captured.err.splitlines() if line.startswith(ghost)]
+            assert ghost_lines == [f"{ghost}: non arredato (OperationalError)"]
             assert f"{slug}: stati 6" in captured.out
         finally:
             space.dispose()

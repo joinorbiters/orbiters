@@ -39,6 +39,8 @@ def container_settings(api_engine: Engine) -> Settings:
         database_url=api_engine.url.render_as_string(hide_password=False),
         jwt_secret="test-secret-for-the-api-test-suite-only",
         cookie_secure=True,
+        # Where a link by mail points (ORB-172): required, never the request's Host.
+        public_url="https://pigro.test",
         # A loopback port nobody listens on, so no test in this file can ever ask the
         # real hub whatever a developer's `.env` says (ORB-173).
         hub_url="http://127.0.0.1:9",
@@ -279,6 +281,56 @@ def test_the_list_of_spaces_answers_only_to_the_registry_token(
     assert [row["slug"] for row in rows] == [SLUG]
     assert rows[0]["owner_email"] == SIGNUP["email"]
     assert set(rows[0]) == {"id", "slug", "owner_email", "created_at"}
+
+
+def test_a_link_asked_at_the_root_reaches_the_space_that_address_owns(
+    spaces_client: TestClient,
+) -> None:
+    """Spec 2026-09-12 §6.2: the bare login page asks for a link, the registry says which
+    space the address owns, and the link enters that space with cookies scoped to it."""
+    from pigrocrm.core.mail import RecordingSender
+    from pigrocrm_api.routers.auth import get_sender
+
+    recording = RecordingSender()
+    spaces_client.app.dependency_overrides[get_sender] = lambda: recording  # type: ignore[attr-defined]
+    created = spaces_client.post("/api/tenants/", json=SIGNUP)
+    assert created.status_code == 201, created.text
+
+    response = spaces_client.post("/api/auth/link", json={"email": SIGNUP["email"]})
+    assert response.status_code == 202
+    assert len(recording.sent) == 1
+    assert f"/{SLUG}/app/entra?t=" in recording.sent[0].text
+    token = recording.sent[0].text.split("?t=", 1)[1].split()[0]
+
+    entered = spaces_client.post(f"/{SLUG}/api/auth/entra", json={"t": token})
+    assert entered.status_code == 200, entered.text
+    assert any(f"Path=/{SLUG}/" in c for c in entered.headers.get_list("set-cookie"))
+    assert spaces_client.get(f"/{SLUG}/api/auth/me").json()["email"] == SIGNUP["email"]
+    # The root itself never had this user: nothing is mailed for it, and the bare `entra`
+    # does not know the token.
+    assert spaces_client.post("/api/auth/entra", json={"t": token}).status_code == 401
+
+
+def test_a_link_asked_under_a_space_reaches_that_space_only(spaces_client: TestClient) -> None:
+    """Under `/<slug>/api`, the space's own user and the space's own entry page."""
+    from pigrocrm.core.mail import RecordingSender
+    from pigrocrm_api.routers.auth import get_sender
+
+    recording = RecordingSender()
+    spaces_client.app.dependency_overrides[get_sender] = lambda: recording  # type: ignore[attr-defined]
+    created = spaces_client.post("/api/tenants/", json=SIGNUP)
+    assert created.status_code == 201, created.text
+
+    response = spaces_client.post(f"/{SLUG}/api/auth/link", json={"email": SIGNUP["email"]})
+    assert response.status_code == 202
+    assert len(recording.sent) == 1
+    assert f"https://pigro.test/{SLUG}/app/entra?t=" in recording.sent[0].text
+    # An address the space does not know: 202 and no mail, like the root.
+    assert (
+        spaces_client.post(f"/{SLUG}/api/auth/link", json={"email": "x@studio.it"}).status_code
+        == 202
+    )
+    assert len(recording.sent) == 1
 
 
 def test_the_signup_learns_whether_an_address_is_a_member_and_how_many_spaces_it_owns(

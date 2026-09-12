@@ -393,3 +393,111 @@ def test_login_with_a_nul_byte_does_not_reveal_whether_the_email_exists(
     assert existing_error["type"] == unknown_error["type"]
     assert existing_error["msg"] == unknown_error["msg"]
     assert existing_error["loc"] == unknown_error["loc"]
+
+
+# --- a link by mail (spec 2026-09-12 §6.2) --------------------------------------------
+
+from pigrocrm.core.mail import RecordingSender  # noqa: E402
+from pigrocrm_api.routers.auth import get_sender  # noqa: E402
+
+ADMIN_EMAIL = CREDENTIALS["email"]
+
+
+PUBLIC_URL = "https://pigro.test"
+
+
+@pytest.fixture
+def sender(client: TestClient) -> RecordingSender:
+    """A recording sender, and the public origin a link needs: without either the
+    endpoint answers 503 by design."""
+    recording = RecordingSender()
+    client.app.dependency_overrides[get_sender] = lambda: recording  # type: ignore[attr-defined]
+    client.app.dependency_overrides[get_settings] = lambda: Settings(  # type: ignore[attr-defined]
+        public_url=PUBLIC_URL,
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    return recording
+
+
+def _token_from(mail_text: str) -> str:
+    return mail_text.split("?t=", 1)[1].split()[0]
+
+
+def test_link_answers_202_and_mails_a_known_address(
+    client: TestClient, admin_user, sender: RecordingSender
+) -> None:
+    response = client.post("/api/auth/link", json={"email": ADMIN_EMAIL.upper()})
+    assert response.status_code == 202
+    assert len(sender.sent) == 1
+    mail = sender.sent[0]
+    assert mail.to == ADMIN_EMAIL and "15 minuti" in mail.text
+    # The link wears the configured public origin, never the request's Host.
+    assert f"{PUBLIC_URL}/app/entra?t=" in mail.text and "testserver" not in mail.text
+
+
+def test_link_answers_202_and_mails_nothing_for_an_unknown_address(
+    client: TestClient, sender: RecordingSender
+) -> None:
+    response = client.post("/api/auth/link", json={"email": "nessuno@pigro.it"})
+    assert response.status_code == 202
+    assert sender.sent == []
+
+
+def test_link_is_503_without_a_sender(client: TestClient, admin_user) -> None:
+    response = client.post("/api/auth/link", json={"email": ADMIN_EMAIL})
+    assert response.status_code == 503
+    assert "non è ancora attivo" in response.json()["detail"]
+
+
+def test_entra_sets_the_cookies_and_me_answers(
+    client: TestClient, admin_user, sender: RecordingSender
+) -> None:
+    client.post("/api/auth/link", json={"email": ADMIN_EMAIL})
+    token = _token_from(sender.sent[0].text)
+    response = client.post("/api/auth/entra", json={"t": token})
+    assert response.status_code == 200, response.text
+    assert response.json()["email"] == ADMIN_EMAIL
+    set_cookie = response.headers.get_list("set-cookie")
+    assert any("pigrocrm_access=" in c and "Path=/" in c for c in set_cookie)
+    assert client.get("/api/auth/me").status_code == 200
+    # Spent: the same link a second time is a 401 with the sentence the page shows.
+    again = client.post("/api/auth/entra", json={"t": token})
+    assert again.status_code == 401 and "link" in again.json()["detail"]
+
+
+def test_entra_with_garbage_is_401(client: TestClient) -> None:
+    assert client.post("/api/auth/entra", json={"t": "x"}).status_code == 401
+
+
+def test_link_is_503_without_a_public_url(client: TestClient, admin_user) -> None:
+    """A link built from the request's Host would hand a live token to whatever host the
+    caller named: no public origin, no link."""
+    client.app.dependency_overrides[get_sender] = lambda: RecordingSender()  # type: ignore[attr-defined]
+    response = client.post("/api/auth/link", json={"email": ADMIN_EMAIL})
+    assert response.status_code == 503
+    assert "PIGROCRM_PUBLIC_URL" in response.json()["detail"]
+
+
+def test_the_first_entry_kills_the_earlier_session_and_keeps_its_own(
+    client: TestClient, admin_user, sender: RecordingSender
+) -> None:
+    """The guarantee the signup will rely on: a session opened before the address was
+    proven dies at the first link entry; the session the entry opens refreshes fine."""
+    earlier = client.post(
+        "/api/auth/login", json={"email": ADMIN_EMAIL, "password": CREDENTIALS["password"]}
+    )
+    assert earlier.status_code == 200
+    earlier_refresh = client.cookies.get(REFRESH_COOKIE)
+    assert earlier_refresh
+    client.cookies.clear()
+
+    client.post("/api/auth/link", json={"email": ADMIN_EMAIL})
+    token = _token_from(sender.sent[0].text)
+    entered = client.post("/api/auth/entra", json={"t": token})
+    assert entered.status_code == 200, entered.text
+    # The new session refreshes.
+    assert client.post("/api/auth/refresh").status_code == 200
+    # The earlier one does not.
+    client.cookies.clear()
+    client.cookies.set(REFRESH_COOKIE, earlier_refresh)
+    assert client.post("/api/auth/refresh").status_code == 401
