@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { toast } from 'sonner'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ConnectAgentDialog } from './ConnectAgentDialog'
 import { api } from '@/lib/api'
@@ -20,7 +21,21 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   return {
     ...actual,
     useBlocker: vi.fn(),
-    Link: ({ children, to }: { children: React.ReactNode; to: string }) => <a href={to}>{children}</a>,
+    // `onClick` is forwarded: the dialog closes itself from the link's handler, and
+    // cancels the navigation when the unsaved-token guard is declined.
+    Link: ({
+      children,
+      to,
+      onClick,
+    }: {
+      children: React.ReactNode
+      to: string
+      onClick?: (event: React.MouseEvent<HTMLAnchorElement>) => void
+    }) => (
+      <a href={to} onClick={onClick}>
+        {children}
+      </a>
+    ),
   }
 })
 const mockTenant = vi.hoisted(() => ({ prefix: '' }))
@@ -138,6 +153,37 @@ describe('ConnectAgentDialog', () => {
     expect(within(screen.getByRole('dialog')).getByRole('link', { name: 'Gestisci i token' })).toHaveAttribute(
       'href',
       '/app/token',
+    )
+  })
+
+  it('closes the dialog when the Token page link is followed', async () => {
+    const onOpenChange = renderDialog()
+    await userEvent.click(screen.getByRole('link', { name: 'Gestisci i token' }))
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it('asks before the Token page link leaves with a token on screen, and cancels the navigation on no', async () => {
+    vi.mocked(api.POST).mockReturnValueOnce(
+      Promise.resolve(ok({ id: 't2', nome: 'Claude Code', prefix: 'pgc_zzzz9999', last_used_at: null, revoked_at: null, created_at: '2026-09-12T10:00:00Z', token: 'pgc_x' })),
+    )
+    const onOpenChange = renderDialog()
+    await userEvent.click(screen.getByRole('button', { name: 'Crea il token' }))
+    await screen.findByDisplayValue('pgc_x')
+    vi.mocked(window.confirm).mockReturnValueOnce(false)
+    // `fireEvent.click` answers false when the handler called `preventDefault`, which
+    // is the assertion: the dialog stays open *and* the router never navigates.
+    expect(fireEvent.click(screen.getByRole('link', { name: 'Gestisci i token' }))).toBe(false)
+    expect(onOpenChange).not.toHaveBeenCalledWith(false)
+  })
+
+  it('says so when the clipboard refuses', async () => {
+    Object.assign(navigator, {
+      clipboard: { writeText: vi.fn().mockRejectedValue(new Error('negato')) },
+    })
+    renderDialog()
+    await userEvent.click(screen.getByRole('button', { name: "Copia l'endpoint" }))
+    await vi.waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Copia negli appunti non riuscita'),
     )
   })
 })

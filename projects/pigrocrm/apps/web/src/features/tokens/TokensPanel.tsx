@@ -90,10 +90,15 @@ export function TokensPanel() {
 
   function copyIssued() {
     if (!issued) return
-    void navigator.clipboard.writeText(issued.token).then(() => {
-      setCopied(true)
-      toast.success('Token copiato negli appunti')
-    })
+    void navigator.clipboard
+      .writeText(issued.token)
+      .then(() => {
+        setCopied(true)
+        toast.success('Token copiato negli appunti')
+      })
+      // A denied permission, an insecure origin or a page without focus all reject
+      // here; silence would leave the person thinking the token is on the clipboard.
+      .catch(() => toast.error('Copia negli appunti non riuscita'))
   }
 
   function revokeToken(token: TokenRecord) {

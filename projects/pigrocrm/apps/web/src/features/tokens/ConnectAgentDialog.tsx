@@ -53,14 +53,17 @@ export function ConnectAgentDialog({
   const fieldError = problem ? fieldErrorFrom(problem) : null
   const banner = problem && fieldError?.field !== 'nome' ? problem.detail : null
 
-  function close(next: boolean) {
-    if (!next && issued && !confirmDiscardingToken()) return
+  /** True when the dialog actually closed; false when the guard was declined. The
+   *  Token-page link reads the answer to cancel its own navigation. */
+  function close(next: boolean): boolean {
+    if (!next && issued && !confirmDiscardingToken()) return false
     if (!next) {
       setIssued(null)
       setProblem(null)
       setNome('Claude Code')
     }
     onOpenChange(next)
+    return true
   }
 
   function mint() {
@@ -72,7 +75,12 @@ export function ConnectAgentDialog({
   }
 
   function copy(text: string, what: string) {
-    void navigator.clipboard.writeText(text).then(() => toast.success(`${what} copiato negli appunti`))
+    void navigator.clipboard
+      .writeText(text)
+      .then(() => toast.success(`${what} copiato negli appunti`))
+      // A denied permission, an insecure origin or a page without focus all reject
+      // here; silence would leave the person thinking the value is on the clipboard.
+      .catch(() => toast.error('Copia negli appunti non riuscita'))
   }
 
   return (
@@ -166,7 +174,16 @@ export function ConnectAgentDialog({
 
         <DialogFooter className="sm:justify-between">
           <Button variant="ghost" asChild>
-            <Link to="/app/token">Gestisci i token</Link>
+            {/* Leaving the dialog open behind the Token page would keep the token on
+                screen under it; declining the guard cancels the navigation too. */}
+            <Link
+              to="/app/token"
+              onClick={(event) => {
+                if (!close(false)) event.preventDefault()
+              }}
+            >
+              Gestisci i token
+            </Link>
           </Button>
           <Button onClick={() => close(false)}>Chiudi</Button>
         </DialogFooter>
