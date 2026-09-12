@@ -91,13 +91,12 @@ def cycle(mcp_session: Session, tmp_path: Path) -> dict[str, Any]:
     them the emission fails on the customer record rather than on anything this test is
     about.
     """
-    # The install's own configuration, as `Actor.system()` and not as the agent. Two
-    # reasons, and the first is now enforced: `update_fiscal_profile` is one of the
-    # operations `AGENT_FORBIDDEN_ACTIONS` refuses to any agent credential
-    # whatever its role, so setting the fixture up as `AGENTE` meant building the scene
-    # by doing a thing this very test then asserts an agent cannot do. The second is that
-    # it was never true anyway: nobody installs a CRM by asking an agent to choose the
-    # fiscal regime.
+    # The install's own configuration, as `Actor.system()` and not as the agent: this
+    # test is about issuing, and the scene is the installation's, not the agent's. (Until
+    # ORB-188 there was a second reason -- `update_fiscal_profile` was one of the
+    # operations `AGENT_FORBIDDEN_ACTIONS` refused to any agent credential -- which no
+    # longer holds: an admin's agent may set the profile, see
+    # `test_fiscal_identity_tools.py`.)
     FiscalProfileService(mcp_session).upsert(
         FiscalProfileUpsert(codice_regime="RF19"), Actor.system()
     )

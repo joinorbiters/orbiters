@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { GetStartedPage } from './GetStartedPage'
-import { FISCAL_PROMPT_FULL_ACCESS, INTRO_PROMPT, STEP_PROMPTS } from './prompts'
+import { INTRO_PROMPT, STEP_PROMPTS } from './prompts'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -28,7 +28,6 @@ vi.mock('@/lib/auth', () => ({
     enterWithLink: vi.fn(),
   }),
   useCanWrite: () => auth.user?.ruolo !== 'readonly',
-  useIsAdmin: () => auth.user?.ruolo === 'admin',
 }))
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
@@ -49,7 +48,6 @@ const EMPTY: Record<string, unknown> = {
   '/api/time-entries': EMPTY_PAGE,
   '/api/documents': EMPTY_PAGE,
   '/api/tokens': [],
-  '/api/settings/space': { mcp_full_access: false },
 }
 
 /** Stubs by path: `overrides` win, `/api/emitter` is 404 unless overridden, `failing`
@@ -94,6 +92,8 @@ afterEach(() => {
 describe('Get started', () => {
   it('shows the assistant card and the four steps to do on an empty space, and remembers the visit', async () => {
     renderPage()
+    // The prompts are fixed text (ORB-188): the page reads no space settings to pick them.
+    expect(api.GET).not.toHaveBeenCalledWith('/api/settings/space')
     expect(screen.getByRole('heading', { name: 'Get started' })).toBeInTheDocument()
     expect(await screen.findByText('Il CRM che lavora al posto tuo')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Collega l.assistente/ })).toHaveAttribute('href', '/app/token')
@@ -187,19 +187,10 @@ describe('Get started', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Prompt copiato'))
   })
 
-  it('asks the assistant to write the fiscal profile only where the space grants it full access', async () => {
-    answers({ '/api/settings/space': { mcp_full_access: true } })
-    renderPage()
-    await screen.findByText(/0 di 4/)
-    expect(await screen.findByText(FISCAL_PROMPT_FULL_ACCESS)).toBeInTheDocument()
-    expect(screen.queryByText(STEP_PROMPTS.fiscali)).toBeNull()
-  })
-
-  it('does not read the space settings for a collaboratore, who has no fiscal step to prompt', async () => {
+  it('gives a collaboratore no fiscal prompt, since the fiscal step is the admin’s', async () => {
     if (auth.user) auth.user.ruolo = 'collaboratore'
     renderPage()
     await screen.findByText(/0 di 4/)
-    expect(api.GET).not.toHaveBeenCalledWith('/api/settings/space')
     expect(screen.queryByText(/Prompt per l’assistente: I tuoi dati fiscali/)).toBeNull()
     expect(screen.getByText('Prompt per l’assistente: Il primo cliente')).toBeInTheDocument()
   })

@@ -2,7 +2,7 @@
 module here.
 
 Everything in this file is on the **default** surface: none of it consumes a number,
-touches the fiscal register or rewrites a rate, so none of it belongs to the sixteen
+touches the fiscal register or rewrites a rate, so none of it belongs to the forbidden
 operations of slice 3 §11. A commitment created in error is archived; one that stopped
 mattering is cancelled, which is a different statement and the reason the state machine
 has three states rather than two.
