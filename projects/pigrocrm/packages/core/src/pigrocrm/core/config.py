@@ -54,6 +54,13 @@ class Settings(BaseSettings):
     # nothing new. Read from the environment only, never from `space_settings`. A secret
     # the same way `google_client_secret` is, so `repr=False` keeps it out of logs.
     registry_token: str = Field(default="", repr=False)
+    # Where the Orbiters hub answers, for the one question the signup asks it: whether an
+    # address belongs to a community member (`tenants/hub.py`, ORB-173). The bearer is
+    # `registry_token` above, the same value the hub reads as
+    # `ORBITERS_PIGRO_REGISTRY_TOKEN`: since ORB-173 it travels in both directions. Empty
+    # token, unreachable hub, anything but a 200: the answer is «not a member» and the
+    # signup goes on. The community is the fast lane, never a gate.
+    hub_url: str = "https://joinorbiters.com"
     jwt_secret: str = "change-me-in-production-please-set-a-real-secret"
     access_token_minutes: int = 15
     # Six months, sliding: `/api/auth/refresh` consumes the old jti and issues a new row

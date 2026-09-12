@@ -8,6 +8,7 @@ docs/superpowers/specs/2026-09-08-spazi-un-database-per-tenant-design.md.
 
 from pigrocrm.core.tenants.database import ensure_tenants_database, tenants_database_url
 from pigrocrm.core.tenants.defaults import DefaultsReport, ensure_defaults
+from pigrocrm.core.tenants.hub import MemberLookup, lookup_member
 from pigrocrm.core.tenants.models import Tenant, TenantsBase
 from pigrocrm.core.tenants.schemas import (
     RESERVED_SLUGS,
@@ -24,6 +25,7 @@ __all__ = [
     "DefaultsReport",
     "RESERVED_SLUGS",
     "SLUG_PATTERN",
+    "MemberLookup",
     "Tenant",
     "TenantAvailability",
     "TenantRead",
@@ -32,6 +34,7 @@ __all__ = [
     "TenantsBase",
     "ensure_defaults",
     "ensure_tenants_database",
+    "lookup_member",
     "slugify",
     "tenants_database_url",
     "validate_slug",

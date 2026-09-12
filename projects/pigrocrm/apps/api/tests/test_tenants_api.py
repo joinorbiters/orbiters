@@ -16,10 +16,11 @@ from sqlalchemy import Engine, text
 
 from pigrocrm.core.config import Settings, get_settings
 from pigrocrm.core.db.sidecar import drop_database
-from pigrocrm.core.tenants import ensure_tenants_database
+from pigrocrm.core.tenants import MemberLookup, ensure_tenants_database
 from pigrocrm.core.tenants.database import tenant_database_name, tenant_database_url
 from pigrocrm_api.deps import get_session, reset_session_factories
 from pigrocrm_api.main import create_app
+from pigrocrm_api.ratelimit import REQUESTS_PER_MINUTE, reset_rate_limit
 from pigrocrm_api.tenancy import split_tenant_prefix
 
 SLUG = "studio-prova"
@@ -40,6 +41,9 @@ def container_settings(api_engine: Engine) -> Settings:
         cookie_secure=True,
         # Where a link by mail points (ORB-172): required, never the request's Host.
         public_url="https://pigro.test",
+        # A loopback port nobody listens on, so no test in this file can ever ask the
+        # real hub whatever a developer's `.env` says (ORB-173).
+        hub_url="http://127.0.0.1:9",
         _env_file=None,  # type: ignore[call-arg]
     )
 
@@ -52,6 +56,8 @@ def _serving(settings: Settings) -> Iterator[TestClient]:
     created under `SLUG` is dropped on the way out, and the registry emptied."""
     reset_session_factories()
     get_settings.cache_clear()
+    # The limiter counts per process: one test's questions must not be the next one's budget.
+    reset_rate_limit()
     app = create_app()
     app.dependency_overrides[get_settings] = lambda: settings
     registry = ensure_tenants_database(settings)
@@ -325,3 +331,84 @@ def test_a_link_asked_under_a_space_reaches_that_space_only(spaces_client: TestC
         == 202
     )
     assert len(recording.sent) == 1
+
+
+def test_the_signup_learns_whether_an_address_is_a_member_and_how_many_spaces_it_owns(
+    spaces_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ORB-173: the hub's answer and the registry's, in one body. The hub is stubbed at
+    the client the router calls; `spazi` is what only the registry knows and is read for
+    real, from the space this test provisions. A count and never the slugs: the address
+    is not proven yet."""
+    asked: list[str] = []
+
+    def fake_lookup(settings: Settings, email: str) -> MemberLookup:
+        asked.append(email)
+        return MemberLookup(membro=True, nome="Ada", cognome="Lovelace")
+
+    monkeypatch.setattr("pigrocrm_api.routers.tenants.lookup_member", fake_lookup)
+
+    before = spaces_client.post("/api/tenants/membro", json={"email": "Ada@Studio.it"})
+    assert before.status_code == 200, before.text
+    assert before.json() == {"membro": True, "nome": "Ada", "cognome": "Lovelace", "spazi": 0}
+    assert asked == ["ada@studio.it"]
+
+    created = spaces_client.post("/api/tenants/", json=SIGNUP)
+    assert created.status_code == 201, created.text
+    after = spaces_client.post("/api/tenants/membro", json={"email": SIGNUP["email"]})
+    assert after.json()["spazi"] == 1
+    assert SLUG not in after.text
+    # Somebody else's address owns nothing here, whatever the hub says about them.
+    assert (
+        spaces_client.post("/api/tenants/membro", json={"email": "bob@studio.it"}).json()["spazi"]
+        == 0
+    )
+
+
+def test_an_unreachable_hub_still_answers_and_says_not_a_member(
+    container_settings: Settings,
+) -> None:
+    """The real client against a loopback port nobody listens on, with a token set: the
+    route answers 200 and `membro: false`, and the signup goes on. The community is the
+    fast lane, never a gate."""
+    with_hub = container_settings.model_copy(update={"registry_token": REGISTRY_TOKEN})
+    with _serving(with_hub) as client:
+        answer = client.post("/api/tenants/membro", json={"email": "ada@studio.it"})
+        assert answer.status_code == 200, answer.text
+        assert answer.json() == {"membro": False, "nome": None, "cognome": None, "spazi": 0}
+
+
+def test_a_malformed_or_missing_address_is_a_422_and_the_query_string_is_not_read(
+    spaces_client: TestClient,
+) -> None:
+    for body in ({"email": "non-una-mail"}, {"email": ""}, {}, None):
+        refused = spaces_client.post("/api/tenants/membro", json=body)
+        assert refused.status_code == 422, (body, refused.text)
+    # The address in the URL is refused too: it would sit in every access log.
+    assert (
+        spaces_client.post("/api/tenants/membro", params={"email": "ada@studio.it"}).status_code
+        == 422
+    )
+
+
+def test_the_member_question_is_throttled_per_client(
+    spaces_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unauthenticated by design, so the bucket is what stops a sweep of a mailing list:
+    the request past the budget is a 429 with a `Retry-After`, and a 422 spends nothing
+    because the limiter runs inside the route, after validation."""
+    monkeypatch.setattr(
+        "pigrocrm_api.routers.tenants.lookup_member",
+        lambda settings, email: MemberLookup(membro=False),
+    )
+    question = {"email": "ada@studio.it"}
+    for _ in range(REQUESTS_PER_MINUTE):
+        assert spaces_client.post("/api/tenants/membro", json=question).status_code == 200
+    refused = spaces_client.post("/api/tenants/membro", json=question)
+    assert refused.status_code == 429, refused.text
+    assert refused.headers["Retry-After"] == "60"
+    # Another client has its own bucket.
+    other = spaces_client.post(
+        "/api/tenants/membro", json={"email": "ada@studio.it"}, headers={"X-Real-IP": "10.0.0.7"}
+    )
+    assert other.status_code == 200, other.text

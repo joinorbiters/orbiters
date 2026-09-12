@@ -30,7 +30,7 @@ from orbiters_core.models import (
     MemberLogin,
     MemberSession,
 )
-from orbiters_core.schemas import CvFile, MemberProfile, MemberUpdate
+from orbiters_core.schemas import CvFile, MemberLookup, MemberProfile, MemberUpdate
 
 ENTITY = "freelancer"
 # What the comment calls each field, in the admin's language, in the wizard's order.
@@ -153,6 +153,19 @@ class MemberService:
         if session_row is not None:
             self.session.delete(session_row)
             self.session.commit()
+
+    # ---- what another product may ask ------------------------------------------------
+
+    def lookup(self, email: str) -> MemberLookup:
+        """Whether a freelancer with that address exists, and their two names if so
+        (ORB-173). The same match as `uq_freelancers_email_lower`, so the answer agrees
+        with what the wizard would have refused as a duplicate. An unknown address is
+        `membro=False` and never an error: the caller is PigroCRM's signup, and a person
+        who is not in the community is the ordinary case there, not a fault."""
+        row = self._by_email(email.strip().lower())
+        if row is None:
+            return MemberLookup(membro=False)
+        return MemberLookup(membro=True, nome=row.nome, cognome=row.cognome)
 
     # ---- what they see and change -----------------------------------------------------
 
