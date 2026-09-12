@@ -323,8 +323,11 @@ def test_the_cli_skips_a_space_it_cannot_reach_and_still_furnishes_the_others(
             # Alembic logs the migrations it ran on stderr too; the line under test is the
             # CLI's own, and it must carry the exception type and nothing of the URL.
             ghost_lines = [line for line in captured.err.splitlines() if line.startswith(ghost)]
-            assert ghost_lines == [f"{ghost}: non arredato (OperationalError)"]
+            # The migration comes first (ORB-189), so a database that does not exist
+            # fails there, once, and is not furnished either.
+            assert ghost_lines == [f"{ghost}: non migrato (OperationalError)"]
             assert f"{slug}: stati 6" in captured.out
+            assert f"{slug}: schema già a" in captured.out
         finally:
             space.dispose()
     finally:
@@ -332,6 +335,91 @@ def test_the_cli_skips_a_space_it_cannot_reach_and_still_furnishes_the_others(
         registry_session.execute(
             text("delete from tenants where slug in (:a, :b)"), {"a": slug, "b": ghost}
         )
+        registry_session.commit()
+
+
+def test_the_cli_migrates_a_space_left_behind_before_furnishing_it(
+    settings: Settings,
+    registry_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The production state of 2026-09-12 (ORB-189): eight spaces provisioned at an
+    older head, the image now carrying a migration every read of `users` depends on.
+    The boot command must bring the space to head before it touches anything else."""
+    from alembic import command
+    from alembic.config import Config
+
+    from pigrocrm.core import cli
+    from pigrocrm.core.tenants.service import default_alembic_ini
+
+    service = TenantService(registry_session, settings)
+    slug = "prova-indietro"
+    try:
+        service.provision(TenantSignup(slug=slug, nome="Ada", email="ada@studio.it"))
+        url = tenant_database_url(settings, tenant_database_name(slug))
+        space = create_engine(url, future=True)
+        try:
+            with space.begin() as connection:
+                head = connection.execute(text("select version_num from alembic_version")).scalar()
+                # 0034's downgrade makes the password NOT NULL again, and the first admin
+                # has none (ORB-176): the row goes first, the schema is what is under test.
+                connection.execute(text("delete from users"))
+                connection.execute(text("delete from pipeline_stages"))
+            config = Config(str(default_alembic_ini()))
+            config.set_main_option("sqlalchemy.url", url.render_as_string(hide_password=False))
+            # To 0033 by name, not `-1`: the incident's revision, and the one where
+            # `email_verificata_il` is absent whatever the head becomes later.
+            command.downgrade(config, "0033")
+            with space.connect() as connection:
+                behind = connection.execute(
+                    text("select version_num from alembic_version")
+                ).scalar()
+                assert behind != head
+                columns = (
+                    connection.execute(
+                        text(
+                            "select column_name from information_schema.columns "
+                            "where table_name = 'users'"
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                assert "email_verificata_il" not in columns
+
+            monkeypatch.setattr(cli, "get_settings", lambda: settings)
+            assert cli.main(["ensure-space-defaults"]) == 0
+            out = capsys.readouterr().out
+            assert f"{slug}: schema migrato da {behind} a {head}" in out
+            assert f"{slug}: stati 6" in out
+            with space.connect() as connection:
+                assert (
+                    connection.execute(text("select version_num from alembic_version")).scalar()
+                    == head
+                )
+                columns = (
+                    connection.execute(
+                        text(
+                            "select column_name from information_schema.columns "
+                            "where table_name = 'users'"
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                assert "email_verificata_il" in columns
+                assert (
+                    connection.execute(text("select count(*) from pipeline_stages")).scalar() == 6
+                )
+            # The next boot has nothing to migrate and says so.
+            assert cli.main(["ensure-space-defaults"]) == 0
+            assert f"{slug}: schema già a {head}" in capsys.readouterr().out
+        finally:
+            space.dispose()
+    finally:
+        _drop(settings, slug)
+        registry_session.execute(text("delete from tenants where slug = :s"), {"s": slug})
         registry_session.commit()
 
 

@@ -219,7 +219,11 @@ Chiamata in due punti: dentro `provision`, dopo l'admin (un fallimento è un fal
 del provisioning, `_undo` come per gli altri passi); e dal comando
 `pigrocrm ensure-space-defaults`, che scorre il registro e la applica a ogni spazio, eseguito
 nel `CMD` di `Dockerfile.api` dopo `alembic upgrade head`, così gli otto spazi di oggi si
-mettono in pari al primo avvio dopo il deploy, senza comandi a mano. Non un hook nella
+mettono in pari al primo avvio dopo il deploy, senza comandi a mano. Dal 2026-09-12
+(ORB-189) lo stesso comando porta prima ogni spazio alla testa delle migrazioni:
+`alembic upgrade head` nel `CMD` conosce solo il database radice, e lo spazio veniva
+migrato una volta sola, alla creazione; la 0.13.0 ha portato la 0034 a otto spazi che non
+l'avevano e il login di ognuno ha risposto 500 finché non è stata applicata a mano. Non un hook nella
 costruzione dell'engine dello spazio in `deps.py`: ORB-170 sta spostando proprio quel registro
 in `packages/core`, e un secondo cambiamento sugli stessi file sarebbe un conflitto certo.
 La radice non passa di qui: i suoi predefiniti li ha già scelti Ivan.

@@ -109,10 +109,14 @@ way.
 `tenants/service.py` finds that file from `pigrocrm.core.__file__` rather than from
 the checkout, so it works identically in the image. The API container runs
 `alembic upgrade head` at start-up; there is one instance, so there is no
-concurrent-migration risk. After the migrations the same `CMD` runs
-`pigrocrm ensure-space-defaults`, which gives every space in the registry its default
-stages, templates and cost categories where a table is empty, and never fails the boot
-(spec 2026-09-12 §6.5).
+concurrent-migration risk. That command migrates the **root** database only. After it
+the same `CMD` runs `pigrocrm ensure-space-defaults`, which brings every space in the
+registry to head with the same `migrate_to_head` provisioning uses (ORB-189: a space
+was migrated once, at creation, and `pigrocrm-v0.13.0` broke every space's login by
+shipping a migration they had never received), then gives it its default stages,
+templates and cost categories where a table is empty, and never fails the boot (spec
+2026-09-12 §6.5). A new migration reaches the spaces at the first boot after the deploy,
+not before: nothing else runs DDL on a space.
 
 **`--no-sync` on the container's `uv run` calls is load-bearing.** Without it, uv
 re-evaluates the environment against the default group selection — which includes

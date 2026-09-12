@@ -57,6 +57,9 @@ RUN uv sync --frozen --no-dev --package pigrocrm-api --package pigrocrm-mcp
 
 EXPOSE 8000
 # Migrations run at start-up: one instance, so there is no concurrent-migration risk.
+# `alembic upgrade head` here knows only the root database; every space's database is
+# migrated by `ensure-space-defaults` right after, before it is furnished (ORB-189:
+# 0.13.0 shipped a migration the login depends on to spaces that never received it).
 #
 # `--no-sync` on both calls is load-bearing, not decoration: without it, `uv run`
 # re-evaluates the environment against pyproject.toml's *default* group selection --
