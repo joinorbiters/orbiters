@@ -44,6 +44,10 @@
     return SILENT_HOSTS.indexOf(hostname) === -1
   }
 
+  function internal(hostname) {
+    return INTERNAL_HOSTS.test(hostname)
+  }
+
   /* localStorage throws rather than returning null in a browser set to block site data,
      and in Safari's private mode. A visitor whose browser refuses to remember anything
      is a visitor who sees the notice again, which is a nuisance; a page that breaks on
@@ -84,8 +88,9 @@
   }
 
   /* PostHog's own loader, written out: a stub that queues every call made before
-     `array.js` arrives, the script, then the init entry the SDK reads on load
-     (`_i`, one `[key, config]` per instance, and `__SV` is how it recognises the stub).
+     `array.js` arrives, the script, then the init entry the SDK reads on load (`_i`, one
+     `[key, config, name]` per instance; the SDK recognises the stub by that array, and
+     `__SV` is only the official snippet's own re-entry guard, kept for fidelity).
      Called only from `accept`, like `loadPixel`. Anonymous visitors stay anonymous
      (`identified_only`): the CRM and the hub identify a person after the login, and
      the cookie is on the top-level domain so that person is this same visitor. */
@@ -120,9 +125,9 @@
       session_recording: { maskAllInputs: true },
     })
     /* Queued on the stub and replayed by the SDK when it lands. A call rather than the
-       `internal_or_test_user_hostname` option, which the SDK's defaults overwrote when
-       tried live (shared/analytics/browser.ts has the date and the version). */
-    if (INTERNAL_HOSTS.test(window.location.hostname)) stub.setInternalOrTestUser()
+       `internal_or_test_user_hostname` option, which did not take effect when tried live
+       (shared/analytics/browser.ts has the date and the version). */
+    if (internal(window.location.hostname)) stub.setInternalOrTestUser()
   }
 
   function button(label, kind, onClick) {
@@ -147,7 +152,7 @@
     var text = document.createElement('p')
     text.appendChild(
       document.createTextNode(
-        'Un cookie di misurazione, per sapere se un annuncio funziona e come usi il sito. ',
+        'Cookie di misurazione, per sapere se un annuncio funziona e come usi il sito. ',
       ),
     )
     var link = document.createElement('a')
@@ -227,7 +232,13 @@
     stop = room(box)
   }
 
-  window.__consent = { start: start, decide: decide, measured: measured, STORAGE_KEY: STORAGE_KEY }
+  window.__consent = {
+    start: start,
+    decide: decide,
+    measured: measured,
+    internal: internal,
+    STORAGE_KEY: STORAGE_KEY,
+  }
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', start)

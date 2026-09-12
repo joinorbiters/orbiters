@@ -60,8 +60,9 @@ describe('on a real host', () => {
     expect(config).toMatchObject({
       api_host: POSTHOG_HOST,
       person_profiles: 'identified_only',
-      // TanStack Router pushes history: without this a SPA counts one pageview per
-      // full load and nothing for the pages navigated to in between.
+      // TanStack Router pushes history: a SPA has to count the pages navigated to, not
+      // only the full loads. Both are the 2026-08-30 defaults too; they are written out
+      // so the policy reads without knowing what a date implies.
       capture_pageview: 'history_change',
       autocapture: true,
     })
@@ -84,7 +85,7 @@ describe('on a real host', () => {
     vi.clearAllMocks()
     __resetAnalyticsForTests()
     initAnalytics({ hostname: 'joinorbiters.com' })
-    expect(init.mock.calls[0]?.[1]?.session_recording?.maskTextSelector).toBeNull()
+    expect(init.mock.calls[0]?.[1]?.session_recording).not.toHaveProperty('maskTextSelector')
   })
 
   it('passes identify, group, capture and reset through', () => {

@@ -40,14 +40,13 @@ export function initAnalytics(options: AnalyticsOptions = {}): boolean {
     autocapture: true,
     session_recording: {
       maskAllInputs: true,
-      maskTextSelector: options.maskText ? '*' : null,
+      ...(options.maskText ? { maskTextSelector: '*' } : {}),
     },
   })
   // Called rather than configured: `internal_or_test_user_hostname` exists as an
-  // option, but with `defaults: '2026-08-30'` the SDK's own default for it
-  // (`/^(localhost|127\.0\.0\.1)$/`) won over the one passed at init, observed live
-  // against array.js 1.430.2 on 2026-09-12. The explicit call is what the option ends up
-  // making anyway.
+  // option, but it did not take effect when tried live against array.js 1.430.2 on
+  // 2026-09-12 (the running config still showed the SDK's own default for it, and the
+  // events arrived unmarked). The explicit call is what the option ends up making.
   if (isInternalHost(hostname)) posthog.setInternalOrTestUser()
   active = true
   return true

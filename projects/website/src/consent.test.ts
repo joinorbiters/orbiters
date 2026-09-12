@@ -25,6 +25,7 @@ type Consent = {
   start: () => void
   decide: (decision: string, box?: Element | null) => void
   measured: (hostname: string) => boolean
+  internal: (hostname: string) => boolean
   STORAGE_KEY: string
 }
 
@@ -155,10 +156,14 @@ describe('once somebody accepts', () => {
     stub.capture('iscrizione_community')
     // joinorbiters.com is a visitor's host, so nothing was queued before this call.
     expect(stub[0]).toEqual(['capture', 'iscrizione_community'])
-    // The preview stacks would have queued `setInternalOrTestUser` first; the rule is
-    // the same regex as `shared/analytics`, and it is applied where the init is.
-    expect(js).toContain("if (INTERNAL_HOSTS.test(window.location.hostname)) stub.setInternalOrTestUser()")
-    expect(js).toContain('var INTERNAL_HOSTS = /^preview\\./')
+    // The preview stacks would have queued `setInternalOrTestUser` first: the rule is
+    // the same as `shared/analytics`'s, and it is applied where the init is.
+    const { internal } = (window as unknown as { __consent: Consent }).__consent
+    expect(internal('preview.joinorbiters.com')).toBe(true)
+    expect(internal('preview.pigro.joinorbiters.com')).toBe(true)
+    expect(internal('joinorbiters.com')).toBe(false)
+    expect(internal('www.joinorbiters.com')).toBe(false)
+    expect(js).toContain('if (internal(window.location.hostname)) stub.setInternalOrTestUser()')
   })
 
   it('takes the notice away and does not ask again on the next page', () => {

@@ -218,7 +218,9 @@ describe('privacy.html', () => {
     // than an interest we assert: consent first, and a way back.
     const policy = page['privacy.html']
     expect(policy).toMatch(/consenso/i)
-    expect(policy).toContain('<time datetime="2026-09-12">')
+    // Both halves of the date: the attribute a machine reads and the words a person does.
+    // The first version of this change moved one and not the other.
+    expect(policy).toContain('<time datetime="2026-09-12">12 settembre 2026</time>')
   })
 
   it('says PostHog is there, on the site after the yes and behind the logins without one', () => {
@@ -233,5 +235,10 @@ describe('privacy.html', () => {
     // What is sent about a signed-in person, named, and the legal basis.
     expect(policy).toMatch(/interesse legittimo/i)
     for (const claim of ['email', 'nome', 'ruolo', 'spazio']) expect(policy).toContain(claim)
+    // The site records sessions too (consent.js sets `session_recording`), and the hub
+    // masks its inputs but not every text: the policy says exactly that, no more.
+    expect(policy).toContain('registra la sessione con i campi mascherati')
+    expect(policy).toContain('ogni campo è mascherato, e nel CRM anche ogni testo')
+    expect(policy).toContain('indirizzo IP e il tuo browser')
   })
 })

@@ -35,9 +35,9 @@ the one value every surface must agree on. The package holds:
 
 - `posthog.ts`: the key, the ingestion host (`https://eu.i.posthog.com`), the asset
   host (`https://eu-assets.i.posthog.com`), `INTERNAL_HOSTS` (the preview hostnames)
-  and `analyticsEnabled(hostname)`, which is false on `localhost`, `127.0.0.1`, an
-  empty hostname and under vitest, so a developer's machine and a test never send an
-  event.
+  and `analyticsEnabled(hostname)`, which is false on `localhost`, `127.0.0.1` and an
+  empty hostname, so a developer's machine and a test (jsdom's default location is
+  `localhost`) never send an event.
 - `browser.ts`: the one `initAnalytics(...)` the two SPAs call, on top of `posthog-js`.
   It applies the shared policy (pageviews on history change, autocapture, replay with
   inputs masked, the CRM adds text masking, `person_profiles: 'identified_only'`,

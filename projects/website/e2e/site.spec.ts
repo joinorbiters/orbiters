@@ -89,7 +89,10 @@ test.describe('every page of the site', () => {
       await expect
         .poll(() => requested.filter(towards([PIXEL_HOST])).length)
         .toBeGreaterThan(0)
-      await page.waitForLoadState('networkidle')
+      // A short fixed wait, not `networkidle`: the pixel's request is towards a host CI
+      // cannot reach, and a firewall that drops rather than refuses would keep the
+      // network busy until the test's own timeout.
+      await page.waitForTimeout(1000)
       expect(requested.filter(towards(POSTHOG_HOSTS))).toEqual([])
       expect(await page.evaluate(() => 'posthog' in window)).toBe(false)
     })
