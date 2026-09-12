@@ -3,7 +3,6 @@ import { PageHeader } from '@/components/PageHeader'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { CommercialTab } from './CommercialTab'
 import { EconomicTab } from './EconomicTab'
-import { NewSpacePanels } from './NewSpacePanels'
 import { PeriodPicker } from './PeriodPicker'
 import { DASHBOARD_TABS, type DashboardSearch } from './search'
 
@@ -51,9 +50,6 @@ export function DashboardPage({
       />
 
       <div className="px-8 py-6">
-        {/* A new space first: the assistant and the first steps, read from the data and
-            gone on their own once the space is in use (spec 2026-09-12 §6.7). */}
-        <NewSpacePanels />
         {/* One tab is mounted at a time, deliberately. Rendering all three and hiding two
             would issue three requests -- three snapshot transactions, each holding two
             pooled connections on the API side -- to draw one screen. §17's placeholders that

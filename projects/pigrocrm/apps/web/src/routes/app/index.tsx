@@ -1,5 +1,6 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { DashboardPage } from '@/features/dashboard/DashboardPage'
+import { useFirstVisitGoesToGetStarted } from '@/features/get-started/useFirstVisit'
 import { validateDashboardSearch, type DashboardSearch } from '@/features/dashboard/search'
 
 /**
@@ -14,6 +15,8 @@ import { validateDashboardSearch, type DashboardSearch } from '@/features/dashbo
  * the validator `features/dashboard/search.ts`, both so they can be tested directly.
  */
 function DashboardRoute() {
+  // The first login lands on «Get started», once (ORB-180).
+  useFirstVisitGoesToGetStarted()
   const search = Route.useSearch()
   const navigate = useNavigate({ from: Route.fullPath })
   // No `PageHeader` here: `DashboardPage` draws its own, because the tabs and the period
