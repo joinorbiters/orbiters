@@ -102,6 +102,59 @@ def seed_templates() -> int:
     return 0
 
 
+def ensure_space_defaults() -> int:
+    """`pigrocrm ensure-space-defaults`: every space in the registry gets the stages,
+    templates and categories it lacks, table by table, only where the table is empty
+    (spec 2026-09-12 §6.5). Runs in the API image's CMD after the migrations, so the
+    spaces created before the seeds existed catch up at the first boot after the deploy.
+
+    Always answers 0, whatever happens: this runs before uvicorn, and a furnishing
+    problem must never keep the API down. A registry that cannot be reached, or one
+    space that cannot, is one line on stderr with the exception's type and never its
+    text (a psycopg error can carry the URL, password included). The root installation
+    is not in the registry and is not touched."""
+    from sqlalchemy import create_engine, select
+
+    from pigrocrm.core.tenants import Tenant, ensure_defaults, ensure_tenants_database
+    from pigrocrm.core.tenants.database import tenant_database_url
+
+    settings = get_settings()
+    try:
+        registry = ensure_tenants_database(settings)
+        try:
+            with session_factory(registry)() as session:
+                spaces = [
+                    (row.slug, row.db_name)
+                    for row in session.scalars(select(Tenant).order_by(Tenant.created_at)).all()
+                ]
+        finally:
+            registry.dispose()
+    except Exception as exc:  # noqa: BLE001 - never a boot failure
+        print(f"registro degli spazi non raggiungibile ({type(exc).__name__})", file=sys.stderr)
+        return 0
+    if not spaces:
+        print("nessuno spazio nel registro")
+        return 0
+    for slug, db_name in spaces:
+        engine = create_engine(tenant_database_url(settings, db_name), future=True)
+        try:
+            with session_factory(engine)() as space:
+                report = ensure_defaults(space)
+        except Exception as exc:  # noqa: BLE001 - one space must not stop the others
+            print(f"{slug}: non arredato ({type(exc).__name__})", file=sys.stderr)
+            continue
+        finally:
+            engine.dispose()
+        if report.seeded:
+            print(
+                f"{slug}: stati {report.stages}, template {report.templates}, "
+                f"categorie {report.categories}"
+            )
+        else:
+            print(f"{slug}: già a posto")
+    return 0
+
+
 def gmail_sync(email: str | None) -> int:
     """`pigrocrm gmail-sync [--email casella@dove.it]`: one cycle, for cron.
 
@@ -284,6 +337,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     reset = sub.add_parser("resetpassword", help="Imposta una nuova password a un utente esistente")
     reset.add_argument("--email")
     sub.add_parser("seed-templates", help="Crea i template predefiniti, se mancano")
+    sub.add_parser(
+        "ensure-space-defaults",
+        help="Dà a ogni spazio del registro stati, template e categorie predefiniti, se mancano",
+    )
     sync = sub.add_parser("gmail-sync", help="Sincronizza la casella Google collegata (per cron)")
     sync.add_argument("--email", help="La casella da sincronizzare, se ne è collegata più di una")
 
@@ -294,6 +351,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return resetpassword(args.email)
     if args.command == "seed-templates":
         return seed_templates()
+    if args.command == "ensure-space-defaults":
+        return ensure_space_defaults()
     if args.command == "gmail-sync":
         return gmail_sync(args.email)
     return 1

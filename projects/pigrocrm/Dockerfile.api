@@ -71,4 +71,4 @@ EXPOSE 8000
 # no route to PyPI, or one where it is slow, this is the difference between the
 # container starting and not. `--no-sync` makes uv trust the image's own venv
 # exactly as built and skip that check entirely.
-CMD ["sh", "-c", "cd projects/pigrocrm/packages/core && uv run --no-sync alembic upgrade head && cd /app && uv run --no-sync uvicorn pigrocrm_api.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "cd projects/pigrocrm/packages/core && uv run --no-sync alembic upgrade head && cd /app && uv run --no-sync python -m pigrocrm.core.cli ensure-space-defaults && uv run --no-sync uvicorn pigrocrm_api.main:app --host 0.0.0.0 --port 8000"]

@@ -1,3 +1,4 @@
+import re
 from uuid import uuid4
 
 import pytest
@@ -5,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.errors import Conflict, NotFound, PermissionDenied, ValidationFailed
-from pigrocrm.core.templates.renderer import DeclaredVariable
+from pigrocrm.core.templates.renderer import DeclaredVariable, render_template
 from pigrocrm.core.templates.repository import TemplateRepository
 from pigrocrm.core.templates.schemas import (
     TemplateCreate,
@@ -13,7 +14,7 @@ from pigrocrm.core.templates.schemas import (
     TemplateUpdate,
     TemplateVariable,
 )
-from pigrocrm.core.templates.service import TemplateService
+from pigrocrm.core.templates.service import OFFERTA_TEMPLATE_NOME, TemplateService
 
 ADMIN = Actor(id=None, type="system", role="admin")
 READONLY = Actor(id=None, type="user", role="readonly")
@@ -317,3 +318,69 @@ def test_declared_variables_is_a_public_method_that_drops_options(db_session: Se
     assert declared == (
         DeclaredVariable(nome="colore", etichetta="Colore", tipo="select", obbligatoria=True),
     )
+
+
+# --- the default offer (spec 2026-09-12 §6.5) --------------------------------------
+
+# What the body may read without the form asking for it: `cliente` and `emittente`
+# come from `DocumentService._template_scope`, and so does `oggi`.
+_SCOPE_PREFIXES = ("cliente.", "emittente.")
+_SCOPE_KEYS = {"oggi"}
+
+
+def test_seed_creates_a_default_offer_a_space_can_render_without_editing(
+    db_session: Session,
+) -> None:
+    service = TemplateService(db_session)
+    created = service.seed_defaults(ADMIN)
+    offerta = next(t for t in created if t.nome == OFFERTA_TEMPLATE_NOME)
+    assert offerta.tipo == "offerta"
+    assert offerta.attivo is True
+    declared = {v.nome for v in offerta.variabili_dichiarate}
+    assert declared == {"oggetto", "ambito", "attivita", "compenso", "pagamento"}
+    # Every placeholder in the body is either declared or supplied by the document
+    # scope, so the first render of a fresh space cannot fail on a missing variable.
+    placeholders = set(re.findall(r"\{\{([a-z_.]+)\}\}", offerta.corpo_markdown))
+    for name in placeholders:
+        assert name in declared or name in _SCOPE_KEYS or name.startswith(_SCOPE_PREFIXES), name
+    assert "{{#each" not in offerta.corpo_markdown
+
+
+def test_seed_skips_the_offer_when_a_template_with_that_name_exists(
+    db_session: Session,
+) -> None:
+    service = TemplateService(db_session)
+    service.create(
+        TemplateCreate(nome=OFFERTA_TEMPLATE_NOME, tipo="offerta", corpo_markdown="mia"),
+        ADMIN,
+    )
+    created = service.seed_defaults(ADMIN)
+    assert OFFERTA_TEMPLATE_NOME not in {t.nome for t in created}
+    kept = TemplateRepository(db_session).get_by_nome(OFFERTA_TEMPLATE_NOME)
+    assert kept is not None and kept.corpo_markdown == "mia"
+
+
+def test_the_default_offer_renders_with_the_five_answers_and_the_document_scope(
+    db_session: Session,
+) -> None:
+    """What `DocumentService.create_from_template` does with it: the declared answers
+    plus `cliente`, `emittente` and `oggi` from the record. No hole, no error."""
+    service = TemplateService(db_session)
+    created = service.seed_defaults(ADMIN)
+    offerta = next(t for t in created if t.nome == OFFERTA_TEMPLATE_NOME)
+    row = TemplateRepository(db_session).get(offerta.id)
+    assert row is not None
+    scope = {
+        "oggetto": "Consulenza CTO",
+        "ambito": "Tre mesi di guida tecnica.",
+        "attivita": "Revisione dell'architettura e del team.",
+        "compenso": "1.000 euro al giorno, due giorni a settimana.",
+        "pagamento": "Fattura mensile, 30 giorni.",
+        "cliente": {"ragione_sociale": "ACME S.r.l."},
+        "emittente": {"ragione_sociale": "Ada Lovelace"},
+        "oggi": "2026-09-12",
+    }
+    markdown = render_template(row.corpo_markdown, scope, service.declared_variables(row))
+    # The renderer escapes Markdown in values ("S\\.r\\.l\\."), so match the plain words.
+    assert "ACME" in markdown and "Consulenza CTO" in markdown and "Ada Lovelace" in markdown
+    assert "{{" not in markdown

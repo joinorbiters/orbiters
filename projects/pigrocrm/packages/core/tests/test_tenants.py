@@ -130,6 +130,25 @@ def test_provisioning_creates_a_migrated_database_with_one_admin(
                 users = connection.execute(text("select email, ruolo, attivo from users")).all()
                 assert users == [("ada@studio.it", "admin", True)]
                 assert connection.execute(text("select count(*) from customers")).scalar() == 0
+                # Born ready (spec 2026-09-12 §6.5): the first deal, the first offer and
+                # the first cost need nothing from Impostazioni.
+                assert (
+                    connection.execute(text("select count(*) from pipeline_stages")).scalar() == 6
+                )
+                names = (
+                    connection.execute(text("select nome from templates order by nome"))
+                    .scalars()
+                    .all()
+                )
+                assert "Offerta" in names and len(names) == 3
+                assert (
+                    connection.execute(text("select count(*) from cost_categories")).scalar() == 5
+                )
+                # The emitter carries the name and nothing fiscal: that is the person's.
+                emitter = connection.execute(
+                    text("select ragione_sociale, partita_iva, codice_fiscale from emitter_profile")
+                ).all()
+                assert emitter == [("Ada Lovelace", None, None)]
         finally:
             space.dispose()
     finally:
@@ -183,6 +202,134 @@ def test_a_short_password_provisions_nothing_and_frees_the_name(
         ).scalar()
         == 0
     )
+    with create_engine(settings.database_url, future=True).connect() as connection:
+        exists = connection.execute(
+            text("select 1 from pg_database where datname = :n"), {"n": tenant_database_name(slug)}
+        ).scalar()
+    assert exists is None
+
+
+def test_the_cli_furnishes_an_existing_space_that_has_nothing(
+    settings: Settings,
+    registry_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from pigrocrm.core import cli
+
+    service = TenantService(registry_session, settings)
+    slug = "prova-arredo"
+    try:
+        service.provision(
+            TenantSignup(slug=slug, nome="Ada", email="ada@studio.it", password="lunghissima1")
+        )
+        space = create_engine(
+            tenant_database_url(settings, tenant_database_name(slug)), future=True
+        )
+        try:
+            # The state the eight production spaces are in: born before the seeds.
+            with space.begin() as connection:
+                connection.execute(text("delete from pipeline_stages"))
+                connection.execute(text("delete from cost_categories"))
+            monkeypatch.setattr(cli, "get_settings", lambda: settings)
+            assert cli.main(["ensure-space-defaults"]) == 0
+            out = capsys.readouterr().out
+            assert slug in out and "stati 6" in out and "categorie 5" in out
+            with space.connect() as connection:
+                assert (
+                    connection.execute(text("select count(*) from pipeline_stages")).scalar() == 6
+                )
+                assert (
+                    connection.execute(text("select count(*) from cost_categories")).scalar() == 5
+                )
+                # Templates were not empty and are untouched: still the three seeds.
+                assert connection.execute(text("select count(*) from templates")).scalar() == 3
+            # A second run has nothing to do and says so.
+            assert cli.main(["ensure-space-defaults"]) == 0
+            assert "già a posto" in capsys.readouterr().out
+        finally:
+            space.dispose()
+    finally:
+        _drop(settings, slug)
+        registry_session.execute(text("delete from tenants where slug = :s"), {"s": slug})
+        registry_session.commit()
+
+
+def test_the_cli_skips_a_space_it_cannot_reach_and_still_furnishes_the_others(
+    settings: Settings,
+    registry_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from pigrocrm.core import cli
+    from pigrocrm.core.tenants import Tenant
+
+    service = TenantService(registry_session, settings)
+    slug = "prova-vicino"
+    ghost = "prova-fantasma"
+    try:
+        service.provision(
+            TenantSignup(slug=slug, nome="Ada", email="ada@studio.it", password="lunghissima1")
+        )
+        # A registry row whose database does not exist: the eight-spaces boot must not
+        # stop here, and the failure must not name the URL.
+        registry_session.add(
+            Tenant(slug=ghost, db_name=tenant_database_name(ghost), owner_email="x@studio.it")
+        )
+        registry_session.commit()
+        space = create_engine(
+            tenant_database_url(settings, tenant_database_name(slug)), future=True
+        )
+        try:
+            with space.begin() as connection:
+                connection.execute(text("delete from pipeline_stages"))
+            monkeypatch.setattr(cli, "get_settings", lambda: settings)
+            assert cli.main(["ensure-space-defaults"]) == 0
+            captured = capsys.readouterr()
+            assert f"{ghost}: non arredato (" in captured.err
+            assert "password" not in captured.err and "postgresql" not in captured.err
+            assert f"{slug}: stati 6" in captured.out
+        finally:
+            space.dispose()
+    finally:
+        _drop(settings, slug)
+        registry_session.execute(
+            text("delete from tenants where slug in (:a, :b)"), {"a": slug, "b": ghost}
+        )
+        registry_session.commit()
+
+
+def test_the_cli_never_fails_the_boot_when_the_registry_is_unreachable(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from pigrocrm.core import cli
+
+    unreachable = Settings(
+        database_url="postgresql+psycopg://x:y@127.0.0.1:9/nulla",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    monkeypatch.setattr(cli, "get_settings", lambda: unreachable)
+    assert cli.main(["ensure-space-defaults"]) == 0
+    err = capsys.readouterr().err
+    assert "registro degli spazi non raggiungibile (" in err and "x:y" not in err
+
+
+def test_a_failing_seed_undoes_the_space_and_frees_the_name(
+    settings: Settings, registry_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pigrocrm.core.tenants.service as tenants_service
+
+    def boom(session: Session) -> None:
+        raise RuntimeError("seed rotto")
+
+    monkeypatch.setattr(tenants_service, "ensure_defaults", boom)
+    service = TenantService(registry_session, settings)
+    slug = "prova-seme"
+    with pytest.raises(RuntimeError):
+        service.provision(
+            TenantSignup(slug=slug, nome="Ada", email="ada@studio.it", password="lunghissima1")
+        )
+    assert service.availability(slug).disponibile is True
     with create_engine(settings.database_url, future=True).connect() as connection:
         exists = connection.execute(
             text("select 1 from pg_database where datname = :n"), {"n": tenant_database_name(slug)}

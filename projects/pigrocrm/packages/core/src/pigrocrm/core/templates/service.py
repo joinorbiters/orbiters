@@ -64,6 +64,30 @@ def _conflicting_nome(nome: str) -> Conflict:
     return Conflict(ENTITY, "esiste già un template con questo nome", nome=nome)
 
 
+# The default offer a space is born with (spec 2026-09-12 §6.5). Flat variables on
+# purpose: a declared variable is one field of the compilation form, so the body cannot
+# iterate a list the way `render/assets/template-offer.md` does with `offerta.righe`.
+# `cliente.*`, `emittente.*` and `oggi` come from `DocumentService._template_scope`.
+OFFERTA_TEMPLATE_NOME = "Offerta"
+OFFERTA_TEMPLATE_VARIABLES: tuple[dict[str, Any], ...] = (
+    {"nome": "oggetto", "etichetta": "Oggetto", "tipo": "text", "obbligatoria": True},
+    {"nome": "ambito", "etichetta": "Ambito e obiettivi", "tipo": "textarea", "obbligatoria": True},
+    {"nome": "attivita", "etichetta": "Attività", "tipo": "textarea", "obbligatoria": True},
+    {
+        "nome": "compenso",
+        "etichetta": "Condizioni economiche",
+        "tipo": "textarea",
+        "obbligatoria": True,
+    },
+    {
+        "nome": "pagamento",
+        "etichetta": "Fatturazione e pagamento",
+        "tipo": "textarea",
+        "obbligatoria": True,
+    },
+)
+
+
 class TemplateService:
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -246,7 +270,8 @@ class TemplateService:
         against a stored "Rapporto ore" and then be refused by the database as a raw
         `IntegrityError`.
 
-        Seeds two templates: the timesheet, and slice 5's payment reminder.
+        Seeds three templates: the timesheet, slice 5's payment reminder and the
+        default offer (spec 2026-09-12 §6.5).
         `render/assets/template-offer.md` is deliberately left alone -- adopting it
         would change slice 2's shipped behaviour in a slice that is not about offers.
 
@@ -282,6 +307,15 @@ class TemplateService:
                 "sollecito",
                 SOLLECITO_TEMPLATE_SOURCE,
                 SOLLECITO_TEMPLATE_VARIABLES,
+            ),
+            # The offer every space starts from (spec 2026-09-12 §6.5): the one
+            # document the landing promises, editable in Impostazioni → Template like
+            # the other two. `template-offer.md` stays the renderer's own asset.
+            (
+                OFFERTA_TEMPLATE_NOME,
+                "offerta",
+                (ASSETS_DIR / "template-offerta-default.md").read_text(encoding="utf-8"),
+                OFFERTA_TEMPLATE_VARIABLES,
             ),
         )
         created: list[TemplateRead] = []
