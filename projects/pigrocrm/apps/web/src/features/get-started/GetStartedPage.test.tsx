@@ -4,10 +4,12 @@
  * the Home's one-time redirect. The API client is stubbed by path, `useAuth` by role.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { GetStartedPage } from './GetStartedPage'
+import { FISCAL_PROMPT_FULL_ACCESS, INTRO_PROMPT, STEP_PROMPTS } from './prompts'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -29,6 +31,8 @@ vi.mock('@/lib/auth', () => ({
   useIsAdmin: () => auth.user?.ruolo === 'admin',
 }))
 
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
+
 vi.mock('@tanstack/react-router', () => ({
   Link: ({ to, children, className }: { to: string; children: React.ReactNode; className?: string }) => (
     <a href={to} className={className}>
@@ -45,6 +49,7 @@ const EMPTY: Record<string, unknown> = {
   '/api/time-entries': EMPTY_PAGE,
   '/api/documents': EMPTY_PAGE,
   '/api/tokens': [],
+  '/api/settings/space': { mcp_full_access: false },
 }
 
 /** Stubs by path: `overrides` win, `/api/emitter` is 404 unless overridden, `failing`
@@ -75,6 +80,9 @@ function renderPage() {
 
 beforeEach(() => {
   vi.mocked(api.GET).mockReset()
+  vi.mocked(toast.success).mockReset()
+  vi.mocked(toast.error).mockReset()
+  Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } })
   answers()
 })
 
@@ -154,5 +162,74 @@ describe('Get started', () => {
     renderPage()
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(window.localStorage.length).toBe(0)
+  })
+
+  it('offers a prompt to copy for each step still to do, and one for the first conversation', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event')
+    answers({ '/api/customers': { items: [{ id: 'c1' }], next_cursor: null } })
+    renderPage()
+    await screen.findByText(/1 di 4/)
+    // Three steps to do, one done: three step prompts, each named after its step, plus
+    // the card's own.
+    expect(screen.getAllByText(/^Prompt per l’assistente: /)).toHaveLength(3)
+    expect(screen.getByText('Il primo prompt, appena collegato')).toBeInTheDocument()
+    expect(screen.getByText(INTRO_PROMPT)).toBeInTheDocument()
+    expect(screen.queryByText(STEP_PROMPTS.cliente)).toBeNull()
+    // The prompt is one click away, behind the step's disclosure.
+    const summary = screen.getByText('Prompt per l’assistente: I tuoi dati fiscali')
+    const details = summary.closest('details') as HTMLDetailsElement
+    expect(details.open).toBe(false)
+    await userEvent.click(summary)
+    expect(details.open).toBe(true)
+    expect(screen.getByText(STEP_PROMPTS.fiscali)).toBeInTheDocument()
+    await userEvent.click(within(details).getByRole('button', { name: 'Copia il prompt' }))
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(STEP_PROMPTS.fiscali)
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Prompt copiato'))
+  })
+
+  it('asks the assistant to write the fiscal profile only where the space grants it full access', async () => {
+    answers({ '/api/settings/space': { mcp_full_access: true } })
+    renderPage()
+    await screen.findByText(/0 di 4/)
+    expect(await screen.findByText(FISCAL_PROMPT_FULL_ACCESS)).toBeInTheDocument()
+    expect(screen.queryByText(STEP_PROMPTS.fiscali)).toBeNull()
+  })
+
+  it('does not read the space settings for a collaboratore, who has no fiscal step to prompt', async () => {
+    if (auth.user) auth.user.ruolo = 'collaboratore'
+    renderPage()
+    await screen.findByText(/0 di 4/)
+    expect(api.GET).not.toHaveBeenCalledWith('/api/settings/space')
+    expect(screen.queryByText(/Prompt per l’assistente: I tuoi dati fiscali/)).toBeNull()
+    expect(screen.getByText('Prompt per l’assistente: Il primo cliente')).toBeInTheDocument()
+  })
+
+  it('says so when the clipboard is refused, and leaves the text on the page', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event')
+    Object.assign(navigator, { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('no')) } })
+    renderPage()
+    await screen.findByText(/0 di 4/)
+    await userEvent.click(screen.getByText('Il primo prompt, appena collegato'))
+    await userEvent.click(screen.getAllByRole('button', { name: 'Copia il prompt' })[0] as HTMLElement)
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(screen.getByText(INTRO_PROMPT)).toBeInTheDocument()
+  })
+
+  it('survives a browser with no clipboard at all, as on a plain http origin', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event')
+    Object.assign(navigator, { clipboard: undefined })
+    renderPage()
+    await screen.findByText(/0 di 4/)
+    await userEvent.click(screen.getByText('Il primo prompt, appena collegato'))
+    await userEvent.click(screen.getAllByRole('button', { name: 'Copia il prompt' })[0] as HTMLElement)
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(screen.getByText(INTRO_PROMPT)).toBeInTheDocument()
+  })
+
+  it('gives a readonly user no prompt: there is nothing they could ask the assistant to change', async () => {
+    if (auth.user) auth.user.ruolo = 'readonly'
+    renderPage()
+    await screen.findByText(/0 di 4/)
+    expect(screen.queryAllByText(/^Prompt per l’assistente/)).toHaveLength(0)
   })
 })
