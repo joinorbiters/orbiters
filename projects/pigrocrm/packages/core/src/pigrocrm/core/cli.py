@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import cast
 
+from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
 from pigrocrm.core.actor import Actor, Role
@@ -102,21 +103,46 @@ def seed_templates() -> int:
     return 0
 
 
-def ensure_space_defaults() -> int:
-    """`pigrocrm ensure-space-defaults`: every space in the registry gets the stages,
-    templates and categories it lacks, table by table, only where the table is empty
-    (spec 2026-09-12 §6.5). Runs in the API image's CMD after the migrations, so the
-    spaces created before the seeds existed catch up at the first boot after the deploy.
+def _schema_revision(engine: Engine) -> str | None:
+    """The Alembic revision a space's database is at, `None` before its first migration
+    (no `alembic_version` table yet). A database that cannot be reached raises: that is
+    the caller's line on stderr, not a missing table."""
+    from sqlalchemy import text
+    from sqlalchemy.exc import ProgrammingError
 
-    Always answers 0, whatever happens: this runs before uvicorn, and a furnishing
-    problem must never keep the API down. A registry that cannot be reached, or one
-    space that cannot, is one line on stderr with the exception's type and never its
-    text (a psycopg error can carry the URL, password included). The root installation
-    is not in the registry and is not touched."""
+    try:
+        with engine.connect() as connection:
+            return connection.execute(text("select version_num from alembic_version")).scalar()
+    except ProgrammingError:
+        return None
+
+
+def ensure_space_defaults() -> int:
+    """`pigrocrm ensure-space-defaults`: every space in the registry is brought to the
+    image's schema, then gets the stages, templates and categories it lacks, table by
+    table, only where the table is empty (spec 2026-09-12 §6.5). Runs in the API
+    image's CMD after the root's own `alembic upgrade head`.
+
+    **The migration comes first, and it is the reason this command visits every space
+    at all** (ORB-189). A space's database was migrated once, when the space was
+    provisioned, and never again: `alembic upgrade head` in the CMD knows only the root
+    database. `pigrocrm-v0.13.0` shipped migration 0034, which every read of `users`
+    depends on, to eight spaces still at 0031 and 0033, and the login of every space
+    answered 500 until somebody ran the migration by hand. So each registry row is
+    upgraded here with the same `migrate_to_head` provisioning uses, one line per space
+    saying from which revision to which, and only then furnished.
+
+    Always answers 0, whatever happens: this runs before uvicorn, and a problem in one
+    space must never keep the API down for the others. A registry that cannot be
+    reached, a space that cannot be migrated (then it is not furnished either) or one
+    that cannot be furnished is one line on stderr with the exception's type and never
+    its text (a psycopg error can carry the URL, password included). The root
+    installation is not in the registry and is not touched."""
     from sqlalchemy import create_engine, select
 
     from pigrocrm.core.tenants import Tenant, ensure_defaults, ensure_tenants_database
     from pigrocrm.core.tenants.database import tenant_database_url
+    from pigrocrm.core.tenants.service import migrate_to_head
 
     settings = get_settings()
     try:
@@ -136,13 +162,26 @@ def ensure_space_defaults() -> int:
         print("nessuno spazio nel registro")
         return 0
     for slug, db_name in spaces:
-        engine = create_engine(tenant_database_url(settings, db_name), future=True)
+        url = tenant_database_url(settings, db_name)
+        engine = create_engine(url, future=True)
         try:
-            with session_factory(engine)() as space:
-                report = ensure_defaults(space)
-        except Exception as exc:  # noqa: BLE001 - one space must not stop the others
-            print(f"{slug}: non arredato ({type(exc).__name__})", file=sys.stderr)
-            continue
+            try:
+                before = _schema_revision(engine)
+                migrate_to_head(settings, url.render_as_string(hide_password=False))
+                after = _schema_revision(engine)
+            except Exception as exc:  # noqa: BLE001 - one space must not stop the others
+                print(f"{slug}: non migrato ({type(exc).__name__})", file=sys.stderr)
+                continue
+            if before == after:
+                print(f"{slug}: schema già a {after}")
+            else:
+                print(f"{slug}: schema migrato da {before or 'zero'} a {after}")
+            try:
+                with session_factory(engine)() as space:
+                    report = ensure_defaults(space)
+            except Exception as exc:  # noqa: BLE001 - one space must not stop the others
+                print(f"{slug}: non arredato ({type(exc).__name__})", file=sys.stderr)
+                continue
         finally:
             engine.dispose()
         if report.seeded:
