@@ -47,7 +47,9 @@ def default_alembic_ini() -> Path:
 def migrate_to_head(settings: Settings, url: str) -> None:
     """`alembic upgrade head` against `url`, with the repository's own env.py. The
     configured URL wins over `get_settings()` there -- that is exactly the hook env.py
-    documents for callers like this one."""
+    documents for callers like this one. Two callers: `provision`, once, for a new
+    space; and `pigrocrm ensure-space-defaults` at every boot, for every registered
+    space (ORB-189), which is what keeps a space's schema following the image."""
     ini = (
         Path(settings.tenants_alembic_ini)
         if settings.tenants_alembic_ini

@@ -337,7 +337,9 @@ def test_the_cli_migrates_a_space_left_behind_before_furnishing_it(
                 connection.execute(text("delete from pipeline_stages"))
             config = Config(str(default_alembic_ini()))
             config.set_main_option("sqlalchemy.url", url.render_as_string(hide_password=False))
-            command.downgrade(config, "-1")
+            # To 0033 by name, not `-1`: the incident's revision, and the one where
+            # `email_verificata_il` is absent whatever the head becomes later.
+            command.downgrade(config, "0033")
             with space.connect() as connection:
                 behind = connection.execute(
                     text("select version_num from alembic_version")
