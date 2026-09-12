@@ -811,23 +811,23 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
 
     # -- Invoices -------------------------------------------------------------
     #
-    # Reads, and the proforma. `issue`, `annul`, `mark_transmitted_externally`,
-    # `export_xml` and the write behind the fiscal profile
-    # (`FiscalProfileService.upsert`) are deliberately absent, and the absence is the
-    # mechanism: a personal access token inherits its owner's full role and never
-    # expires, so a permission check inside a registered tool would be a check an
-    # admin's token passes. A tool that does not exist cannot be called by anyone.
+    # Reads, the proforma, and the two identity writes. `issue`, `annul`,
+    # `mark_transmitted_externally` and `export_xml` are deliberately absent, and the
+    # absence is the mechanism: a personal access token inherits its owner's full role
+    # and never expires, so a permission check inside a registered tool would be a check
+    # an admin's token passes. A tool that does not exist cannot be called by anyone.
     #
-    # Reading the profile is exposed and writing it is not, which is the whole line
-    # this surface draws: `describe_fiscal_profile` tells an agent which VAT rate,
-    # natura and bollo its proforma will inherit, and deciding what those are is the
-    # part a person does. The write is banned as a `(service, method)` pair rather
-    # than by name, since `EmitterProfileService.upsert` is a different operation
-    # spelled identically.
+    # The fiscal profile and the emitter are written here, on the default surface
+    # (ORB-188, 2026-09-12). The line this surface draws is not "reads yes, writes no":
+    # it is "what cannot be undone stays behind the switch". A profile or an emitter is
+    # one rewritable row; an issued invoice keeps its own copy of both. A space is born
+    # empty and the first thing a person asks the assistant they just connected is to
+    # set them, so `update_fiscal_profile` and `update_emitter_profile` sit next to
+    # their reads, admin-only through the services' own `require_admin`.
     #
-    # `test_mcp_invoice_ban.py` reads this module's AST and fails if any of those five
-    # names appears as a registered tool, so the guarantee survives someone adding one
-    # later without reading this comment.
+    # `test_mcp_invoice_ban.py` reads this module's AST and fails if any of the four
+    # names above appears as a registered tool, so the guarantee survives someone adding
+    # one later without reading this comment.
 
     @mcp.tool()
     @guard
@@ -994,6 +994,44 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
         nell'intestazione di ogni fattura e di ogni documento. Da leggere prima di
         scrivere un testo che li ripete, invece di chiederli all'utente."""
         return invoices.describe_emitter_profile(context)
+
+    @mcp.tool()
+    @guard
+    def update_fiscal_profile(dati: dict[str, Any]) -> dict[str, Any]:
+        """Riscrive il profilo fiscale: **sostituzione totale, non modifica parziale**.
+
+        Ogni chiave assente torna al proprio default. Decide aliquota, natura, bollo e
+        riferimento normativo di **ogni riga di ogni fattura futura**; le fatture gia'
+        emesse conservano la propria copia e non si muovono. Leggi prima
+        `describe_fiscal_profile`, rimanda indietro l'oggetto intero con le modifiche,
+        e mostra alla persona il riepilogo completo chiedendo conferma prima di salvare.
+
+        `dati` ha la forma di `FiscalProfileUpsert`: `codice_regime` (`RF19` per il
+        forfettario), `coefficiente_redditivita`, `aliquota_imposta_sostitutiva` e
+        `aliquota_inps` in percentuale, `modalita_pagamento` (codice SdI, `MP05` per il
+        bonifico), `giorni_scadenza`, `iban`, e i parametri IVA e bollo che per un
+        forfettario restano ai default. Solo un admin.
+        """
+        return invoices.update_fiscal_profile(context, dati)
+
+    @mcp.tool()
+    @guard
+    def update_emitter_profile(dati: dict[str, Any]) -> dict[str, Any]:
+        """Scrive chi emette: l'intestazione di ogni offerta e di ogni fattura.
+
+        **Sostituzione totale** dell'unica riga: ogni chiave assente torna vuota
+        (`nazione` torna a `IT`, `ragione_sociale` e' obbligatoria). Per questo leggi
+        prima `describe_emitter_profile` e rimanda indietro l'oggetto letto con le sole
+        modifiche, cosi' non cancelli quello che non hai nominato. Le chiavi, nella forma
+        di `EmitterProfileUpsert`: `ragione_sociale`, `partita_iva` (11 cifre) o
+        `codice_fiscale`, `indirizzo`, `cap`, `comune`, `provincia`, `nazione`, `pec`,
+        `codice_sdi` (7 caratteri), `telefono`, `email`, `sito_web`, `regime_fiscale` (il
+        testo stampato in calce), `firma_email`, `logo_key` e `firma_key` (chiavi di
+        storage, non byte). Mostra alla persona il riepilogo intero e aspetta il suo ok
+        prima di salvare. Un dato fiscale che non ti e' stato dato non si inventa:
+        lascialo vuoto e dillo. Solo un admin.
+        """
+        return invoices.update_emitter_profile(context, dati)
 
     # ---- time tracking -----------------------------------------------------
     # An agent may record and read. It may not change what already-recorded numbers
@@ -1372,7 +1410,7 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
     # -- Attività e calendario (slice 10) -------------------------------------
     #
     # On the default surface, all of it: nothing here consumes a number, touches the
-    # fiscal register or rewrites a rate, so none of it is one of the sixteen. The one
+    # fiscal register or rewrites a rate, so none of it is one of the forbidden. The one
     # rule worth knowing is that closing a commitment is two different operations --
     # `complete_attivita` says it was done, `cancel_attivita` says it stopped mattering
     # -- and that neither deletes the row, because six months later the question is

@@ -1,11 +1,11 @@
-"""The operations an installation has to ask for: the sixteen of slices 3 and 4, and
-Gmail discovery.
+"""The operations an installation has to ask for: the fiscal acts and the configuration
+writes of slices 3 and 4, and Gmail discovery.
 
 Registered only when `Settings.mcp_full_access` is true, exactly the way `tools/gmail.py`
 is registered only when Gmail is configured — and for the same reason, expressed twice.
 Not registered means **not listed and not callable**: an installation that has not opted
-in does not get sixteen tools that answer «vietato», it gets a surface on which they do
-not exist.
+in does not get tools that answer «vietato», it gets a surface on which they do not
+exist.
 
 **What makes these different from everything else on this surface.** The rest of the
 product is reversible. A customer created in error is archived, an hour logged on the
@@ -25,8 +25,8 @@ decision about one machine, recorded in its `.env`.
 **The registration is the second half of the switch, not the whole of it.** The first is
 `Actor.full_access`, stamped onto the credential in `PatService.resolve` and checked by
 every one of these service methods through `require_admin`/`require_write`. Registering a
-tool without that would produce sixteen tools that all refuse; opening the credential
-without registering would produce sixteen capabilities with no door. Both halves read the
+tool without that would produce tools that all refuse; opening the credential without
+registering would produce capabilities with no door. Both halves read the
 same setting, and `test_mcp_invoice_ban.py` fails if they ever disagree — because a
 half-open switch, where the operator believes it is on and one operation still refuses at
 the moment they are issuing an invoice, is the worst of the three states.
@@ -47,8 +47,6 @@ from pigrocrm.core.analytics.schemas import BindTimeRequest
 from pigrocrm.core.analytics.service import AnalyticsService
 from pigrocrm.core.config import Settings, gmail_configured
 from pigrocrm.core.errors import ValidationFailed
-from pigrocrm.core.fiscal.schemas import FiscalProfileUpsert
-from pigrocrm.core.fiscal.service import FiscalProfileService
 from pigrocrm.core.gmail.attachment_text import GmailAttachmentService
 from pigrocrm.core.gmail.sync import GmailSyncService
 from pigrocrm.core.gmail.tokens import GoogleTokenClient
@@ -171,22 +169,6 @@ def register(
         return (
             InvoiceService(context.session, context.storage)
             .export_xml(UUID(invoice_id), context.actor)
-            .model_dump(mode="json")
-        )
-
-    @mcp.tool()
-    @guard
-    def update_fiscal_profile(dati: dict[str, Any]) -> dict[str, Any]:
-        """Riscrive il profilo fiscale: **sostituzione totale, non modifica parziale**.
-
-        Ogni chiave assente torna al proprio default. Decide aliquota, natura, bollo e
-        riferimento normativo di **ogni riga di ogni fattura futura**; le fatture già
-        emesse conservano la propria copia e non si muovono. Leggi prima
-        `describe_fiscal_profile` e rimanda indietro l'oggetto intero.
-        """
-        return (
-            FiscalProfileService(context.session)
-            .upsert(FiscalProfileUpsert.model_validate(dati), context.actor)
             .model_dump(mode="json")
         )
 

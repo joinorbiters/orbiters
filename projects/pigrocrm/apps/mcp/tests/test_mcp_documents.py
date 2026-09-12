@@ -322,7 +322,7 @@ async def test_describe_emitter_profile_reads_the_issuer_every_header_prints(
     rendering a document needs one -- which is the same reason
     `EmitterProfileService.get` is un-role-gated at the service layer: the PDF header
     needs it for every role, so there is no role for which this read is privileged. The
-    write on that row (`upsert`) has no tool at all."""
+    write on that row is `update_emitter_profile`, admin-only (ORB-188)."""
     async with Client(server) as client:
         profile = _payload(await client.call_tool("describe_emitter_profile", {}))
 
