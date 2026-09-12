@@ -47,7 +47,14 @@ vi.mock('@tanstack/react-router', () => ({
   useRouterState: () => ({ location: { pathname: mockRoute.pathname } }),
   // The command palette the shell mounts navigates; nothing here asserts on where.
   useNavigate: () => vi.fn(),
+  // The connect-agent dialog the shell now mounts guards against navigating away with an
+  // unsaved token; nothing here exercises the guard itself.
+  useBlocker: vi.fn(),
 }))
+
+// The connect-agent dialog copies text via `sonner`'s toast; nothing here asserts on the
+// toast copy, only that clicking a copy button does not throw for want of a mock.
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 const mockAuth = vi.hoisted(() => ({ ruolo: 'admin' as string }))
 vi.mock('@/lib/auth', () => ({
@@ -378,5 +385,31 @@ describe('AppShell', () => {
     renderShell()
     await userEvent.click(screen.getByRole('button', { name: 'Menu del profilo' }))
     expect(await screen.findByRole('menuitem', { name: /esci/i })).toBeInTheDocument()
+  })
+
+  /**
+   * «Collega un agente» is not gated by role, for the same reason Token is not: the token
+   * it mints belongs to whoever creates it, not to the space.
+   */
+  it.each(['admin', 'collaboratore', 'readonly'])('offers «Collega un agente» to a %s, above the profile', (ruolo) => {
+    mockAuth.ruolo = ruolo
+    renderShell()
+    const button = screen.getByRole('button', { name: 'Collega un agente' })
+    expect(button).toBeInTheDocument()
+    // Above the profile block: the button comes before the profile trigger in the DOM.
+    const profile = screen.getByRole('button', { name: 'Menu del profilo' })
+    expect(button.compareDocumentPosition(profile) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('opens the connect dialog from the sidebar', async () => {
+    renderShell()
+    await userEvent.click(screen.getByRole('button', { name: 'Collega un agente' }))
+    expect(screen.getByRole('dialog', { name: 'Collega un agente' })).toBeInTheDocument()
+  })
+
+  it('keeps the entry in the rail as an icon with its name', async () => {
+    renderShell()
+    await userEvent.click(screen.getByRole('button', { name: 'Comprimi il menu' }))
+    expect(screen.getByRole('button', { name: 'Collega un agente' })).toBeInTheDocument()
   })
 })

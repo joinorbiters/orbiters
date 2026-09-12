@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   LogOut,
   PanelLeftIcon,
+  Plug,
   Receipt,
   Search,
   Settings,
@@ -23,6 +24,7 @@ import { BrandMark } from '@/components/BrandMark'
 import { readSidebarGroups, writeSidebarGroups } from '@/components/sidebarGroups'
 import { CommandPalette } from '@/features/search/CommandPalette'
 import { SETTINGS_TABS, type SettingsTabValue } from '@/features/settings/tabs'
+import { ConnectAgentDialog } from '@/features/tokens/ConnectAgentDialog'
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
@@ -211,6 +213,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   // Cmd/Ctrl+K listener, so it has to be alive even while the field has never been
   // clicked.
   const [searchOpen, setSearchOpen] = useState(false)
+  // The connect-agent dialog, same idea as the search palette: mounted here once so its
+  // trigger can sit in the sidebar as a plain button rather than a route.
+  const [agentOpen, setAgentOpen] = useState(false)
 
   const groups = isAdmin ? [...GROUPS, SETTINGS] : GROUPS
   const activeGroup = groups.find((group) =>
@@ -418,6 +423,21 @@ export function AppShell({ children }: { children: ReactNode }) {
                 ) : null,
               ]}
         </nav>
+
+        {/* «Collega un agente» (ORB-170): for every role, like Token, because a token
+            belongs to whoever creates it. A button and not a route: the dialog is the
+            whole surface. In the rail the label is for screen readers only. */}
+        <div className="px-3 pb-1">
+          <button
+            type="button"
+            onClick={() => setAgentOpen(true)}
+            className={cn(ITEM, QUIET, FOCUS, 'w-full', rail && 'justify-center px-0')}
+          >
+            <Plug className="size-4 shrink-0" aria-hidden="true" />
+            <span className={cn('truncate', rail && 'sr-only')}>Collega un agente</span>
+          </button>
+        </div>
+        <ConnectAgentDialog open={agentOpen} onOpenChange={setAgentOpen} />
 
         {/* The profile, anchored at the bottom, opens a menu: the account's own things --
             who is signed in, the space's settings for an admin, the way out. */}
