@@ -2457,11 +2457,45 @@ export interface paths {
         put?: never;
         /**
          * Signup
-         * @description Creates the space: a registry row, a migrated database, its first admin. 409 when
-         *     the name is taken, 422 when it is malformed or reserved or the password too short.
-         *     The `Location` header is where the person logs in next.
+         * @description Creates the space: a registry row, a migrated database, its first admin, its
+         *     defaults. 409 when the name is taken, 422 when it is malformed or reserved or a
+         *     password is given and too short.
+         *
+         *     Registering is entering (spec 2026-09-12 §6.4): the response carries the cookies the
+         *     space's own login would set, at the space's path (the browser accepts them from the
+         *     root's response: same host), and `Location` is the space's home. The first link
+         *     entry of the real owner revokes this session (`MagicLinkService.enter`), which is
+         *     what makes opening it before the address is proven safe. The welcome mail leaves
+         *     after the response when a sender and a public origin exist; without them the space
+         *     is created all the same.
          */
         post: operations["signup_api_tenants__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tenants/membro": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Member
+         * @description Whether an address belongs to an Orbiters community member, and how many spaces
+         *     it already owns here (ORB-173). No auth, like the signup itself: the person has no
+         *     account yet, so the route is throttled per client instead. The hub is asked with
+         *     `PIGROCRM_REGISTRY_TOKEN` at `PIGROCRM_HUB_URL` and given five seconds; unreachable,
+         *     unconfigured or refusing, the answer is `membro: false` and the signup goes on.
+         *     `spazi` comes from this installation's own registry and answers even when the hub
+         *     does not.
+         */
+        post: operations["member_api_tenants_membro_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5105,6 +5139,35 @@ export interface components {
             /** Password */
             password: string;
         };
+        /**
+         * MemberAnswer
+         * @description What the signup learns about an address before the person has an account: whether
+         *     the Orbiters hub knows them as a community member, their two names if so, and how
+         *     many spaces the registry already holds in that name. A count, not the slugs: the
+         *     address is not proven yet, and which spaces are whose is the mail's to tell.
+         */
+        MemberAnswer: {
+            /** Membro */
+            membro: boolean;
+            /** Nome */
+            nome: string | null;
+            /** Cognome */
+            cognome: string | null;
+            /** Spazi */
+            spazi: number;
+        };
+        /**
+         * MemberQuestion
+         * @description The address the signup asks about. In a body, never in the URL: a query string is
+         *     written by the access log and by every proxy on the way, on both hosts.
+         */
+        MemberQuestion: {
+            /**
+             * Email
+             * Format: email
+             */
+            email: string;
+        };
         /** MoveStageRequest */
         MoveStageRequest: {
             /**
@@ -6087,7 +6150,12 @@ export interface components {
              */
             email: string;
             /** Password */
-            password: string;
+            password?: string | null;
+            /**
+             * Membro
+             * @default false
+             */
+            membro: boolean;
         };
         /** TimeEntryCreate */
         TimeEntryCreate: {
@@ -6325,7 +6393,7 @@ export interface components {
              */
             email: string;
             /** Password */
-            password: string;
+            password?: string | null;
             /** Nome */
             nome: string;
             /**
@@ -26493,6 +26561,127 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TenantRead"];
+                };
+            };
+            /** @description Permesso negato: l'actor non ha il ruolo richiesto. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La risorsa richiesta non esiste o è stata rimossa. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description La richiesta è in conflitto con lo stato attuale della risorsa. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Una regola di dominio non è stata rispettata (application/problem+json), oppure il corpo, i parametri o il path della richiesta non hanno la forma attesa e non hanno mai raggiunto l'endpoint (application/json). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": {
+                        /** Type */
+                        type: string;
+                        /** Title */
+                        title: string;
+                        /** Status */
+                        status: number;
+                        /** Detail */
+                        detail: string;
+                        /** Code */
+                        code: string;
+                        /** Instance */
+                        instance: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    member_api_tenants_membro_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemberQuestion"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberAnswer"];
                 };
             };
             /** @description Permesso negato: l'actor non ha il ruolo richiesto. */

@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { api, toProblem, unwrap } from '@/lib/api'
-import { slugProblem, slugify, spaceLoginUrl } from '@/lib/tenant'
+import { slugProblem, slugify } from '@/lib/tenant'
 
 /** The public host the space will answer on, for the preview under the name field. */
 function spaceHost(): string {
@@ -21,26 +21,47 @@ type Availability =
   | { state: 'free'; slug: string }
   | { state: 'taken'; slug: string; reason: string }
 
-export function SignupPage() {
+/** What the hub and the registry said about the address typed at step 1. */
+interface Member {
+  membro: boolean
+  nome: string | null
+  cognome: string | null
+  spazi: number
+}
+
+const TERMINI = 'https://joinorbiters.com/termini'
+const PRIVACY = 'https://joinorbiters.com/privacy'
+
+/**
+ * Two steps and a landing (spec 2026-09-12 §6.4). The email first: the CRM asks the hub
+ * whether it knows the address, so a member finds the name already written, and asks
+ * its own registry whether a space exists for it, so nobody creates a second one by
+ * mistake (a link by mail is offered instead). Then the name of the space, with the
+ * address derived and editable on request. No password: the 201 opens the session and
+ * the page lands inside the space. `go` is injectable for the tests (jsdom cannot spy on
+ * `window.location.assign`).
+ */
+export function SignupPage({ go = (url) => window.location.assign(url) }: { go?: (url: string) => void }) {
   const navigate = useNavigate()
+  const [step, setStep] = useState<1 | 2>(1)
+  const [email, setEmail] = useState('')
+  const [member, setMember] = useState<Member | null>(null)
+  const [linkSent, setLinkSent] = useState(false)
   const [nome, setNome] = useState('')
   const [slug, setSlug] = useState('')
   const [slugTouched, setSlugTouched] = useState(false)
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
+  const [editingSlug, setEditingSlug] = useState(false)
   const [availability, setAvailability] = useState<Availability>({ state: 'idle' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [created, setCreated] = useState<string | null>(null)
 
   // The local grammar check needs no round-trip and no state: a malformed name never
   // leaves the browser.
   const localProblem = slug === '' ? null : slugProblem(slug)
 
   // Ask the server whether a well-formed address is free, a moment after typing stops.
-  // Every setState here happens inside the timer, never synchronously in the effect.
   useEffect(() => {
-    if (slug === '' || localProblem) return
+    if (step !== 2 || slug === '' || localProblem) return
     const asked = slug
     const handle = window.setTimeout(() => {
       setAvailability({ state: 'checking', slug: asked })
@@ -57,7 +78,7 @@ export function SignupPage() {
         .catch(() => setAvailability({ state: 'idle' }))
     }, 350)
     return () => window.clearTimeout(handle)
-  }, [slug, localProblem])
+  }, [step, slug, localProblem])
 
   // The name proposes the address until the person edits the address by hand.
   function onNomeChange(value: string) {
@@ -65,15 +86,17 @@ export function SignupPage() {
     if (!slugTouched) setSlug(slugify(value))
   }
 
-  async function onSubmit(event: FormEvent) {
+  async function onEmailNext(event: FormEvent) {
     event.preventDefault()
     setError(null)
     setBusy(true)
     try {
-      const tenant = await unwrap(
-        api.POST('/api/tenants/', { body: { slug, nome, email, password } }),
-      )
-      setCreated(tenant.slug)
+      const answer = await unwrap(api.POST('/api/tenants/membro', { body: { email } }))
+      setMember(answer)
+      if (answer.spazi > 0) return
+      const proposed = [answer.nome, answer.cognome].filter(Boolean).join(' ')
+      if (proposed) onNomeChange(proposed)
+      setStep(2)
     } catch (caught) {
       setError(toProblem(caught).detail)
     } finally {
@@ -81,38 +104,43 @@ export function SignupPage() {
     }
   }
 
-  if (created) {
-    return (
-      <div className="flex min-h-screen items-center justify-center p-4">
-        <Card className="w-full max-w-sm">
-          <CardHeader>
-            <CardTitle className="inline-flex items-center text-2xl">
-              <BrandMark className="mr-2.5 size-3.5" />
-              Il tuo spazio è pronto
-            </CardTitle>
-            <CardDescription>
-              Risponde su {spaceHost()}/{created}. Entra con l'email e la password che hai
-              scelto.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button
-              className="w-full"
-              onClick={() => window.location.assign(spaceLoginUrl(created))}
-            >
-              Vai al login del tuo spazio
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    )
+  async function onSendLink() {
+    setError(null)
+    setBusy(true)
+    try {
+      await unwrap(api.POST('/api/auth/link', { body: { email } }))
+      setLinkSent(true)
+    } catch (caught) {
+      setError(toProblem(caught).detail)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onCreate(event: FormEvent) {
+    event.preventDefault()
+    setError(null)
+    setBusy(true)
+    try {
+      const tenant = await unwrap(
+        api.POST('/api/tenants/', { body: { slug, nome, email, membro: member?.membro ?? false } }),
+      )
+      // The 201 set the space's cookies: a different basepath is a different application
+      // instance, so this is a navigation, not a router push.
+      go(`/${tenant.slug}/app/`)
+    } catch (caught) {
+      setError(toProblem(caught).detail)
+      setBusy(false)
+    }
   }
 
   // Only an answer about *this* slug counts; anything else is still pending.
   const current = availability.state !== 'idle' && availability.slug === slug ? availability : null
   const problem = localProblem ?? (current?.state === 'taken' ? current.reason : null)
   const isFree = current?.state === 'free'
-  const canSubmit = !busy && isFree && email !== '' && password !== ''
+  const canCreate = !busy && isFree && nome.trim() !== ''
+
+  const hasSpaces = step === 1 && member !== null && member.spazi > 0
 
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
@@ -120,88 +148,165 @@ export function SignupPage() {
         <CardHeader>
           <CardTitle className="inline-flex items-center text-2xl">
             <BrandMark className="mr-2.5 size-3.5" />
-            Crea il tuo spazio
+            {hasSpaces ? 'Hai già uno spazio' : 'Crea il tuo spazio'}
           </CardTitle>
           <CardDescription>
-            Un PigroCRM tutto tuo, con i tuoi dati in un database separato.
+            {hasSpaces
+              ? linkSent
+                ? 'Controlla la posta: il link per entrare vale 15 minuti.'
+                : 'Questa email ha già uno spazio PigroCRM. Ti mandiamo il link per entrare.'
+              : step === 1
+                ? '1 di 2. Un PigroCRM tutto tuo, con i tuoi dati in un database separato.'
+                : member?.membro
+                  ? `2 di 2. Sei dei nostri${member.nome ? `: ciao ${member.nome}` : ''}.`
+                  : '2 di 2. Come si chiama il tuo spazio?'}
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={onSubmit} className="space-y-4" noValidate>
-            <div className="space-y-2">
-              <Label htmlFor="nome">Il tuo nome</Label>
-              <Input
-                id="nome"
-                autoComplete="name"
-                required
-                value={nome}
-                onChange={(event) => onNomeChange(event.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="slug">Indirizzo dello spazio</Label>
-              <Input
-                id="slug"
-                autoComplete="off"
-                required
-                value={slug}
-                aria-invalid={problem ? true : undefined}
-                aria-describedby="slug-hint"
-                onChange={(event) => {
-                  setSlugTouched(true)
-                  setSlug(event.target.value.toLowerCase())
+          {hasSpaces ? (
+            <div className="space-y-3">
+              {!linkSent && (
+                <Button className="w-full" disabled={busy} onClick={() => void onSendLink()}>
+                  {busy ? 'Invio in corso…' : 'Mandami il link per entrare'}
+                </Button>
+              )}
+              {error && (
+                <p className="text-destructive text-sm" role="alert">
+                  {error}
+                </p>
+              )}
+              <Button
+                type="button"
+                variant="ghost"
+                className="w-full"
+                onClick={() => {
+                  setStep(2)
+                  setLinkSent(false)
                 }}
-              />
-              <p id="slug-hint" className="text-muted-foreground text-sm" role="status">
-                {problem ??
-                  (slug === ''
-                    ? 'Lo ricaviamo dal tuo nome, puoi cambiarlo.'
-                    : isFree
-                      ? `${spaceHost()}/${slug} è libero.`
-                      : `${spaceHost()}/${slug} …`)}
+              >
+                Vuoi crearne un altro?
+              </Button>
+            </div>
+          ) : step === 1 ? (
+            <form onSubmit={onEmailNext} className="space-y-4" noValidate>
+              <div className="space-y-2">
+                <Label htmlFor="email">Con quale email ti conosciamo?</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  autoComplete="email"
+                  required
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                />
+                <p className="text-muted-foreground text-sm">
+                  Se sei nella community Orbiters, usa la stessa. È anche il tuo modo di entrare:
+                  niente password, un link via mail.
+                </p>
+              </div>
+              {error && (
+                <p className="text-destructive text-sm" role="alert">
+                  {error}
+                </p>
+              )}
+              <Button type="submit" className="w-full" disabled={busy || email.trim() === ''}>
+                {busy ? 'Un momento…' : 'Avanti'}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                className="w-full"
+                onClick={() => void navigate({ to: '/app/login' })}
+              >
+                Ho già uno spazio: entra
+              </Button>
+            </form>
+          ) : (
+            <form onSubmit={onCreate} className="space-y-4" noValidate>
+              <div className="space-y-2">
+                <Label htmlFor="nome">Come si chiama il tuo spazio?</Label>
+                <Input
+                  id="nome"
+                  autoComplete="name"
+                  required
+                  value={nome}
+                  onChange={(event) => onNomeChange(event.target.value)}
+                />
+                {editingSlug ? (
+                  <div className="space-y-2">
+                    <Label htmlFor="slug">Indirizzo dello spazio</Label>
+                    <Input
+                      id="slug"
+                      autoComplete="off"
+                      value={slug}
+                      aria-invalid={problem ? true : undefined}
+                      aria-describedby="slug-hint"
+                      onChange={(event) => {
+                        setSlugTouched(true)
+                        setSlug(event.target.value.toLowerCase())
+                      }}
+                    />
+                  </div>
+                ) : null}
+                <p id="slug-hint" className="text-muted-foreground text-sm" role="status">
+                  {problem ??
+                    (slug === ''
+                      ? 'L’indirizzo lo ricaviamo dal nome.'
+                      : isFree
+                        ? `${spaceHost()}/${slug} è libero.`
+                        : `${spaceHost()}/${slug} …`)}
+                  {!editingSlug && slug !== '' && (
+                    <>
+                      {' '}
+                      <button
+                        type="button"
+                        className="underline underline-offset-4"
+                        onClick={() => setEditingSlug(true)}
+                      >
+                        cambia
+                      </button>
+                    </>
+                  )}
+                </p>
+              </div>
+              {member && !member.membro && (
+                <p className="text-muted-foreground text-sm">
+                  Non sei ancora nella community Orbiters? Puoi entrare comunque: nella mail ti
+                  raccontiamo cos’è.
+                </p>
+              )}
+              {error && (
+                <p className="text-destructive text-sm" role="alert">
+                  {error}
+                </p>
+              )}
+              <Button type="submit" className="w-full" disabled={!canCreate}>
+                {busy ? 'Creazione in corso…' : 'Crea lo spazio'}
+              </Button>
+              <p className="text-muted-foreground text-center text-xs">
+                Creando lo spazio accetti i{' '}
+                <a className="underline" href={TERMINI}>
+                  termini
+                </a>{' '}
+                e la{' '}
+                <a className="underline" href={PRIVACY}>
+                  privacy
+                </a>
+                .
               </p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                autoComplete="email"
-                required
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                autoComplete="new-password"
-                required
-                minLength={10}
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-              />
-              <p className="text-muted-foreground text-sm">Almeno 10 caratteri.</p>
-            </div>
-            {error && (
-              <p className="text-destructive text-sm" role="alert">
-                {error}
-              </p>
-            )}
-            <Button type="submit" className="w-full" disabled={!canSubmit}>
-              {busy ? 'Creazione in corso…' : 'Crea lo spazio'}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              className="w-full"
-              onClick={() => void navigate({ to: '/app/login' })}
-            >
-              Ho già un account
-            </Button>
-          </form>
+              <Button
+                type="button"
+                variant="ghost"
+                className="w-full"
+                onClick={() => {
+                  setStep(1)
+                  setError(null)
+                }}
+              >
+                Indietro
+              </Button>
+            </form>
+          )}
         </CardContent>
       </Card>
     </div>
