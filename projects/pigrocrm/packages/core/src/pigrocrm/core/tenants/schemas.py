@@ -61,9 +61,14 @@ class TenantSignup(BaseModel):
     slug: str = Field(min_length=SLUG_MIN, max_length=SLUG_MAX)
     nome: SafeStr = Field(min_length=1, max_length=200)
     email: EmailStr
-    # The floor is `UserService.create`'s (MIN_PASSWORD_LENGTH); the ceiling stops a
-    # megabyte of "password" from reaching argon2.
-    password: str = Field(min_length=1, max_length=1024)
+    # Optional since the wizard (spec 2026-09-12 §6.4): a space's first admin enters with
+    # a link by mail. When given, the floor is `UserService.create`'s
+    # (MIN_PASSWORD_LENGTH); the ceiling stops a megabyte of "password" from reaching
+    # argon2.
+    password: str | None = Field(default=None, min_length=1, max_length=1024)
+    # What the wizard learned from the hub about this address: decides whether the
+    # welcome mail tells the person about Orbiters. Never trusted for anything else.
+    membro: bool = False
 
     @field_validator("slug")
     @classmethod

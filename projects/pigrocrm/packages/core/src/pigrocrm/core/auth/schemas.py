@@ -31,7 +31,10 @@ NOME_MAX_LENGTH = 200
 
 class UserCreate(BaseModel):
     email: EmailStr
-    password: str
+    # `None` only for a space's first admin, created by the signup wizard (spec
+    # 2026-09-12 §6.4): the person enters with a link by mail and never had a password.
+    # `UserService.create` refuses it from anyone but the system.
+    password: str | None = None
     nome: SafeStr = Field(max_length=NOME_MAX_LENGTH)
     ruolo: Role = "collaboratore"
     tariffa_oraria_default: Decimal | None = Field(

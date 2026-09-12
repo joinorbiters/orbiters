@@ -387,3 +387,23 @@ def test_a_user_without_a_password_cannot_log_in_with_one(db_session: Session) -
     with pytest.raises(ValidationFailed) as excinfo:
         service.authenticate("link@x.it", "lunghissima1")
     assert INVALID_CREDENTIALS in str(excinfo.value)
+
+
+def test_only_the_system_may_create_a_user_without_a_password(db_session: Session) -> None:
+    """A space's first admin enters with a link by mail (spec 2026-09-12 §6.4); an admin
+    adding a colleague still hands them a password."""
+    from pigrocrm.core.auth.repository import UserRepository
+
+    service = UserService(db_session)
+    admin = service.create(
+        UserCreate(email="capo@x.it", password="lunghissima1", nome="Capo", ruolo="admin"),
+        Actor.system(),
+    )
+    human = Actor(id=admin.id, type="user", role="admin")
+    with pytest.raises(ValidationFailed):
+        service.create(UserCreate(email="link@x.it", password=None, nome="Link"), human)
+    created = service.create(
+        UserCreate(email="link@x.it", password=None, nome="Link"), Actor.system()
+    )
+    row = UserRepository(db_session).get(created.id)
+    assert row is not None and row.password_hash is None

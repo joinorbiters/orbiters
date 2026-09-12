@@ -44,7 +44,18 @@ class UserService:
 
     def create(self, data: UserCreate, actor: Actor) -> UserRead:
         actor.require_admin("create_user")
-        if len(data.password) < MIN_PASSWORD_LENGTH:
+        if data.password is None:
+            # A user with no password enters with a link by mail (spec 2026-09-12 §6.2).
+            # Only the provisioning of a space may create one: an admin adding a
+            # colleague still hands them a password, as before.
+            if actor.type != "system":
+                raise ValidationFailed(
+                    "user",
+                    "password",
+                    "obbligatoria",
+                    expected=f">= {MIN_PASSWORD_LENGTH} caratteri",
+                )
+        elif len(data.password) < MIN_PASSWORD_LENGTH:
             raise ValidationFailed(
                 "user",
                 "password",
@@ -56,7 +67,7 @@ class UserService:
 
         user = User(
             email=data.email,
-            password_hash=hash_password(data.password),
+            password_hash=hash_password(data.password) if data.password is not None else None,
             nome=data.nome,
             ruolo=data.ruolo,
             attivo=True,
