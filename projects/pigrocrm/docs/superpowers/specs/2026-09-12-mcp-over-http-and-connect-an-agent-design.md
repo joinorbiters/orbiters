@@ -288,14 +288,11 @@ notifications over HTTP; rate limiting on the endpoint (the token is 32 random b
 and the `401` is uniform); Gmail and Drive for spaces, which the spaces design already
 excludes.
 
-Two things the implementation plan verifies before anything else, because the design
-leans on them and they were read in the installed SDK (`mcp==2.0.0`) rather than
-exercised:
+Retired on 2026-09-12 before the plan was written: an in-process spike confirmed that
+under stateless Streamable HTTP a `ServerMiddleware` receives the Starlette `Request` as
+`ctx.request` and that a `ContextVar` set there reaches the tool;
+`apps/mcp/tests/test_actor_scope.py` pins it.
 
-1. That a `ServerMiddleware` receives the Starlette `Request` as `ctx.request` under
-   the stateless Streamable HTTP transport, and that a `ContextVar` set inside it is
-   visible to the tool function `call_next` reaches. If it is not, the fallback is to
-   read the actor from `ctx.request.state` inside `_guard`, which every tool already
-   passes through.
-2. That Claude Code connects to a stateless, JSON-response Streamable HTTP endpoint
-   with a custom header, end to end, against a local `docker compose up`.
+The remaining verification: that Claude Code connects to a stateless, JSON-response
+Streamable HTTP endpoint with a custom header, end to end, against a local `docker
+compose up`.
