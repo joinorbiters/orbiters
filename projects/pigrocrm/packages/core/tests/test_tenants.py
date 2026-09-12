@@ -24,6 +24,7 @@ from pigrocrm.core.tenants import (
     validate_slug,
 )
 from pigrocrm.core.tenants.database import tenant_database_name, tenant_database_url
+from pigrocrm.core.tenants.prefix import API_SEGMENTS, MCP_SEGMENTS, split_tenant_prefix
 
 
 def _settings_for(engine: Engine) -> Settings:
@@ -93,6 +94,36 @@ def test_the_signup_schema_refuses_a_reserved_name_before_anything_else() -> Non
 
 def test_the_database_name_is_an_unquoted_identifier() -> None:
     assert tenant_database_name("studio-rossi") == "pigro_t_studio_rossi"
+
+
+def test_the_prefix_splitter_recognises_the_api_segments_by_default() -> None:
+    assert split_tenant_prefix("/studio/api/customers") == ("studio", "/api/customers")
+    assert split_tenant_prefix("/studio/health") == ("studio", "/health")
+    assert split_tenant_prefix("/api/customers") == (None, "/api/customers")
+    assert split_tenant_prefix("/app/api/x") == (None, "/app/api/x")  # reserved word
+    assert split_tenant_prefix("/studio/app/login") == (None, "/studio/app/login")
+    assert split_tenant_prefix("/Studio/api/x") == (None, "/Studio/api/x")  # not a slug
+    assert API_SEGMENTS == ("api", "health")
+
+
+def test_the_prefix_splitter_serves_the_mcp_segment_when_asked() -> None:
+    assert split_tenant_prefix("/studio/mcp", segments=MCP_SEGMENTS) == ("studio", "/mcp")
+    assert split_tenant_prefix("/studio/mcp/", segments=MCP_SEGMENTS) == ("studio", "/mcp/")
+    assert split_tenant_prefix("/mcp", segments=MCP_SEGMENTS) == (None, "/mcp")
+    # The MCP splitter does not know the API's segments, and vice versa.
+    assert split_tenant_prefix("/studio/api/x", segments=MCP_SEGMENTS) == (None, "/studio/api/x")
+    assert split_tenant_prefix("/studio/mcp") == (None, "/studio/mcp")
+
+
+def test_the_root_slug_is_stripped_but_stays_the_root_for_every_segment_set() -> None:
+    assert split_tenant_prefix("/studiorossi/api/auth/me", "studiorossi") == (None, "/api/auth/me")
+    assert split_tenant_prefix("/studiorossi/mcp", "studiorossi", MCP_SEGMENTS) == (None, "/mcp")
+    assert split_tenant_prefix("/altro/mcp", "studiorossi", MCP_SEGMENTS) == ("altro", "/mcp")
+
+
+def test_mcp_is_a_reserved_name() -> None:
+    assert "mcp" in RESERVED_SLUGS
+    assert validate_slug("mcp") == "questo nome è riservato"
 
 
 # --- the provisioning --------------------------------------------------------------

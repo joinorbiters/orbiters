@@ -81,7 +81,7 @@ _ESITO_ERRORE = "errore"
 # a dict key is one more place a credential would sit.
 _token_clients: dict[str, GoogleTokenClient] = {}
 # FastAPI runs sync endpoints in a thread pool, so two requests can reach a cold cache
-# at once. Same reasoning, and the same shape, as `deps.py`'s `_engine_lock`.
+# at once. Same reasoning, and the same shape, as `deps.py`'s `_registry_lock`.
 _token_clients_lock = threading.Lock()
 
 # `test_gmail_query.py`'s second guard refuses the literal "/messages" anywhere outside

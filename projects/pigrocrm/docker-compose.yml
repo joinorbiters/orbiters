@@ -1,16 +1,57 @@
-# No `mcp` service here, on purpose: apps/mcp speaks MCP over stdio (see its own
-# __main__.py -- `build_server(...).run("stdio")`), meant to be launched as a
-# subprocess by an MCP client (Claude Desktop/Code) that owns its stdin/stdout for
-# the life of one session, not run as a long-lived network daemon. `docker compose
-# up -d` has no such client to attach; the container would just sit there with
-# nothing ever writing to its stdin. Its code already ships inside the `api` image
-# built below -- Dockerfile.api COPYs and `uv sync`s apps/mcp too -- so an operator
-# who wants Claude talking to this deployment's data runs it on demand instead,
-# with a personal access token minted from Impostazioni -> Token in the UI:
+# apps/mcp speaks two transports. Over stdio (`python -m pigrocrm_mcp`, see its
+# __main__.py) it is launched as a subprocess by an MCP client that owns its
+# stdin/stdout for one session -- there is no service for that here, and an operator
+# who wants it runs it on demand inside the api image, with a personal access token
+# from Impostazioni -> Token in the UI:
 #   docker compose run --rm -e PIGROCRM_TOKEN=<token> api uv run --no-sync python -m pigrocrm_mcp
-# (`run`, not `exec` into the already-detached `api` container, so this process
-# gets its own stdio actually connected to whatever launched this command --
-# typically an MCP client's own "command"/"args" configuration over SSH.)
+# Over Streamable HTTP (`pigrocrm_mcp.http`, ORB-170) it is the `mcp` service below:
+# the same image as `api`, the same environment and the same documents volume,
+# reached only through the `web` container's nginx at /<slug>/mcp and /mcp, with the
+# same tokens as bearers. It has no host port on purpose.
+
+x-api-environment: &api-environment
+  PIGROCRM_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-pigrocrm}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-pigrocrm}
+  PIGROCRM_JWT_SECRET: ${PIGROCRM_JWT_SECRET:?serve un secret}
+  # The installation's own choices, forwarded by name with the code's own defaults
+  # (packages/core/src/pigrocrm/core/config.py) so an `.env` that leaves them out
+  # gets exactly what a bare `Settings()` would. Booleans and the enum default to a
+  # literal, never to an empty string, which pydantic would refuse at start-up.
+  PIGROCRM_TIMEZONE: ${PIGROCRM_TIMEZONE:-Europe/Rome}
+  PIGROCRM_MCP_FULL_ACCESS: ${PIGROCRM_MCP_FULL_ACCESS:-false}
+  PIGROCRM_STORAGE_BACKEND: ${PIGROCRM_STORAGE_BACKEND:-local}
+  PIGROCRM_GDRIVE_SERVICE_ACCOUNT_JSON: ${PIGROCRM_GDRIVE_SERVICE_ACCOUNT_JSON:-}
+  PIGROCRM_GDRIVE_ROOT_FOLDER_ID: ${PIGROCRM_GDRIVE_ROOT_FOLDER_ID:-}
+  # Gmail and Drive (slice 5, 9): all four or none, as .env.example says. With
+  # `google_accounts` rows in the database and no PIGROCRM_GOOGLE_TOKEN_KEY, the API
+  # refuses to boot rather than hold tokens it cannot decrypt.
+  PIGROCRM_GOOGLE_CLIENT_ID: ${PIGROCRM_GOOGLE_CLIENT_ID:-}
+  PIGROCRM_GOOGLE_CLIENT_SECRET: ${PIGROCRM_GOOGLE_CLIENT_SECRET:-}
+  PIGROCRM_GOOGLE_TOKEN_KEY: ${PIGROCRM_GOOGLE_TOKEN_KEY:-}
+  PIGROCRM_PUBLIC_URL: ${PIGROCRM_PUBLIC_URL:-}
+  PIGROCRM_GOOGLE_APP_UNVERIFIED: ${PIGROCRM_GOOGLE_APP_UNVERIFIED:-false}
+  PIGROCRM_ROOT_SLUG: ${PIGROCRM_ROOT_SLUG:-}
+  # Lets the Orbiters hub read the list of spaces (ORB-142). Empty: no such route.
+  PIGROCRM_REGISTRY_TOKEN: ${PIGROCRM_REGISTRY_TOKEN:-}
+  # Resend sends the login link and the welcome mail (spec 2026-09-12 §6.1). Empty
+  # key: no mail, the endpoints answer 503, the password login still works.
+  PIGROCRM_RESEND_API_KEY: ${PIGROCRM_RESEND_API_KEY:-}
+  PIGROCRM_MAIL_FROM: ${PIGROCRM_MAIL_FROM:-PigroCRM <ciao@joinorbiters.com>}
+  # Where the signup asks the Orbiters hub who is a member (ORB-173).
+  PIGROCRM_HUB_URL: ${PIGROCRM_HUB_URL:-https://joinorbiters.com}
+  # PIGROCRM_COOKIE_SECURE is deliberately NOT set here -- do not add it.
+  # .env (this same file, shared with the plain `uv run uvicorn`/`uv run pytest`
+  # local-dev flow) carries PIGROCRM_COOKIE_SECURE=false for that flow's own
+  # reason (see .env.example). Compose only forwards the variables a service's
+  # `environment:` block names explicitly; it does not leak every key of `.env`
+  # into every container. Leaving this key out means the api container always
+  # gets Settings' own compiled-in default (cookie_secure=True), regardless of
+  # what the local-dev section of `.env` says -- which is exactly what a real
+  # deployment needs, and is the one thing that must NOT be copied from dev to
+  # production. If a future change ever pipes ${PIGROCRM_COOKIE_SECURE} through
+  # to this service, it re-opens that hole: `docker compose up` with an
+  # unmodified `.env.example`-derived `.env` would then silently serve cookies
+  # without `Secure`.
+
 services:
   db:
     image: postgres:17-alpine
@@ -51,52 +92,42 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    environment:
-      PIGROCRM_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-pigrocrm}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-pigrocrm}
-      PIGROCRM_JWT_SECRET: ${PIGROCRM_JWT_SECRET:?serve un secret}
-      # The installation's own choices, forwarded by name with the code's own defaults
-      # (packages/core/src/pigrocrm/core/config.py) so an `.env` that leaves them out
-      # gets exactly what a bare `Settings()` would. Booleans and the enum default to a
-      # literal, never to an empty string, which pydantic would refuse at start-up.
-      PIGROCRM_TIMEZONE: ${PIGROCRM_TIMEZONE:-Europe/Rome}
-      PIGROCRM_MCP_FULL_ACCESS: ${PIGROCRM_MCP_FULL_ACCESS:-false}
-      PIGROCRM_STORAGE_BACKEND: ${PIGROCRM_STORAGE_BACKEND:-local}
-      PIGROCRM_GDRIVE_SERVICE_ACCOUNT_JSON: ${PIGROCRM_GDRIVE_SERVICE_ACCOUNT_JSON:-}
-      PIGROCRM_GDRIVE_ROOT_FOLDER_ID: ${PIGROCRM_GDRIVE_ROOT_FOLDER_ID:-}
-      # Gmail and Drive (slice 5, 9): all four or none, as .env.example says. With
-      # `google_accounts` rows in the database and no PIGROCRM_GOOGLE_TOKEN_KEY, the API
-      # refuses to boot rather than hold tokens it cannot decrypt.
-      PIGROCRM_GOOGLE_CLIENT_ID: ${PIGROCRM_GOOGLE_CLIENT_ID:-}
-      PIGROCRM_GOOGLE_CLIENT_SECRET: ${PIGROCRM_GOOGLE_CLIENT_SECRET:-}
-      PIGROCRM_GOOGLE_TOKEN_KEY: ${PIGROCRM_GOOGLE_TOKEN_KEY:-}
-      PIGROCRM_PUBLIC_URL: ${PIGROCRM_PUBLIC_URL:-}
-      PIGROCRM_GOOGLE_APP_UNVERIFIED: ${PIGROCRM_GOOGLE_APP_UNVERIFIED:-false}
-      PIGROCRM_ROOT_SLUG: ${PIGROCRM_ROOT_SLUG:-}
-      # Lets the Orbiters hub read the list of spaces (ORB-142). Empty: no such route.
-      PIGROCRM_REGISTRY_TOKEN: ${PIGROCRM_REGISTRY_TOKEN:-}
-      # Resend sends the login link and the welcome mail (spec 2026-09-12 §6.1). Empty
-      # key: no mail, the endpoints answer 503, the password login still works.
-      PIGROCRM_RESEND_API_KEY: ${PIGROCRM_RESEND_API_KEY:-}
-      PIGROCRM_MAIL_FROM: ${PIGROCRM_MAIL_FROM:-PigroCRM <ciao@joinorbiters.com>}
-      # Where the signup asks the Orbiters hub who is a member (ORB-173).
-      PIGROCRM_HUB_URL: ${PIGROCRM_HUB_URL:-https://joinorbiters.com}
-      # PIGROCRM_COOKIE_SECURE is deliberately NOT set here -- do not add it.
-      # .env (this same file, shared with the plain `uv run uvicorn`/`uv run pytest`
-      # local-dev flow) carries PIGROCRM_COOKIE_SECURE=false for that flow's own
-      # reason (see .env.example). Compose only forwards the variables a service's
-      # `environment:` block names explicitly; it does not leak every key of `.env`
-      # into every container. Leaving this key out means the api container always
-      # gets Settings' own compiled-in default (cookie_secure=True), regardless of
-      # what the local-dev section of `.env` says -- which is exactly what a real
-      # deployment needs, and is the one thing that must NOT be copied from dev to
-      # production. If a future change ever pipes ${PIGROCRM_COOKIE_SECURE} through
-      # to this service, it re-opens that hole: `docker compose up` with an
-      # unmodified `.env.example`-derived `.env` would then silently serve cookies
-      # without `Secure`.
+    environment: *api-environment
     # Where `PIGROCRM_STORAGE_BACKEND=local` writes documents (config.py's
     # `storage_local_root`, ./var/documents under the image's WORKDIR /app). On the
     # host, like the database above, so a rebuilt container keeps every PDF -- and
     # written `../../` for the same reason as the database volume above.
+    volumes:
+      - ${PIGROCRM_DOCUMENTS_DIR:-../../var/documents}:/app/var/documents
+
+  mcp:
+    build:
+      context: ../..
+      dockerfile: projects/pigrocrm/Dockerfile.api
+    restart: unless-stopped
+    # After `api` has *started*, which is all `service_started` says: it does not wait
+    # for the migrations `api` runs at start-up to be finished. That is enough here
+    # because nothing in this process opens a database before its first request, and by
+    # then a stack that came up together has long since migrated.
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        condition: service_started
+    environment: *api-environment
+    # `uvicorn`, `starlette` and `anyio` are in this process through the `mcp` SDK's own
+    # dependencies and the shared api image, which is why apps/mcp/pyproject.toml
+    # declares none of the three.
+    command: ["uv", "run", "--no-sync", "uvicorn", "pigrocrm_mcp.http:app", "--host", "0.0.0.0", "--port", "8001"]
+    healthcheck:
+      # `GET /health` (spec §3) answers before any space is resolved, so this probe
+      # opens no database. Written with the image's own python rather than curl or
+      # wget, neither of which the api image carries.
+      test: ["CMD", "uv", "run", "--no-sync", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     volumes:
       - ${PIGROCRM_DOCUMENTS_DIR:-../../var/documents}:/app/var/documents
 

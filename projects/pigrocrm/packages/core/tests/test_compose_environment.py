@@ -26,7 +26,8 @@ from pigrocrm.core.config import Settings
 COMPOSE = Path(__file__).resolve().parents[3] / "docker-compose.yml"
 PREFIX = "PIGROCRM_"
 
-# Fields that are deliberately **not** in the api service's `environment:`, each with the
+# Fields that are deliberately **not** in the shared `x-api-environment` anchor block
+# (docker-compose.yml, consumed by both the `api` and `mcp` services), each with the
 # reason. Two kinds only: a value the compose file computes itself, and a value that must
 # not be configurable in a container.
 NOT_FORWARDED: dict[str, str] = {
@@ -68,17 +69,18 @@ NOT_FORWARDED: dict[str, str] = {
 }
 
 
-# `PIGROCRM_X: ${PIGROCRM_X:-default}`, indented under a service's `environment:`.
+# `PIGROCRM_X: ${PIGROCRM_X:-default}`, indented under the shared anchor block (2 spaces,
+# `x-api-environment:` itself sitting at column 0) rather than under a service directly.
 _LINE = re.compile(r"^\s+(PIGROCRM_[A-Z0-9_]+):\s*(\S.*?)\s*$", re.MULTILINE)
-# Two variables that have been in the api service since the first deploy and are not
-# going anywhere. They are the canary for the parser below: if a compose change makes
-# this file read nothing, these two go missing and every test here fails loudly instead
-# of passing over an empty set.
+# Two variables that have been forwarded since the first deploy and are not going
+# anywhere. They are the canary for the parser below: if a compose change makes this
+# file read nothing, these two go missing and every test here fails loudly instead of
+# passing over an empty set.
 _CANARIES = frozenset({f"{PREFIX}DATABASE_URL", f"{PREFIX}JWT_SECRET"})
 
 
-def _api_environment() -> dict[str, str]:
-    """The api service's `PIGROCRM_*` lines.
+def _shared_environment() -> dict[str, str]:
+    """The `PIGROCRM_*` lines of the shared `x-api-environment` anchor block.
 
     Read with a regex rather than a YAML parser, and the reason is worth the paragraph:
     PyYAML is not a declared dependency of this repository. It happens to be installed
@@ -86,20 +88,36 @@ def _api_environment() -> dict[str, str]:
     then a suite that checks the deployment would fail for a reason that has nothing to
     do with the deployment. What is being parsed is a flat block of `KEY: value` lines,
     which a regex reads exactly; `_CANARIES` is what keeps that claim honest.
+
+    Both `api` and `mcp` resolve their `environment:` to this one block (`environment: *
+    api-environment`), so reading the anchor once is reading what either service actually
+    gets; `test_both_python_services_share_the_one_environment_block` is what keeps that
+    claim honest too.
     """
     text = COMPOSE.read_text()
-    api = text[text.index("\n  api:") + 1 :]
-    # Up to the next service at the same indentation, so `web`'s own environment (if it
-    # ever gains one) cannot be mistaken for the API's. Searched *past* the `api:` line
-    # itself, which the same pattern would otherwise match at offset zero.
-    after_header = api.index("\n") + 1
-    end = re.search(r"^  [a-z][a-z0-9_-]*:", api[after_header:], re.MULTILINE)
-    block = api[: after_header + end.start()] if end else api
+    anchor = text[text.index("\nx-api-environment:") + 1 :]
+    # Up to the next top-level key (`services:`), so `services:` and everything under it
+    # cannot be mistaken for the anchor's own content. Searched *past* the anchor's own
+    # header line, which the same pattern would otherwise match at offset zero.
+    after_header = anchor.index("\n") + 1
+    end = re.search(r"^[a-z][a-z0-9_-]*:", anchor[after_header:], re.MULTILINE)
+    block = anchor[: after_header + end.start()] if end else anchor
     return {match.group(1): match.group(2) for match in _LINE.finditer(block)}
 
 
+def _service_block(name: str) -> str:
+    """The named service's own YAML block, sliced the same way the anchor block above
+    used to be sliced when it lived inside `api`: from `\\n  <name>:` up to the next
+    service at the same indentation."""
+    text = COMPOSE.read_text()
+    service = text[text.index(f"\n  {name}:") + 1 :]
+    after_header = service.index("\n") + 1
+    end = re.search(r"^  [a-z][a-z0-9_-]*:", service[after_header:], re.MULTILINE)
+    return service[: after_header + end.start()] if end else service
+
+
 def _forwarded() -> set[str]:
-    return set(_api_environment())
+    return set(_shared_environment())
 
 
 def test_the_environment_block_is_really_being_read() -> None:
@@ -113,8 +131,8 @@ def test_every_setting_is_forwarded_or_declared_not_to_be(field: str) -> None:
     variable = f"{PREFIX}{field.upper()}"
     assert variable in _forwarded() or field in NOT_FORWARDED, (
         f"`{field}` e' una nuova impostazione e il container non la vede: aggiungi "
-        f"`{variable}: ${{{variable}:-<default>}}` all'ambiente del servizio `api` in "
-        "docker-compose.yml, oppure una riga in NOT_FORWARDED che dice perche' no. "
+        f"`{variable}: ${{{variable}:-<default>}}` al blocco condiviso `x-api-environment` "
+        "in docker-compose.yml, oppure una riga in NOT_FORWARDED che dice perche' no. "
         "Documentarla solo in .env.example non basta: compose inoltra soltanto quello "
         "che un servizio nomina, e il sintomo di una variabile dimenticata e' una "
         "funzionalita' che non parte senza dirlo a nessuno."
@@ -147,4 +165,12 @@ def test_every_forwarded_variable_is_a_setting() -> None:
 def test_a_secret_is_required_and_never_defaulted() -> None:
     """`JWT_SECRET` uses compose's `:?` form, so a deploy without one fails to start
     instead of running on a value somebody can guess."""
-    assert "?" in str(_api_environment()[f"{PREFIX}JWT_SECRET"])
+    assert "?" in str(_shared_environment()[f"{PREFIX}JWT_SECRET"])
+
+
+def test_both_python_services_share_the_one_environment_block() -> None:
+    """One block, two consumers: `api` and `mcp` must both resolve `environment:` to
+    the same anchor, so the forwarded set checked above is checked once and holds
+    for both containers."""
+    for name in ("api", "mcp"):
+        assert "environment: *api-environment" in _service_block(name), name
