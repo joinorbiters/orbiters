@@ -382,14 +382,17 @@ export function AppShell({ children }: { children: ReactNode }) {
           aria-label="Navigazione principale"
           className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-3"
         >
+          {/* Home, then «Get started» right under it (ORB-180); the other top-level
+              entries follow the groups. */}
           {leaf(TOP_LEVEL[0])}
+          {leaf(TOP_LEVEL[1])}
 
           {rail
             ? // The rail: no headers, no indentation, every section one click away. The
               // settings tabs are the exception -- one link to the page that owns them.
               [
                 ...GROUPS.flatMap((group) => group.items.map((item) => leaf(item))),
-                ...TOP_LEVEL.slice(1).map((item) => leaf(item)),
+                ...TOP_LEVEL.slice(2).map((item) => leaf(item)),
                 // The first tab, under the group's own name: in the rail the label is the
                 // accessible name, and «Spazio» would say nothing about where it goes.
                 isAdmin
@@ -408,7 +411,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                     {group.items.map((item) => subItem(item))}
                   </NavGroup>
                 )),
-                ...TOP_LEVEL.slice(1).map((item) => leaf(item)),
+                ...TOP_LEVEL.slice(2).map((item) => leaf(item)),
                 isAdmin ? (
                   <NavGroup
                     key={SETTINGS.id}
