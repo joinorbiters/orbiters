@@ -105,7 +105,7 @@ describe('AuthProvider — session freshness', () => {
 
 describe('AuthProvider — who PostHog sees', () => {
   it('identifies the person and the space once the session is known, and not again on every poll', async () => {
-    vi.mocked(api.GET).mockReturnValue(Promise.resolve(ok(ADMIN)))
+    vi.mocked(api.GET).mockImplementation(() => Promise.resolve(ok({ ...ADMIN })))
     renderProbe()
     expect(await screen.findByText('admin')).toBeInTheDocument()
 
@@ -130,6 +130,30 @@ describe('AuthProvider — who PostHog sees', () => {
     await screen.findByText('not-admin')
     expect(identifyUser).not.toHaveBeenCalled()
     expect(identifyGroup).not.toHaveBeenCalled()
+    // A visitor's first `null` is not a reset: the login pageview has to merge into
+    // the person they become.
+    expect(resetUser).not.toHaveBeenCalled()
+  })
+
+  it('forgets the person once when the session vanishes without a logout here', async () => {
+    // Another tab logged out, or the account was deactivated: the poll answers 401 and
+    // `app.tsx` router-pushes to the login page without a reload, so the identified
+    // id would otherwise stay in memory and own the login page's pageviews.
+    vi.mocked(api.GET).mockReturnValueOnce(Promise.resolve(ok(ADMIN)))
+    renderProbe()
+    expect(await screen.findByText('admin')).toBeInTheDocument()
+
+    vi.mocked(api.GET).mockReturnValue(
+      Promise.resolve({ error: { detail: 'Autenticazione richiesta' }, response: new Response(null, { status: 401 }) } as never),
+    )
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(await screen.findByText('not-admin')).toBeInTheDocument()
+
+    expect(resetUser).toHaveBeenCalledTimes(1)
+    // No session, no poll (the interval guard), and nothing left to forget either way.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(resetUser).toHaveBeenCalledTimes(1)
+    expect(identifyUser).toHaveBeenCalledTimes(1)
   })
 
   it('forgets the person on logout, before the page leaves', async () => {

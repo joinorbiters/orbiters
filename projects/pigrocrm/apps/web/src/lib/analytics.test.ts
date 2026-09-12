@@ -8,9 +8,9 @@ vi.mock('@orbiters/analytics/browser', () => ({
   resetUser: vi.fn(),
 }))
 
-import { capture, identifyGroup, identifyUser } from '@orbiters/analytics/browser'
+import { capture, identifyGroup, identifyUser, resetUser } from '@orbiters/analytics/browser'
 import type { paths } from './api-types'
-import { analyticsMiddleware, eventFor, identifySession, installAnalyticsMiddleware } from './analytics'
+import { analyticsMiddleware, eventFor, forgetSession, identifySession } from './analytics'
 
 // Absolute, because a `Request` needs a base to resolve against and the middleware
 // reads the pathname off `request.url`, the way it does in a browser where
@@ -97,7 +97,7 @@ describe('on the real client', () => {
       }),
     )
     const client = createClient<paths>({ baseUrl: `${ORIGIN}/studio`, fetch: fetchMock })
-    installAnalyticsMiddleware(client, '/studio')
+    client.use(analyticsMiddleware('/studio'))
 
     await client.POST('/api/customers', { body: { ragione_sociale: 'Ada' } as never })
     await client.GET('/api/customers')
@@ -115,7 +115,7 @@ describe('on the real client', () => {
       }),
     )
     const client = createClient<paths>({ baseUrl: ORIGIN, fetch: fetchMock })
-    installAnalyticsMiddleware(client, '')
+    client.use(analyticsMiddleware(''))
 
     await client.POST('/api/customers', { body: { ragione_sociale: '' } as never })
 
@@ -139,5 +139,10 @@ describe('identifySession', () => {
   it('names a space by its slug, without the slash', () => {
     identifySession(ADA, '/studio')
     expect(identifyGroup).toHaveBeenCalledWith('spazio', 'studio')
+  })
+
+  it('is undone by forgetSession', () => {
+    forgetSession()
+    expect(resetUser).toHaveBeenCalledTimes(1)
   })
 })

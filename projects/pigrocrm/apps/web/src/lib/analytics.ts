@@ -8,10 +8,10 @@
  * action counts only when the API said yes: a 422 on «Nuovo cliente» is not a customer.
  *
  * Identity follows the session the same way: `AuthProvider` calls `identifySession`
- * when `me` answers a person, and `resetUser` when they leave.
+ * when `me` answers a person, and `forgetSession` when they leave or the session is gone.
  * Design: docs/design/2026-09-12-posthog-analytics-design.md, «The CRM (ORB-184)».
  */
-import { capture, identifyGroup, identifyUser } from '@orbiters/analytics/browser'
+import { capture, identifyGroup, identifyUser, resetUser } from '@orbiters/analytics/browser'
 import type { Middleware } from 'openapi-fetch'
 import type { SessionUser } from './auth'
 import { tenantPrefix } from './tenant'
@@ -52,9 +52,11 @@ export function eventFor(method: string, pathname: string, prefix: string): stri
 }
 
 /**
- * The middleware itself. `onResponse` sees the response after `sendRefreshingSession`
- * has already retried an expired session, so a call that succeeded on the second try
- * counts once, and a call that stayed 401 does not count at all.
+ * The middleware itself, registered from `main.tsx` rather than inside `lib/api.ts` so
+ * the client stays a plain typed fetch in every test that stubs it. `onResponse` sees
+ * the response after `sendRefreshingSession` has already retried an expired session,
+ * so a call that succeeded on the second try counts once, and a call that stayed 401
+ * does not count at all.
  */
 export function analyticsMiddleware(prefix: string = tenantPrefix): Middleware {
   return {
@@ -64,15 +66,6 @@ export function analyticsMiddleware(prefix: string = tenantPrefix): Middleware {
       if (event !== undefined) capture(event)
     },
   }
-}
-
-/** Registered from `main.tsx`, not inside `lib/api.ts`, so the client stays a plain
- *  typed fetch in every test that stubs it. */
-export function installAnalyticsMiddleware(
-  client: { use(...middleware: Middleware[]): void },
-  prefix: string = tenantPrefix,
-): void {
-  client.use(analyticsMiddleware(prefix))
 }
 
 /** The group key for a space: its slug, or `root` for the installation with no prefix. */
@@ -88,4 +81,9 @@ export function identifySession(
 ): void {
   identifyUser(user.id, { email: user.email, nome: user.nome, ruolo: user.ruolo })
   identifyGroup('spazio', spaceKey(prefix))
+}
+
+/** Forgets the person: on logout, and when the session vanished without one. */
+export function forgetSession(): void {
+  resetUser()
 }
