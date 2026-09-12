@@ -109,7 +109,10 @@ way.
 `tenants/service.py` finds that file from `pigrocrm.core.__file__` rather than from
 the checkout, so it works identically in the image. The API container runs
 `alembic upgrade head` at start-up; there is one instance, so there is no
-concurrent-migration risk.
+concurrent-migration risk. After the migrations the same `CMD` runs
+`pigrocrm ensure-space-defaults`, which gives every space in the registry its default
+stages, templates and cost categories where a table is empty, and never fails the boot
+(spec 2026-09-12 §6.5).
 
 **`--no-sync` on the container's `uv run` calls is load-bearing.** Without it, uv
 re-evaluates the environment against the default group selection — which includes

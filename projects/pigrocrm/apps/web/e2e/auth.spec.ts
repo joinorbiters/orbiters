@@ -14,6 +14,7 @@ test('an unauthenticated visitor is sent to the login page', async ({ page }) =>
 
 test('a wrong password is rejected without saying which field was wrong', async ({ page }) => {
   await page.goto('/app/login')
+  await page.getByRole('button', { name: /Accedi con la password/ }).click()
   await page.getByLabel('Email').fill(EMAIL)
   await page.getByLabel('Password').fill('sbagliata')
   await page.getByRole('button', { name: 'Accedi' }).click()
@@ -24,6 +25,7 @@ test('a wrong password is rejected without saying which field was wrong', async 
 
 test('a correct login reaches the dashboard and logout returns to login', async ({ page }) => {
   await page.goto('/app/login')
+  await page.getByRole('button', { name: /Accedi con la password/ }).click()
   await page.getByLabel('Email').fill(EMAIL)
   await page.getByLabel('Password').fill(PASSWORD)
   await page.getByRole('button', { name: 'Accedi' }).click()

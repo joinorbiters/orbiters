@@ -16,10 +16,11 @@ from sqlalchemy import Engine, text
 
 from pigrocrm.core.config import Settings, get_settings
 from pigrocrm.core.db.sidecar import drop_database
-from pigrocrm.core.tenants import ensure_tenants_database
+from pigrocrm.core.tenants import MemberLookup, ensure_tenants_database
 from pigrocrm.core.tenants.database import tenant_database_name, tenant_database_url
 from pigrocrm_api.deps import get_session, reset_session_factories
 from pigrocrm_api.main import create_app
+from pigrocrm_api.ratelimit import REQUESTS_PER_MINUTE, reset_rate_limit
 from pigrocrm_api.tenancy import split_tenant_prefix
 
 SLUG = "studio-prova"
@@ -28,7 +29,6 @@ SIGNUP = {
     "slug": SLUG,
     "nome": "Ada Lovelace",
     "email": "ada@studio.it",
-    "password": "lunghissima1",
 }
 
 
@@ -38,6 +38,11 @@ def container_settings(api_engine: Engine) -> Settings:
         database_url=api_engine.url.render_as_string(hide_password=False),
         jwt_secret="test-secret-for-the-api-test-suite-only",
         cookie_secure=True,
+        # Where a link by mail points (ORB-172): required, never the request's Host.
+        public_url="https://pigro.test",
+        # A loopback port nobody listens on, so no test in this file can ever ask the
+        # real hub whatever a developer's `.env` says (ORB-173).
+        hub_url="http://127.0.0.1:9",
         _env_file=None,  # type: ignore[call-arg]
     )
 
@@ -50,6 +55,8 @@ def _serving(settings: Settings) -> Iterator[TestClient]:
     created under `SLUG` is dropped on the way out, and the registry emptied."""
     reset_session_factories()
     get_settings.cache_clear()
+    # The limiter counts per process: one test's questions must not be the next one's budget.
+    reset_rate_limit()
     app = create_app()
     app.dependency_overrides[get_settings] = lambda: settings
     registry = ensure_tenants_database(settings)
@@ -112,19 +119,18 @@ def test_signing_up_creates_a_space_that_serves_its_own_data(
     created = spaces_client.post("/api/tenants/", json=SIGNUP)
     assert created.status_code == 201, created.text
     assert created.json()["slug"] == SLUG
-    assert created.headers["Location"] == f"/{SLUG}/app/login"
+    # Registering is entering (spec 2026-09-12 §6.4): the space's home, not its login.
+    assert created.headers["Location"] == f"/{SLUG}/app/"
 
     # The name is gone, and a second signup with it is a 409, not a second space.
     assert spaces_client.get(f"/api/tenants/{SLUG}/disponibile").json()["disponibile"] is False
     again = spaces_client.post("/api/tenants/", json={**SIGNUP, "email": "bob@studio.it"})
     assert again.status_code == 409, again.text
 
-    # The space's own login, with the admin the signup created, and a cookie scoped to it.
-    login = spaces_client.post(
-        f"/{SLUG}/api/auth/login", json={"email": SIGNUP["email"], "password": SIGNUP["password"]}
-    )
-    assert login.status_code == 200, login.text
-    assert f"Path=/{SLUG}/" in login.headers["set-cookie"]
+    # The signup opened the space's session (ORB-176): the access cookie is scoped to it
+    # and the space's own `me` answers the admin the signup created.
+    assert f"Path=/{SLUG}/" in created.headers["set-cookie"]
+    assert spaces_client.get(f"/{SLUG}/api/auth/me").json()["email"] == SIGNUP["email"]
 
     # The space is empty and separate: the root's session is not this one.
     customers = spaces_client.get(f"/{SLUG}/api/customers")
@@ -136,10 +142,10 @@ def test_signing_up_creates_a_space_that_serves_its_own_data(
     assert spaces_client.get(f"/{SLUG}/api/gmail/account").json()["account"] is None
     assert spaces_client.get(f"/{SLUG}/api/gmail/oauth/start").status_code == 409
 
-    # The root does not know this user: the same credentials are refused there.
+    # The root does not know this user, and the admin has no password anywhere.
     assert (
         spaces_client.post(
-            "/api/auth/login", json={"email": SIGNUP["email"], "password": SIGNUP["password"]}
+            "/api/auth/login", json={"email": SIGNUP["email"], "password": "qualunque11"}
         ).status_code
         == 401
     )
@@ -273,3 +279,209 @@ def test_the_list_of_spaces_answers_only_to_the_registry_token(
     assert [row["slug"] for row in rows] == [SLUG]
     assert rows[0]["owner_email"] == SIGNUP["email"]
     assert set(rows[0]) == {"id", "slug", "owner_email", "created_at"}
+
+
+def test_a_link_asked_at_the_root_reaches_the_space_that_address_owns(
+    spaces_client: TestClient,
+) -> None:
+    """Spec 2026-09-12 §6.2: the bare login page asks for a link, the registry says which
+    space the address owns, and the link enters that space with cookies scoped to it."""
+    from pigrocrm.core.mail import RecordingSender
+    from pigrocrm_api.routers.auth import get_sender
+
+    recording = RecordingSender()
+    spaces_client.app.dependency_overrides[get_sender] = lambda: recording  # type: ignore[attr-defined]
+    created = spaces_client.post("/api/tenants/", json=SIGNUP)
+    assert created.status_code == 201, created.text
+
+    # The signup mailed the welcome (ORB-176); the link mail is the second one.
+    recording.sent.clear()
+    response = spaces_client.post("/api/auth/link", json={"email": SIGNUP["email"]})
+    assert response.status_code == 202
+    assert len(recording.sent) == 1
+    assert f"/{SLUG}/app/entra?t=" in recording.sent[0].text
+    token = recording.sent[0].text.split("?t=", 1)[1].split()[0]
+
+    entered = spaces_client.post(f"/{SLUG}/api/auth/entra", json={"t": token})
+    assert entered.status_code == 200, entered.text
+    assert any(f"Path=/{SLUG}/" in c for c in entered.headers.get_list("set-cookie"))
+    assert spaces_client.get(f"/{SLUG}/api/auth/me").json()["email"] == SIGNUP["email"]
+    # The root itself never had this user: nothing is mailed for it, and the bare `entra`
+    # does not know the token.
+    assert spaces_client.post("/api/auth/entra", json={"t": token}).status_code == 401
+
+
+def test_a_link_asked_under_a_space_reaches_that_space_only(spaces_client: TestClient) -> None:
+    """Under `/<slug>/api`, the space's own user and the space's own entry page."""
+    from pigrocrm.core.mail import RecordingSender
+    from pigrocrm_api.routers.auth import get_sender
+
+    recording = RecordingSender()
+    spaces_client.app.dependency_overrides[get_sender] = lambda: recording  # type: ignore[attr-defined]
+    created = spaces_client.post("/api/tenants/", json=SIGNUP)
+    assert created.status_code == 201, created.text
+
+    recording.sent.clear()  # the welcome mail of the signup (ORB-176)
+    response = spaces_client.post(f"/{SLUG}/api/auth/link", json={"email": SIGNUP["email"]})
+    assert response.status_code == 202
+    assert len(recording.sent) == 1
+    assert f"https://pigro.test/{SLUG}/app/entra?t=" in recording.sent[0].text
+    # An address the space does not know: 202 and no mail, like the root.
+    assert (
+        spaces_client.post(f"/{SLUG}/api/auth/link", json={"email": "x@studio.it"}).status_code
+        == 202
+    )
+    assert len(recording.sent) == 1
+
+
+def test_the_signup_learns_whether_an_address_is_a_member_and_how_many_spaces_it_owns(
+    spaces_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ORB-173: the hub's answer and the registry's, in one body. The hub is stubbed at
+    the client the router calls; `spazi` is what only the registry knows and is read for
+    real, from the space this test provisions. A count and never the slugs: the address
+    is not proven yet."""
+    asked: list[str] = []
+
+    def fake_lookup(settings: Settings, email: str) -> MemberLookup:
+        asked.append(email)
+        return MemberLookup(membro=True, nome="Ada", cognome="Lovelace")
+
+    monkeypatch.setattr("pigrocrm_api.routers.tenants.lookup_member", fake_lookup)
+
+    before = spaces_client.post("/api/tenants/membro", json={"email": "Ada@Studio.it"})
+    assert before.status_code == 200, before.text
+    assert before.json() == {"membro": True, "nome": "Ada", "cognome": "Lovelace", "spazi": 0}
+    assert asked == ["ada@studio.it"]
+
+    created = spaces_client.post("/api/tenants/", json=SIGNUP)
+    assert created.status_code == 201, created.text
+    after = spaces_client.post("/api/tenants/membro", json={"email": SIGNUP["email"]})
+    assert after.json()["spazi"] == 1
+    assert SLUG not in after.text
+    # Somebody else's address owns nothing here, whatever the hub says about them.
+    assert (
+        spaces_client.post("/api/tenants/membro", json={"email": "bob@studio.it"}).json()["spazi"]
+        == 0
+    )
+
+
+def test_an_unreachable_hub_still_answers_and_says_not_a_member(
+    container_settings: Settings,
+) -> None:
+    """The real client against a loopback port nobody listens on, with a token set: the
+    route answers 200 and `membro: false`, and the signup goes on. The community is the
+    fast lane, never a gate."""
+    with_hub = container_settings.model_copy(update={"registry_token": REGISTRY_TOKEN})
+    with _serving(with_hub) as client:
+        answer = client.post("/api/tenants/membro", json={"email": "ada@studio.it"})
+        assert answer.status_code == 200, answer.text
+        assert answer.json() == {"membro": False, "nome": None, "cognome": None, "spazi": 0}
+
+
+def test_a_malformed_or_missing_address_is_a_422_and_the_query_string_is_not_read(
+    spaces_client: TestClient,
+) -> None:
+    for body in ({"email": "non-una-mail"}, {"email": ""}, {}, None):
+        refused = spaces_client.post("/api/tenants/membro", json=body)
+        assert refused.status_code == 422, (body, refused.text)
+    # The address in the URL is refused too: it would sit in every access log.
+    assert (
+        spaces_client.post("/api/tenants/membro", params={"email": "ada@studio.it"}).status_code
+        == 422
+    )
+
+
+def test_the_member_question_is_throttled_per_client(
+    spaces_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unauthenticated by design, so the bucket is what stops a sweep of a mailing list:
+    the request past the budget is a 429 with a `Retry-After`, and a 422 spends nothing
+    because the limiter runs inside the route, after validation."""
+    monkeypatch.setattr(
+        "pigrocrm_api.routers.tenants.lookup_member",
+        lambda settings, email: MemberLookup(membro=False),
+    )
+    question = {"email": "ada@studio.it"}
+    for _ in range(REQUESTS_PER_MINUTE):
+        assert spaces_client.post("/api/tenants/membro", json=question).status_code == 200
+    refused = spaces_client.post("/api/tenants/membro", json=question)
+    assert refused.status_code == 429, refused.text
+    assert refused.headers["Retry-After"] == "60"
+    # Another client has its own bucket.
+    other = spaces_client.post(
+        "/api/tenants/membro", json={"email": "ada@studio.it"}, headers={"X-Real-IP": "10.0.0.7"}
+    )
+    assert other.status_code == 200, other.text
+
+
+WIZARD_SIGNUP = {**SIGNUP, "membro": False}
+
+
+def test_signing_up_enters_for_a_while_and_the_welcome_link_makes_it_durable(
+    spaces_client: TestClient,
+) -> None:
+    """Spec 2026-09-12 §6.4, the whole chain: the 201 carries the access cookie only; the
+    welcome mail carries a link that enters; that click verifies the address, opens the
+    refresh cookie and is what makes the session durable. Before it, the admin can
+    neither mint a token nor add a user."""
+    from pigrocrm.core.mail import RecordingSender
+    from pigrocrm_api.sessions import get_sender
+
+    recording = RecordingSender()
+    spaces_client.app.dependency_overrides[get_sender] = lambda: recording  # type: ignore[attr-defined]
+    created = spaces_client.post("/api/tenants/", json=WIZARD_SIGNUP)
+    assert created.status_code == 201, created.text
+    assert created.headers["Location"] == f"/{SLUG}/app/"
+    cookies = created.headers.get_list("set-cookie")
+    assert any("pigrocrm_access=" in c and f"Path=/{SLUG}/" in c for c in cookies)
+    assert not any("pigrocrm_refresh=" in c for c in cookies)
+    # In, for the access token's life: `me` answers, `refresh` has nothing to refresh.
+    me = spaces_client.get(f"/{SLUG}/api/auth/me")
+    assert me.status_code == 200 and me.json()["ruolo"] == "admin"
+    assert spaces_client.post(f"/{SLUG}/api/auth/refresh").status_code == 401
+    # Nothing durable before the address is proven: no token, no second user.
+    token = spaces_client.post(f"/{SLUG}/api/tokens", json={"nome": "claude"})
+    assert token.status_code == 422, token.text
+    assert "conferma il tuo indirizzo" in token.text
+    user = spaces_client.post(
+        f"/{SLUG}/api/users",
+        json={
+            "email": "b@studio.it",
+            "password": "lunghissima1",
+            "nome": "B",
+            "ruolo": "collaboratore",
+        },
+    )
+    assert user.status_code == 422, user.text
+    # The welcome mail: to the owner, with a link that enters and the Orbiters paragraph
+    # for someone who is not a member yet.
+    assert len(recording.sent) == 1
+    mail = recording.sent[0]
+    assert mail.to == "ada@studio.it" and mail.subject == "Il tuo spazio PigroCRM è pronto"
+    assert f"https://pigro.test/{SLUG}/app/login" in mail.text and "hub/freelance" in mail.text
+    raw = mail.text.split(f"/{SLUG}/app/entra?t=", 1)[1].split()[0]
+    entered = spaces_client.post(f"/{SLUG}/api/auth/entra", json={"t": raw})
+    assert entered.status_code == 200, entered.text
+    assert any(
+        "pigrocrm_refresh=" in c and f"Path=/{SLUG}/" in c
+        for c in entered.headers.get_list("set-cookie")
+    )
+    assert spaces_client.post(f"/{SLUG}/api/auth/refresh").status_code == 200
+    assert spaces_client.post(f"/{SLUG}/api/tokens", json={"nome": "claude"}).status_code == 201
+    # No password was ever set: the password form knows nothing of this admin.
+    denied = spaces_client.post(
+        f"/{SLUG}/api/auth/login", json={"email": "ada@studio.it", "password": "qualunque11"}
+    )
+    assert denied.status_code == 401
+
+
+def test_signing_up_without_a_sender_still_creates_the_space(spaces_client: TestClient) -> None:
+    created = spaces_client.post("/api/tenants/", json={**WIZARD_SIGNUP, "membro": True})
+    assert created.status_code == 201, created.text
+    assert spaces_client.get(f"/{SLUG}/api/auth/me").status_code == 200
+
+
+def test_the_signup_refuses_a_password(spaces_client: TestClient) -> None:
+    refused = spaces_client.post("/api/tenants/", json={**SIGNUP, "password": "lunghissima1"})
+    assert refused.status_code == 422, refused.text

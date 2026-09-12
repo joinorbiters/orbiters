@@ -44,7 +44,7 @@ def provisioned(settings: Settings) -> Iterator[str]:
     registry = ensure_tenants_database(settings)
     with session_factory(registry)() as session:
         TenantService(session, settings).provision(
-            TenantSignup(slug=SLUG, nome="Ada", email="ada@studio.it", password="lunghissima1")
+            TenantSignup(slug=SLUG, nome="Ada", email="ada@studio.it")
         )
     try:
         yield SLUG

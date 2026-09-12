@@ -358,6 +358,9 @@ _CREDENZIALI: dict[Method, str] = {
     ("RefreshTokenService", "issue"): "sessione del browser, non superficie agentica",
     ("RefreshTokenService", "consume"): "sessione del browser, non superficie agentica",
     ("RefreshTokenService", "rotate"): "sessione del browser, non superficie agentica",
+    ("RefreshTokenService", "revoke_all"): "sessione del browser, non superficie agentica",
+    ("MagicLinkService", "request"): "e' il passo di login via mail, non un'operazione",
+    ("MagicLinkService", "enter"): "e' il passo di login via mail, non un'operazione",
     ("UserService", "create"): "creare utenti e' amministrazione dell'account",
     ("UserService", "update"): "cambiare ruoli e' amministrazione dell'account",
     ("UserService", "list"): "l'anagrafica utenti non serve a nessun tool",
@@ -501,6 +504,11 @@ _COPERTE_O_UMANE: dict[Method, str] = {
         "`GET /api/tenants/` with `PIGROCRM_REGISTRY_TOKEN` (ORB-142): the installation's "
         "spaces are not the titolare's CRM data, and an agent acting in one space has no "
         "business listing everybody else's"
+    ),
+    ("TenantService", "count_for_owner"): (
+        "il registro degli spazi non e' superficie di uno spazio: lo legge la registrazione "
+        "(`POST /api/tenants/membro`, ORB-173) per dire a chi torna che ha gia' aperto degli "
+        "spazi, prima che esista un actor; un agente dentro uno spazio non ha motivo di leggerlo"
     ),
     ("DocumentService", "create"): "create_document_from_template e' l'unica creazione "
     "che non richieda di caricare byte",

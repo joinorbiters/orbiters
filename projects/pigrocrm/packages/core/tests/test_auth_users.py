@@ -368,3 +368,69 @@ def test_reset_password_refuses_a_short_password_and_an_unknown_email(db_session
     )
     with pytest.raises(ValidationFailed):
         service.reset_password("corta@studio.it", "corta", Actor.system())
+
+
+def test_a_user_without_a_password_cannot_log_in_with_one(db_session: Session) -> None:
+    """A link-by-mail account (spec 2026-09-12 §6.2): same sentence as a wrong password."""
+    from pigrocrm.core.auth.repository import UserRepository
+    from pigrocrm.core.auth.service import INVALID_CREDENTIALS
+
+    service = UserService(db_session)
+    created = service.create(
+        UserCreate(email="link@x.it", password="lunghissima1", nome="Link", ruolo="admin"),
+        Actor.system(),
+    )
+    row = UserRepository(db_session).get(created.id)
+    assert row is not None
+    row.password_hash = None
+    db_session.flush()
+    with pytest.raises(ValidationFailed) as excinfo:
+        service.authenticate("link@x.it", "lunghissima1")
+    assert INVALID_CREDENTIALS in str(excinfo.value)
+
+
+def test_only_the_system_may_create_a_user_without_a_password(db_session: Session) -> None:
+    """A space's first admin enters with a link by mail (spec 2026-09-12 §6.4); an admin
+    adding a colleague still hands them a password."""
+    from pigrocrm.core.auth.repository import UserRepository
+
+    service = UserService(db_session)
+    admin = service.create(
+        UserCreate(email="capo@x.it", password="lunghissima1", nome="Capo", ruolo="admin"),
+        Actor.system(),
+    )
+    human = Actor(id=admin.id, type="user", role="admin")
+    with pytest.raises(ValidationFailed):
+        service.create(UserCreate(email="link@x.it", password=None, nome="Link"), human)
+    created = service.create(
+        UserCreate(email="link@x.it", password=None, nome="Link"), Actor.system()
+    )
+    row = UserRepository(db_session).get(created.id)
+    assert row is not None and row.password_hash is None
+
+
+def test_an_unverified_passwordless_admin_cannot_create_users_until_the_first_link(
+    db_session: Session,
+) -> None:
+    """Spec 2026-09-12 §6.4: an address somebody typed at the signup may not add a user
+    (or mint a token, `test_pat_service.py`) before a link by mail proves it."""
+    from datetime import UTC, datetime
+
+    from pigrocrm.core.auth.repository import UserRepository
+
+    service = UserService(db_session)
+    admin = service.create(
+        UserCreate(email="link@x.it", password=None, nome="Link", ruolo="admin"), Actor.system()
+    )
+    actor = Actor(id=admin.id, type="user", role="admin")
+    with pytest.raises(ValidationFailed) as excinfo:
+        service.create(UserCreate(email="c@x.it", password="lunghissima1", nome="C"), actor)
+    assert "conferma il tuo indirizzo" in str(excinfo.value)
+    row = UserRepository(db_session).get(admin.id)
+    assert row is not None
+    row.email_verificata_il = datetime.now(UTC)
+    db_session.flush()
+    assert (
+        service.create(UserCreate(email="c@x.it", password="lunghissima1", nome="C"), actor).email
+        == "c@x.it"
+    )

@@ -9,6 +9,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -386,6 +387,12 @@ def _space_token(http_settings: Settings, slug: str) -> tuple[str, UUID]:
         with session_factory(engine)() as session:
             user = UserRepository(session).get_by_email(f"ada@{slug}.it")
             assert user is not None
+            # The signup leaves the admin without a password (spec 2026-09-12 §6.4) and an
+            # account that never proved its address may not mint a token. Here the first
+            # link by mail has been used, which is the state anybody reaching «Collega un
+            # agente» is in.
+            user.email_verificata_il = datetime.now(UTC)
+            session.flush()
             actor = Actor(id=user.id, type="user", role="admin")
             _, raw = PatService(session, settings=http_settings).create("prova", actor)
             session.commit()
@@ -403,9 +410,7 @@ def spaces(http_settings: Settings) -> Iterator[dict[str, tuple[str, UUID]]]:
         with session_factory(registry)() as session:
             for slug in SPACES:
                 TenantService(session, http_settings).provision(
-                    TenantSignup(
-                        slug=slug, nome="Ada", email=f"ada@{slug}.it", password="lunghissima1"
-                    )
+                    TenantSignup(slug=slug, nome="Ada", email=f"ada@{slug}.it")
                 )
         for slug in SPACES:
             tokens[slug] = _space_token(http_settings, slug)

@@ -14,6 +14,7 @@ import {
   PanelLeftIcon,
   Plug,
   Receipt,
+  Rocket,
   Search,
   Settings,
   Users,
@@ -69,6 +70,9 @@ import { cn } from '@/lib/utils'
 // would mean a collaborator could never connect an agent to their own account.
 const TOP_LEVEL = [
   { to: '/app', label: 'Home', icon: LayoutDashboard, exact: true },
+  // Where the first login lands, and where the assistant and the first steps live
+  // (ORB-180): its own entry, right under Home, for every role.
+  { to: '/app/get-started', label: 'Get started', icon: Rocket, exact: false },
   // Under Home, at Ivan's request (2026-09-09), and top-level rather than inside a
   // group for the same reason Home is: a month of one's own days and deadlines is a
   // cross-cutting view, not a step of «Vendite» or of «Amministrazione».
@@ -383,14 +387,17 @@ export function AppShell({ children }: { children: ReactNode }) {
           aria-label="Navigazione principale"
           className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-3"
         >
+          {/* Home, then «Get started» right under it (ORB-180); the other top-level
+              entries follow the groups. */}
           {leaf(TOP_LEVEL[0])}
+          {leaf(TOP_LEVEL[1])}
 
           {rail
             ? // The rail: no headers, no indentation, every section one click away. The
               // settings tabs are the exception -- one link to the page that owns them.
               [
                 ...GROUPS.flatMap((group) => group.items.map((item) => leaf(item))),
-                ...TOP_LEVEL.slice(1).map((item) => leaf(item)),
+                ...TOP_LEVEL.slice(2).map((item) => leaf(item)),
                 // The first tab, under the group's own name: in the rail the label is the
                 // accessible name, and «Spazio» would say nothing about where it goes.
                 isAdmin
@@ -409,7 +416,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                     {group.items.map((item) => subItem(item))}
                   </NavGroup>
                 )),
-                ...TOP_LEVEL.slice(1).map((item) => leaf(item)),
+                ...TOP_LEVEL.slice(2).map((item) => leaf(item)),
                 isAdmin ? (
                   <NavGroup
                     key={SETTINGS.id}

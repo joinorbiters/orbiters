@@ -16,6 +16,8 @@ interface AuthValue {
   user: SessionUser | null
   isLoading: boolean
   login: (email: string, password: string) => Promise<void>
+  /** Spends a link-by-mail token (`/app/entra?t=...`) and publishes the session. */
+  enterWithLink: (t: string) => Promise<void>
   logout: () => Promise<void>
 }
 
@@ -51,6 +53,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     onSuccess: (user) => queryClient.setQueryData(queryKeys.me, user),
   })
 
+  const enterMutation = useMutation({
+    mutationFn: (body: { t: string }) => unwrap(api.POST('/api/auth/entra', { body })),
+    onSuccess: (user) => queryClient.setQueryData(queryKeys.me, user),
+  })
+
   const logoutMutation = useMutation({
     mutationFn: () => unwrap(api.POST('/api/auth/logout')),
   })
@@ -60,6 +67,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isLoading,
     login: async (email, password) => {
       await loginMutation.mutateAsync({ email, password })
+    },
+    enterWithLink: async (t) => {
+      await enterMutation.mutateAsync({ t })
     },
     /**
      * Ends the session and then leaves the page, whatever the server answered.
