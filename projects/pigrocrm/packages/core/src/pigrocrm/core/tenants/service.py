@@ -1,4 +1,5 @@
-"""Provisioning a space: a registry row, a database, its schema, its first admin.
+"""Provisioning a space: a registry row, a database, its schema, its first admin, its
+defaults.
 
 Everything a space needs is what a fresh installation needs, done in-process: the same
 Alembic migrations production runs at boot, the same `UserService.create` that
@@ -23,8 +24,11 @@ from pigrocrm.core.auth.service import UserService
 from pigrocrm.core.config import Settings
 from pigrocrm.core.db.session import session_factory
 from pigrocrm.core.db.sidecar import create_database_if_missing, drop_database
+from pigrocrm.core.emitter.schemas import EmitterProfileUpsert
+from pigrocrm.core.emitter.service import EmitterProfileService
 from pigrocrm.core.errors import Conflict, NotFound, ValidationFailed
 from pigrocrm.core.tenants.database import tenant_database_name, tenant_database_url
+from pigrocrm.core.tenants.defaults import ensure_defaults
 from pigrocrm.core.tenants.models import Tenant
 from pigrocrm.core.tenants.schemas import (
     TenantAvailability,
@@ -138,6 +142,18 @@ class TenantService:
                         UserCreate(
                             email=data.email, password=data.password, nome=data.nome, ruolo="admin"
                         ),
+                        Actor.system(),
+                    )
+                    # Born ready (spec 2026-09-12 §6.5): stages, templates and
+                    # categories, then an emitter that carries the name and nothing
+                    # fiscal. Inside the same try: a space that fails here is undone
+                    # like one whose migration failed.
+                    ensure_defaults(space)
+                    # `nome` is capped at 200 by `TenantSignup`, under the emitter's 255;
+                    # a name that is only spaces would make an empty header, so the
+                    # address stands in for it.
+                    EmitterProfileService(space).upsert(
+                        EmitterProfileUpsert(ragione_sociale=data.nome.strip() or data.slug),
                         Actor.system(),
                     )
             finally:
