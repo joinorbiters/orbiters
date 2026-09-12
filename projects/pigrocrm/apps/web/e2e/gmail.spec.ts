@@ -65,7 +65,8 @@ test('the banner does not appear on the login screen, and does not even ask', as
   })
 
   await page.goto('/app/login')
-  await expect(page.getByRole('button', { name: 'Accedi' })).toBeVisible()
+  // Email-first since ORB-172: the login's primary button asks for the link by mail.
+  await expect(page.getByRole('button', { name: 'Mandami il link' })).toBeVisible()
   await expect(page.getByRole('alert')).toHaveCount(0)
   expect(asked).toEqual([])
 })

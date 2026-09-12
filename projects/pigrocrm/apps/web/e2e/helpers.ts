@@ -14,6 +14,9 @@ export const ADMIN_PASSWORD = 'supersegreta1'
 
 export async function login(page: Page, email: string, password: string): Promise<void> {
   await page.goto('/app/login')
+  // Since ORB-172 the login is email-first: the password form is the second way and
+  // opens on this button. The e2e admin has a password, so this is its door.
+  await page.getByRole('button', { name: /Accedi con la password/ }).click()
   await page.getByLabel('Email').fill(email)
   await page.getByLabel('Password').fill(password)
   await page.getByRole('button', { name: 'Accedi' }).click()
