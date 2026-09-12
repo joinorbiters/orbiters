@@ -1,7 +1,7 @@
 /** The prompts a person copies into the assistant (ORB-182): one per step, honest about
- *  what the MCP can and cannot do in this space. */
+ *  what the MCP can do, which since ORB-188 includes the fiscal identity. */
 import { describe, expect, it } from 'vitest'
-import { FISCAL_PROMPT_FULL_ACCESS, INTRO_PROMPT, promptFor, STEP_PROMPTS } from './prompts'
+import { INTRO_PROMPT, STEP_PROMPTS } from './prompts'
 
 describe('the ready prompts', () => {
   it('cover every step and leave the values to fill in marked', () => {
@@ -9,33 +9,23 @@ describe('the ready prompts', () => {
       expect(STEP_PROMPTS[id]).toContain('«')
       expect(STEP_PROMPTS[id].length).toBeGreaterThan(80)
     }
-    expect(FISCAL_PROMPT_FULL_ACCESS).toContain('«')
   })
 
-  it('never promise the assistant will set the emitter, which the MCP cannot do', () => {
-    // The emitter's identity is a deliberate exclusion of the agent surface: both fiscal
-    // prompts name Impostazioni → Emittente as the person's job.
-    for (const prompt of [STEP_PROMPTS.fiscali, FISCAL_PROMPT_FULL_ACCESS]) {
-      expect(prompt).toContain('profilo fiscale')
-      expect(prompt).toContain('Impostazioni → Emittente')
-      expect(prompt).toMatch(/non la puoi fare tu/)
-    }
-  })
-
-  it('ask the assistant to write the fiscal profile only where the space grants it full access', () => {
-    // `update_fiscal_profile` exists only with `mcp_full_access`, off by default: the
-    // default prompt reads and explains, the full-access one writes the whole profile.
-    expect(promptFor('fiscali', { fullAccess: false })).toMatch(/^Leggi il mio profilo fiscale/)
-    expect(promptFor('fiscali', { fullAccess: false })).not.toMatch(/Imposta il mio profilo/)
-    expect(promptFor('fiscali', { fullAccess: false })).toContain('Impostazioni → Fiscale')
-    expect(promptFor('fiscali', { fullAccess: true })).toBe(FISCAL_PROMPT_FULL_ACCESS)
-    expect(FISCAL_PROMPT_FULL_ACCESS).toMatch(/riepilogo dell’intero profilo/)
-    expect(promptFor('cliente', { fullAccess: true })).toBe(STEP_PROMPTS.cliente)
+  it('ask the assistant to set both the emitter and the fiscal profile, in one imperative voice', () => {
+    // `update_emitter_profile` and `update_fiscal_profile` are on the default MCP surface
+    // (ORB-188): the prompt says «imposta» and names both halves, nothing is left to type.
+    expect(STEP_PROMPTS.fiscali).toMatch(/^Imposta su PigroCRM/)
+    expect(STEP_PROMPTS.fiscali).toContain('Emittente:')
+    expect(STEP_PROMPTS.fiscali).toContain('Profilo fiscale:')
+    expect(STEP_PROMPTS.fiscali).toContain('partita IVA')
+    expect(STEP_PROMPTS.fiscali).toContain('IBAN')
+    expect(STEP_PROMPTS.fiscali).not.toMatch(/a mano|non la puoi fare tu|Impostazioni/)
   })
 
   it('ask for a preview and a confirmation before anything is written or generated', () => {
     expect(INTRO_PROMPT).toMatch(/aspetta il mio ok/)
-    expect(FISCAL_PROMPT_FULL_ACCESS).toMatch(/chiedimi conferma/)
+    expect(STEP_PROMPTS.fiscali).toMatch(/chiedimi conferma/)
+    expect(STEP_PROMPTS.fiscali).toMatch(/non inventare/)
     expect(STEP_PROMPTS.documento).toMatch(/anteprima/)
     expect(STEP_PROMPTS.cliente).toMatch(/non inventare/)
   })

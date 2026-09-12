@@ -11,8 +11,10 @@ from datetime import date
 from typing import Any
 from uuid import UUID
 
+from pigrocrm.core.emitter.schemas import EmitterProfileUpsert
 from pigrocrm.core.emitter.service import EmitterProfileService
 from pigrocrm.core.errors import Conflict
+from pigrocrm.core.fiscal.schemas import FiscalProfileUpsert
 from pigrocrm.core.fiscal.service import FiscalProfileService
 from pigrocrm.core.invoices.schemas import (
     InvoiceCreate,
@@ -37,14 +39,15 @@ from pigrocrm_mcp.context import McpContext
 # one. Documentation that describes a guarantee nobody checks is worse than none: it
 # reads exactly like the guarantee.
 #
-# The `update_fiscal_profile` disagreement has since been settled in the ban's favour --
-# this table was the statement that was right, and slice 3 §11's own four names include
-# it. `FiscalProfileService.upsert` is now banned as a `(service, method)` pair, because
-# `EmitterProfileService` has an `upsert` too and banning the bare name would have
-# refused an unrelated write. Reading the profile stays exposed
-# (`describe_fiscal_profile`, below): an agent has to know the regime to compose a
-# proforma a person will be able to issue, and choosing what the regime *is* is the part
-# it must not do.
+# The `update_fiscal_profile` disagreement was first settled in the ban's favour (slice
+# 3 §11's four names include it, banned as the `(FiscalProfileService, upsert)` pair
+# because `EmitterProfileService` has an `upsert` too), then reopened by ORB-188
+# (2026-09-12): the profile is a total replacement that can be replaced again, an issued
+# invoice keeps its own copy, and in a space born empty «imposta il mio profilo fiscale»
+# is the first thing a person asks their assistant. So the write is on the default
+# surface below, next to the read, admin-only through the service; and the emitter's
+# identity, which had no tool under any switch, is written the same way. What stays
+# behind `mcp_full_access` is what cannot be undone: issuing, annulling, the register.
 
 
 def _invoices(context: McpContext) -> InvoiceService:
@@ -247,6 +250,27 @@ def describe_fiscal_profile(context: McpContext) -> dict[str, Any]:
     return FiscalProfileService(context.session).describe(context.actor)
 
 
+def update_fiscal_profile(context: McpContext, dati: dict[str, Any]) -> dict[str, Any]:
+    """The whole profile, replaced (ORB-188). `require_admin` inside the service is the
+    only gate, and it is enough: the row is rewritable, issued invoices keep their copy."""
+    return (
+        FiscalProfileService(context.session)
+        .upsert(FiscalProfileUpsert.model_validate(dati), context.actor)
+        .model_dump(mode="json")
+    )
+
+
+def update_emitter_profile(context: McpContext, dati: dict[str, Any]) -> dict[str, Any]:
+    """The one emitter row, replaced (ORB-188): ragione sociale, partita IVA or codice
+    fiscale, address, PEC, codice SDI, contacts. Admin-only through the service, which
+    also checks the partita IVA and the codice SDI by shape."""
+    return (
+        EmitterProfileService(context.session)
+        .upsert(EmitterProfileUpsert.model_validate(dati), context.actor)
+        .model_dump(mode="json")
+    )
+
+
 def describe_emitter_profile(context: McpContext) -> dict[str, Any]:
     """Who the invoices and the documents say they come from.
 
@@ -254,6 +278,6 @@ def describe_emitter_profile(context: McpContext) -> dict[str, Any]:
     left un-role-gated at the service layer, because the PDF header needs it for every
     role -- so there is no role for which this is agent-only knowledge. `logo_key` and
     `firma_key` are storage keys, not bytes, exactly like every other identifier this
-    surface returns; the write on the same row (`upsert`) has no tool at all.
+    surface returns; the write on the same row is `update_emitter_profile` (ORB-188).
     """
     return EmitterProfileService(context.session).get(context.actor).model_dump(mode="json")

@@ -58,7 +58,13 @@ AGENT_FORBIDDEN_ACTIONS: frozenset[str] = frozenset(
         "annul_invoice",
         "mark_transmitted_externally",
         "export_invoice_xml",
-        "update_fiscal_profile",
+        # `update_fiscal_profile` is *not* here since ORB-188 (2026-09-12). It was, as
+        # one of slice 3 §11's four names, because the profile decides the rate, natura
+        # and bollo of every future invoice line. But the write is a total replacement
+        # that can be replaced again, an issued invoice keeps its own copy and does not
+        # move, and in a space born empty it is the first thing a person asks their
+        # assistant to do («imposta il mio profilo fiscale»). Setup, not history. The
+        # service still asks `require_admin`, so a collaboratore's token is refused.
         # Rates, cost categories and period locks: configuration, or rewriting what a
         # quarter's work was worth (slice 4 §11).
         "recalculate_rates",

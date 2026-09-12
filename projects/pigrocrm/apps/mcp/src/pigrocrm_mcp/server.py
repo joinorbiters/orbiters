@@ -310,13 +310,13 @@ def build_server(
         # The other half of the switch. `Actor.full_access` (stamped in
         # `PatService.resolve`) decides whether the *service* says yes; this decides
         # whether there is a door at all. Both read the same setting, and
-        # `test_mcp_invoice_ban.py` fails if they disagree -- sixteen registered tools
-        # that all refuse, or sixteen capabilities with no way to reach them, are both
-        # worse than either honest state.
+        # `test_mcp_invoice_ban.py` fails if they disagree -- registered tools that all
+        # refuse, or capabilities with no way to reach them, are both worse than either
+        # honest state.
         #
         # Conditional for the same reason Gmail is: not registered means not listed and
-        # not callable. An installation that has not opted in does not get sixteen tools
-        # answering «vietato», it gets a surface on which they do not exist. The module
+        # not callable. An installation that has not opted in does not get tools answering
+        # «vietato», it gets a surface on which they do not exist. The module
         # reads the settings once more for the one tool that also needs a mailbox
         # (`discover_gmail_correspondents`), which is absent without Google exactly as
         # `tools/gmail.py` is.
