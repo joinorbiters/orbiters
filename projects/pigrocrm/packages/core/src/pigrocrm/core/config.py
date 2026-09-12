@@ -186,6 +186,13 @@ class Settings(BaseSettings):
     # How long a link by mail is good for. Fifteen, like the hub's.
     magic_link_minutes: int = Field(default=15, ge=1, le=120)
 
+    # --- Product analytics (docs/design/2026-09-12-posthog-analytics-design.md). The
+    # MCP server reports every tool call to PostHog when this holds the project key,
+    # the same public `phc_` key the browsers carry in `shared/analytics`. Empty: the
+    # installation measures nothing. Read by `pigrocrm_mcp.analytics`, never by core.
+    posthog_key: str = ""
+    posthog_host: str = "https://eu.i.posthog.com"
+
     gmail_sync_address_batch_size: int = 20
     gmail_backfill_days: int = 90
     gmail_watermark_overlap_hours: int = 24

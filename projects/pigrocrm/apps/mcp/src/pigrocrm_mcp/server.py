@@ -13,6 +13,7 @@ from pigrocrm.core.config import Settings, get_settings, gmail_configured
 from pigrocrm.core.errors import DomainError
 from pigrocrm.core.fields.schemas import EntityType
 from pigrocrm.core.storage import DocumentStorage, storage_from_settings
+from pigrocrm_mcp import analytics
 from pigrocrm_mcp.context import ActorProvider, McpContext, SessionProvider
 from pigrocrm_mcp.errors import to_agent_message, to_domain_error
 from pigrocrm_mcp.resources import entities
@@ -340,4 +341,8 @@ def build_server(
             from pigrocrm_mcp.tools import drive_privileged as drive_privileged_tools
 
             drive_privileged_tools.register(mcp, context, _guard, resolved_settings)
+    # Last, once every tool and resource is registered, so the wrapper sees them all.
+    # A no-op without `PIGROCRM_POSTHOG_KEY` (see `analytics.py`), which is what every
+    # test and every self-hosted installation without a key gets.
+    analytics.install(mcp, resolved_settings, actor_provider)
     return mcp
