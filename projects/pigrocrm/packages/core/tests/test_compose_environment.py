@@ -41,6 +41,7 @@ NOT_FORWARDED: dict[str, str] = {
     # the day one of them needs moving, this list is where the decision is recorded.
     "access_token_minutes": "durata del token: il default vale per ogni installazione",
     "refresh_token_days": "durata del refresh: come sopra",
+    "magic_link_minutes": "durata del link via mail: come sopra",
     "gmail_backfill_days": "quanto indietro guarda il primo sync: default",
     "gmail_watermark_overlap_hours": "sovrapposizione del watermark: default",
     "gmail_body_max_bytes": "quanto corpo si conserva: default",

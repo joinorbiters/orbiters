@@ -1,19 +1,26 @@
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
+from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
 
+from pigrocrm.core.auth.magic_link import MagicLinkService
 from pigrocrm.core.auth.refresh_service import RefreshTokenService
 from pigrocrm.core.auth.repository import UserRepository
 from pigrocrm.core.auth.schemas import UserRead
 from pigrocrm.core.auth.service import UserService
 from pigrocrm.core.auth.tokens import decode_token, issue_access_token
 from pigrocrm.core.config import Settings
+from pigrocrm.core.db.session import session_factory
 from pigrocrm.core.errors import DomainError, ValidationFailed
+from pigrocrm.core.mail import EmailSender, Mail, magic_link_mail, sender_from_settings
+from pigrocrm.core.tenants import TenantService, ensure_tenants_database
+from pigrocrm.core.tenants.database import tenant_database_name, tenant_database_url
 from pigrocrm.core.validation import SafeStr
 from pigrocrm_api.deps import ACCESS_COOKIE, REFRESH_COOKIE, ActorDep, SessionDep, SettingsDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
-from pigrocrm_api.tenancy import cookie_path, cookie_paths_to_clear, first_cookie
+from pigrocrm_api.tenancy import cookie_path, cookie_paths_to_clear, first_cookie, tenant_slug
 
 router = APIRouter(prefix="/api/auth", tags=["auth"], responses=PROBLEM_RESPONSES)
 
@@ -140,6 +147,149 @@ def login(
         user = UserService(session).authenticate(payload.email, payload.password)
     except ValidationFailed as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Credenziali non valide") from exc
+    _clear_other_jars(response, request, settings)
+    _set_cookie(
+        response,
+        ACCESS_COOKIE,
+        issue_access_token(user.id, user.ruolo, settings),
+        settings.access_token_minutes * 60,
+        secure=settings.cookie_secure,
+        path=cookie_path(request),
+    )
+    _set_cookie(
+        response,
+        REFRESH_COOKIE,
+        RefreshTokenService(session).issue(user.id, settings),
+        settings.refresh_token_days * 86400,
+        secure=settings.cookie_secure,
+        path=cookie_path(request),
+    )
+    return user
+
+
+# ---- a link by mail (spec 2026-09-12 §6.2) ----------------------------------------------
+
+
+def get_sender(settings: SettingsDep) -> EmailSender | None:
+    """The mail sender, or `None` without a key: the endpoints that mail answer 503.
+    Declared here rather than in `deps.py`, which ORB-170 is reshaping at the same time;
+    tests override this one dependency with a `RecordingSender`."""
+    return sender_from_settings(settings)
+
+
+SenderDep = Annotated[EmailSender | None, Depends(get_sender)]
+
+NO_SENDER = (
+    "L'accesso via email non è ancora attivo su questa installazione. Entra con la password."
+)
+INVALID_LINK = "Questo link non è valido o è scaduto. Chiedine un altro."
+
+
+class LinkRequest(BaseModel):
+    email: SafeStr
+
+
+class LinkToken(BaseModel):
+    t: SafeStr
+
+
+class Ack(BaseModel):
+    ok: bool = True
+
+
+def _send(sender: EmailSender, mail: Mail) -> None:
+    sender.send(mail)
+
+
+def _origin(request: Request, settings: Settings) -> str:
+    """Where the link points: the configured public origin, else the request's own."""
+    return settings.public_url.rstrip("/") or str(request.base_url).rstrip("/")
+
+
+def _entra_url(origin: str, prefix: str, raw: str) -> str:
+    return f"{origin}{prefix}/app/entra?t={raw}"
+
+
+def _owned_slugs(settings: Settings, email: str) -> list[str]:
+    """The spaces the registry says this address opened. Its own engine, opened and
+    disposed here rather than through `deps`' cached registry: a link request is rare,
+    ORB-170 is moving that registry, and an installation with no registry database at
+    all (a self-hosted CRM that never had a signup) is simply one with no spaces."""
+    try:
+        registry = ensure_tenants_database(settings)
+    except SQLAlchemyError:
+        return []
+    try:
+        with session_factory(registry)() as session:
+            rows = TenantService(session, settings).list()
+            return [t.slug for t in rows if t.owner_email == email]
+    finally:
+        registry.dispose()
+
+
+@router.post("/link", response_model=Ack, status_code=status.HTTP_202_ACCEPTED)
+def request_link(
+    payload: LinkRequest,
+    request: Request,
+    background: BackgroundTasks,
+    session: SessionDep,
+    settings: SettingsDep,
+    sender: SenderDep,
+) -> Ack:
+    """A link by mail (spec 2026-09-12 §6.2). Under a space's prefix, the space's own
+    user. At the root, every space the registry says this address owns gets a link in
+    one mail, and the root itself is tried when none does. 202 whether the address is
+    known or not, and the mail leaves after the response, so neither the status nor the
+    timing says which; 503 while no sender is configured."""
+    if sender is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, NO_SENDER)
+    email = payload.email.strip().lower()
+    origin = _origin(request, settings)
+    links: list[tuple[str, str]] = []
+    slug = tenant_slug(request)
+    if slug is not None:
+        raw = MagicLinkService(session, settings).request(email)
+        if raw:
+            links.append((slug, _entra_url(origin, f"/{slug}", raw)))
+    else:
+        for owned_slug in _owned_slugs(settings, email):
+            # A throwaway engine rather than `deps`' cached one: a link request is rare,
+            # and ORB-170 is moving that registry while this lands.
+            engine = create_engine(
+                tenant_database_url(settings, tenant_database_name(owned_slug)), future=True
+            )
+            try:
+                with session_factory(engine)() as space:
+                    raw = MagicLinkService(space, settings).request(email)
+            finally:
+                engine.dispose()
+            if raw:
+                links.append((owned_slug, _entra_url(origin, f"/{owned_slug}", raw)))
+        if not links:
+            raw = MagicLinkService(session, settings).request(email)
+            if raw:
+                # The root logs in on the bare page (decision 2026-09-09); its cookies
+                # live at `/`, so the entry page is the bare one too.
+                links.append((settings.root_slug or "PigroCRM", _entra_url(origin, "", raw)))
+    if links:
+        background.add_task(
+            _send, sender, magic_link_mail(email, links, settings.magic_link_minutes)
+        )
+    return Ack()
+
+
+@router.post("/entra", response_model=UserRead, responses={401: _UNAUTHENTICATED_RESPONSE})
+def enter_with_link(
+    payload: LinkToken,
+    request: Request,
+    response: Response,
+    session: SessionDep,
+    settings: SettingsDep,
+) -> UserRead:
+    """Spends the link and opens the session, with the cookies `login` sets."""
+    user = MagicLinkService(session, settings).enter(payload.t)
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, INVALID_LINK)
     _clear_other_jars(response, request, settings)
     _set_cookie(
         response,
