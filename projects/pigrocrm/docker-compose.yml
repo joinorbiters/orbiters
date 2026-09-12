@@ -80,6 +80,10 @@ services:
       PIGROCRM_MAIL_FROM: ${PIGROCRM_MAIL_FROM:-PigroCRM <ciao@joinorbiters.com>}
       # Where the signup asks the Orbiters hub who is a member (ORB-173).
       PIGROCRM_HUB_URL: ${PIGROCRM_HUB_URL:-https://joinorbiters.com}
+      # The MCP server (run on demand from this image, see the note at the top) reports
+      # its tool calls to PostHog when the key is set (ORB-186). Empty: it measures nothing.
+      PIGROCRM_POSTHOG_KEY: ${PIGROCRM_POSTHOG_KEY:-}
+      PIGROCRM_POSTHOG_HOST: ${PIGROCRM_POSTHOG_HOST:-https://eu.i.posthog.com}
       # PIGROCRM_COOKIE_SECURE is deliberately NOT set here -- do not add it.
       # .env (this same file, shared with the plain `uv run uvicorn`/`uv run pytest`
       # local-dev flow) carries PIGROCRM_COOKIE_SECURE=false for that flow's own
