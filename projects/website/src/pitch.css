@@ -145,10 +145,9 @@ h1, .h1 { font-size: 168px; font-weight: 600; line-height: 0.96; letter-spacing:
 .list .row .n { font-size: 44px; font-weight: 600; color: var(--melon); }
 .list .row .t { font-size: 60px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.05; }
 .list .row .t small { display: block; font-size: 30px; font-weight: 400; color: var(--quiet); letter-spacing: 0; margin-top: 6px; }
-.list.five { gap: 14px; }
-.list.five .row { padding-bottom: 12px; }
-.list.five .row .t { font-size: 46px; }
-.list.five .row .t small { font-size: 24px; margin-top: 2px; }
+.list.five { gap: 18px; }
+.list.five .row { padding-bottom: 16px; }
+.list.five .row .t { font-size: 54px; }
 
 /* Three columns of one word. */
 .cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 48px; }
