@@ -25,13 +25,14 @@
       document.documentElement.classList.add('js')
       setTimeout(function () { document.documentElement.classList.add('reveal-all') }, 3000)
     </script>
-    <!-- The cookie notice, and with it the ChatGPT Ads measurement pixel: consent.js
-      shows the notice and injects the SDK only once somebody has said yes, so before a
-      decision this page asks nothing of anyone. Here and on orbiters.html, the two
-      pages an ad can land on; privacy.html and termini.html have no pixel and so
-      nothing to ask about. The pixel id and the SDK URL live in that one file rather
-      than in two heads, and the Conversions API key appears in no page at all: it is in
-      the server's .env, used only by the API. -->
+    <!-- The cookie notice, and with it the two trackers, the ChatGPT Ads measurement
+      pixel and PostHog: consent.js shows the notice and injects both SDKs only once
+      somebody has said yes, so before a decision this page asks nothing of anyone. Here,
+      on pigrocrm.html and on orbiters.html, the three pages an ad can land on;
+      privacy.html and termini.html have no tracker and so nothing to ask about. The
+      pixel id, the PostHog key and the SDK URLs live in that one file rather than in
+      three heads, and the Conversions API key appears in no page at all: it is in the
+      server's .env, used only by the API. -->
     <script type="module" src="./consent.js"></script>
   </head>
   <body>

@@ -54,3 +54,6 @@ catalog:
 # like a broken lockfile.
 allowBuilds:
   esbuild: true
+  # core-js's install script only prints a funding banner; posthog-js pulls the package
+  # in, and pnpm 11 wants an explicit answer rather than a silent skip.
+  core-js: false

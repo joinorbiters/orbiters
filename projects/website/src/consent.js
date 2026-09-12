@@ -1,20 +1,27 @@
-/* The cookie notice, and the only thing that can load the measurement pixel.
+/* The cookie notice, and the only thing that can load a tracker: the measurement
+ * pixel and, since 2026-09-12, PostHog.
  *
- * The pixel is not on the page until somebody says yes. That is the whole design: the
- * SDK is *injected* here rather than sitting in the markup, so before a decision the
- * browser makes no request to OpenAI at all -- no script, no cookie, no ping, and
- * nothing to explain. A snippet in the head with `oaiq('consent', false)` after it
- * would still have fetched the script and handed a third party the visitor's address.
+ * Neither is on the page until somebody says yes. That is the whole design: both SDKs
+ * are *injected* here rather than sitting in the markup, so before a decision the
+ * browser makes no request to OpenAI or to PostHog at all -- no script, no cookie, no
+ * ping, and nothing to explain. A snippet in the head with `oaiq('consent', false)` or
+ * `posthog.opt_out_capturing()` after it would still have fetched the script and handed
+ * a third party the visitor's address.
  *
  * Consequences worth knowing:
  *   - with JavaScript off, nothing here runs, so there is no notice and no tracker,
  *     which is the correct pair;
  *   - a refusal is remembered and the notice does not come back;
- *   - `orbiters.js` calls `window.oaiq` if it is a function. The stub below is defined
- *     only once consent is granted, so a signup made under a refusal measures nothing.
+ *   - `orbiters.js` calls `window.oaiq` and `window.posthog` if they are there. Both
+ *     stubs below are defined only once consent is granted, so a signup made under a
+ *     refusal measures nothing.
  *
- * The two pages that carry this are the two an ad can land on. privacy.html and
- * termini.html have no pixel and therefore nothing to ask about.
+ * The three pages that carry this are the three an ad can land on. privacy.html and
+ * termini.html have no tracker and therefore nothing to ask about.
+ *
+ * The PostHog key and hosts are the ones in `shared/analytics/posthog.ts`, copied here
+ * as literals because this file runs without a bundler; `pixel.test.ts` compares the
+ * two, so they cannot drift quietly.
  */
 ;(function () {
   var STORAGE_KEY = 'orbiters.consent'
@@ -22,6 +29,24 @@
   var DENIED = 'denied'
   var PIXEL_ID = '9r6qrnPxBV8WDVGtpuaqxh'
   var SDK_URL = 'https://bzrcdn.openai.com/sdk/oaiq.min.js'
+  var POSTHOG_KEY = 'phc_BEfHvXF3DHU4ZGrJc9QJFPDrR2PxXuGDnZL4Kf6XabLb'
+  var POSTHOG_HOST = 'https://eu.i.posthog.com'
+  var POSTHOG_ASSET_HOST = 'https://eu-assets.i.posthog.com'
+  /* The same two rules as `shared/analytics/posthog.ts`: a developer's machine and the
+     e2e suite (Playwright against `vite preview` on localhost) send nothing at all, and
+     the preview stack's events are marked internal rather than counted as visitors.
+     The pixel has no such rule because it fires only on a signup, which the suite
+     never completes against a real API. */
+  var SILENT_HOSTS = ['', 'localhost', '127.0.0.1', '[::1]', '0.0.0.0']
+  var INTERNAL_HOSTS = /^preview\./
+
+  function measured(hostname) {
+    return SILENT_HOSTS.indexOf(hostname) === -1
+  }
+
+  function internal(hostname) {
+    return INTERNAL_HOSTS.test(hostname)
+  }
 
   /* localStorage throws rather than returning null in a browser set to block site data,
      and in Safari's private mode. A visitor whose browser refuses to remember anything
@@ -62,6 +87,49 @@
     window.oaiq('init', { pixelId: PIXEL_ID, debug: true })
   }
 
+  /* PostHog's own loader, written out: a stub that queues every call made before
+     `array.js` arrives, the script, then the init entry the SDK reads on load (`_i`, one
+     `[key, config, name]` per instance; the SDK recognises the stub by that array, and
+     `__SV` is only the official snippet's own re-entry guard, kept for fidelity).
+     Called only from `accept`, like `loadPixel`. Anonymous visitors stay anonymous
+     (`identified_only`): the CRM and the hub identify a person after the login, and
+     the cookie is on the top-level domain so that person is this same visitor. */
+  function loadPostHog() {
+    if (window.posthog) return
+    if (!measured(window.location.hostname)) return
+    var stub = []
+    stub.__SV = 1
+    stub._i = []
+    var methods =
+      'capture identify group reset register opt_in_capturing opt_out_capturing setInternalOrTestUser'
+    methods.split(' ').forEach(function (name) {
+      stub[name] = function () {
+        stub.push([name].concat(Array.prototype.slice.call(arguments)))
+      }
+    })
+    stub.init = function (key, config) {
+      stub._i.push([key, config, undefined])
+    }
+    window.posthog = stub
+    var script = document.createElement('script')
+    script.async = true
+    script.crossOrigin = 'anonymous'
+    script.src = POSTHOG_ASSET_HOST + '/static/array.js'
+    var first = document.getElementsByTagName('script')[0]
+    if (first && first.parentNode) first.parentNode.insertBefore(script, first)
+    else document.head.appendChild(script)
+    stub.init(POSTHOG_KEY, {
+      api_host: POSTHOG_HOST,
+      defaults: '2026-08-30',
+      person_profiles: 'identified_only',
+      session_recording: { maskAllInputs: true },
+    })
+    /* Queued on the stub and replayed by the SDK when it lands. A call rather than the
+       `internal_or_test_user_hostname` option, which did not take effect when tried live
+       (shared/analytics/browser.ts has the date and the version). */
+    if (internal(window.location.hostname)) stub.setInternalOrTestUser()
+  }
+
   function button(label, kind, onClick) {
     var element = document.createElement('button')
     element.type = 'button'
@@ -83,7 +151,9 @@
 
     var text = document.createElement('p')
     text.appendChild(
-      document.createTextNode('Solo un cookie di misurazione, per sapere se un annuncio funziona. '),
+      document.createTextNode(
+        'Cookie di misurazione, per sapere se un annuncio funziona e come usi il sito. ',
+      ),
     )
     var link = document.createElement('a')
     link.href = '/privacy'
@@ -133,15 +203,20 @@
     return stop
   }
 
+  function accept() {
+    loadPixel()
+    loadPostHog()
+  }
+
   function decide(decision, box) {
     remember(decision)
-    if (decision === GRANTED) loadPixel()
+    if (decision === GRANTED) accept()
     if (box && box.parentNode) box.parentNode.removeChild(box)
   }
 
   function start() {
     var decision = remembered()
-    if (decision === GRANTED) return loadPixel()
+    if (decision === GRANTED) return accept()
     /* A refusal is final until the visitor clears their own storage: no pixel, and no
        second ask. */
     if (decision === DENIED) return
@@ -157,7 +232,13 @@
     stop = room(box)
   }
 
-  window.__consent = { start: start, decide: decide, STORAGE_KEY: STORAGE_KEY }
+  window.__consent = {
+    start: start,
+    decide: decide,
+    measured: measured,
+    internal: internal,
+    STORAGE_KEY: STORAGE_KEY,
+  }
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', start)
