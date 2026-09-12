@@ -72,7 +72,7 @@ invoice at all. Preparing it is a decision; listing what could be chased is not.
 None of the refusals is a permission check inside a registered tool. A PAT inherits its
 owner's full role and never expires (residuo R10), so a check inside a registered tool
 is a check an administrator's token passes; the only mechanism that holds is that the
-tool does not exist. The durable list is in `test_mcp_invoice_ban.py`, beside the sixteen
+tool does not exist. The durable list is in `test_mcp_invoice_ban.py`, beside the forbidden
 fiscal and configuration refusals it belongs with.
 
 **Residuo R1 is not fixed here.** The MCP server still shares one `Session` across

@@ -749,7 +749,7 @@ def test_no_declared_exclusion_is_actually_reachable(service: str, method: str) 
     """An exclusion that is reachable is a false statement, and the most expensive kind:
     it reads as a considered refusal while the operation is in fact exposed. This is what
     catches somebody adding a tool for a method and forgetting the table -- including,
-    and especially, one of the fourteen forbidden ones."""
+    and especially, one of the forbidden ones."""
     assert (service, method) not in REACHABLE, (
         f"'{service}.{method}' e' dichiarato non esposto ma un tool o una resource lo "
         "chiama davvero"

@@ -526,10 +526,11 @@ def test_no_tool_reaches_a_forbidden_operation_under_another_name(method: str) -
 
 def test_the_qualified_scan_tells_two_services_with_the_same_method_apart(tmp_path: Path) -> None:
     """Guards the guard, on the one property that makes it worth having. If
-    `_receivers_of` collapsed to "some `.upsert(` exists", banning
-    `FiscalProfileService.upsert` would also ban `EmitterProfileService.upsert` -- and a
-    future tool for the issuer's own identity would fail the build with a message about
-    the fiscal regime, which is how a policy stops being believed."""
+    `_receivers_of` collapsed to "some `.upsert(` exists", a qualified ban declared on
+    one service's `upsert` would also ban every other service's -- `FiscalProfileService`
+    and `EmitterProfileService` both have one, and both are tools today -- and the build
+    would fail with a message about the wrong operation, which is how a policy stops
+    being believed."""
     (tmp_path / "m.py").write_text(
         "def a(context):\n"
         "    return EmitterProfileService(context.session).upsert(data, context.actor)\n"

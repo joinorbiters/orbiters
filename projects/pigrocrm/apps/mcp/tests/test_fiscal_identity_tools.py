@@ -109,6 +109,26 @@ async def test_an_admin_agent_sets_the_emitter_and_a_malformed_value_names_its_f
     assert EmitterProfileService(mcp_session).get(ADMIN).partita_iva == "01234567890"
 
 
+async def test_the_emitter_read_can_be_handed_back_to_the_write_unchanged(
+    mcp_session: Session, tmp_path: Path
+) -> None:
+    """The round trip the write's docstring prescribes -- «leggi prima, rimanda indietro
+    l'oggetto letto con le modifiche» -- has to validate: `EmitterProfileUpsert` forbids
+    extra keys, so the read must not carry `id` or the timestamps."""
+    server = _server(mcp_session, ADMIN, tmp_path)
+    async with Client(server) as client:
+        await client.call_tool("update_emitter_profile", {"dati": EMITTENTE})
+        read = await client.call_tool("describe_emitter_profile", {})
+        assert not {"id", "created_at", "updated_at"} & set(read.structured_content)
+        back = await client.call_tool(
+            "update_emitter_profile", {"dati": {**read.structured_content, "comune": "Roma"}}
+        )
+        assert not back.is_error, back.content[0].text
+        assert back.structured_content["comune"] == "Roma"
+        assert back.structured_content["codice_sdi"] == "ABCDEFG"
+        assert back.structured_content["nazione"] == "IT"
+
+
 async def test_a_collaboratore_agent_is_refused_both_writes_and_nothing_changes(
     mcp_session: Session, tmp_path: Path
 ) -> None:

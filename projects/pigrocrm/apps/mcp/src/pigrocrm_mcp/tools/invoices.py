@@ -279,5 +279,13 @@ def describe_emitter_profile(context: McpContext) -> dict[str, Any]:
     role -- so there is no role for which this is agent-only knowledge. `logo_key` and
     `firma_key` are storage keys, not bytes, exactly like every other identifier this
     surface returns; the write on the same row is `update_emitter_profile` (ORB-188).
+    Without `id` and the timestamps, so that what this returns can be handed back to
+    the write unchanged: `EmitterProfileUpsert` forbids extra keys, and the round trip
+    the write's docstring prescribes («leggi prima, rimanda indietro l'oggetto») has to
+    be possible. Same exclusion `as_template_values` and the fiscal `describe` apply.
     """
-    return EmitterProfileService(context.session).get(context.actor).model_dump(mode="json")
+    return (
+        EmitterProfileService(context.session)
+        .get(context.actor)
+        .model_dump(mode="json", exclude={"id", "created_at", "updated_at"})
+    )

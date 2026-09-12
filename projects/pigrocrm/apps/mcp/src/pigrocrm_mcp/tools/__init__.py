@@ -1017,13 +1017,19 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
     @mcp.tool()
     @guard
     def update_emitter_profile(dati: dict[str, Any]) -> dict[str, Any]:
-        """Scrive chi emette: `ragione_sociale`, `partita_iva` o `codice_fiscale`,
-        `indirizzo`, `cap`, `comune`, `provincia`, `nazione`, `pec`, `codice_sdi`,
-        `telefono`, `email`, `sito_web`. E' l'intestazione di ogni offerta e di ogni
-        fattura: **sostituzione totale** dell'unica riga, ogni chiave assente torna
-        vuota. Leggi prima `describe_emitter_profile`, mostra alla persona il riepilogo
-        intero e aspetta il suo ok prima di salvare. Un dato fiscale che non ti e' stato
-        dato non si inventa: lascialo vuoto e dillo. Solo un admin.
+        """Scrive chi emette: l'intestazione di ogni offerta e di ogni fattura.
+
+        **Sostituzione totale** dell'unica riga: ogni chiave assente torna vuota
+        (`nazione` torna a `IT`, `ragione_sociale` e' obbligatoria). Per questo leggi
+        prima `describe_emitter_profile` e rimanda indietro l'oggetto letto con le sole
+        modifiche, cosi' non cancelli quello che non hai nominato. Le chiavi, nella forma
+        di `EmitterProfileUpsert`: `ragione_sociale`, `partita_iva` (11 cifre) o
+        `codice_fiscale`, `indirizzo`, `cap`, `comune`, `provincia`, `nazione`, `pec`,
+        `codice_sdi` (7 caratteri), `telefono`, `email`, `sito_web`, `regime_fiscale` (il
+        testo stampato in calce), `firma_email`, `logo_key` e `firma_key` (chiavi di
+        storage, non byte). Mostra alla persona il riepilogo intero e aspetta il suo ok
+        prima di salvare. Un dato fiscale che non ti e' stato dato non si inventa:
+        lascialo vuoto e dillo. Solo un admin.
         """
         return invoices.update_emitter_profile(context, dati)
 
@@ -1404,7 +1410,7 @@ def register_entity_tools(mcp: MCPServer, context: McpContext, guard: Callable[.
     # -- Attività e calendario (slice 10) -------------------------------------
     #
     # On the default surface, all of it: nothing here consumes a number, touches the
-    # fiscal register or rewrites a rate, so none of it is one of the sixteen. The one
+    # fiscal register or rewrites a rate, so none of it is one of the forbidden. The one
     # rule worth knowing is that closing a commitment is two different operations --
     # `complete_attivita` says it was done, `cancel_attivita` says it stopped mattering
     # -- and that neither deletes the row, because six months later the question is

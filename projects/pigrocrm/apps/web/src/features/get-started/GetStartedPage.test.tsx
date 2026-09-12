@@ -28,7 +28,6 @@ vi.mock('@/lib/auth', () => ({
     enterWithLink: vi.fn(),
   }),
   useCanWrite: () => auth.user?.ruolo !== 'readonly',
-  useIsAdmin: () => auth.user?.ruolo === 'admin',
 }))
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
@@ -93,6 +92,8 @@ afterEach(() => {
 describe('Get started', () => {
   it('shows the assistant card and the four steps to do on an empty space, and remembers the visit', async () => {
     renderPage()
+    // The prompts are fixed text (ORB-188): the page reads no space settings to pick them.
+    expect(api.GET).not.toHaveBeenCalledWith('/api/settings/space')
     expect(screen.getByRole('heading', { name: 'Get started' })).toBeInTheDocument()
     expect(await screen.findByText('Il CRM che lavora al posto tuo')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Collega l.assistente/ })).toHaveAttribute('href', '/app/token')
@@ -186,11 +187,10 @@ describe('Get started', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Prompt copiato'))
   })
 
-  it('gives a collaboratore no fiscal prompt, since the fiscal step is the admin’s, and reads no settings for it', async () => {
+  it('gives a collaboratore no fiscal prompt, since the fiscal step is the admin’s', async () => {
     if (auth.user) auth.user.ruolo = 'collaboratore'
     renderPage()
     await screen.findByText(/0 di 4/)
-    expect(api.GET).not.toHaveBeenCalledWith('/api/settings/space')
     expect(screen.queryByText(/Prompt per l’assistente: I tuoi dati fiscali/)).toBeNull()
     expect(screen.getByText('Prompt per l’assistente: Il primo cliente')).toBeInTheDocument()
   })
