@@ -115,9 +115,11 @@ describe('AppShell', () => {
   it('shows the top-level entries and the group headers in Italian', () => {
     renderShell()
     const nav = sidebar()
-    for (const label of ['Home', 'Token']) {
+    for (const label of ['Home', 'Get started', 'Token']) {
       expect(nav.getByRole('link', { name: label })).toBeInTheDocument()
     }
+    // «Get started» right under Home (ORB-180), before the groups.
+    expect(nav.getAllByRole('link').slice(0, 2).map((l) => l.textContent)).toEqual(['Home', 'Get started'])
     for (const label of ['Vendite', 'Amministrazione', 'Impostazioni']) {
       expect(nav.getByRole('button', { name: label })).toBeInTheDocument()
     }
@@ -297,9 +299,10 @@ describe('AppShell', () => {
     const nav = sidebar()
     expect(nav.queryByRole('button', { name: 'Vendite' })).not.toBeInTheDocument()
     // The sub-items of the collapsible groups become icon links in the rail...
-    for (const label of ['Home', 'Clienti', 'Deal', 'Fatture', 'Ore', 'Token']) {
+    for (const label of ['Home', 'Get started', 'Clienti', 'Deal', 'Fatture', 'Ore', 'Token']) {
       expect(nav.getByRole('link', { name: label })).toBeInTheDocument()
     }
+    expect(nav.getAllByRole('link', { name: 'Get started' })).toHaveLength(1)
     // ...except the settings tabs, which are tabs of one page and collapse to one link.
     expect(nav.getByRole('link', { name: 'Impostazioni' })).toBeInTheDocument()
     expect(nav.queryByRole('link', { name: 'Campi' })).not.toBeInTheDocument()

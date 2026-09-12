@@ -238,31 +238,34 @@ frasi (dati fiscali, primo cliente, prima offerta), e per chi non è membro un p
 su Orbiters con il link al wizard. Voce di `docs/design/positioning.md`, cornice di §6.1.
 `RecordingSender` nei test afferma destinatario, link e che nulla di sensibile ci finisce.
 
-### 6.7 La Home di uno spazio nuovo (web)
+### 6.7 «Get started»: l'assistente e i primi passi (web)
 
-Sopra le tab, due cose, entrambe derivate dai dati e mai salvate.
+Rivisto con Ivan il 2026-09-12 (ORB-180, sulla PR di ORB-174): non sulla Home, ma in una
+pagina propria, `/app/get-started`, con una voce di menu «Get started» subito sotto Home, per
+ogni ruolo. Dopo il primo login la Home ci manda una volta sola (un `replace`, così indietro
+non rimbalza) e lo ricorda nel browser, per spazio e per utente; le volte successive la Home
+resta la Home. Uno spazio che non ha più nulla da fare (tutti i passi fatti e l'assistente
+collegato) non ci viene mandato affatto: la radice e gli spazi in uso restano sulla Home.
 
 **La card dell'assistente.** Larga, prima di tutto: «Il CRM che lavora al posto tuo. Collega
 Claude al tuo spazio e chiedigli di registrare le ore, preparare un'offerta, riassumere la
-settimana». Il bottone «Collega l'assistente» porta alla pagina del collegamento che Ivan
-sta facendo in ORB-170: la voce «Collega un agente» della sidebar apre una finestra con
-l'indirizzo dell'MCP e il token; il bottone della Home apre la stessa finestra, quindi la card
-si fa dopo quella PR. La card resta finché lo spazio non ha almeno un token personale
-(`/api/tokens`), poi sparisce: il collegamento è la cosa che vuole ottenere.
+settimana». Il bottone «Collega l'assistente» porta oggi a `/app/token` dietro una costante;
+aprirà la finestra «Collega un agente» di ORB-170 quando arriva. La card resta finché
+l'utente non ha almeno un token personale, poi sparisce.
 
-**«Primi passi».** Quattro voci, nell'ordine in cui il prodotto le richiede, ciascuna
-un link alla pagina giusta e ciascuna «fatta» quando la cosa esiste:
+**«Primi passi».** Quattro voci, nell'ordine in cui il prodotto le richiede, ciascuna un
+link alla pagina giusta e ciascuna «fatta» quando la cosa esiste:
 
 1. **I tuoi dati fiscali** → Impostazioni → Emittente. Fatto con partita IVA o codice
-   fiscale salvati.
-2. **Il primo cliente** → Clienti, con la creazione aperta.
+   fiscale salvati. Per chi non è admin è testo, non link.
+2. **Il primo cliente** → Clienti.
 3. **Il primo deal, o le prime ore** → Deal o Ore.
 4. **La prima offerta** → il deal, «Crea documento».
 
-Lo stato viene dai conteggi che le query esistenti già fanno; niente tabella, niente
-migrazione. Il pannello sparisce da solo a quattro su quattro; «Nascondi» lo chiude prima e
-quella preferenza sta nel browser. Sulla radice non compare, perché la condizione non si
-dà.
+Lo stato viene da sei letture di una riga, mai salvato; a quattro su quattro la lista resta
+con le sue spunte («Fatti tutti»). Una lettura fallita conta come fatta: un pannello che
+insiste perché una richiesta si è rotta sarebbe la cosa falsa della pagina. Chi è in sola
+lettura vede i passi come testo. Nessun «Nascondi»: la pagina è dove si va apposta.
 
 ### 6.8 Il sito non cambia
 

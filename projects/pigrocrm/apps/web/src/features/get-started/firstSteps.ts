@@ -1,12 +1,12 @@
 /**
  * What a new space still has to do, read from the data and never stored (spec
- * 2026-09-12 §6.7): a step is done because the thing exists. Six one-row reads, so the
- * Home of an empty space can say what comes first without a table of its own. The root
- * and any space that has been used see nothing: every step is done.
+ * 2026-09-12 §6.7): a step is done because the thing exists. Six one-row reads behind
+ * the «Get started» page (ORB-180), which is where the Home sends a person the first
+ * time and where the sidebar takes them afterwards.
  *
  * The keys sit under the prefixes the rest of the app invalidates (`['customers', …]`,
  * `['emitter', …]`, `['tokens', userId, …]`), so creating the first customer, saving
- * the emitter or minting a token refreshes the panel on the next Home without waiting
+ * the emitter or minting a token refreshes the page on its next visit without waiting
  * out `staleTime`.
  */
 import { useQuery } from '@tanstack/react-query'
@@ -37,26 +37,29 @@ export interface FirstStepsState {
   assistantConnected: boolean
 }
 
-/** The one preference this panel keeps, in the browser, per space and per user: two
- *  spaces share the origin (`/<slug>/app`), and «Nascondi» in one must not hide the
- *  other's list. */
-export function hideKey(userId: string): string {
-  return `pigrocrm.primi-passi.nascosto:${tenantPrefix || '/'}:${userId}`
+/** Whether this browser has already been taken to «Get started» for this space and
+ *  user: the Home does it once after the first login (ORB-180), and remembers here, per
+ *  space (two spaces share the origin) and per user. */
+export function seenKey(userId: string): string {
+  return `pigrocrm.get-started.visto:${tenantPrefix || '/'}:${userId}`
 }
 
-export function isHidden(userId: string): boolean {
+export function hasSeenGetStarted(userId: string): boolean {
   try {
-    return window.localStorage.getItem(hideKey(userId)) === '1'
+    return window.localStorage.getItem(seenKey(userId)) === '1'
   } catch {
-    return false
+    // A browser that refuses storage (a private window, blocked site data) is never
+    // redirected: the sidebar entry is one click away, and a loop would be worse.
+    return true
   }
 }
 
-export function hide(userId: string): void {
+export function markGetStartedSeen(userId: string): void {
   try {
-    window.localStorage.setItem(hideKey(userId), '1')
+    window.localStorage.setItem(seenKey(userId), '1')
   } catch {
-    // A browser that refuses storage shows the panel again next time. Fine.
+    // Storage refused: `hasSeenGetStarted` answers `true` in the same browser, so
+    // nothing is lost and nothing loops.
   }
 }
 
@@ -114,17 +117,17 @@ async function hasToken(): Promise<boolean> {
 
 const OPTIONS = { retry: false, staleTime: 30_000 } as const
 
-export function useFirstSteps({ hidden }: { hidden: boolean }): FirstStepsState {
+/** `enabled: false` issues no request and reports `loading: false`: for the Home's
+ *  redirect once it has nothing left to decide. */
+export function useFirstSteps({ enabled = true }: { enabled?: boolean } = {}): FirstStepsState {
   const { user } = useAuth()
   const userId = user?.id ?? ''
   const isAdmin = user?.ruolo === 'admin'
-  // Only the token is read while the list is hidden: the card stays until the assistant
-  // is connected, the five other reads are not worth a request nobody will see.
-  const steps = { ...OPTIONS, enabled: !hidden }
+  const steps = { ...OPTIONS, enabled }
   const token = useQuery({
     queryKey: [...queryKeys.tokens(userId), 'first-steps'],
     queryFn: hasToken,
-    ...OPTIONS,
+    ...steps,
   })
   const fiscali = useQuery({ queryKey: [...queryKeys.emitter, 'first-steps'], queryFn: fiscalDataSaved, ...steps })
   const cliente = useQuery({ queryKey: queryKeys.customers(SCOPE), queryFn: hasCustomers, ...steps })
@@ -132,8 +135,8 @@ export function useFirstSteps({ hidden }: { hidden: boolean }): FirstStepsState 
   const ore = useQuery({ queryKey: queryKeys.timeEntries(SCOPE), queryFn: hasTimeEntries, ...steps })
   const documento = useQuery({ queryKey: queryKeys.documents(SCOPE), queryFn: hasDocuments, ...steps })
 
-  const active = hidden ? [token] : [token, fiscali, cliente, deal, ore, documento]
-  const loading = active.some((q) => q.isPending)
+  const active = [token, fiscali, cliente, deal, ore, documento]
+  const loading = enabled && active.some((q) => q.isPending)
   const value = (q: { data?: boolean; isError: boolean }) => (q.isError ? true : (q.data ?? false))
 
   const list: FirstStep[] = [
