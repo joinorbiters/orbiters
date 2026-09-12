@@ -7,9 +7,9 @@
  * handed back as a new search object for the route to push into the URL.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DashboardPage } from './DashboardPage'
 import type { DashboardSearch } from './search'
 import { api } from '@/lib/api'
@@ -22,6 +22,15 @@ vi.mock('@/lib/api', async (importOriginal) => {
 // The tabs link out (the fiscal card points at Impostazioni → Fiscale when a parameter is
 // missing), and a `<Link>` outside a router throws. What those destinations are is asserted
 // in each tab's own file; here the only question is which tab got mounted.
+// The first-steps panels read who is looking (`useAuth`) and whether they can act
+// (`useCanWrite`): an admin by default, a readonly or a collaboratore where a test says so.
+const auth = { user: { id: 'u1', email: 'ada@studio.it', nome: 'Ada', ruolo: 'admin' as string, attivo: true } }
+vi.mock('@/lib/auth', () => ({
+  useAuth: () => ({ user: auth.user, isLoading: false, login: vi.fn(), logout: vi.fn(), enterWithLink: vi.fn() }),
+  useCanWrite: () => auth.user.ruolo !== 'readonly',
+  useIsAdmin: () => auth.user.ruolo === 'admin',
+}))
+
 vi.mock('@tanstack/react-router', () => ({
   Link: ({ to, children }: { to: string; children: React.ReactNode }) => <a href={to}>{children}</a>,
 }))
@@ -77,11 +86,22 @@ const EMPTY_ESTIMATE = {
 /** One mock for every endpoint the tabs read: which tab is mounted decides which are
  *  called. The economic one reads two -- the overview behind its cards and the estimate
  *  behind the «Stima fiscale» card under them. */
+const EMPTY_PAGE = { items: [], next_cursor: null }
+
+/** A space that has done nothing yet: every list empty, no emitter, no token. The
+ *  first-steps panels (spec 2026-09-12 §6.7) read these six. */
 const BY_PATH: Record<string, unknown> = {
   '/api/dashboard/commerciale': EMPTY_DASHBOARD,
   '/api/analytics/panoramica': EMPTY_OVERVIEW,
   '/api/analytics/fiscale': EMPTY_ESTIMATE,
+  '/api/customers': EMPTY_PAGE,
+  '/api/deals': EMPTY_PAGE,
+  '/api/time-entries': EMPTY_PAGE,
+  '/api/documents': EMPTY_PAGE,
+  '/api/tokens': [],
 }
+// `/api/emitter` answers 404 until the profile is saved once.
+const NOT_FOUND = new Set(['/api/emitter'])
 
 const SEARCH: DashboardSearch = {
   tab: 'commerciale',
@@ -101,14 +121,20 @@ function renderPage(search = SEARCH) {
   return { onSearchChange }
 }
 
+afterEach(() => {
+  window.localStorage.clear()
+  auth.user.ruolo = 'admin'
+})
+
 beforeEach(() => {
   vi.mocked(api.GET).mockReset()
   vi.mocked(api.GET).mockImplementation(
     ((path: string) =>
-      Promise.resolve({
-        data: BY_PATH[path],
-        response: new Response(null, { status: 200 }),
-      })) as never,
+      Promise.resolve(
+        NOT_FOUND.has(path)
+          ? { error: { detail: 'Not Found' }, response: new Response(null, { status: 404 }) }
+          : { data: BY_PATH[path], response: new Response(null, { status: 200 }) },
+      )) as never,
   )
 })
 
@@ -227,5 +253,111 @@ describe('DashboardPage, two tabs', () => {
   it('shows the period picker on both tabs', () => {
     renderPage({ ...SEARCH, tab: 'economica' })
     expect(screen.getByLabelText('Dal')).toBeInTheDocument()
+  })
+
+  describe('a new space (spec 2026-09-12 §6.7)', () => {
+    /** The stubs of a space in use: the same paths, with something in them, or an HTTP
+     *  error where a test wants one. */
+    function withData(overrides: Record<string, unknown>, failing: Record<string, number> = {}) {
+      vi.mocked(api.GET).mockImplementation(
+        ((path: string) =>
+          Promise.resolve(
+            path in failing
+              ? { error: { detail: 'boom' }, response: new Response(null, { status: failing[path] }) }
+              : path in overrides
+                ? { data: overrides[path], response: new Response(null, { status: 200 }) }
+                : NOT_FOUND.has(path)
+                  ? { error: { detail: 'Not Found' }, response: new Response(null, { status: 404 }) }
+                  : { data: BY_PATH[path], response: new Response(null, { status: 200 }) },
+          )) as never,
+      )
+    }
+
+    it('shows the assistant card and the four steps to do on an empty space', async () => {
+      renderPage()
+      expect(await screen.findByText('Il CRM che lavora al posto tuo')).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: /Collega l.assistente/ })).toHaveAttribute(
+        'href',
+        '/app/token',
+      )
+      expect(screen.getByText('Primi passi')).toBeInTheDocument()
+      expect(screen.getByText(/0 di 4/)).toBeInTheDocument()
+      expect(screen.getAllByText('Da fare:')).toHaveLength(4)
+      expect(screen.getByRole('link', { name: 'I tuoi dati fiscali' })).toHaveAttribute(
+        'href',
+        '/app/impostazioni/emittente',
+      )
+    })
+
+    it('counts a step done when the thing exists, and only then', async () => {
+      withData({
+        '/api/emitter': { ragione_sociale: 'Ada', partita_iva: '01234567890', codice_fiscale: null },
+        '/api/customers': { items: [{ id: 'c1' }], next_cursor: null },
+      })
+      renderPage()
+      expect(await screen.findByText(/2 di 4/)).toBeInTheDocument()
+      expect(screen.getAllByText('Fatto:')).toHaveLength(2)
+      // A done step is no longer a link: there is nothing left to do there.
+      expect(screen.queryByRole('link', { name: 'Il primo cliente' })).toBeNull()
+      expect(screen.getByRole('link', { name: 'Il primo deal, o le prime ore' })).toBeInTheDocument()
+    })
+
+    it('counts a step it could not read as done rather than nag about a broken request', async () => {
+      withData({}, { '/api/customers': 500 })
+      renderPage()
+      expect(await screen.findByText(/1 di 4/)).toBeInTheDocument()
+      expect(screen.queryByRole('link', { name: 'Il primo cliente' })).toBeNull()
+    })
+
+    it('shows neither panel once everything is done and the assistant is connected', async () => {
+      withData({
+        '/api/emitter': { ragione_sociale: 'Ada', partita_iva: null, codice_fiscale: 'RSSMRA80A01H501U' },
+        '/api/customers': { items: [{ id: 'c1' }], next_cursor: null },
+        '/api/time-entries': { items: [{ id: 't1' }], next_cursor: null },
+        '/api/documents': { items: [{ id: 'd1' }], next_cursor: null },
+        '/api/tokens': [{ id: 'k1' }],
+      })
+      renderPage()
+      expect(await screen.findByRole('tab', { name: 'Commerciale' })).toBeInTheDocument()
+      await waitFor(() => expect(api.GET).toHaveBeenCalledWith('/api/tokens'))
+      await waitFor(() => expect(api.GET).toHaveBeenCalledWith('/api/documents', expect.anything()))
+      expect(screen.queryByTestId('new-space-panels')).toBeNull()
+    })
+
+    it('hides the steps on «Nascondi», keeps the assistant card, and remembers it per space and user', async () => {
+      renderPage()
+      await screen.findByText('Primi passi')
+      await userEvent.click(screen.getByRole('button', { name: 'Nascondi' }))
+      expect(screen.queryByText('Primi passi')).toBeNull()
+      expect(screen.getByText('Il CRM che lavora al posto tuo')).toBeInTheDocument()
+      expect(window.localStorage.getItem('pigrocrm.primi-passi.nascosto:/:u1')).toBe('1')
+    })
+
+    it('reads only the token while the list is hidden', async () => {
+      window.localStorage.setItem('pigrocrm.primi-passi.nascosto:/:u1', '1')
+      renderPage()
+      expect(await screen.findByText('Il CRM che lavora al posto tuo')).toBeInTheDocument()
+      expect(screen.queryByText('Primi passi')).toBeNull()
+      expect(api.GET).not.toHaveBeenCalledWith('/api/customers', expect.anything())
+      expect(api.GET).not.toHaveBeenCalledWith('/api/emitter')
+    })
+
+    it('shows nothing to a readonly user, who could do none of it', async () => {
+      auth.user.ruolo = 'readonly'
+      renderPage()
+      expect(await screen.findByRole('tab', { name: 'Commerciale' })).toBeInTheDocument()
+      expect(screen.queryByTestId('new-space-panels')).toBeNull()
+      expect(api.GET).not.toHaveBeenCalledWith('/api/tokens')
+    })
+
+    it('does not link a collaboratore to the fiscal settings only an admin can open', async () => {
+      auth.user.ruolo = 'collaboratore'
+      renderPage()
+      expect(await screen.findByText('Primi passi')).toBeInTheDocument()
+      expect(screen.queryByRole('link', { name: 'I tuoi dati fiscali' })).toBeNull()
+      expect(screen.getByText('I tuoi dati fiscali')).toBeInTheDocument()
+      expect(screen.getByText(/Li imposta l.amministratore/)).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: 'Il primo cliente' })).toBeInTheDocument()
+    })
   })
 })
