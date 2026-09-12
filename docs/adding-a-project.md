@@ -287,6 +287,41 @@ are. The copy in `/etc/nginx/sites-available/` has certbot's port-443 block on t
 it: **edit that one in place**, with `nginx -t` before the reload. Overwriting it from
 the repository takes TLS away on the spot.
 
+### The tables behind the events: PostHog's warehouse reads two databases
+
+Since 2026-09-12 (ORB-187) PostHog's data warehouse reads the hub's database
+(`orbiters` on 55435: `signups`, `freelancers`, `companies`, `guide_downloads`,
+`member_logins`, `comments`) and the CRM's registry (`pigrocrm_tenants` on 55432:
+`tenants`), so the events the surfaces send can be joined to the rows behind them. The
+design is `docs/design/2026-09-12-posthog-analytics-design.md`. Both Postgres answer on
+the loopback only, so PostHog reaches them through an SSH tunnel, and the arrangement on
+the server is:
+
+- a user `posthog`, shell `/usr/sbin/nologin`, whose one `authorized_keys` line is
+  PostHog's key with `restrict,port-forwarding,permitopen="127.0.0.1:55435",permitopen="127.0.0.1:55432"`;
+- `/etc/ssh/sshd_config.d/60-posthog-tunnel.conf`, a `Match User posthog` block with
+  `AllowTcpForwarding yes`, `PermitOpen` on the same two addresses, `PermitTTY no`,
+  `X11Forwarding no`, `AllowAgentForwarding no`, `PasswordAuthentication no`,
+  `ForceCommand /bin/false`. A shell attempt answers «This account is currently not
+  available»; a forward to either port works and to anything else does not;
+- a role `posthog_ro` in each database, `LOGIN` with its own password, `CONNECT` on the
+  database, `USAGE` on `public` and `SELECT` on the tables above and nothing else. The
+  sessions, the admin users and the magic-link tokens are not granted.
+
+In PostHog the two sources are Postgres sources with prefixes `hub` and `pigro`, host
+`127.0.0.1` and the container's host port, the SSH tunnel enabled towards the server's
+address with key-pair auth as `posthog`, and **«Require TLS through tunnel» off**: the
+tunnel is the encryption, the containers speak plain Postgres, and with the switch on
+every attempt answers «Your database doesn't support the encrypted connection PostHog
+requires». Through the API the switch is `ssh_tunnel.require_tls: {"enabled": false}`
+in the source payload, which the wizard shows and the API reference does not name.
+
+A new project with a database that PostHog should read gets the same three things: a
+`permitopen` for its port on the key line and in the `Match` block, a `posthog_ro` role
+with `SELECT` on the tables that matter, and a source with the prefix the project is
+called. Per-space CRM databases are deliberately not connected: one source per space does
+not scale, and the activation funnel is read from events.
+
 ## 8. Documentation
 
 `projects/<name>/README.md` and `projects/<name>/AGENTS.md`, plus a row in the
