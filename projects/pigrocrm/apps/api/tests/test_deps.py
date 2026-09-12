@@ -6,6 +6,7 @@ from fastapi import Request
 
 import pigrocrm_api.deps as deps
 from pigrocrm.core.config import Settings
+from pigrocrm.core.tenants import registry as registry_module
 
 
 def test_get_session_builds_the_engine_exactly_once_under_concurrent_cold_start(
@@ -13,22 +14,23 @@ def test_get_session_builds_the_engine_exactly_once_under_concurrent_cold_start(
 ) -> None:
     """FastAPI runs sync dependencies in a thread pool: several requests can reach
     get_session()'s cold-start check before the first one finishes building the
-    engine. A naive check-then-act on the module globals would let each of them build
-    (and leak) its own Engine, and could even leave `_factory` bound to a different
-    Engine than the one `_engine` ends up holding.
+    registry. A naive check-then-act on the module global would let each of them build
+    (and leak) its own `SpaceRegistry`, and the registry's own double-checked lock
+    (`SpaceRegistry.session_factory`) is what then keeps two threads sharing that one
+    registry from building two root engines.
 
     This drives many threads through that window at once. `create_engine_from_settings`
-    is wrapped with an artificial delay and does not touch a real database -- creating
-    a SQLAlchemy Engine never connects eagerly -- so the race is exercised
-    deterministically: the delay only widens a window that already exists, it does not
-    manufacture one that would not otherwise be there.
+    (called from `SpaceRegistry.session_factory`, ORB-170) is wrapped with an artificial
+    delay and does not touch a real database -- creating a SQLAlchemy Engine never
+    connects eagerly -- so the race is exercised deterministically: the delay only widens
+    a window that already exists, it does not manufacture one that would not otherwise be
+    there.
     """
-    monkeypatch.setattr(deps, "_engine", None)
-    monkeypatch.setattr(deps, "_factory", None)
+    monkeypatch.setattr(deps, "_registry", None)
 
     calls = 0
     calls_lock = threading.Lock()
-    real_create_engine_from_settings = deps.create_engine_from_settings
+    real_create_engine_from_settings = registry_module.create_engine_from_settings
 
     def slow_create_engine_from_settings(settings: object) -> object:
         nonlocal calls
@@ -37,7 +39,9 @@ def test_get_session_builds_the_engine_exactly_once_under_concurrent_cold_start(
         time.sleep(0.05)
         return real_create_engine_from_settings(settings)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(deps, "create_engine_from_settings", slow_create_engine_from_settings)
+    monkeypatch.setattr(
+        registry_module, "create_engine_from_settings", slow_create_engine_from_settings
+    )
 
     thread_count = 8
     barrier = threading.Barrier(thread_count)

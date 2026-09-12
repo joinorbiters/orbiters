@@ -165,6 +165,34 @@ The runbook — the table of error sentences, what to do about each one and how 
 to the expiry of the Google consent — is
 [`docs/superpowers/notes/2026-09-09-gmail-cron-runbook.md`](docs/superpowers/notes/2026-09-09-gmail-cron-runbook.md).
 
+## Connect an agent
+
+Every operation in the UI is also an MCP tool. Over HTTP the server answers at
+`https://<host>/mcp` for the root installation and `https://<host>/<slug>/mcp` for a
+space, authenticated with a personal access token as a bearer. In the app, the
+«Collega un agente» entry at the bottom of the sidebar mints a token and gives you
+both snippets below with the values filled in.
+
+```
+claude mcp add --transport http pigrocrm https://<host>/mcp --header "Authorization: Bearer pgc_..."
+```
+
+```json
+{"mcpServers": {"pigrocrm": {"type": "http", "url": "https://<host>/mcp",
+  "headers": {"Authorization": "Bearer pgc_..."}}}}
+```
+
+The host vhosts in `deploy/nginx/` gained a `/mcp` block with a long read timeout for
+this, because a tool call answers only when it has finished: an installation still
+serving an older copy of its vhost caps every call at nginx's 60-second default until it
+re-applies the file (`deploy/setup-server.sh`).
+
+The token inherits the whole role of whoever created it; revoke it from Impostazioni →
+Token if it leaks. Claude Code, Cursor, Codex and any client that can send a header
+work; the connectors of claude.ai and Claude Desktop need OAuth, which this server does
+not offer yet. The stdio transport is still there for a client that launches the server
+itself (see the head of `docker-compose.yml`).
+
 ## Status
 
 In development. Will replace the previous system.

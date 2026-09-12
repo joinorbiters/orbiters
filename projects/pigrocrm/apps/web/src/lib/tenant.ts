@@ -28,6 +28,7 @@ export const RESERVED_SLUGS = new Set([
   'admin',
   'static',
   'registrati',
+  'mcp',
 ])
 
 /** `"/studio"` for `/studio/app/clienti`, `""` for `/app/clienti` or anything else. */

@@ -36,7 +36,7 @@ was decided, and the reason is written down.
 ```
 packages/core/   the domain: models, services, migrations, rendering. Depends on neither adapter.
 apps/api/        FastAPI. Imports core.
-apps/mcp/        the MCP server, stdio. Imports core.
+apps/mcp/        the MCP server, stdio and Streamable HTTP. Imports core.
 apps/web/        Vite + React SPA, served under /app.
 deploy/          the nginx vhost and the server setup script.
 ```

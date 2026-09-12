@@ -1,4 +1,3 @@
-import { useBlocker } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
 import { Copy, KeyRound, Plus } from 'lucide-react'
 import { useState } from 'react'
@@ -23,6 +22,7 @@ import { fieldErrorFrom, toProblem, type ProblemDetail } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { roleLabel } from '@/lib/roles'
 import { useCreateToken, useRevokeToken, useTokens, type CreatedToken, type TokenRecord } from './queries'
+import { useUnsavedTokenGuard } from './useUnsavedTokenGuard'
 
 const dateFormatter = new Intl.DateTimeFormat('it-IT', { dateStyle: 'medium', timeStyle: 'short' })
 
@@ -52,9 +52,6 @@ function statoOf(token: TokenRecord): TokenStato {
   return token.revoked_at ? 'revocato' : 'attivo'
 }
 
-const LEAVE_WARNING =
-  'Il token mostrato non è stato confermato come copiato: se esci ora sparisce per sempre e dovrai revocarlo e crearne uno nuovo. Uscire comunque?'
-
 export function TokensPanel() {
   const { user } = useAuth()
   const [creating, setCreating] = useState(false)
@@ -67,17 +64,7 @@ export function TokensPanel() {
   const create = useCreateToken()
   const revoke = useRevokeToken()
 
-  // Escape and click-outside are handled by the reveal dialog itself (below);
-  // this covers the two ways those don't: leaving via Back/a Link (an in-app
-  // route change `preventDefault` on a DOM event cannot see at all) and a
-  // real reload/close (a native "leave site?" prompt, via
-  // `enableBeforeUnload` -- see @tanstack/history's own `onBeforeUnload`).
-  // Both ask the same question and both can be declined, unlike the silent,
-  // unrecoverable loss either used to be.
-  useBlocker({
-    shouldBlockFn: () => Boolean(issued) && !window.confirm(LEAVE_WARNING),
-    enableBeforeUnload: Boolean(issued),
-  })
+  useUnsavedTokenGuard(Boolean(issued))
 
   const fieldError = problem ? fieldErrorFrom(problem) : null
   const banner = problem && fieldError?.field !== 'nome' ? problem.detail : null
@@ -103,10 +90,15 @@ export function TokensPanel() {
 
   function copyIssued() {
     if (!issued) return
-    void navigator.clipboard.writeText(issued.token).then(() => {
-      setCopied(true)
-      toast.success('Token copiato negli appunti')
-    })
+    void navigator.clipboard
+      .writeText(issued.token)
+      .then(() => {
+        setCopied(true)
+        toast.success('Token copiato negli appunti')
+      })
+      // A denied permission, an insecure origin or a page without focus all reject
+      // here; silence would leave the person thinking the token is on the clipboard.
+      .catch(() => toast.error('Copia negli appunti non riuscita'))
   }
 
   function revokeToken(token: TokenRecord) {
