@@ -58,4 +58,16 @@ describe('the entry page', () => {
     )
     expect(go).not.toHaveBeenCalled()
   })
+
+  it('spends the token once, however often the page re-renders', async () => {
+    POST.mockResolvedValue({ data: { id: 'u1', email: 'ada@x.it' }, response: { status: 200 } })
+    const { rerender } = render(<EnterPage token="abc" go={vi.fn()} />)
+    // A new `go` and a new `enterWithLink` closure, as `AuthProvider` produces on every
+    // render: the effect must not run the entry again.
+    rerender(<EnterPage token="abc" go={vi.fn()} />)
+    await waitFor(() => expect(enterWithLink).toHaveBeenCalledTimes(1))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(enterWithLink).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
 })

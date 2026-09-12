@@ -1,5 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { BrandMark } from '@/components/BrandMark'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -23,6 +23,7 @@ async function homeAfterEntry(): Promise<string> {
  * where another one can be asked.
  *
  * `go` is injectable because jsdom does not let a test spy on `window.location.assign`.
+ * The token is spent once per mount, however often the page re-renders.
  */
 export function EnterPage({
   token,
@@ -33,21 +34,22 @@ export function EnterPage({
 }) {
   const { enterWithLink } = useAuth()
   const [error, setError] = useState<string | null>(null)
+  // Once per mount, whatever re-renders: `enterWithLink` is a fresh closure every time
+  // `AuthProvider` renders (and it renders while the mutation is pending), so an effect
+  // keyed on it would spend the token a second time and read its own 401 as a dead link.
+  const started = useRef(false)
 
   useEffect(() => {
-    let cancelled = false
+    if (started.current) return
+    started.current = true
     void (async () => {
       try {
         await enterWithLink(token)
-        const target = await homeAfterEntry()
-        if (!cancelled) go(target)
+        go(await homeAfterEntry())
       } catch (caught) {
-        if (!cancelled) setError(toProblem(caught).detail)
+        setError(toProblem(caught).detail)
       }
     })()
-    return () => {
-      cancelled = true
-    }
   }, [token, enterWithLink, go])
 
   return (

@@ -92,6 +92,9 @@ def test_an_expired_or_unknown_or_inactive_link_answers_none(db_session: Session
     assert user is not None
     service.update(user.id, UserUpdate(attivo=False), Actor.system())
     assert links.enter(raw2) is None
+    # Spent all the same: reactivating the account does not revive the link.
+    service.update(user.id, UserUpdate(attivo=True), Actor.system())
+    assert links.enter(raw2) is None
 
 
 def test_request_sweeps_the_spent_and_expired_rows_of_that_user(db_session: Session) -> None:

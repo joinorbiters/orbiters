@@ -58,7 +58,9 @@ class MagicLinkService:
     def enter(self, raw: str) -> UserRead | None:
         """The user, or `None` for a wrong, spent or expired link, or an inactive user.
         The first entry of a user writes `email_verificata_il` and revokes every refresh
-        token issued before it: the address was a claim until this click."""
+        token issued before it: the address was a claim until this click. Refresh tokens
+        only: an access token issued before it stays valid for the rest of its
+        `access_token_minutes`, and that window is the accepted cost."""
         if not raw:
             return None
         now = datetime.now(UTC)
@@ -66,9 +68,6 @@ class MagicLinkService:
             select(MagicLinkToken).where(MagicLinkToken.token_hash == _hash(raw))
         )
         if token is None or token.used_at is not None or token.expires_at <= now:
-            return None
-        user = self.users.get(token.user_id)
-        if user is None or not user.attivo:
             return None
         spent = self.session.execute(
             update(MagicLinkToken)
@@ -78,6 +77,12 @@ class MagicLinkService:
         )
         if len(spent.scalars().all()) != 1:
             self.session.rollback()
+            return None
+        # Spent before the user is checked: a link of a deactivated user must not stay
+        # live for the rest of its fifteen minutes in case the account comes back.
+        user = self.users.get(token.user_id)
+        if user is None or not user.attivo:
+            self.session.commit()
             return None
         if user.email_verificata_il is None:
             user.email_verificata_il = now

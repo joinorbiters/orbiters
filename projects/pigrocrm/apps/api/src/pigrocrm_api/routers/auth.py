@@ -1,7 +1,7 @@
 from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -14,9 +14,13 @@ from pigrocrm.core.auth.tokens import decode_token, issue_access_token
 from pigrocrm.core.config import Settings
 from pigrocrm.core.db.session import session_factory
 from pigrocrm.core.errors import DomainError, ValidationFailed
-from pigrocrm.core.mail import EmailSender, Mail, magic_link_mail, sender_from_settings
-from pigrocrm.core.tenants import TenantService, ensure_tenants_database
-from pigrocrm.core.tenants.database import tenant_database_name, tenant_database_url
+from pigrocrm.core.mail import EmailSender, magic_link_mail, sender_from_settings
+from pigrocrm.core.tenants import TenantService
+from pigrocrm.core.tenants.database import (
+    tenant_database_name,
+    tenant_database_url,
+    tenants_database_url,
+)
 from pigrocrm.core.validation import SafeStr
 from pigrocrm_api.deps import ACCESS_COOKIE, REFRESH_COOKIE, ActorDep, SessionDep, SettingsDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
@@ -182,6 +186,10 @@ SenderDep = Annotated[EmailSender | None, Depends(get_sender)]
 NO_SENDER = (
     "L'accesso via email non è ancora attivo su questa installazione. Entra con la password."
 )
+NO_PUBLIC_URL = (
+    "L'installazione non ha un indirizzo pubblico configurato (PIGROCRM_PUBLIC_URL), quindi "
+    "non può mandare link. Entra con la password."
+)
 INVALID_LINK = "Questo link non è valido o è scaduto. Chiedine un altro."
 
 
@@ -190,20 +198,23 @@ class LinkRequest(BaseModel):
 
 
 class LinkToken(BaseModel):
-    t: SafeStr
+    # `token_urlsafe(32)` is 43 characters; anything much longer is not ours.
+    t: SafeStr = Field(max_length=128)
 
 
 class Ack(BaseModel):
     ok: bool = True
 
 
-def _send(sender: EmailSender, mail: Mail) -> None:
-    sender.send(mail)
-
-
-def _origin(request: Request, settings: Settings) -> str:
-    """Where the link points: the configured public origin, else the request's own."""
-    return settings.public_url.rstrip("/") or str(request.base_url).rstrip("/")
+def _origin(settings: Settings) -> str:
+    """Where a link by mail points: the configured public origin, and nothing else. The
+    request's own `Host` is whatever the caller sent, and a link built from it would
+    hand a live token to that host; without `PIGROCRM_PUBLIC_URL` this installation
+    mails no link (503 with a sentence, like the missing key)."""
+    origin = settings.public_url.strip().rstrip("/")
+    if not origin:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, NO_PUBLIC_URL)
+    return origin
 
 
 def _entra_url(origin: str, prefix: str, raw: str) -> str:
@@ -211,20 +222,34 @@ def _entra_url(origin: str, prefix: str, raw: str) -> str:
 
 
 def _owned_slugs(settings: Settings, email: str) -> list[str]:
-    """The spaces the registry says this address opened. Its own engine, opened and
-    disposed here rather than through `deps`' cached registry: a link request is rare,
-    ORB-170 is moving that registry, and an installation with no registry database at
-    all (a self-hosted CRM that never had a signup) is simply one with no spaces."""
+    """The spaces the registry says this address opened. A plain read on its own engine,
+    opened and disposed here rather than through `deps`' cached registry: a link
+    request is rare and ORB-170 is moving that registry. No DDL: an installation whose
+    registry database does not exist (a self-hosted CRM that never had a signup) is one
+    with no spaces, and an anonymous request must not create it."""
+    engine = create_engine(tenants_database_url(settings), future=True)
     try:
-        registry = ensure_tenants_database(settings)
-    except SQLAlchemyError:
-        return []
-    try:
-        with session_factory(registry)() as session:
+        with session_factory(engine)() as session:
             rows = TenantService(session, settings).list()
             return [t.slug for t in rows if t.owner_email == email]
+    except SQLAlchemyError:
+        return []
     finally:
-        registry.dispose()
+        engine.dispose()
+
+
+def _space_link(settings: Settings, slug: str, email: str) -> str | None:
+    """A token for `email` in the space `slug`, or `None`: no such user, or a space whose
+    database cannot be opened (which must not turn the request into a 500 for the one
+    address that owns it)."""
+    engine = create_engine(tenant_database_url(settings, tenant_database_name(slug)), future=True)
+    try:
+        with session_factory(engine)() as space:
+            return MagicLinkService(space, settings).request(email)
+    except SQLAlchemyError:
+        return None
+    finally:
+        engine.dispose()
 
 
 @router.post("/link", response_model=Ack, status_code=status.HTTP_202_ACCEPTED)
@@ -243,26 +268,19 @@ def request_link(
     timing says which; 503 while no sender is configured."""
     if sender is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, NO_SENDER)
+    origin = _origin(settings)
     email = payload.email.strip().lower()
-    origin = _origin(request, settings)
     links: list[tuple[str, str]] = []
     slug = tenant_slug(request)
     if slug is not None:
         raw = MagicLinkService(session, settings).request(email)
         if raw:
-            links.append((slug, _entra_url(origin, f"/{slug}", raw)))
+            # Under a prefix `settings` are the space's own, and `deps` already gives
+            # them a `public_url` that ends with `/<slug>`: nothing to append.
+            links.append((slug, _entra_url(origin, "", raw)))
     else:
         for owned_slug in _owned_slugs(settings, email):
-            # A throwaway engine rather than `deps`' cached one: a link request is rare,
-            # and ORB-170 is moving that registry while this lands.
-            engine = create_engine(
-                tenant_database_url(settings, tenant_database_name(owned_slug)), future=True
-            )
-            try:
-                with session_factory(engine)() as space:
-                    raw = MagicLinkService(space, settings).request(email)
-            finally:
-                engine.dispose()
+            raw = _space_link(settings, owned_slug, email)
             if raw:
                 links.append((owned_slug, _entra_url(origin, f"/{owned_slug}", raw)))
         if not links:
@@ -272,9 +290,7 @@ def request_link(
                 # live at `/`, so the entry page is the bare one too.
                 links.append((settings.root_slug or "PigroCRM", _entra_url(origin, "", raw)))
     if links:
-        background.add_task(
-            _send, sender, magic_link_mail(email, links, settings.magic_link_minutes)
-        )
+        background.add_task(sender.send, magic_link_mail(email, links, settings.magic_link_minutes))
     return Ack()
 
 
