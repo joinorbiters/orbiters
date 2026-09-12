@@ -18,17 +18,22 @@ import pytest
 import pytest_asyncio
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
-from sqlalchemy import Engine, delete, select
+from sqlalchemy import Engine, create_engine, delete, select, text
 
 from pigrocrm.core.activities.models import Activity
 from pigrocrm.core.actor import Actor
 from pigrocrm.core.auth.models import User
 from pigrocrm.core.auth.pat_models import PersonalAccessToken
 from pigrocrm.core.auth.pat_service import PatService
+from pigrocrm.core.auth.repository import UserRepository
 from pigrocrm.core.auth.schemas import UserCreate
 from pigrocrm.core.auth.service import UserService
 from pigrocrm.core.config import Settings
 from pigrocrm.core.db import session_factory
+from pigrocrm.core.db.sidecar import drop_database
+from pigrocrm.core.space_settings import SpaceSettingsService, SpaceSettingsUpdate
+from pigrocrm.core.tenants import TenantService, TenantSignup, ensure_tenants_database
+from pigrocrm.core.tenants.database import tenant_database_name, tenant_database_url
 from pigrocrm_mcp.http import McpHttpApp, create_app
 
 EMAIL = "http-transport@prova.it"
@@ -319,3 +324,133 @@ async def test_the_bearer_scheme_is_read_case_insensitively(
         "/mcp", json=INITIALIZE, headers={**ACCEPT, "Authorization": f"bearer {raw}"}
     )
     assert response.status_code == 200
+
+
+SPACES = ("spazio-uno", "spazio-due")
+
+
+def _space_token(http_settings: Settings, slug: str) -> tuple[str, UUID]:
+    """The admin the signup created, and a fresh PAT of theirs, on the space's database."""
+    engine = create_engine(
+        tenant_database_url(http_settings, tenant_database_name(slug)), future=True
+    )
+    try:
+        with session_factory(engine)() as session:
+            user = UserRepository(session).get_by_email(f"ada@{slug}.it")
+            assert user is not None
+            actor = Actor(id=user.id, type="user", role="admin")
+            _, raw = PatService(session, settings=http_settings).create("prova", actor)
+            session.commit()
+            return raw, user.id
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture
+def spaces(http_settings: Settings) -> Iterator[dict[str, tuple[str, UUID]]]:
+    """Two real spaces on the container, each with an admin PAT; dropped afterwards."""
+    registry = ensure_tenants_database(http_settings)
+    tokens: dict[str, tuple[str, UUID]] = {}
+    try:
+        with session_factory(registry)() as session:
+            for slug in SPACES:
+                TenantService(session, http_settings).provision(
+                    TenantSignup(
+                        slug=slug, nome="Ada", email=f"ada@{slug}.it", password="lunghissima1"
+                    )
+                )
+        for slug in SPACES:
+            tokens[slug] = _space_token(http_settings, slug)
+        yield tokens
+    finally:
+        with session_factory(registry)() as session:
+            session.execute(text("delete from tenants where slug = any(:s)"), {"s": list(SPACES)})
+            session.commit()
+        registry.dispose()
+        for slug in SPACES:
+            drop_database(
+                http_settings, tenant_database_url(http_settings, tenant_database_name(slug))
+            )
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_space_is_404_whatever_the_header_says(
+    served: tuple[McpHttpApp, httpx2.AsyncClient],
+) -> None:
+    _, client = served
+    response = await client.post(
+        "/nessuno/mcp", json=INITIALIZE, headers={**ACCEPT, **_bearer("pgc_qualcosa")}
+    )
+    assert response.status_code == 404
+    assert response.json() == {"detail": "spazio non trovato"}
+
+
+@pytest.mark.asyncio
+async def test_a_root_token_does_not_open_a_space(
+    served: tuple[McpHttpApp, httpx2.AsyncClient],
+    root_token: tuple[str, UUID],
+    spaces: dict[str, tuple[str, UUID]],
+) -> None:
+    raw, _ = root_token
+    _, client = served
+    response = await client.post(
+        "/spazio-uno/mcp", json=INITIALIZE, headers={**ACCEPT, **_bearer(raw)}
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_two_spaces_do_not_see_each_other(
+    served: tuple[McpHttpApp, httpx2.AsyncClient], spaces: dict[str, tuple[str, UUID]]
+) -> None:
+    app, _ = served
+    uno, due = spaces["spazio-uno"][0], spaces["spazio-due"][0]
+    await _call_tool(
+        app,
+        "http://prova/spazio-uno/mcp",
+        uno,
+        "create_customer",
+        {"ragione_sociale": "Solo in uno"},
+    )
+    found_in_uno = await _call_tool(
+        app, "http://prova/spazio-uno/mcp", uno, "search_customers", {"search": "Solo in uno"}
+    )
+    found_in_due = await _call_tool(
+        app, "http://prova/spazio-due/mcp", due, "search_customers", {"search": "Solo in uno"}
+    )
+    assert len(found_in_uno["items"]) == 1
+    assert len(found_in_due["items"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_the_space_setting_decides_the_privileged_tools_and_a_change_rebuilds_the_server(
+    served: tuple[McpHttpApp, httpx2.AsyncClient],
+    spaces: dict[str, tuple[str, UUID]],
+    http_settings: Settings,
+) -> None:
+    app, _ = served
+    raw, user_id = spaces["spazio-uno"]
+    url = "http://prova/spazio-uno/mcp"
+    assert "issue_invoice" not in await _tool_names(app, url, raw)
+
+    engine = create_engine(
+        tenant_database_url(http_settings, tenant_database_name("spazio-uno")), future=True
+    )
+    try:
+        with session_factory(engine)() as session:
+            SpaceSettingsService(session, http_settings).update(
+                SpaceSettingsUpdate(mcp_full_access=True),
+                Actor(id=user_id, type="user", role="admin"),
+                spazio="spazio-uno",
+            )
+            session.commit()
+    finally:
+        engine.dispose()
+
+    # `overrides_ttl=0.0` in the `served` fixture: the next request re-reads the rows,
+    # sees they changed, and rebuilds this space's server with the privileged tools.
+    assert "issue_invoice" in await _tool_names(app, url, raw)
+    # The other space is untouched.
+    assert "issue_invoice" not in await _tool_names(
+        app, "http://prova/spazio-due/mcp", spaces["spazio-due"][0]
+    )
