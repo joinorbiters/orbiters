@@ -1,6 +1,7 @@
 /**
  * «Get started» (ORB-180): the assistant first, because it is what the landing sells and
- * what a space is for, then the four first steps with their state. Both read from the data
+ * what a space is for, then the four first steps with their state, each with a prompt to
+ * copy into the assistant (ORB-182). Both read from the data
  * (`useFirstSteps`) and nothing is stored: the card stays until this user has a token, the
  * steps stay with their ticks. The Home sends a person here once, after the first login;
  * the sidebar brings them back whenever they want.
@@ -12,7 +13,9 @@ import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useAuth, useCanWrite } from '@/lib/auth'
+import { CopyPrompt } from './CopyPrompt'
 import { CONNECT_ASSISTANT_TO, markGetStartedSeen, useFirstSteps, type FirstStep } from './firstSteps'
+import { INTRO_PROMPT, STEP_PROMPTS } from './prompts'
 
 export function GetStartedPage() {
   const { user } = useAuth()
@@ -65,6 +68,8 @@ function AssistantCard() {
             <ChevronRight className="ml-1 size-4" aria-hidden />
           </Link>
         </Button>
+        {/* What to say first, once connected (ORB-182). */}
+        <CopyPrompt text={INTRO_PROMPT} summary="Il primo prompt, appena collegato" />
       </CardContent>
     </Card>
   )
@@ -117,6 +122,9 @@ function FirstStepsList({
                       {canWrite ? step.hint : 'Lo fa chi può scrivere nello spazio.'}
                     </p>
                   )}
+                  {/* The same step, said to the assistant (ORB-182): only for a step still
+                      to do, and only for someone who may do it. */}
+                  {linkable && <CopyPrompt text={STEP_PROMPTS[step.id]} />}
                 </div>
               </li>
             )

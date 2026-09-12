@@ -6,8 +6,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { GetStartedPage } from './GetStartedPage'
+import { INTRO_PROMPT, STEP_PROMPTS } from './prompts'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -28,6 +30,8 @@ vi.mock('@/lib/auth', () => ({
   useCanWrite: () => auth.user?.ruolo !== 'readonly',
   useIsAdmin: () => auth.user?.ruolo === 'admin',
 }))
+
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 
 vi.mock('@tanstack/react-router', () => ({
   Link: ({ to, children, className }: { to: string; children: React.ReactNode; className?: string }) => (
@@ -75,6 +79,9 @@ function renderPage() {
 
 beforeEach(() => {
   vi.mocked(api.GET).mockReset()
+  vi.mocked(toast.success).mockReset()
+  vi.mocked(toast.error).mockReset()
+  Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } })
   answers()
 })
 
@@ -154,5 +161,40 @@ describe('Get started', () => {
     renderPage()
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(window.localStorage.length).toBe(0)
+  })
+
+  it('offers a prompt to copy for each step still to do, and one for the first conversation', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event')
+    answers({ '/api/customers': { items: [{ id: 'c1' }], next_cursor: null } })
+    renderPage()
+    await screen.findByText(/1 di 4/)
+    // Three steps to do, one done: three step prompts, plus the card's own.
+    expect(screen.getAllByText('Prompt per l’assistente')).toHaveLength(3)
+    expect(screen.getByText('Il primo prompt, appena collegato')).toBeInTheDocument()
+    expect(screen.getByText(INTRO_PROMPT)).toBeInTheDocument()
+    expect(screen.getByText(STEP_PROMPTS.fiscali)).toBeInTheDocument()
+    expect(screen.queryByText(STEP_PROMPTS.cliente)).toBeNull()
+    const copies = screen.getAllByRole('button', { name: 'Copia il prompt' })
+    expect(copies).toHaveLength(4)
+    await userEvent.click(copies[1] as HTMLElement)
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(STEP_PROMPTS.fiscali)
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Prompt copiato'))
+  })
+
+  it('says so when the clipboard is refused, and leaves the text on the page', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event')
+    Object.assign(navigator, { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('no')) } })
+    renderPage()
+    await screen.findByText(/0 di 4/)
+    await userEvent.click(screen.getAllByRole('button', { name: 'Copia il prompt' })[0] as HTMLElement)
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(screen.getByText(INTRO_PROMPT)).toBeInTheDocument()
+  })
+
+  it('gives a readonly user no prompt: there is nothing they could ask the assistant to change', async () => {
+    if (auth.user) auth.user.ruolo = 'readonly'
+    renderPage()
+    await screen.findByText(/0 di 4/)
+    expect(screen.queryAllByText('Prompt per l’assistente')).toHaveLength(0)
   })
 })
