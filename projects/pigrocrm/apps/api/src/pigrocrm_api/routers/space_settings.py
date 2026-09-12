@@ -7,8 +7,11 @@ rows applied and would count them twice. After a write the per-process cache of
 overrides is dropped for this database, so the next request sees the new values.
 """
 
-from fastapi import APIRouter, Request
+from typing import Annotated
 
+from fastapi import APIRouter, Depends, Request
+
+from pigrocrm.core.config import Settings, get_settings
 from pigrocrm.core.space_settings import (
     SpaceSettingsRead,
     SpaceSettingsService,
@@ -40,7 +43,10 @@ def update(
     session: SessionDep,
     actor: ActorDep,
     base: BaseSettingsDep,
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> SpaceSettingsRead:
     result = SpaceSettingsService(session, base).update(data, actor, spazio=tenant_slug(request))
-    invalidate_space_settings(tenant_slug(request))
+    # This request's own settings, so a test that overrides `get_settings` invalidates
+    # the registry it read from rather than one built against the process environment.
+    invalidate_space_settings(tenant_slug(request), settings)
     return result

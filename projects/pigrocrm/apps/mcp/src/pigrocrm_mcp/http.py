@@ -26,6 +26,7 @@ anyio does not allow entering a scope in one task and leaving it in another.
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, MutableMapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
@@ -65,6 +66,9 @@ _ROOT = ""
 INVALID_TOKEN = "Token non valido"
 SPACE_NOT_FOUND = "spazio non trovato"
 NOT_FOUND = "non trovato"
+INTERNAL_ERROR = "errore interno"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -165,6 +169,11 @@ class McpHttpApp:
             await self._lifespan_protocol(receive, send)
             return
         if scope["type"] != "http":
+            if scope["type"] == "websocket":
+                # Nothing here speaks WebSocket, and the ASGI spec asks for a close
+                # rather than silence: a server given no answer at all holds the
+                # handshake open until it times out.
+                await send({"type": "websocket.close"})
             return
 
         path: str = scope["path"]
@@ -177,16 +186,31 @@ class McpHttpApp:
             await _json(send, 404, {"detail": NOT_FOUND})
             return
 
+        # The boundary of this application: everything up to the hand-over gets an
+        # answer of ours, because a pure ASGI app that lets an exception out leaves the
+        # server to send a bodyless 500 -- or nothing at all. Only the two codes this
+        # path really produces are read as answers; any other `DomainError` is a bug
+        # here, not a message for the caller, and is treated as one. Past the hand-over
+        # the SDK's stateless handler catches its own per-request failures, so the call
+        # below is deliberately outside this block.
         try:
             auth = await anyio.to_thread.run_sync(self._authenticate, slug, _bearer_of(scope))
+            space = await self._space_app(slug, auth)
         except DomainError as exc:
             if exc.code == "not_found":
                 await _json(send, 404, {"detail": SPACE_NOT_FOUND})
-            else:
+            elif exc.code == "validation_failed":
                 await _json(send, 401, {"detail": INVALID_TOKEN}, {"www-authenticate": "Bearer"})
+            else:
+                # Never the token: the log line carries the exception, never the header.
+                logger.exception("unexpected domain error serving MCP over HTTP")
+                await _json(send, 500, {"detail": INTERNAL_ERROR})
+            return
+        except Exception:
+            logger.exception("failed to serve an MCP request over HTTP")
+            await _json(send, 500, {"detail": INTERNAL_ERROR})
             return
 
-        space = await self._space_app(slug, auth)
         scope["path"] = MCP_PATH
         scope["raw_path"] = MCP_PATH.encode("utf-8")
         scope.setdefault("state", {})[ACTOR_STATE_KEY] = auth.actor
@@ -201,12 +225,14 @@ class McpHttpApp:
         itself is the same `ValidationFailed`, which the caller turns into one 401.
         """
         factory = self._registry.session_factory(slug)  # NotFound for an unknown slug
+        if not raw_token:
+            # Before the session opens: a missing or malformed header needs no read at
+            # all. After the slug, so an unknown space is still 404. The same class
+            # `PatService.resolve` raises, so the caller has one branch.
+            raise ValidationFailed("token", "token", INVALID_TOKEN)
         with factory() as session:
             overrides = self._registry.overrides(slug, session)
             settings = self._registry.effective_settings(slug, session)
-            if not raw_token:
-                # The same class `PatService.resolve` raises, so the caller has one branch.
-                raise ValidationFailed("token", "token", INVALID_TOKEN)
             actor = PatService(session, settings=settings).resolve(raw_token)
             session.commit()  # `resolve` stamps last_used_at
         return _Authenticated(actor=actor, overrides=overrides, settings=settings)
@@ -231,6 +257,12 @@ class McpHttpApp:
                 self._spaces.pop(key, None)
                 current.stop.set()
             built = await self._build(slug, auth)
+            if self._task_group is None:
+                # The group went away while this build was waiting on `task_group.start`:
+                # `_own` set `stop` on every space it could see and this one was not yet
+                # among them, so nobody else will ever set it and the task holding its
+                # lifespan would never leave.
+                built.stop.set()
             self._spaces[key] = built
             return built
 

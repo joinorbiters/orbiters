@@ -149,10 +149,16 @@ def request_base_settings(
 BaseSettingsDep = Annotated[Settings, Depends(request_base_settings)]
 
 
-def invalidate_space_settings(slug: str | None) -> None:
+def invalidate_space_settings(slug: str | None, settings: Settings | None = None) -> None:
     """After a write to `space_settings`: forget the cached rows and the storage built
-    from them, for this database only."""
-    _space_registry().invalidate(slug)
+    from them, for this database only.
+
+    `settings` only decides which server the registry is built against if this call is
+    the one that builds it, so a caller with a request's settings at hand passes them:
+    in a test that overrides `get_settings`, the invalidation then reaches the same
+    registry the request read from. Without them the process settings are used, which
+    in production are the same object anyway."""
+    _space_registry(settings).invalidate(slug)
     if slug is None:
         reset_storage_cache()
     else:

@@ -99,15 +99,29 @@ services:
       context: ../..
       dockerfile: projects/pigrocrm/Dockerfile.api
     restart: unless-stopped
-    # After `api`, which runs the migrations at start-up; this process never migrates
-    # and must not touch a database that is still being upgraded.
+    # After `api` has *started*, which is all `service_started` says: it does not wait
+    # for the migrations `api` runs at start-up to be finished. That is enough here
+    # because nothing in this process opens a database before its first request, and by
+    # then a stack that came up together has long since migrated.
     depends_on:
       db:
         condition: service_healthy
       api:
         condition: service_started
     environment: *api-environment
+    # `uvicorn`, `starlette` and `anyio` are in this process through the `mcp` SDK's own
+    # dependencies and the shared api image, which is why apps/mcp/pyproject.toml
+    # declares none of the three.
     command: ["uv", "run", "--no-sync", "uvicorn", "pigrocrm_mcp.http:app", "--host", "0.0.0.0", "--port", "8001"]
+    healthcheck:
+      # `GET /health` (spec §3) answers before any space is resolved, so this probe
+      # opens no database. Written with the image's own python rather than curl or
+      # wget, neither of which the api image carries.
+      test: ["CMD", "uv", "run", "--no-sync", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     volumes:
       - ${PIGROCRM_DOCUMENTS_DIR:-../../var/documents}:/app/var/documents
 

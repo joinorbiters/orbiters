@@ -31,6 +31,7 @@ from pigrocrm.core.auth.service import UserService
 from pigrocrm.core.config import Settings
 from pigrocrm.core.db import session_factory
 from pigrocrm.core.db.sidecar import drop_database
+from pigrocrm.core.errors import Conflict
 from pigrocrm.core.space_settings import SpaceSettingsService, SpaceSettingsUpdate
 from pigrocrm.core.tenants import TenantService, TenantSignup, ensure_tenants_database
 from pigrocrm.core.tenants.database import tenant_database_name, tenant_database_url
@@ -301,7 +302,8 @@ async def test_a_space_lifespan_that_fails_to_start_answers_the_request_instead_
     The deadline is the assertion: the task that enters a space's lifespan is not a
     child of the request, so a failure before it is ready used to leave the request
     waiting on an event nobody would ever set, holding the build lock and blocking every
-    later build behind it.
+    later build behind it. What the caller reads is the application's own 500, because
+    `__call__` answers every failure of its own rather than letting one reach the server.
     """
     raw, _ = root_token
     _, client = served
@@ -309,8 +311,54 @@ async def test_a_space_lifespan_that_fails_to_start_answers_the_request_instead_
         "pigrocrm_mcp.http.build_server", lambda *args, **kwargs: _ServerWhoseAppFails()
     )
     with anyio.fail_after(10):
-        with pytest.raises(RuntimeError, match="la lifespan non parte"):
-            await client.post("/mcp", json=INITIALIZE, headers={**ACCEPT, **_bearer(raw)})
+        response = await client.post("/mcp", json=INITIALIZE, headers={**ACCEPT, **_bearer(raw)})
+    assert response.status_code == 500
+    assert response.json() == {"detail": "errore interno"}
+
+
+@pytest.mark.asyncio
+async def test_a_build_that_fails_is_this_applications_own_500(
+    served: tuple[McpHttpApp, httpx2.AsyncClient],
+    root_token: tuple[str, UUID],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Anything at all out of the build is one uniform 500 with a body.
+
+    A pure ASGI application that lets an exception out sends no response at all, and the
+    caller reads whatever the server invents -- a bodyless 500 under uvicorn.
+    """
+    raw, _ = root_token
+    _, client = served
+
+    async def esplode(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("il build esplode")
+
+    monkeypatch.setattr(McpHttpApp, "_build", esplode)
+    response = await client.post("/mcp", json=INITIALIZE, headers={**ACCEPT, **_bearer(raw)})
+    assert response.status_code == 500
+    assert response.json() == {"detail": "errore interno"}
+
+
+@pytest.mark.asyncio
+async def test_a_domain_error_that_is_not_about_the_token_is_a_500_not_a_401(
+    served: tuple[McpHttpApp, httpx2.AsyncClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only `validation_failed` means «this credential is no good».
+
+    Every other `DomainError` reaching this boundary is a bug on our side, and telling
+    the caller its token is invalid would send it to mint a second one that fails too.
+    """
+    _, client = served
+
+    def conflitto(*args: Any, **kwargs: Any) -> Any:
+        raise Conflict("token", "qualcosa di inatteso")
+
+    monkeypatch.setattr(McpHttpApp, "_authenticate", conflitto)
+    response = await client.post(
+        "/mcp", json=INITIALIZE, headers={**ACCEPT, **_bearer("pgc_qualsiasi")}
+    )
+    assert response.status_code == 500
+    assert response.json() == {"detail": "errore interno"}
 
 
 @pytest.mark.asyncio
@@ -397,6 +445,23 @@ async def test_a_root_token_does_not_open_a_space(
         "/spazio-uno/mcp", json=INITIALIZE, headers={**ACCEPT, **_bearer(raw)}
     )
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_a_space_token_opens_neither_the_root_nor_another_space(
+    served: tuple[McpHttpApp, httpx2.AsyncClient], spaces: dict[str, tuple[str, UUID]]
+) -> None:
+    """The mirror of the test above: a token is a credential of one database only.
+
+    The root and the other space each resolve it on their own `personal_access_tokens`,
+    where its hash is not, so both answer the same 401 as an invented token.
+    """
+    uno = spaces["spazio-uno"][0]
+    _, client = served
+    for path in ["/mcp", "/spazio-due/mcp"]:
+        response = await client.post(path, json=INITIALIZE, headers={**ACCEPT, **_bearer(uno)})
+        assert response.status_code == 401, path
+        assert response.json() == {"detail": "Token non valido"}
 
 
 @pytest.mark.asyncio

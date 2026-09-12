@@ -182,6 +182,11 @@ claude mcp add --transport http pigrocrm https://<host>/mcp --header "Authorizat
   "headers": {"Authorization": "Bearer pgc_..."}}}}
 ```
 
+The host vhosts in `deploy/nginx/` gained a `/mcp` block with a long read timeout for
+this, because a tool call answers only when it has finished: an installation still
+serving an older copy of its vhost caps every call at nginx's 60-second default until it
+re-applies the file (`deploy/setup-server.sh`).
+
 The token inherits the whole role of whoever created it; revoke it from Impostazioni →
 Token if it leaks. Claude Code, Cursor, Codex and any client that can send a header
 work; the connectors of claude.ai and Claude Desktop need OAuth, which this server does
