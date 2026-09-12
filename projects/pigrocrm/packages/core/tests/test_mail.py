@@ -81,20 +81,24 @@ def test_the_recording_sender_keeps_what_it_was_given() -> None:
     assert recording.sent == [mail]
 
 
-def test_the_welcome_mail_says_where_to_enter_and_what_to_do_first() -> None:
-    member = welcome_mail("ada@x.it", "Ada", "https://pigro.test/ada/app/login", membro=True)
+def test_the_welcome_mail_enters_with_a_link_and_says_what_to_do_first() -> None:
+    entra = "https://pigro.test/ada/app/entra?t=abc"
+    login = "https://pigro.test/ada/app/login"
+    member = welcome_mail("ada@x.it", entra, login, membro=True)
     assert member.subject == "Il tuo spazio PigroCRM è pronto"
-    assert member.text.startswith("Ciao Ada,")
-    assert "https://pigro.test/ada/app/login" in member.text
+    assert member.text.startswith("Ciao,")
+    assert entra in member.text and login in member.text
     assert (
         "assistente" in member.text
         and "dati fiscali" in member.text
         and "primo cliente" in member.text
     )
     assert "joinorbiters.com/hub/freelance" not in member.text
-    guest = welcome_mail("bob@x.it", None, "https://pigro.test/bob/app/login", membro=False)
-    assert guest.text.startswith("Ciao,")
+    assert member.html is not None and entra in member.html
+    guest = welcome_mail("bob@x.it", entra, login, membro=False)
     assert "joinorbiters.com/hub/freelance" in guest.text
     assert guest.html is not None and "hub/freelance" in guest.html
-    hostile = welcome_mail("x@x.it", "<b>Ada</b>", "https://pigro.test/x/app/login", membro=True)
-    assert hostile.html is not None and "<b>Ada</b>" not in hostile.html
+    hostile = welcome_mail(
+        "x@x.it", 'https://pigro.test/x/app/entra?t="><script>', login, membro=True
+    )
+    assert hostile.html is not None and "<script>" not in hostile.html

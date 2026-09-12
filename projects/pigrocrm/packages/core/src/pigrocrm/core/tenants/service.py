@@ -139,9 +139,9 @@ class TenantService:
             try:
                 with session_factory(engine)() as space:
                     UserService(space).create(
-                        UserCreate(
-                            email=data.email, password=data.password, nome=data.nome, ruolo="admin"
-                        ),
+                        # No password: the admin enters with a link by mail, and the first
+                        # link proves the address (spec 2026-09-12 §6.4).
+                        UserCreate(email=data.email, password=None, nome=data.nome, ruolo="admin"),
                         Actor.system(),
                     )
                     # Born ready (spec 2026-09-12 §6.5): stages, templates and
@@ -159,8 +159,8 @@ class TenantService:
             finally:
                 engine.dispose()
         except ValidationFailed:
-            # The password was too short: nothing about the space is wrong, only the
-            # input, and the person will retry. Leave nothing behind.
+            # A domain rule refused something about the admin: nothing about the space
+            # is wrong, only the input, and the person will retry. Leave nothing behind.
             self._undo(tenant, url)
             raise
         except Exception:

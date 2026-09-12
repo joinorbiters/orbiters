@@ -2458,16 +2458,18 @@ export interface paths {
         /**
          * Signup
          * @description Creates the space: a registry row, a migrated database, its first admin, its
-         *     defaults. 409 when the name is taken, 422 when it is malformed or reserved or a
-         *     password is given and too short.
+         *     defaults. 409 when the name is taken, 422 when it is malformed or reserved.
          *
-         *     Registering is entering (spec 2026-09-12 §6.4): the response carries the cookies the
-         *     space's own login would set, at the space's path (the browser accepts them from the
-         *     root's response: same host), and `Location` is the space's home. The first link
-         *     entry of the real owner revokes this session (`MagicLinkService.enter`), which is
-         *     what makes opening it before the address is proven safe. The welcome mail leaves
-         *     after the response when a sender and a public origin exist; without them the space
-         *     is created all the same.
+         *     Registering is entering (spec 2026-09-12 §6.4), for as long as an address nobody has
+         *     proven deserves: the response carries the space's *access* cookie, at the space's
+         *     path (the browser accepts it from the root's response: same host), and `Location` is
+         *     the space's home. No refresh token: whoever typed somebody else's email works for
+         *     `access_token_minutes` and then stops, cannot mint a personal token and cannot add a
+         *     user (`require_verified_identity`). The welcome mail carries a link that enters:
+         *     the first click proves the address, opens the durable session and revokes what came
+         *     before (`MagicLinkService.enter`). Without a sender or a public origin the space is
+         *     created all the same, and the login page's own link does the rest. Throttled per
+         *     client like the member question: a `CREATE DATABASE` per anonymous POST.
          */
         post: operations["signup_api_tenants__post"];
         delete?: never;
@@ -6149,8 +6151,6 @@ export interface components {
              * Format: email
              */
             email: string;
-            /** Password */
-            password?: string | null;
             /**
              * Membro
              * @default false

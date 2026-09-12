@@ -157,4 +157,29 @@ describe('the signup wizard', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/già in uso/))
     expect(screen.getByLabelText('Come si chiama il tuo spazio?')).toBeInTheDocument()
   })
+
+  it('proposes the name to an owner who wants a second space, and lets everyone change the email', async () => {
+    answers({ '/api/tenants/membro': OWNER })
+    const user = userEvent.setup()
+    render(<SignupPage />)
+    await throughStepOne(user)
+    await screen.findByText('Hai già uno spazio')
+    await user.click(screen.getByRole('button', { name: 'Vuoi crearne un altro?' }))
+    expect(screen.getByLabelText('Come si chiama il tuo spazio?')).toHaveValue('Ada Lovelace')
+    // «Indietro» goes to the email, never back to the owner card, and forgets the name.
+    await user.click(screen.getByRole('button', { name: 'Indietro' }))
+    expect(screen.getByLabelText('Con quale email ti conosciamo?')).toHaveValue('ada@studio.it')
+    expect(screen.queryByText('Hai già uno spazio')).toBeNull()
+    await throughStepOne(user)
+    await user.click(await screen.findByRole('button', { name: 'Cambia email' }))
+    expect(screen.getByLabelText('Con quale email ti conosciamo?')).toBeInTheDocument()
+  })
+
+  it('trims the email before asking about it', async () => {
+    answers({ '/api/tenants/membro': NOBODY })
+    const user = userEvent.setup()
+    render(<SignupPage />)
+    await throughStepOne(user, '  bob@studio.it ')
+    expect(POST).toHaveBeenCalledWith('/api/tenants/membro', { body: { email: 'bob@studio.it' } })
+  })
 })

@@ -43,7 +43,8 @@ const PRIVACY = 'https://joinorbiters.com/privacy'
  */
 export function SignupPage({ go = (url) => window.location.assign(url) }: { go?: (url: string) => void }) {
   const navigate = useNavigate()
-  const [step, setStep] = useState<1 | 2>(1)
+  // Three screens: the email, the owner card (this address already has a space), the name.
+  const [screen, setScreen] = useState<'email' | 'owner' | 'name'>('email')
   const [email, setEmail] = useState('')
   const [member, setMember] = useState<Member | null>(null)
   const [linkSent, setLinkSent] = useState(false)
@@ -61,7 +62,7 @@ export function SignupPage({ go = (url) => window.location.assign(url) }: { go?:
 
   // Ask the server whether a well-formed address is free, a moment after typing stops.
   useEffect(() => {
-    if (step !== 2 || slug === '' || localProblem) return
+    if (screen !== 'name' || slug === '' || localProblem) return
     const asked = slug
     const handle = window.setTimeout(() => {
       setAvailability({ state: 'checking', slug: asked })
@@ -78,7 +79,7 @@ export function SignupPage({ go = (url) => window.location.assign(url) }: { go?:
         .catch(() => setAvailability({ state: 'idle' }))
     }, 350)
     return () => window.clearTimeout(handle)
-  }, [step, slug, localProblem])
+  }, [screen, slug, localProblem])
 
   // The name proposes the address until the person edits the address by hand.
   function onNomeChange(value: string) {
@@ -91,12 +92,15 @@ export function SignupPage({ go = (url) => window.location.assign(url) }: { go?:
     setError(null)
     setBusy(true)
     try {
-      const answer = await unwrap(api.POST('/api/tenants/membro', { body: { email } }))
+      const address = email.trim()
+      const answer = await unwrap(api.POST('/api/tenants/membro', { body: { email: address } }))
+      setEmail(address)
       setMember(answer)
-      if (answer.spazi > 0) return
+      // The member's name proposes the space's name, whichever screen comes next: whoever
+      // owns a space and still wants another finds it written too.
       const proposed = [answer.nome, answer.cognome].filter(Boolean).join(' ')
-      if (proposed) onNomeChange(proposed)
-      setStep(2)
+      if (proposed && nome === '') onNomeChange(proposed)
+      setScreen(answer.spazi > 0 ? 'owner' : 'name')
     } catch (caught) {
       setError(toProblem(caught).detail)
     } finally {
@@ -123,7 +127,9 @@ export function SignupPage({ go = (url) => window.location.assign(url) }: { go?:
     setBusy(true)
     try {
       const tenant = await unwrap(
-        api.POST('/api/tenants/', { body: { slug, nome, email, membro: member?.membro ?? false } }),
+        api.POST('/api/tenants/', {
+          body: { slug, nome: nome.trim(), email, membro: member?.membro ?? false },
+        }),
       )
       // The 201 set the space's cookies: a different basepath is a different application
       // instance, so this is a navigation, not a router push.
@@ -140,7 +146,18 @@ export function SignupPage({ go = (url) => window.location.assign(url) }: { go?:
   const isFree = current?.state === 'free'
   const canCreate = !busy && isFree && nome.trim() !== ''
 
-  const hasSpaces = step === 1 && member !== null && member.spazi > 0
+  const hasSpaces = screen === 'owner'
+
+  function backToEmail() {
+    setScreen('email')
+    setMember(null)
+    setLinkSent(false)
+    setError(null)
+    setNome('')
+    setSlug('')
+    setSlugTouched(false)
+    setEditingSlug(false)
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
@@ -155,7 +172,7 @@ export function SignupPage({ go = (url) => window.location.assign(url) }: { go?:
               ? linkSent
                 ? 'Controlla la posta: il link per entrare vale 15 minuti.'
                 : 'Questa email ha già uno spazio PigroCRM. Ti mandiamo il link per entrare.'
-              : step === 1
+              : screen === 'email'
                 ? '1 di 2. Un PigroCRM tutto tuo, con i tuoi dati in un database separato.'
                 : member?.membro
                   ? `2 di 2. Sei dei nostri${member.nome ? `: ciao ${member.nome}` : ''}.`
@@ -180,14 +197,18 @@ export function SignupPage({ go = (url) => window.location.assign(url) }: { go?:
                 variant="ghost"
                 className="w-full"
                 onClick={() => {
-                  setStep(2)
+                  setScreen('name')
                   setLinkSent(false)
+                  setError(null)
                 }}
               >
                 Vuoi crearne un altro?
               </Button>
+              <Button type="button" variant="link" className="w-full" onClick={backToEmail}>
+                Cambia email
+              </Button>
             </div>
-          ) : step === 1 ? (
+          ) : screen === 'email' ? (
             <form onSubmit={onEmailNext} className="space-y-4" noValidate>
               <div className="space-y-2">
                 <Label htmlFor="email">Con quale email ti conosciamo?</Label>
@@ -294,15 +315,7 @@ export function SignupPage({ go = (url) => window.location.assign(url) }: { go?:
                 </a>
                 .
               </p>
-              <Button
-                type="button"
-                variant="ghost"
-                className="w-full"
-                onClick={() => {
-                  setStep(1)
-                  setError(null)
-                }}
-              >
+              <Button type="button" variant="ghost" className="w-full" onClick={backToEmail}>
                 Indietro
               </Button>
             </form>

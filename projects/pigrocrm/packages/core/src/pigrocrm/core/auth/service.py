@@ -36,6 +36,27 @@ def _snapshot(user: User) -> dict[str, object]:
     return {name: getattr(user, name) for name in _AUDITED_FIELDS}
 
 
+UNVERIFIED_IDENTITY = (
+    "prima conferma il tuo indirizzo: entra dal link che ti abbiamo mandato per email"
+)
+
+
+def require_verified_identity(session: Session, actor: Actor, action: str) -> None:
+    """An account that never had a password and never used a link by mail is an address
+    somebody typed (spec 2026-09-12 §6.4): it may work in its space for the length of an
+    access token, and nothing more durable than that. Minting a personal token or
+    creating a user would outlive the revocation the first link performs, so both wait
+    for the address to be proven. The system and every account with a password or a
+    verified address pass."""
+    if actor.id is None:
+        return
+    user = UserRepository(session).get(actor.id)
+    if user is None:
+        return
+    if user.password_hash is None and user.email_verificata_il is None:
+        raise ValidationFailed("user", "email", UNVERIFIED_IDENTITY, expected=action)
+
+
 class UserService:
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -44,6 +65,7 @@ class UserService:
 
     def create(self, data: UserCreate, actor: Actor) -> UserRead:
         actor.require_admin("create_user")
+        require_verified_identity(self.session, actor, "create_user")
         if data.password is None:
             # A user with no password enters with a link by mail (spec 2026-09-12 §6.2).
             # Only the provisioning of a space may create one: an admin adding a

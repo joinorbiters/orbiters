@@ -407,3 +407,30 @@ def test_only_the_system_may_create_a_user_without_a_password(db_session: Sessio
     )
     row = UserRepository(db_session).get(created.id)
     assert row is not None and row.password_hash is None
+
+
+def test_an_unverified_passwordless_admin_cannot_create_users_until_the_first_link(
+    db_session: Session,
+) -> None:
+    """Spec 2026-09-12 §6.4: an address somebody typed at the signup may not add a user
+    (or mint a token, `test_pat_service.py`) before a link by mail proves it."""
+    from datetime import UTC, datetime
+
+    from pigrocrm.core.auth.repository import UserRepository
+
+    service = UserService(db_session)
+    admin = service.create(
+        UserCreate(email="link@x.it", password=None, nome="Link", ruolo="admin"), Actor.system()
+    )
+    actor = Actor(id=admin.id, type="user", role="admin")
+    with pytest.raises(ValidationFailed) as excinfo:
+        service.create(UserCreate(email="c@x.it", password="lunghissima1", nome="C"), actor)
+    assert "conferma il tuo indirizzo" in str(excinfo.value)
+    row = UserRepository(db_session).get(admin.id)
+    assert row is not None
+    row.email_verificata_il = datetime.now(UTC)
+    db_session.flush()
+    assert (
+        service.create(UserCreate(email="c@x.it", password="lunghissima1", nome="C"), actor).email
+        == "c@x.it"
+    )

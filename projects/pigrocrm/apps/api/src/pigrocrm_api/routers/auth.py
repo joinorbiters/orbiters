@@ -1,6 +1,6 @@
-from typing import Annotated, Any
+from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
@@ -14,7 +14,7 @@ from pigrocrm.core.auth.tokens import decode_token, issue_access_token
 from pigrocrm.core.config import Settings
 from pigrocrm.core.db.session import session_factory
 from pigrocrm.core.errors import DomainError, ValidationFailed
-from pigrocrm.core.mail import EmailSender, magic_link_mail, sender_from_settings
+from pigrocrm.core.mail import magic_link_mail
 from pigrocrm.core.tenants import TenantService
 from pigrocrm.core.tenants.database import (
     tenant_database_name,
@@ -24,6 +24,11 @@ from pigrocrm.core.tenants.database import (
 from pigrocrm.core.validation import SafeStr
 from pigrocrm_api.deps import ACCESS_COOKIE, REFRESH_COOKIE, ActorDep, SessionDep, SettingsDep
 from pigrocrm_api.errors import PROBLEM_RESPONSES
+from pigrocrm_api.sessions import (  # noqa: F401 - get_sender is the override seam
+    SenderDep,
+    get_sender,
+    set_session_cookie,
+)
 from pigrocrm_api.tenancy import cookie_path, cookie_paths_to_clear, first_cookie, tenant_slug
 
 router = APIRouter(prefix="/api/auth", tags=["auth"], responses=PROBLEM_RESPONSES)
@@ -114,12 +119,9 @@ class LoginRequest(BaseModel):
     password: str
 
 
-def _set_cookie(
-    response: Response, name: str, value: str, max_age: int, *, secure: bool, path: str = "/"
-) -> None:
-    response.set_cookie(
-        name, value, httponly=True, secure=secure, samesite="lax", max_age=max_age, path=path
-    )
+# The cookie writer and the sender dependency live in `pigrocrm_api.sessions`, shared
+# with the signup; the names here are what this module and its tests always used.
+_set_cookie = set_session_cookie
 
 
 def _clear_other_jars(response: Response, request: Request, settings: Settings) -> None:
@@ -173,15 +175,6 @@ def login(
 
 # ---- a link by mail (spec 2026-09-12 §6.2) ----------------------------------------------
 
-
-def get_sender(settings: SettingsDep) -> EmailSender | None:
-    """The mail sender, or `None` without a key: the endpoints that mail answer 503.
-    Declared here rather than in `deps.py`, which ORB-170 is reshaping at the same time;
-    tests override this one dependency with a `RecordingSender`."""
-    return sender_from_settings(settings)
-
-
-SenderDep = Annotated[EmailSender | None, Depends(get_sender)]
 
 NO_SENDER = (
     "L'accesso via email non è ancora attivo su questa installazione. Entra con la password."
