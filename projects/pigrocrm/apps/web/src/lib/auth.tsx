@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createContext, use, type ReactNode } from 'react'
+import { resetUser } from '@orbiters/analytics/browser'
+import { createContext, use, useEffect, type ReactNode } from 'react'
+import { identifySession } from './analytics'
 import { api, unwrap } from './api'
 import { queryKeys } from './query'
 import { tenantPrefix } from './tenant'
@@ -62,8 +64,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     mutationFn: () => unwrap(api.POST('/api/auth/logout')),
   })
 
+  const user = (data as SessionUser | null) ?? null
+
+  // Keyed on the four values PostHog receives, never on `user` itself: `me` is re-read
+  // every thirty seconds and each answer is a new object, so an effect on the object
+  // would re-identify the same person on every poll. A change of role does re-run it,
+  // which is right: the person property should say what they are now.
+  const userId = user?.id
+  const email = user?.email
+  const nome = user?.nome
+  const ruolo = user?.ruolo
+  useEffect(() => {
+    if (userId === undefined || email === undefined || nome === undefined || ruolo === undefined) {
+      return
+    }
+    identifySession({ id: userId, email, nome, ruolo })
+  }, [userId, email, nome, ruolo])
+
   const value: AuthValue = {
-    user: (data as SessionUser | null) ?? null,
+    user,
     isLoading,
     login: async (email, password) => {
       await loginMutation.mutateAsync({ email, password })
@@ -90,6 +109,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         await logoutMutation.mutateAsync()
       } finally {
+        // Before the page leaves, and in the `finally` for the same reason the
+        // navigation is: the person asked to be forgotten here too, and the next login
+        // on this browser must not be stitched onto them.
+        resetUser()
         queryClient.clear()
         window.location.assign(`${tenantPrefix}/app/login`)
       }
