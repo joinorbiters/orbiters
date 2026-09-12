@@ -1,3 +1,4 @@
+import { capture } from '@orbiters/analytics/browser'
 import { Link } from '@tanstack/react-router'
 import { ArrowUpRight, Download, LogOut, Pencil } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -112,7 +113,7 @@ export function Area() {
             come arrivare a un numero e difenderlo, cosa scrivere prima di iniziare. Venti minuti.
           </p>
           <Button asChild className="mt-auto self-start">
-            <a href={member.guideUrl}>
+            <a href={member.guideUrl} onClick={() => capture('guida_scaricata')}>
               <Download className="mr-2 size-4" />
               Scarica la guida
             </a>

@@ -1,3 +1,4 @@
+import { resetUser } from '@orbiters/analytics/browser'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ApiError,
@@ -59,6 +60,7 @@ export function useMemberLogout() {
   return useMutation({
     mutationFn: () => member.logout(),
     onSettled: () => {
+      resetUser()
       client.clear()
       window.location.assign('/hub/accedi')
     },

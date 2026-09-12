@@ -3,6 +3,7 @@ import { BookOpen, Boxes, Briefcase, LogIn, LogOut, Mail, ShieldCheck, UserRound
 import { useEffect } from 'react'
 import { BrandMark } from '@/components/BrandMark'
 import { Button } from '@/components/ui/button'
+import { useIdentifyAdmin } from '@/lib/analytics'
 import { useAdmin, useLogout } from '@/lib/auth'
 
 const NAV = [
@@ -21,6 +22,7 @@ export function AdminLayout() {
   const me = useAdmin()
   const logout = useLogout()
   const navigate = useNavigate()
+  useIdentifyAdmin(me.data)
 
   useEffect(() => {
     if (!me.isPending && me.data === null) void navigate({ to: '/admin/login' })

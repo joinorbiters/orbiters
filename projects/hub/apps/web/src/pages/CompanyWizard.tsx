@@ -1,5 +1,6 @@
 import { useLocation, useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
+import { useWizardAnalytics } from '@/lib/analytics'
 import { ApiError, requestPeople, type CompanyRequest } from '@/lib/api'
 import { resolveAttribution } from '@/lib/utm'
 import { LongTextField, TextField } from '@/wizard/fields'
@@ -135,6 +136,7 @@ export function CompanyWizard() {
   // The URL's own query string, from the router rather than `window`: the attribution
   // is whatever this page was opened with.
   const searchStr = useLocation({ select: (location) => location.searchStr })
+  const analytics = useWizardAnalytics('azienda', searchStr)
   const [value, setValue] = useState<CompanyRequest>(EMPTY)
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<{ message: string; step?: string } | null>(null)
@@ -147,6 +149,7 @@ export function CompanyWizard() {
         { ...value, budget_giornaliero: value.budget_giornaliero.replace(',', '.') },
         resolveAttribution(searchStr),
       )
+      analytics.completed()
       void navigate({ to: '/grazie', search: { chi: 'azienda' } })
     } catch (error) {
       const failure = error instanceof ApiError ? error : null
@@ -171,6 +174,7 @@ export function CompanyWizard() {
       submitting={submitting}
       submitError={submitError}
       submitLabel="Invia la richiesta"
+      onStep={analytics.onStep}
     />
   )
 }

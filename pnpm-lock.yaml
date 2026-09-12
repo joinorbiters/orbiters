@@ -73,6 +73,9 @@ importers:
 
   projects/hub/apps/web:
     dependencies:
+      '@orbiters/analytics':
+        specifier: workspace:*
+        version: link:../../../../shared/analytics
       '@orbiters/brand':
         specifier: workspace:*
         version: link:../../../../shared/brand

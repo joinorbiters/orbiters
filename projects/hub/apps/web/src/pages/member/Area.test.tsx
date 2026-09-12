@@ -7,10 +7,18 @@ import {
   createRoute,
   createRouter,
 } from '@tanstack/react-router'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Area } from './Area'
 import { MemberGuard } from './Guard'
+
+vi.mock('@orbiters/analytics/browser', () => ({
+  capture: vi.fn(),
+  identifyUser: vi.fn(),
+  resetUser: vi.fn(),
+}))
+import { capture, identifyUser, resetUser } from '@orbiters/analytics/browser'
 
 function answer(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -64,7 +72,10 @@ function mount() {
   )
 }
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.clearAllMocks()
+})
 
 describe('/io', () => {
   it('shows the answers under the wizard’s questions, the CV and the two perks', async () => {
@@ -108,5 +119,38 @@ describe('/io', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(answer(401, { detail: 'Autenticazione richiesta' }))
     mount()
     expect(await screen.findByRole('heading', { name: 'Accedi' })).toBeInTheDocument()
+    expect(identifyUser).not.toHaveBeenCalled()
+  })
+})
+
+describe('what the area reports to PostHog (ORB-185)', () => {
+  it('identifies the member once the profile is known, by id, with the email and the name', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(answer(200, PROFILE))
+    mount()
+    await screen.findAllByText('Ada Lovelace')
+    expect(identifyUser).toHaveBeenCalledTimes(1)
+    expect(identifyUser).toHaveBeenCalledWith('f1', { email: 'ada@studio.it', nome: 'Ada' })
+  })
+
+  it('counts the guide on the click and leaves the download to the link', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(answer(200, PROFILE))
+    mount()
+    const link = await screen.findByRole('link', { name: /Scarica la guida/ })
+    // jsdom cannot navigate; stopping the default here does not stop React's own handler.
+    link.addEventListener('click', (event) => event.preventDefault())
+    await userEvent.setup().click(link)
+    expect(capture).toHaveBeenCalledWith('guida_scaricata')
+    expect(link).toHaveAttribute('href', '/api/hub/me/guida')
+  })
+
+  it('forgets the person on Esci, before the page leaves', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(answer(200, PROFILE))
+    // The logout ends in `window.location.assign`, which jsdom cannot do and says so
+    // once on the console (from its own console, out of a spy's reach); the assertion
+    // is about what happens before it.
+    mount()
+    await screen.findAllByText('Ada Lovelace')
+    await userEvent.setup().click(screen.getByRole('button', { name: /Esci/ }))
+    await waitFor(() => expect(resetUser).toHaveBeenCalledTimes(1))
   })
 })
