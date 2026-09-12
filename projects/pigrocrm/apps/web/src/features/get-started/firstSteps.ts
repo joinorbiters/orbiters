@@ -6,7 +6,7 @@
  *
  * The keys sit under the prefixes the rest of the app invalidates (`['customers', …]`,
  * `['emitter', …]`, `['tokens', userId, …]`), so creating the first customer, saving
- * the emitter or minting a token refreshes the panel on the next Home without waiting
+ * the emitter or minting a token refreshes the page on its next visit without waiting
  * out `staleTime`.
  */
 import { useQuery } from '@tanstack/react-query'
@@ -48,7 +48,9 @@ export function hasSeenGetStarted(userId: string): boolean {
   try {
     return window.localStorage.getItem(seenKey(userId)) === '1'
   } catch {
-    return true // a browser that refuses storage is never redirected in a loop
+    // A browser that refuses storage (a private window, blocked site data) is never
+    // redirected: the sidebar entry is one click away, and a loop would be worse.
+    return true
   }
 }
 
@@ -56,7 +58,8 @@ export function markGetStartedSeen(userId: string): void {
   try {
     window.localStorage.setItem(seenKey(userId), '1')
   } catch {
-    // Nothing to remember with: the Home will offer the page again next time. Fine.
+    // Storage refused: `hasSeenGetStarted` answers `true` in the same browser, so
+    // nothing is lost and nothing loops.
   }
 }
 
@@ -114,15 +117,17 @@ async function hasToken(): Promise<boolean> {
 
 const OPTIONS = { retry: false, staleTime: 30_000 } as const
 
-export function useFirstSteps(): FirstStepsState {
+/** `enabled: false` issues no request and reports `loading: false`: for the Home's
+ *  redirect once it has nothing left to decide. */
+export function useFirstSteps({ enabled = true }: { enabled?: boolean } = {}): FirstStepsState {
   const { user } = useAuth()
   const userId = user?.id ?? ''
   const isAdmin = user?.ruolo === 'admin'
-  const steps = OPTIONS
+  const steps = { ...OPTIONS, enabled }
   const token = useQuery({
     queryKey: [...queryKeys.tokens(userId), 'first-steps'],
     queryFn: hasToken,
-    ...OPTIONS,
+    ...steps,
   })
   const fiscali = useQuery({ queryKey: [...queryKeys.emitter, 'first-steps'], queryFn: fiscalDataSaved, ...steps })
   const cliente = useQuery({ queryKey: queryKeys.customers(SCOPE), queryFn: hasCustomers, ...steps })
@@ -131,7 +136,7 @@ export function useFirstSteps(): FirstStepsState {
   const documento = useQuery({ queryKey: queryKeys.documents(SCOPE), queryFn: hasDocuments, ...steps })
 
   const active = [token, fiscali, cliente, deal, ore, documento]
-  const loading = active.some((q) => q.isPending)
+  const loading = enabled && active.some((q) => q.isPending)
   const value = (q: { data?: boolean; isError: boolean }) => (q.isError ? true : (q.data ?? false))
 
   const list: FirstStep[] = [

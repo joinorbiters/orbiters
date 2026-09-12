@@ -20,7 +20,8 @@ export function GetStartedPage() {
   const canWrite = useCanWrite()
   const state = useFirstSteps()
 
-  // Being here is what the Home's one-time redirect remembers.
+  // Being here is what the Home's one-time redirect remembers, however one arrived:
+  // through the redirect or through the sidebar. Either way the page has been seen.
   useEffect(() => {
     if (userId) markGetStartedSeen(userId)
   }, [userId])

@@ -14,8 +14,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return { ...actual, api: { GET: vi.fn(), POST: vi.fn(), PUT: vi.fn(), DELETE: vi.fn() } }
 })
 
-const auth = {
-  user: { id: 'u1', email: 'ada@studio.it', nome: 'Ada', ruolo: 'admin' as string, attivo: true },
+const auth: { user: { id: string; email: string; nome: string; ruolo: string; attivo: boolean } | null } = {
+  user: { id: 'u1', email: 'ada@studio.it', nome: 'Ada', ruolo: 'admin', attivo: true },
 }
 vi.mock('@/lib/auth', () => ({
   useAuth: () => ({
@@ -25,8 +25,8 @@ vi.mock('@/lib/auth', () => ({
     logout: vi.fn(),
     enterWithLink: vi.fn(),
   }),
-  useCanWrite: () => auth.user.ruolo !== 'readonly',
-  useIsAdmin: () => auth.user.ruolo === 'admin',
+  useCanWrite: () => auth.user?.ruolo !== 'readonly',
+  useIsAdmin: () => auth.user?.ruolo === 'admin',
 }))
 
 vi.mock('@tanstack/react-router', () => ({
@@ -80,7 +80,7 @@ beforeEach(() => {
 
 afterEach(() => {
   window.localStorage.clear()
-  auth.user.ruolo = 'admin'
+  auth.user = { id: 'u1', email: 'ada@studio.it', nome: 'Ada', ruolo: 'admin', attivo: true }
 })
 
 describe('Get started', () => {
@@ -133,7 +133,7 @@ describe('Get started', () => {
   })
 
   it('shows a readonly user the steps as text, none of them a link', async () => {
-    auth.user.ruolo = 'readonly'
+    if (auth.user) auth.user.ruolo = 'readonly'
     renderPage()
     expect(await screen.findByText(/0 di 4/)).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Il primo cliente' })).toBeNull()
@@ -141,11 +141,18 @@ describe('Get started', () => {
   })
 
   it('does not link a collaboratore to the fiscal settings only an admin can open', async () => {
-    auth.user.ruolo = 'collaboratore'
+    if (auth.user) auth.user.ruolo = 'collaboratore'
     renderPage()
     expect(await screen.findByText(/0 di 4/)).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'I tuoi dati fiscali' })).toBeNull()
     expect(screen.getByText(/Li imposta l.amministratore/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Il primo cliente' })).toBeInTheDocument()
+  })
+
+  it('marks nothing while nobody is logged in', async () => {
+    auth.user = null
+    renderPage()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(window.localStorage.length).toBe(0)
   })
 })
