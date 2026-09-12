@@ -80,10 +80,11 @@ class Settings(BaseSettings):
     # in production because "it's just a flag" should re-read this paragraph first.
     cookie_secure: bool = True
 
-    # Whether a personal access token may perform the sixteen operations listed in
-    # `actor.AGENT_FORBIDDEN_ACTIONS` -- issuing and annulling invoices, the fiscal
-    # profile, rates, cost categories, period locks, the hours-to-invoice bridge and the
-    # annual estimate -- plus sending mail and preparing a payment reminder.
+    # Whether a personal access token may perform the operations listed in
+    # `actor.AGENT_FORBIDDEN_ACTIONS` -- issuing and annulling invoices, rates, cost
+    # categories, period locks, the hours-to-invoice bridge and the annual estimate --
+    # plus sending mail and preparing a payment reminder. (Not the fiscal profile nor
+    # the emitter: an admin's token writes those on every installation, ORB-188.)
     #
     # `False` by default, and the default is the one nobody has to think about. Those
     # operations are not merely privileged, they are **irreversible in ways the rest of

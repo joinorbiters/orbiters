@@ -65,13 +65,16 @@ PRIVILEGED_MODULES = (TOOLS_DIR / "privileged.py", TOOLS_DIR / "drive_privileged
 # Two of them were added after an audit found the repo stating this policy twice
 # and the two statements disagreeing:
 #
-#   * `update_fiscal_profile` is one of the *four* names slice 3 §11 actually banned
+#   * `update_fiscal_profile` was one of the *four* names slice 3 §11 actually banned
 #     (`issue_invoice`, `annul_invoice`, `mark_transmitted_externally`,
-#     `update_fiscal_profile`); this list dropped it and put `export_invoice_xml` -- a
-#     real, correct addition -- in its place, while `tools/invoices.py` went on declaring
-#     it forbidden in a table nothing imported. That row decides the VAT rate, the
-#     natura, the bollo and the normative reference printed on every invoice line: it is
-#     the configuration this ban exists for, not an exception to it.
+#     `update_fiscal_profile`); this list had dropped it and put `export_invoice_xml` --
+#     a real, correct addition -- in its place, while `tools/invoices.py` went on
+#     declaring it forbidden in a table nothing imported. The audit restored it. It left
+#     again with ORB-188 (2026-09-12), this time on purpose and in both halves at once
+#     (`AGENT_FORBIDDEN_ACTIONS` and here): the profile is one rewritable row, an
+#     issued invoice keeps its own copy of it, and in a space born empty setting it is
+#     the first thing a person asks their assistant. It is on the default surface with
+#     the emitter's write, admin-only through the service.
 #   * `unarchive_cost_category` is `archive_cost_category` in the other direction, and
 #     the same decision about which categories the CRM offers. Its absence from slice 4
 #     §11's list of ten is an omission rather than a distinction -- there is no reading
@@ -82,7 +85,6 @@ FORBIDDEN = (
     "annul_invoice",
     "mark_invoice_transmitted",
     "export_invoice_xml",
-    "update_fiscal_profile",
     "recalculate_rates",
     "update_user_rates",
     "update_deal_rate",
@@ -180,9 +182,8 @@ FORBIDDEN_NEEDING_GMAIL = frozenset(
 
 # The service methods behind them. Listed separately because a future tool could call one
 # under an innocuous name -- `finalise_invoice` registering a tool that calls `issue`
-# would pass a name check and defeat the point. One of the operations above has no entry
-# here: `FiscalProfileService.upsert`, which a bare name cannot express and which is
-# banned by `FORBIDDEN_QUALIFIED_CALLS` below.
+# would pass a name check and defeat the point. A ban a bare name cannot express goes
+# in `FORBIDDEN_QUALIFIED_CALLS` below instead.
 FORBIDDEN_SERVICE_CALLS = (
     "issue",
     "annul",
@@ -235,19 +236,21 @@ FORBIDDEN_SERVICE_CALLS = (
 )
 
 # The bans a bare method name cannot express, because the name is not the operation.
-# `update_fiscal_profile` is `FiscalProfileService.upsert`, and `upsert` is exactly the
-# kind of name a second service already carries: `EmitterProfileService.upsert` writes
-# the issuer's identity, and `EmitterProfileService.get` is *on* the MCP surface -- the
-# PDF header needs it for every role. Putting "upsert" in the tuple above would ban the
-# substring, so any call spelled that way, on any service, would fail this file with a
-# message about the fiscal profile. A ban on a name is not a ban on an operation, and the
-# bare names above are safe only because each of them happens to be unique; this one is
-# not, so it names its receiver and `_receivers_of` resolves it.
-FORBIDDEN_QUALIFIED_CALLS = (("FiscalProfileService", "upsert"),)
+# Empty since ORB-188, and kept with its instrument (`_receivers_of`) because the lesson
+# that filled it still holds: its one entry was `("FiscalProfileService", "upsert")`,
+# and `upsert` is exactly the kind of name a second service carries too --
+# `EmitterProfileService.upsert` -- so putting "upsert" in the tuple above would have
+# banned the substring, and any call spelled that way, on any service, would have failed
+# this file with a message about the fiscal profile. A ban on a name is not a ban on an
+# operation, and the bare names above are safe only because each happens to be unique.
+# The next qualified ban goes here as a `(service, method)` pair and is resolved to its
+# receiver; the tests below iterate the tuple so that an empty one asserts nothing
+# rather than parametrising into a skip.
+FORBIDDEN_QUALIFIED_CALLS: tuple[tuple[str, str], ...] = ()
 
 _REASON = (
     "e' un'operazione esclusa dalla superficie MCP per costruzione (slice 3 §11 per "
-    "gli atti fiscali e per il profilo fiscale, slice 4 §11 per le tariffe, le "
+    "gli atti fiscali, slice 4 §11 per le tariffe, le "
     "categorie di costo e le chiusure di periodo), non per controllo di permessi: un "
     "PAT eredita il ruolo pieno del proprietario e non scade (residuo R10), quindi "
     "l'assenza del tool e' l'unico meccanismo che regge."
@@ -523,10 +526,11 @@ def test_no_tool_reaches_a_forbidden_operation_under_another_name(method: str) -
 
 def test_the_qualified_scan_tells_two_services_with_the_same_method_apart(tmp_path: Path) -> None:
     """Guards the guard, on the one property that makes it worth having. If
-    `_receivers_of` collapsed to "some `.upsert(` exists", banning
-    `FiscalProfileService.upsert` would also ban `EmitterProfileService.upsert` -- and a
-    future tool for the issuer's own identity would fail the build with a message about
-    the fiscal regime, which is how a policy stops being believed."""
+    `_receivers_of` collapsed to "some `.upsert(` exists", a qualified ban declared on
+    one service's `upsert` would also ban every other service's -- `FiscalProfileService`
+    and `EmitterProfileService` both have one, and both are tools today -- and the build
+    would fail with a message about the wrong operation, which is how a policy stops
+    being believed."""
     (tmp_path / "m.py").write_text(
         "def a(context):\n"
         "    return EmitterProfileService(context.session).upsert(data, context.actor)\n"
@@ -553,25 +557,25 @@ def test_the_qualified_scan_fails_closed_on_a_receiver_it_cannot_resolve(tmp_pat
     assert _receivers_of("upsert", tmp_path) == [None]
 
 
-@pytest.mark.parametrize(("service", "method"), FORBIDDEN_QUALIFIED_CALLS)
-def test_no_tool_reaches_a_forbidden_operation_on_the_service_that_owns_it(
-    service: str, method: str
-) -> None:
+def test_no_tool_reaches_a_forbidden_operation_on_the_service_that_owns_it() -> None:
     """The qualified half of `test_no_tool_reaches_a_forbidden_operation_under_another_
     name`. Same guarantee, expressed against the receiver instead of the bare name,
-    because the bare name would either miss the operation or ban an unrelated one."""
-    offenders = [
-        owner or "un ricevitore non risolvibile"
-        for owner in _receivers_of(method)
-        if owner is None or owner == service
-    ]
-    assert not offenders, (
-        f"'.{method}(' e' chiamato su {offenders} da qualche modulo sotto tools/, ma "
-        f"'{service}.{method}' {_REASON} Il divieto vale su questa coppia "
-        "servizio/metodo: un ricevitore che questo controllo non sa attribuire conta "
-        "come violazione, perche' un divieto che si arrende all'ambiguita' non e' un "
-        "divieto."
-    )
+    because the bare name would either miss the operation or ban an unrelated one.
+    A loop and not a parametrisation, so that the tuple being empty (as it is since
+    ORB-188) asserts nothing instead of producing a skipped test."""
+    for service, method in FORBIDDEN_QUALIFIED_CALLS:
+        offenders = [
+            owner or "un ricevitore non risolvibile"
+            for owner in _receivers_of(method)
+            if owner is None or owner == service
+        ]
+        assert not offenders, (
+            f"'.{method}(' e' chiamato su {offenders} da qualche modulo sotto tools/, ma "
+            f"'{service}.{method}' {_REASON} Il divieto vale su questa coppia "
+            "servizio/metodo: un ricevitore che questo controllo non sa attribuire conta "
+            "come violazione, perche' un divieto che si arrende all'ambiguita' non e' un "
+            "divieto."
+        )
 
 
 def test_the_structural_ban_has_a_second_line_on_the_credential_itself() -> None:
