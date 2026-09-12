@@ -77,11 +77,22 @@ const EMPTY_ESTIMATE = {
 /** One mock for every endpoint the tabs read: which tab is mounted decides which are
  *  called. The economic one reads two -- the overview behind its cards and the estimate
  *  behind the «Stima fiscale» card under them. */
+const EMPTY_PAGE = { items: [], next_cursor: null }
+
+/** A space that has done nothing yet: every list empty, no emitter, no token. The
+ *  first-steps panels (spec 2026-09-12 §6.7) read these six. */
 const BY_PATH: Record<string, unknown> = {
   '/api/dashboard/commerciale': EMPTY_DASHBOARD,
   '/api/analytics/panoramica': EMPTY_OVERVIEW,
   '/api/analytics/fiscale': EMPTY_ESTIMATE,
+  '/api/customers': EMPTY_PAGE,
+  '/api/deals': EMPTY_PAGE,
+  '/api/time-entries': EMPTY_PAGE,
+  '/api/documents': EMPTY_PAGE,
+  '/api/tokens': [],
 }
+// `/api/emitter` answers 404 until the profile is saved once.
+const NOT_FOUND = new Set(['/api/emitter'])
 
 const SEARCH: DashboardSearch = {
   tab: 'commerciale',
@@ -105,10 +116,11 @@ beforeEach(() => {
   vi.mocked(api.GET).mockReset()
   vi.mocked(api.GET).mockImplementation(
     ((path: string) =>
-      Promise.resolve({
-        data: BY_PATH[path],
-        response: new Response(null, { status: 200 }),
-      })) as never,
+      Promise.resolve(
+        NOT_FOUND.has(path)
+          ? { error: { detail: 'Not Found' }, response: new Response(null, { status: 404 }) }
+          : { data: BY_PATH[path], response: new Response(null, { status: 200 }) },
+      )) as never,
   )
 })
 
@@ -227,5 +239,75 @@ describe('DashboardPage, two tabs', () => {
   it('shows the period picker on both tabs', () => {
     renderPage({ ...SEARCH, tab: 'economica' })
     expect(screen.getByLabelText('Dal')).toBeInTheDocument()
+  })
+
+  describe('a new space (spec 2026-09-12 §6.7)', () => {
+    /** The stubs of a space in use: the same paths, with something in them. */
+    function withData(overrides: Record<string, unknown>) {
+      vi.mocked(api.GET).mockImplementation(
+        ((path: string) =>
+          Promise.resolve(
+            path in overrides
+              ? { data: overrides[path], response: new Response(null, { status: 200 }) }
+              : NOT_FOUND.has(path)
+                ? { error: { detail: 'Not Found' }, response: new Response(null, { status: 404 }) }
+                : { data: BY_PATH[path], response: new Response(null, { status: 200 }) },
+          )) as never,
+      )
+    }
+
+    it('shows the assistant card and the four steps to do on an empty space', async () => {
+      renderPage()
+      expect(await screen.findByText('Il CRM che lavora al posto tuo')).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: /Collega l.assistente/ })).toHaveAttribute(
+        'href',
+        '/app/token',
+      )
+      expect(screen.getByText('Primi passi')).toBeInTheDocument()
+      expect(screen.getByText(/0 di 4/)).toBeInTheDocument()
+      expect(screen.getAllByLabelText('da fare')).toHaveLength(4)
+      expect(screen.getByRole('link', { name: 'I tuoi dati fiscali' })).toHaveAttribute(
+        'href',
+        '/app/impostazioni/emittente',
+      )
+    })
+
+    it('counts a step done when the thing exists, and only then', async () => {
+      withData({
+        '/api/emitter': { ragione_sociale: 'Ada', partita_iva: '01234567890', codice_fiscale: null },
+        '/api/customers': { items: [{ id: 'c1' }], next_cursor: null },
+      })
+      renderPage()
+      expect(await screen.findByText(/2 di 4/)).toBeInTheDocument()
+      expect(screen.getAllByLabelText('fatto')).toHaveLength(2)
+      // A done step is no longer a link: there is nothing left to do there.
+      expect(screen.queryByRole('link', { name: 'Il primo cliente' })).toBeNull()
+      expect(screen.getByRole('link', { name: 'Il primo deal, o le prime ore' })).toBeInTheDocument()
+    })
+
+    it('shows neither panel once everything is done and the assistant is connected', async () => {
+      withData({
+        '/api/emitter': { ragione_sociale: 'Ada', partita_iva: null, codice_fiscale: 'RSSMRA80A01H501U' },
+        '/api/customers': { items: [{ id: 'c1' }], next_cursor: null },
+        '/api/time-entries': { items: [{ id: 't1' }], next_cursor: null },
+        '/api/documents': { items: [{ id: 'd1' }], next_cursor: null },
+        '/api/tokens': [{ id: 'k1' }],
+      })
+      renderPage()
+      // The tab renders; the panels never appear.
+      expect(await screen.findByRole('tab', { name: 'Commerciale' })).toBeInTheDocument()
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      expect(screen.queryByTestId('new-space-panels')).toBeNull()
+    })
+
+    it('hides the steps on «Nascondi» and keeps the assistant card', async () => {
+      renderPage()
+      await screen.findByText('Primi passi')
+      await userEvent.click(screen.getByRole('button', { name: 'Nascondi' }))
+      expect(screen.queryByText('Primi passi')).toBeNull()
+      expect(screen.getByText('Il CRM che lavora al posto tuo')).toBeInTheDocument()
+      expect(window.localStorage.getItem('pigrocrm.primi-passi.nascosto')).toBe('1')
+      window.localStorage.removeItem('pigrocrm.primi-passi.nascosto')
+    })
   })
 })
