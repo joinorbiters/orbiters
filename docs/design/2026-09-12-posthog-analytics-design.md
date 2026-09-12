@@ -157,8 +157,10 @@ actor that ORB-170 introduces.
 
 ## The tables behind the events (ORB-187)
 
-PostHog's Postgres source reads one database through an SSH tunnel with a key PostHog
-generates. Two sources:
+PostHog's Postgres source reads one database through an SSH tunnel, authenticated with
+a key pair generated for it (the private half lives in PostHog's source configuration,
+the public half on the server) and with «Require TLS through tunnel» off, since the
+containers speak plain Postgres and the tunnel is the encryption. Two sources:
 
 - the hub's database (`orbiters`): `signups`, the freelancer and company applications,
   the members. This is the table side of the site's funnel.

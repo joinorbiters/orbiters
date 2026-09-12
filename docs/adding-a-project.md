@@ -287,23 +287,33 @@ are. The copy in `/etc/nginx/sites-available/` has certbot's port-443 block on t
 it: **edit that one in place**, with `nginx -t` before the reload. Overwriting it from
 the repository takes TLS away on the spot.
 
-### The tables behind the events: PostHog's warehouse reads two databases
+### What PostHog's warehouse reads
 
-Since 2026-09-12 (ORB-187) PostHog's data warehouse reads the hub's database
+Since 2026-09-12 (ORB-187) PostHog's data warehouse reads the hub's production database
 (`orbiters` on 55435: `signups`, `freelancers`, `companies`, `guide_downloads`,
-`member_logins`, `comments`) and the CRM's registry (`pigrocrm_tenants` on 55432:
-`tenants`), so the events the surfaces send can be joined to the rows behind them. The
-design is `docs/design/2026-09-12-posthog-analytics-design.md`. Both Postgres answer on
-the loopback only, so PostHog reaches them through an SSH tunnel, and the arrangement on
-the server is:
+`member_logins`, `comments`) and the CRM's production registry (`pigrocrm_tenants` on
+55432: `tenants`), so the events the surfaces send can be joined to the rows behind
+them. The preview databases (55434, 55436) are not connected. The design is
+`docs/design/2026-09-12-posthog-analytics-design.md`. Both Postgres answer on the
+loopback only, so PostHog reaches them through an SSH tunnel, and the arrangement on the
+server is:
 
-- a user `posthog`, shell `/usr/sbin/nologin`, whose one `authorized_keys` line is
-  PostHog's key with `restrict,port-forwarding,permitopen="127.0.0.1:55435",permitopen="127.0.0.1:55432"`;
+- a user `posthog`, shell `/usr/sbin/nologin`, whose one `authorized_keys` line is the
+  public half of a key pair generated for this purpose (the private half is stored in
+  PostHog's source configuration and nowhere else), restricted to the two forwards:
+
+  ```
+  restrict,port-forwarding,permitopen="127.0.0.1:55435",permitopen="127.0.0.1:55432" ssh-ed25519 ...
+  ```
+
 - `/etc/ssh/sshd_config.d/60-posthog-tunnel.conf`, a `Match User posthog` block with
   `AllowTcpForwarding yes`, `PermitOpen` on the same two addresses, `PermitTTY no`,
   `X11Forwarding no`, `AllowAgentForwarding no`, `PasswordAuthentication no`,
-  `ForceCommand /bin/false`. A shell attempt answers «This account is currently not
-  available»; a forward to either port works and to anything else does not;
+  `ForceCommand /bin/false`. A `Match` block runs to the end of its file, so nothing
+  else goes in that drop-in. A shell attempt answers nologin's «This account is
+  currently not available»; a forward to either port works and to anything else does
+  not. `sshd -t` before the reload, and `sshd -T -C user=posthog` prints the effective
+  `permitopen` for that user;
 - a role `posthog_ro` in each database, `LOGIN` with its own password, `CONNECT` on the
   database, `USAGE` on `public` and `SELECT` on the tables above and nothing else. The
   sessions, the admin users and the magic-link tokens are not granted.
@@ -316,11 +326,20 @@ every attempt answers «Your database doesn't support the encrypted connection P
 requires». Through the API the switch is `ssh_tunnel.require_tls: {"enabled": false}`
 in the source payload, which the wizard shows and the API reference does not name.
 
-A new project with a database that PostHog should read gets the same three things: a
-`permitopen` for its port on the key line and in the `Match` block, a `posthog_ro` role
-with `SELECT` on the tables that matter, and a source with the prefix the project is
-called. Per-space CRM databases are deliberately not connected: one source per space does
-not scale, and the activation funnel is read from events.
+Keeping it working:
+
+- **A new table** PostHog should see needs its own `GRANT SELECT` (the grants are per
+  table, a migration does not extend them) and then a schema refresh on the source.
+- **A new project's database**: a `permitopen` for its port on the key line and in the
+  `Match` block, `sshd -t`, `systemctl reload ssh`; a `posthog_ro` role with `SELECT` on
+  the tables that matter; a source with the prefix the project is called.
+- **Rotating the key**: generate a new pair, replace the one `authorized_keys` line,
+  put the new private half in each source's SSH settings, and test both forwards.
+- **Rotating a role password**: `ALTER ROLE posthog_ro PASSWORD '...'` in that
+  database, then the new password on the source; no restart anywhere.
+
+Per-space CRM databases are deliberately not connected: one source per space does not
+scale, and the activation funnel is read from events.
 
 ## 8. Documentation
 
