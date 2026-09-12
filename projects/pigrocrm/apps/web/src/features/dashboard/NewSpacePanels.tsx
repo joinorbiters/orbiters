@@ -2,19 +2,29 @@
  * The two panels a new space sees above its dashboard (spec 2026-09-12 §6.7): the
  * assistant first, because it is what the landing sells and what a space is for, then
  * the four first steps. Both read their state from the data (`useFirstSteps`) and
- * disappear on their own: the card when a token exists, the list at four of four or on
- * «Nascondi», which is the one preference kept, and kept in the browser.
+ * disappear on their own: the card when this user has a token, the list at four of four
+ * or on «Nascondi», the one preference kept, and kept in the browser. A readonly user
+ * sees neither: there is nothing here they could do.
  */
 import { Link } from '@tanstack/react-router'
 import { Bot, Check, ChevronRight, Circle } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { CONNECT_ASSISTANT_TO, hide, isHidden, useFirstSteps } from './newSpace'
+import { useAuth, useCanWrite } from '@/lib/auth'
+import { CONNECT_ASSISTANT_TO, hide, isHidden, useFirstSteps, type FirstStep } from './newSpace'
 
 export function NewSpacePanels() {
-  const state = useFirstSteps()
-  const [hidden, setHidden] = useState(isHidden)
+  const canWrite = useCanWrite()
+  if (!canWrite) return null
+  return <Panels />
+}
+
+function Panels() {
+  const { user } = useAuth()
+  const userId = user?.id ?? ''
+  const [hidden, setHidden] = useState(() => isHidden(userId))
+  const state = useFirstSteps({ hidden })
   if (state.loading) return null
   const showAssistant = !state.assistantConnected
   const showSteps = !state.allDone && !hidden
@@ -27,7 +37,7 @@ export function NewSpacePanels() {
           steps={state.steps}
           doneCount={state.doneCount}
           onHide={() => {
-            hide()
+            hide(userId)
             setHidden(true)
           }}
         />
@@ -45,14 +55,14 @@ function AssistantCard() {
           <CardTitle className="text-xl">Il CRM che lavora al posto tuo</CardTitle>
           <CardDescription className="text-base">
             Collega Claude al tuo spazio e chiedigli di registrare le ore, preparare
-            un&apos;offerta, riassumere la settimana. Tutto quello che fai qui lo può fare lui.
+            un’offerta, riassumere la settimana. Tutto quello che fai qui lo può fare lui.
           </CardDescription>
         </div>
       </CardHeader>
       <CardContent>
         <Button asChild size="lg">
           <Link to={CONNECT_ASSISTANT_TO}>
-            Collega l&apos;assistente
+            Collega l’assistente
             <ChevronRight className="ml-1 size-4" aria-hidden />
           </Link>
         </Button>
@@ -66,7 +76,7 @@ function FirstStepsList({
   doneCount,
   onHide,
 }: {
-  steps: ReturnType<typeof useFirstSteps>['steps']
+  steps: FirstStep[]
   doneCount: number
   onHide: () => void
 }) {
@@ -76,7 +86,7 @@ function FirstStepsList({
         <div className="space-y-1.5">
           <CardTitle>Primi passi</CardTitle>
           <CardDescription>
-            {doneCount} di {steps.length}. Nell&apos;ordine in cui il CRM li chiede.
+            {doneCount} di {steps.length}. Nell’ordine in cui il CRM li chiede.
           </CardDescription>
         </div>
         <Button type="button" variant="ghost" size="sm" onClick={onHide}>
@@ -88,17 +98,20 @@ function FirstStepsList({
           {steps.map((step) => (
             <li key={step.id} className="flex items-start gap-3 py-3">
               {step.done ? (
-                <Check className="mt-0.5 size-5 shrink-0 text-emerald-600" aria-label="fatto" />
+                <Check className="text-foreground mt-0.5 size-5 shrink-0" aria-hidden />
               ) : (
-                <Circle className="text-muted-foreground mt-0.5 size-5 shrink-0" aria-label="da fare" />
+                <Circle className="text-muted-foreground mt-0.5 size-5 shrink-0" aria-hidden />
               )}
               <div className="min-w-0 flex-1">
+                <span className="sr-only">{step.done ? 'Fatto: ' : 'Da fare: '}</span>
                 {step.done ? (
                   <p className="text-muted-foreground line-through">{step.title}</p>
-                ) : (
+                ) : step.canDo ? (
                   <Link to={step.to} className="font-medium underline-offset-4 hover:underline">
                     {step.title}
                   </Link>
+                ) : (
+                  <p className="font-medium">{step.title}</p>
                 )}
                 {!step.done && <p className="text-muted-foreground text-sm">{step.hint}</p>}
               </div>
